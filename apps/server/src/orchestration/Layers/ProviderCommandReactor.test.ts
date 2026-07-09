@@ -7,7 +7,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderForkThreadResult,
+  ProviderRuntimeEvent,
+  ProviderSession,
+} from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -117,6 +122,7 @@ describe("ProviderCommandReactor", () => {
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
     readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
+    readonly forkThreadResult?: ProviderForkThreadResult | null;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -219,7 +225,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
-      Effect.succeed(null),
+      Effect.succeed(input?.forkThreadResult ?? null),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
@@ -581,6 +587,79 @@ describe("ProviderCommandReactor", () => {
     expect(secondInput?.input).not.toContain("Earlier question");
     expect(secondInput?.input).not.toContain("Earlier answer");
     expect(secondInput?.input).toContain("Second side question");
+  });
+
+  it("bootstraps Droid sidechat context after a native provider fork", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-native-droid-sidechat");
+    const harness = await createHarness({
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "native-droid-fork" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-fork-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Native Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("native-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Imported Droid sidechat question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("native-droid-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Imported Droid sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("native-droid-sidechat-user"),
+          role: "user",
+          text: "Continue the native Droid sidechat",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.forkThread.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<sidechat_context>");
+    expect(input?.input).toContain("Imported Droid sidechat question");
+    expect(input?.input).toContain("Imported Droid sidechat answer");
+    expect(input?.input).toContain("Continue the native Droid sidechat");
   });
 
   it("preserves pending sidechat context when the first turn is a provider review", async () => {
@@ -2795,7 +2874,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts an idle Claude session immediately when thread model selection changes", async () => {
+  it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
     });
@@ -2820,8 +2899,17 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+      },
+    });
     harness.startSession.mockClear();
 
+    // Context-window changes switch in-session via setModel on the next turn.
+    // Restarting would resume via --resume and replay the whole conversation
+    // as uncached input tokens.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -2837,14 +2925,197 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    // Effort is fixed at subprocess spawn, so an effort change still restarts.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: {
+            effort: "max",
+          },
+        },
+      }),
+    );
+
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-7",
         options: {
-          contextWindow: "1m",
+          effort: "max",
         },
+      },
+    });
+  });
+
+  it("restarts a directly started Claude session when spawn-fixed options change", async () => {
+    const initialSelection: ModelSelection = {
+      provider: "claudeAgent",
+      model: "claude-opus-4-7",
+    };
+    const harness = await createHarness({ threadModelSelection: initialSelection });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    // Mirrors native import: ProviderService owns the runtime start directly,
+    // while the reactor learns the original selection from thread.created.
+    await harness.drain();
+    const importedSession = await Effect.runPromise(
+      harness.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        modelSelection: initialSelection,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-direct-claude-session-set"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: importedSession.updatedAt,
+        },
+        createdAt: importedSession.updatedAt,
+      }),
+    );
+    harness.startSession.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-direct-claude-effort-update"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max" },
+      },
+    });
+  });
+
+  it("keeps the applied Claude spawn profile while metadata changes mid-turn", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-active-selection-change");
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-bootstrap"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-active-selection-bootstrap"),
+          role: "user",
+          text: "bootstrap",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    harness.startSession.mockClear();
+
+    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-session-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-effort"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max" },
+        },
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-session-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // The context-only edit is compared with the profile that is actually live,
+    // so the pending effort change still forces exactly one replacement.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-context"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max", contextWindow: "1m" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max", contextWindow: "1m" },
       },
     });
   });

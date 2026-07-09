@@ -1016,7 +1016,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("refreshes persisted resume cursor from the active session on runtime events", () =>
+  it.effect("refreshes persisted resume cursor immediately on model reroutes", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -1031,6 +1031,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         resume: "550e8400-e29b-41d4-a716-446655440000",
         resumeSessionAt: "assistant-message-refresh",
         turnCount: 2,
+        rerouteOriginalApiModelId: "claude-fable-5",
+        rerouteFallbackApiModelId: "claude-opus-4-8",
       };
 
       routing.claude.updateSession(session.threadId, (existing) => ({
@@ -1038,12 +1040,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
         resumeCursor: updatedResumeCursor,
       }));
       routing.claude.emit({
-        type: "thread.started",
-        eventId: asEventId("runtime-thread-started-refresh"),
+        type: "model.rerouted",
+        eventId: asEventId("runtime-model-rerouted-refresh"),
         provider: "claudeAgent",
         createdAt: "2026-02-27T00:04:00.000Z",
         threadId: session.threadId,
-        payload: { providerThreadId: updatedResumeCursor.resume },
+        payload: {
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+          reason: "Model safeguards rerouted this request.",
+        },
       });
       yield* sleep(50);
 

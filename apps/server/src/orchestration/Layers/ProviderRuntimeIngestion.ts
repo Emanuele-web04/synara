@@ -71,6 +71,8 @@ const PENDING_GENERATED_IMAGES_CACHE_CAPACITY = 512;
 // Hot-path cache only. Turn settlement also reads durable activity records, so
 // TTL expiry or a server restart cannot discard the transcript reference.
 const PENDING_GENERATED_IMAGES_TTL = Duration.minutes(60);
+const ACTIVITY_UPDATE_FINGERPRINT_CACHE_CAPACITY = 4_096;
+const ACTIVITY_UPDATE_FINGERPRINT_TTL = Duration.minutes(360);
 // One turn realistically produces a handful of images; the cap only bounds a
 // pathological provider replaying image completions in a loop.
 const MAX_PENDING_GENERATED_IMAGES_PER_TURN = 32;
@@ -85,9 +87,11 @@ const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
-type TurnStartRequestedDomainEvent = Extract<
+type RuntimeIngestionDomainEvent = Extract<
   OrchestrationEvent,
-  { type: "thread.turn-start-requested" }
+  {
+    type: "thread.turn-start-requested" | "thread.reverted" | "thread.conversation-rolled-back";
+  }
 >;
 
 type RuntimeIngestionInput =
@@ -97,7 +101,7 @@ type RuntimeIngestionInput =
     }
   | {
       source: "domain";
-      event: TurnStartRequestedDomainEvent;
+      event: RuntimeIngestionDomainEvent;
     };
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
@@ -1004,6 +1008,25 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "model.rerouted": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "model.rerouted",
+          summary: `Model switched: ${event.payload.fromModel} -> ${event.payload.toModel}`,
+          payload: toActivityPayload({
+            fromModel: event.payload.fromModel,
+            toModel: event.payload.toModel,
+            detail: truncateDetail(event.payload.reason, 500),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.tasks.updated": {
       return [
         {
@@ -1429,6 +1452,47 @@ function runtimeEventToActivities(
   return [];
 }
 
+function activityUpdateDedupeKey(
+  event: ProviderRuntimeEvent,
+  threadId: ThreadId,
+  activity: OrchestrationThreadActivity,
+): string | undefined {
+  const prefix = `${threadId}:${event.provider}:${activity.kind}`;
+  if (
+    activity.kind === "context-window.updated" ||
+    activity.kind === "account.rate-limits.updated"
+  ) {
+    return prefix;
+  }
+
+  const payload = asObject(activity.payload);
+  if (activity.kind === "task.progress") {
+    const taskId = asString(payload?.taskId);
+    return taskId ? `${prefix}:${taskId}` : undefined;
+  }
+  if (activity.kind !== "tool.updated") {
+    return undefined;
+  }
+
+  const data = asObject(payload?.data);
+  const toolUpdateId =
+    event.itemId ??
+    asString(data?.toolUseId) ??
+    asString(data?.toolCallId) ??
+    asString(data?.callId) ??
+    asString(data?.callID);
+  return toolUpdateId ? `${prefix}:${toolUpdateId}` : undefined;
+}
+
+function activityUpdateFingerprint(activity: OrchestrationThreadActivity): string {
+  return stringifyJsonLike({
+    kind: activity.kind,
+    summary: activity.summary,
+    payload: activity.payload,
+    turnId: activity.turnId,
+  });
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -1469,7 +1533,51 @@ const make = Effect.gen(function* () {
     timeToLive: PENDING_GENERATED_IMAGES_TTL,
     lookup: () => Effect.succeed([]),
   });
+  const latestActivityUpdateFingerprintByKey = yield* Cache.make<string, string | undefined>({
+    capacity: ACTIVITY_UPDATE_FINGERPRINT_CACHE_CAPACITY,
+    timeToLive: ACTIVITY_UPDATE_FINGERPRINT_TTL,
+    lookup: () => Effect.succeed(undefined),
+  });
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
+
+  const dispatchActivityUpdate = Effect.fnUntraced(function* (
+    event: ProviderRuntimeEvent,
+    threadId: ThreadId,
+    activity: OrchestrationThreadActivity,
+  ) {
+    const key = activityUpdateDedupeKey(event, threadId, activity);
+    const fingerprint = key ? activityUpdateFingerprint(activity) : undefined;
+    if (key && fingerprint) {
+      const previous = yield* Cache.getOption(latestActivityUpdateFingerprintByKey, key);
+      if (Option.isSome(previous) && previous.value === fingerprint) {
+        return;
+      }
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: providerCommandId(event, "thread-activity-append"),
+      threadId,
+      activity,
+      createdAt: activity.createdAt,
+    });
+    if (key && fingerprint) {
+      yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
+    }
+  });
+
+  const clearActivityUpdateFingerprints = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const keyPrefix = `${threadId}:`;
+    const keys = Array.from(yield* Cache.keys(latestActivityUpdateFingerprintByKey));
+    yield* Effect.forEach(
+      keys,
+      (key) =>
+        key.startsWith(keyPrefix)
+          ? Cache.invalidate(latestActivityUpdateFingerprintByKey, key)
+          : Effect.void,
+      { concurrency: 1 },
+    );
+  });
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -2916,20 +3024,19 @@ const make = Effect.gen(function* () {
           : event.type === "item.updated" && toolOutputKey
             ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
             : event;
-      const activities = runtimeEventToActivities(activityEvent);
-      yield* Effect.forEach(activities, (activity) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId: providerCommandId(event, "thread-activity-append"),
-          threadId: thread.id,
-          activity,
-          createdAt: activity.createdAt,
-        }),
+      yield* Effect.forEach(
+        runtimeEventToActivities(activityEvent),
+        (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
+        { concurrency: 1 },
       ).pipe(Effect.asVoid);
     });
 
-  const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>
+  const processDomainEvent = (event: RuntimeIngestionDomainEvent) =>
     Effect.gen(function* () {
+      if (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") {
+        yield* clearActivityUpdateFingerprints(event.payload.threadId);
+        return;
+      }
       const nextAssistantDeliveryMode =
         event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE;
       yield* Ref.set(assistantDeliveryModeRef, nextAssistantDeliveryMode);
@@ -2991,7 +3098,11 @@ const make = Effect.gen(function* () {
     );
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.turn-start-requested") {
+        if (
+          event.type !== "thread.turn-start-requested" &&
+          event.type !== "thread.reverted" &&
+          event.type !== "thread.conversation-rolled-back"
+        ) {
           return Effect.void;
         }
         return worker.enqueue({ source: "domain", event });

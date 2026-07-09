@@ -215,6 +215,7 @@ export interface DesktopUpdateState {
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
+  installFailureCount: number;
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub
@@ -328,6 +329,12 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export interface SynaraStorageSnapshot {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly entries: Readonly<Record<string, string>>;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -369,6 +376,11 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  storageMigration: {
+    saveSnapshot: (snapshot: SynaraStorageSnapshot) => Promise<boolean>;
+    readSnapshot: () => SynaraStorageSnapshot | null;
+    acknowledgeSnapshot: () => Promise<void>;
   };
   server?: {
     transcribeVoice: (

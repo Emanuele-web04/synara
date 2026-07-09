@@ -22,7 +22,7 @@ const projectionProjectsColumnNames = (sql: SqlClient.SqlClient) =>
     SELECT name FROM pragma_table_info('projection_projects')
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
-layer("032_ReconcileLegacyT3SchemaImport", (it) => {
+layer("032_ReconcileImportedSchemaLineage", (it) => {
   // Simulates a legacy ~/.t3 import where the imported `effect_sql_migrations`
   // tracker has IDs 17-31 recorded under unrelated T3 Code names. The 17-31
   // body never ran, so the columns those migrations would have added are

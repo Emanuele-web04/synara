@@ -200,6 +200,7 @@ const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
 });
 
@@ -306,14 +307,8 @@ function decodeProjectionThreadOption(
 }
 
 const REQUIRED_SNAPSHOT_PROJECTORS = [
-  ORCHESTRATION_PROJECTOR_NAMES.projects,
-  ORCHESTRATION_PROJECTOR_NAMES.threads,
+  ORCHESTRATION_PROJECTOR_NAMES.hot,
   ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
-  ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
-  ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-  ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
-  ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-  ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
 ] as const;
 
 function maxIso(left: string | null, right: string): string {
@@ -1558,6 +1553,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             SELECT turns.checkpoint_ref
             FROM projection_turns AS turns
             WHERE turns.thread_id = threads.thread_id
+              AND turns.checkpoint_turn_count IS NOT NULL
+              AND turns.completed_at IS NOT NULL
+            ORDER BY turns.checkpoint_turn_count ASC
+            LIMIT 1
+          ) AS "baselineCheckpointRef",
+          (
+            SELECT turns.checkpoint_ref
+            FROM projection_turns AS turns
+            WHERE turns.thread_id = threads.thread_id
               AND turns.checkpoint_turn_count = ${checkpointTurnCount}
               AND turns.completed_at IS NOT NULL
             LIMIT 1
@@ -2142,6 +2146,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         envMode: row.value.envMode,
         worktreePath: row.value.worktreePath,
         latestCheckpointTurnCount: row.value.latestCheckpointTurnCount ?? 0,
+        baselineCheckpointRef: row.value.baselineCheckpointRef,
         toCheckpointRef: row.value.toCheckpointRef,
       });
     });

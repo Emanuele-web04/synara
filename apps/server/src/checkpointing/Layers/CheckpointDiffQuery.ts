@@ -10,7 +10,9 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
 import {
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnStart,
+  checkpointRefForThreadTurnStartInManagedFamily,
   resolveThreadWorkspaceCwd,
 } from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
@@ -128,9 +130,15 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const earliestManagedBaselineRef = threadContext.value.checkpoints
+        .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
+        .map((checkpoint) =>
+          checkpointRefForThreadTurnInManagedFamily(checkpoint.checkpointRef, input.threadId, 0),
+        )
+        .find((checkpointRef) => checkpointRef !== null);
       let fromCheckpointRef =
         input.fromTurnCount === 0
-          ? checkpointRefForThreadTurn(input.threadId, 0)
+          ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(input.threadId, 0))
           : fromCheckpoint?.checkpointRef;
       if (!fromCheckpointRef) {
         return yield* new CheckpointUnavailableError({
@@ -149,10 +157,12 @@ const make = Effect.gen(function* () {
         });
       }
       if (input.toTurnCount === input.fromTurnCount + 1) {
-        const turnStartCheckpointRef = checkpointRefForThreadTurnStart(
-          input.threadId,
-          toCheckpoint.turnId,
-        );
+        const turnStartCheckpointRef =
+          checkpointRefForThreadTurnStartInManagedFamily(
+            toCheckpointRef,
+            input.threadId,
+            toCheckpoint.turnId,
+          ) ?? checkpointRefForThreadTurnStart(input.threadId, toCheckpoint.turnId);
         const turnStartExists = yield* checkpointStore.hasCheckpointRef({
           cwd: workspaceCwd,
           checkpointRef: turnStartCheckpointRef,
@@ -259,7 +269,14 @@ const make = Effect.gen(function* () {
 
       const diff = yield* checkpointStore.diffCheckpoints({
         cwd: workspaceCwd,
-        fromCheckpointRef: checkpointRefForThreadTurn(input.threadId, 0),
+        fromCheckpointRef:
+          (threadContext.value.baselineCheckpointRef
+            ? checkpointRefForThreadTurnInManagedFamily(
+                threadContext.value.baselineCheckpointRef,
+                input.threadId,
+                0,
+              )
+            : null) ?? checkpointRefForThreadTurn(input.threadId, 0),
         toCheckpointRef: threadContext.value.toCheckpointRef,
         fallbackFromToHead: false,
         ignoreWhitespace,

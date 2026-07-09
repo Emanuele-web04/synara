@@ -47,7 +47,7 @@ import Migration0028 from "./Migrations/028_ProjectionProjectsKind.ts";
 import Migration0029 from "./Migrations/029_ProjectionThreadsLastKnownPr.ts";
 import Migration0030 from "./Migrations/030_ProjectionThreadMessagesDispatchMode.ts";
 import Migration0031 from "./Migrations/031_ProjectionThreadsCreateBranchFlowCompleted.ts";
-import Migration0032 from "./Migrations/032_ReconcileLegacyT3SchemaImport.ts";
+import Migration0032 from "./Migrations/032_ReconcileImportedSchemaLineage.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsSidechatSource.ts";
 import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
@@ -67,6 +67,7 @@ import Migration0048 from "./Migrations/048_AutomationCompletionEvaluationBacklo
 import Migration0049 from "./Migrations/049_ProjectionThreadMessagesDispatchOrigin.ts";
 import Migration0050 from "./Migrations/050_ProfileStatsArchive.ts";
 import Migration0051 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -110,7 +111,7 @@ export const migrationEntries = [
   [29, "ProjectionThreadsLastKnownPr", Migration0029],
   [30, "ProjectionThreadMessagesDispatchMode", Migration0030],
   [31, "ProjectionThreadsCreateBranchFlowCompleted", Migration0031],
-  [32, "ReconcileLegacyT3SchemaImport", Migration0032],
+  [32, "ReconcileImportedSchemaLineage", Migration0032],
   [33, "ProjectionThreadsSidechatSource", Migration0033],
   [34, "AuthAccessManagement", Migration0034],
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
@@ -130,6 +131,7 @@ export const migrationEntries = [
   [49, "ProjectionThreadMessagesDispatchOrigin", Migration0049],
   [50, "ProfileStatsArchive", Migration0050],
   [51, "ProfileStatsDeletedTokensModel", Migration0051],
+  [52, "ProjectionThreadUserMessageSummaryIndex", Migration0052],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -180,6 +182,13 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   if (trackerTables.length === 0) {
     return;
   }
+
+  const previousMigration32Name = "ReconcileLegacyT3SchemaImport";
+  yield* sql`
+    UPDATE effect_sql_migrations
+    SET name = 'ReconcileImportedSchemaLineage'
+    WHERE migration_id = 32 AND name = ${previousMigration32Name}
+  `;
 
   const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC

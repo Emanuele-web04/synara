@@ -48,6 +48,7 @@ import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNo
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
@@ -284,7 +285,7 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
     case "thread.deleted":
       return true;
     default:
-      return event.aggregateKind === "thread";
+      return event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event);
   }
 }
 

@@ -2526,6 +2526,107 @@ describe("store read model sync", () => {
     expect(Object.keys(next.activityByThreadId?.[threadId] ?? {})).toEqual(["activity-command"]);
   });
 
+  it("batch-reduces consecutive activity events without changing the resulting state", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const events = [0, 1, 2].map((index) =>
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({
+            id: `activity-batch-${index}`,
+            sequence: index + 1,
+            kind: "tool.updated",
+            summary: `Tool update ${index}`,
+            createdAt: `2026-07-09T00:00:0${index}.000Z`,
+          }),
+        },
+        { sequence: index + 1 },
+      ),
+    );
+    const initialState = makeState(makeThread());
+
+    const sequential = events.reduce(
+      (state, currentEvent) => applyOrchestrationEventsHotPath(state, [currentEvent]),
+      initialState,
+    );
+    const batched = applyOrchestrationEventsHotPath(initialState, events);
+
+    expect(batched.threads[0]?.activities).toEqual(sequential.threads[0]?.activities);
+    expect(batched.activityIdsByThreadId?.[threadId]).toEqual(
+      sequential.activityIdsByThreadId?.[threadId],
+    );
+    expect(batched.activityByThreadId?.[threadId]).toEqual(
+      sequential.activityByThreadId?.[threadId],
+    );
+    expect(batched.threads[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
+  });
+
+  it("keeps batched activity timestamps equivalent when a generic duplicate is discarded", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const richActivity = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      createdAt: "2026-07-09T00:00:00.000Z",
+      payload: {
+        itemType: "command_execution",
+        title: "Ran command",
+        detail: "echo hello",
+        data: {
+          item: {
+            type: "commandExecution",
+            command: "echo hello",
+          },
+        },
+      },
+    });
+    const initialState = makeState(
+      makeThread({
+        updatedAt: richActivity.createdAt,
+        activities: [richActivity],
+      }),
+    );
+    const events = [
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({
+            id: "activity-new",
+            kind: "tool.updated",
+            summary: "New activity",
+            createdAt: "2026-07-09T00:00:01.000Z",
+          }),
+        },
+        { sequence: 1 },
+      ),
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({
+            id: richActivity.id,
+            kind: richActivity.kind,
+            summary: richActivity.summary,
+            createdAt: "2026-07-09T00:00:10.000Z",
+            payload: { title: "Ran command" },
+          }),
+        },
+        { sequence: 2 },
+      ),
+    ];
+
+    const sequential = events.reduce(
+      (state, currentEvent) => applyOrchestrationEventsHotPath(state, [currentEvent]),
+      initialState,
+    );
+    const batched = applyOrchestrationEventsHotPath(initialState, events);
+
+    expect(batched.threads[0]).toEqual(sequential.threads[0]);
+    expect(batched.threads[0]?.updatedAt).toBe("2026-07-09T00:00:01.000Z");
+  });
+
   it("keeps richer activity payloads when duplicate events arrive with generic data", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const richActivity = makeActivity({

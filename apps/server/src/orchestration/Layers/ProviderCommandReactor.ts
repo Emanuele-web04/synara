@@ -35,6 +35,7 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@t3tools/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { claudeSelectionRequiresRestart } from "@t3tools/shared/model";
 import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
@@ -75,6 +76,7 @@ type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
     type:
+      | "thread.created"
       | "thread.meta-updated"
       | "thread.session-set"
       | "thread.runtime-mode-set"
@@ -274,7 +276,24 @@ const make = Effect.gen(function* () {
     );
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
-  const threadModelSelections = new Map<string, ModelSelection>();
+  // The selection last applied to each live session. Keep this separate from
+  // projected thread metadata so an option changed mid-turn is still compared
+  // against the old subprocess configuration before the next turn starts.
+  const threadSessionModelSelections = new Map<string, ModelSelection>();
+  const seedThreadModelSelections = projectionSnapshotQuery.getCommandReadModel().pipe(
+    Effect.tap((snapshot) =>
+      Effect.sync(() => {
+        for (const thread of snapshot.threads) {
+          threadSessionModelSelections.set(thread.id, thread.modelSelection);
+        }
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("provider command reactor failed to seed model selections", {
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
 
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
@@ -325,7 +344,9 @@ const make = Effect.gen(function* () {
   }) {
     const thread = yield* resolveThread(input.threadId);
     const modelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
+      input.modelSelection ??
+      thread?.modelSelection ??
+      threadSessionModelSelections.get(input.threadId);
     const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
     const threadTextGenerationInput = resolveTextGenerationInputForSelection(
       modelSelection,
@@ -776,13 +797,22 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         requestedModelSelection.model !== activeSession?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
-      const previousModelSelection = threadModelSelections.get(threadId);
+      const previousModelSelection = threadSessionModelSelections.get(threadId);
+      // Claude restarts resume via `--resume`, which replays the whole conversation
+      // as uncached input tokens. Only spawn-fixed options (effort/settings) may
+      // force that; model and context-window changes switch in-session via setModel.
+      // When the dispatch cache has no entry (the session was started by a turn
+      // without a selection), compare against the projected thread selection the
+      // session was actually spawned from so spawn-fixed changes still restart.
       const shouldRestartForModelSelectionChange =
-        (currentProvider === "claudeAgent" ||
-          currentProvider === "droid" ||
-          currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
+        (currentProvider === "claudeAgent"
+          ? claudeSelectionRequiresRestart(
+              previousModelSelection ?? thread.modelSelection,
+              requestedModelSelection,
+            )
+          : (currentProvider === "droid" || currentProvider === "grok") &&
+            !Equal.equals(previousModelSelection, requestedModelSelection));
 
       if (
         !runtimeModeChanged &&
@@ -817,6 +847,7 @@ const make = Effect.gen(function* () {
       if (currentProvider === "droid" && !providerChanged && resumeCursor === undefined) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
+      threadSessionModelSelections.set(threadId, desiredModelSelection);
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -840,6 +871,10 @@ const make = Effect.gen(function* () {
         runtimeMode: desiredRuntimeMode,
       });
       if (forked) {
+        if (preferredProvider === "droid" && thread.sidechatSourceThreadId) {
+          sidechatContextBootstrapThreadIds.add(threadId);
+        }
+        threadSessionModelSelections.set(threadId, desiredModelSelection);
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -864,6 +899,10 @@ const make = Effect.gen(function* () {
     }
 
     const startedSession = yield* startProviderSession(undefined);
+    // Record the exact selection the session was spawned with so later
+    // restart-necessity checks compare against the live spawn state even when
+    // the spawning dispatch carried no explicit model selection.
+    threadSessionModelSelections.set(threadId, desiredModelSelection);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -901,7 +940,7 @@ const make = Effect.gen(function* () {
       threadProviderOptions.set(input.threadId, input.providerOptions);
     }
     if (input.modelSelection !== undefined) {
-      threadModelSelections.set(input.threadId, input.modelSelection);
+      threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
@@ -926,7 +965,7 @@ const make = Effect.gen(function* () {
         : null;
     const selectedProvider =
       input.modelSelection?.provider ??
-      threadModelSelections.get(input.threadId)?.provider ??
+      threadSessionModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
       thread.modelSelection.provider;
     const hasPendingPriorTranscriptBootstrap =
@@ -1010,8 +1049,7 @@ const make = Effect.gen(function* () {
       activeSession === undefined
         ? "in-session"
         : (yield* providerService.getCapabilities(activeSession.provider)).sessionModelSwitch;
-    const requestedModelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const requestedModelSelection = input.modelSelection ?? thread.modelSelection;
     const modelForTurn =
       sessionModelSwitch === "unsupported"
         ? activeSession?.model !== undefined
@@ -1020,7 +1058,7 @@ const make = Effect.gen(function* () {
               model: activeSession.model,
             }
           : requestedModelSelection
-        : input.modelSelection;
+        : requestedModelSelection;
     const sendQueuedProviderTurn = (messageText: string | undefined) =>
       providerService.sendTurn({
         threadId: input.threadId,
@@ -2116,24 +2154,30 @@ const make = Effect.gen(function* () {
           if (
             thread &&
             event.payload.session.status !== "stopped" &&
-            !threadModelSelections.has(event.payload.threadId)
+            !threadSessionModelSelections.has(event.payload.threadId)
           ) {
-            threadModelSelections.set(event.payload.threadId, thread.modelSelection);
+            threadSessionModelSelections.set(event.payload.threadId, thread.modelSelection);
           }
           return;
         }
+        case "thread.created":
+          threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
             return;
           }
 
-          if (
-            !thread?.session ||
-            thread.session.status === "stopped" ||
-            thread.session.activeTurnId !== null
-          ) {
-            threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          if (!thread?.session || thread.session.status === "stopped") {
+            threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+            return;
+          }
+
+          if (thread.session.activeTurnId !== null) {
+            // The current runtime still owns the previous spawn profile. The
+            // projected thread now carries the desired selection; compare them
+            // when the next turn ensures the session.
             return;
           }
 
@@ -2144,7 +2188,7 @@ const make = Effect.gen(function* () {
               ? { providerOptions: cachedProviderOptions }
               : {}),
           });
-          threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         }
         case "thread.runtime-mode-set": {
@@ -2153,12 +2197,11 @@ const make = Effect.gen(function* () {
             return;
           }
           const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          const cachedModelSelection = threadModelSelections.get(event.payload.threadId);
           yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
             ...(cachedProviderOptions !== undefined
               ? { providerOptions: cachedProviderOptions }
               : {}),
-            ...(cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {}),
+            modelSelection: thread.modelSelection,
             runtimeMode: event.payload.runtimeMode,
           });
           return;
@@ -2228,33 +2271,38 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
-  const start: ProviderCommandReactorShape["start"] = Effect.all([
-    Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-      if (
-        event.type !== "thread.meta-updated" &&
-        event.type !== "thread.session-set" &&
-        event.type !== "thread.runtime-mode-set" &&
-        event.type !== "thread.turn-queued" &&
-        event.type !== "thread.turn-start-requested" &&
-        event.type !== "thread.turn-interrupt-requested" &&
-        event.type !== "thread.approval-response-requested" &&
-        event.type !== "thread.user-input-response-requested" &&
-        event.type !== "thread.conversation-rollback-requested" &&
-        event.type !== "thread.message-edit-resend-requested" &&
-        event.type !== "thread.session-stop-requested"
-      ) {
-        return Effect.void;
-      }
+  const start: ProviderCommandReactorShape["start"] = seedThreadModelSelections.pipe(
+    Effect.andThen(
+      Effect.all([
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (
+            event.type !== "thread.created" &&
+            event.type !== "thread.meta-updated" &&
+            event.type !== "thread.session-set" &&
+            event.type !== "thread.runtime-mode-set" &&
+            event.type !== "thread.turn-queued" &&
+            event.type !== "thread.turn-start-requested" &&
+            event.type !== "thread.turn-interrupt-requested" &&
+            event.type !== "thread.approval-response-requested" &&
+            event.type !== "thread.user-input-response-requested" &&
+            event.type !== "thread.conversation-rollback-requested" &&
+            event.type !== "thread.message-edit-resend-requested" &&
+            event.type !== "thread.session-stop-requested"
+          ) {
+            return Effect.void;
+          }
 
-      return worker.enqueue(event);
-    }).pipe(Effect.forkScoped),
-    Stream.runForEach(providerService.streamEvents, (event) => {
-      if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
-        return Effect.void;
-      }
-      return processQueueDrainEventSafely(event);
-    }).pipe(Effect.forkScoped),
-  ]).pipe(Effect.asVoid);
+          return worker.enqueue(event);
+        }).pipe(Effect.forkScoped),
+        Stream.runForEach(providerService.streamEvents, (event) => {
+          if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+            return Effect.void;
+          }
+          return processQueueDrainEventSafely(event);
+        }).pipe(Effect.forkScoped),
+      ]).pipe(Effect.asVoid),
+    ),
+  );
 
   return {
     start,

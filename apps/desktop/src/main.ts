@@ -54,6 +54,7 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
+import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
@@ -88,14 +89,25 @@ import {
   reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
+  reduceDesktopUpdateStateOnInstallRestartFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import {
   PendingUpdateCacheClearQueue,
   resolveElectronUpdaterCacheDirName,
+  resolveElectronUpdaterLegacyZipPath,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
+import {
+  clearInstallMarker,
+  createUpdateInstallMarker,
+  markInstallHandoffSync,
+  readInstallMarker,
+  resolveInstallMarkerOutcome,
+  writeInstallMarker,
+  type UpdateInstallMarker,
+} from "./updateInstallMarker";
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
@@ -124,6 +136,13 @@ import {
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
+import {
+  acknowledgeSynaraStorageSnapshot,
+  readSynaraStorageSnapshot,
+  resolveSynaraStorageSnapshotPath,
+  saveSynaraStorageSnapshot,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
 
 syncShellEnvironment();
 
@@ -183,6 +202,8 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 // conclude the OS installer never started (unsigned/quarantined build, read-only
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
+const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
@@ -190,7 +211,7 @@ const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
   "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
   "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
 ] as const;
-const DESKTOP_UPDATE_CHANNEL = "latest";
+const SYNARA_DESKTOP_UPDATE_CHANNEL = "synara";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
@@ -617,6 +638,7 @@ let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
 let updateInstallWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+let automaticUpdateActivitySuppressed = false;
 let updateDownloadCancellationToken: CancellationToken | null = null;
 let rejectUpdateDownloadStall: ((error: Error) => void) | null = null;
 let lastUpdateDownloadProgressSample: DownloadProgressSample | null = null;
@@ -647,6 +669,63 @@ function clearUpdateInstallWatchdogTimer(): void {
   }
 }
 
+function getUpdateInstallMarkerPath(): string {
+  return Path.join(app.getPath("userData"), UPDATE_INSTALL_MARKER_FILE_NAME);
+}
+
+function recordInstallMarkerFailure(nowIso: string): number {
+  const result = readInstallMarker(getUpdateInstallMarkerPath());
+  if (result.status !== "valid") {
+    console.error(
+      `[desktop-updater] Could not record durable install failure: marker is ${result.status}${result.status === "invalid" ? ` (${result.error})` : ""}.`,
+    );
+    return Math.max(1, updateState.installFailureCount + 1);
+  }
+  if (result.marker.phase === "failed") {
+    return result.marker.consecutiveFailures;
+  }
+  const failedMarker: UpdateInstallMarker = {
+    ...result.marker,
+    phase: "failed",
+    consecutiveFailures: result.marker.consecutiveFailures + 1,
+    lastFailureAt: nowIso,
+  };
+  try {
+    writeInstallMarker(getUpdateInstallMarkerPath(), failedMarker);
+  } catch (error) {
+    console.error(
+      `[desktop-updater] Failed to persist install failure marker: ${formatErrorMessage(error)}`,
+    );
+  }
+  return failedMarker.consecutiveFailures;
+}
+
+async function logMacUpdateDiagnostics(context: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const diagnostics = await Promise.race([
+      collectMacUpdateDiagnostics(APP_USER_MODEL_ID),
+      new Promise<string>((resolve) => {
+        timeout = setTimeout(
+          () => resolve("Diagnostic collection timed out."),
+          AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (diagnostics) {
+      console.info(`[desktop-updater] diagnostics (${context})\n${diagnostics}`);
+    }
+  } catch (error) {
+    console.info(
+      `[desktop-updater] diagnostics (${context}) unavailable: ${formatErrorMessage(error)}`,
+    );
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 // quitAndInstall() is a fire-and-forget void call with no success signal: when
 // the OS installer silently fails the app never quits and the user is left with
 // no feedback (the "update doesn't work for some people" report). If the process
@@ -667,12 +746,14 @@ function armInstallWatchdog(): void {
     // Polling was stopped before the install attempt; resume it so background
     // update checks keep running after this recovery.
     scheduleUpdatePoll();
-    setUpdateState(
-      reduceDesktopUpdateStateOnInstallFailure(
+    const consecutiveFailures = recordInstallMarkerFailure(new Date().toISOString());
+    setUpdateState({
+      ...reduceDesktopUpdateStateOnInstallFailure(
         updateState,
         "The update couldn’t be installed automatically.",
       ),
-    );
+      installFailureCount: consecutiveFailures,
+    });
     console.error(
       "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
     );
@@ -1274,6 +1355,11 @@ function resolveUserDataPath(): string {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
     });
+  } else if (seedResult.status === "repaired-browser-partition") {
+    console.info("[desktop] Restored Synara browser session from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+    });
   } else if (seedResult.status === "seed-failed") {
     console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
@@ -1409,13 +1495,17 @@ function clearUpdatePollTimer(): void {
 // by the install watchdog recovery so polling resumes after a silent install
 // failure instead of staying off until the next app restart.
 function scheduleUpdatePoll(): void {
-  if (updatePollTimer) {
+  if (updatePollTimer || automaticUpdateActivitySuppressed) {
     return;
   }
   updatePollTimer = setInterval(() => {
     void checkForUpdates("poll");
   }, AUTO_UPDATE_POLL_INTERVAL_MS);
   updatePollTimer.unref();
+}
+
+function isExplicitUpdateCheckReason(reason: string): boolean {
+  return reason === "menu" || reason === "renderer";
 }
 
 function emitUpdateState(): void {
@@ -1438,14 +1528,117 @@ function isKnownUpdateVersionNewer(version: string | null | undefined): boolean 
   return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
 }
 
-function getPendingUpdateCacheDir(): string | null {
-  return resolveElectronUpdaterPendingCacheDir({
+function getUpdaterCachePathArgs(): {
+  cacheDirName: string | null;
+  platform: NodeJS.Platform;
+  homeDir: string;
+  localAppData: string | null;
+  xdgCacheHome: string | null;
+} {
+  return {
     cacheDirName: configuredUpdaterCacheDirName,
     platform: process.platform,
     homeDir: OS.homedir(),
     localAppData: process.env.LOCALAPPDATA ?? null,
     xdgCacheHome: process.env.XDG_CACHE_HOME ?? null,
-  });
+  };
+}
+
+function getPendingUpdateCacheDir(): string | null {
+  return resolveElectronUpdaterPendingCacheDir(getUpdaterCachePathArgs());
+}
+
+function clearLegacyUpdaterZipAfterVerifiedInstall(): void {
+  const legacyZipPath = resolveElectronUpdaterLegacyZipPath(getUpdaterCachePathArgs());
+  if (!legacyZipPath) {
+    return;
+  }
+  try {
+    FS.rmSync(legacyZipPath, { force: true });
+    console.info("[desktop-updater] Cleared legacy top-level update.zip after verified install.");
+  } catch (error) {
+    console.warn(
+      `[desktop-updater] Failed to clear legacy top-level update.zip: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function quarantineInstallMarker(reason: string): void {
+  console.warn(`[desktop-updater] Discarding update install marker (${reason}).`);
+  try {
+    clearInstallMarker(getUpdateInstallMarkerPath());
+  } catch (error) {
+    console.warn(
+      `[desktop-updater] Failed to delete quarantined update install marker: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function processInstallMarkerOnStartup(): void {
+  const filePath = getUpdateInstallMarkerPath();
+  const readResult = readInstallMarker(filePath);
+  if (readResult.status === "missing") {
+    return;
+  }
+  if (readResult.status === "invalid") {
+    quarantineInstallMarker(`invalid or unreadable: ${readResult.error}`);
+    return;
+  }
+
+  const marker = readResult.marker;
+  const nowIso = new Date().toISOString();
+  const outcome = resolveInstallMarkerOutcome(marker, app.getVersion(), nowIso);
+  if (outcome === "success") {
+    console.info(
+      `[desktop-updater] Update to ${marker.toVersion} installed successfully (from ${marker.fromVersion})`,
+    );
+    try {
+      clearInstallMarker(filePath);
+    } catch (error) {
+      console.warn(
+        `[desktop-updater] Failed to clear successful update install marker: ${formatErrorMessage(error)}`,
+      );
+    }
+    clearLegacyUpdaterZipAfterVerifiedInstall();
+    return;
+  }
+  if (outcome === "stale" || outcome === "invalid") {
+    quarantineInstallMarker(outcome);
+    return;
+  }
+
+  let consecutiveFailures = marker.consecutiveFailures;
+  if (outcome === "failure") {
+    consecutiveFailures += 1;
+    const failedMarker: UpdateInstallMarker = {
+      ...marker,
+      phase: "failed",
+      consecutiveFailures,
+      lastFailureAt: nowIso,
+    };
+    try {
+      writeInstallMarker(filePath, failedMarker);
+    } catch (error) {
+      console.error(
+        `[desktop-updater] Failed to persist restart install failure: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  automaticUpdateActivitySuppressed = true;
+  const message = `Synara restarted, but update ${marker.toVersion} was not installed. Try again.`;
+  setUpdateState(
+    reduceDesktopUpdateStateOnInstallRestartFailure(
+      updateState,
+      marker.toVersion,
+      consecutiveFailures,
+      message,
+    ),
+  );
+  console.error(
+    `[desktop-updater] UPDATE INSTALL FAILED: still running ${app.getVersion()} after attempting ${marker.toVersion}; consecutive failures=${consecutiveFailures}. Automatic update checks are suppressed until the user retries.`,
+  );
+  void logMacUpdateDiagnostics("startup install verification failure");
 }
 
 // electron-updater can leave a same-version ZIP in `pending` after a restart or
@@ -1617,6 +1810,19 @@ function handleDesktopAppForegrounded(): void {
 
 async function checkForUpdates(reason: string): Promise<void> {
   if (isQuitting || !updaterConfigured || updateCheckInFlight) return;
+  if (automaticUpdateActivitySuppressed) {
+    if (!isExplicitUpdateCheckReason(reason)) {
+      console.info(
+        `[desktop-updater] Skipping automatic update check (${reason}) after an unverified install failure.`,
+      );
+      return;
+    }
+    automaticUpdateActivitySuppressed = false;
+    console.info(
+      `[desktop-updater] User requested update recovery (${reason}); automatic checks are enabled for this session.`,
+    );
+    scheduleUpdatePoll();
+  }
   if (
     updateState.status === "checking" ||
     updateState.status === "downloading" ||
@@ -1650,6 +1856,16 @@ async function downloadAvailableUpdate(): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
+  if (
+    updaterConfigured &&
+    updateState.status === "error" &&
+    updateState.errorContext === "install" &&
+    updateState.downloadedVersion === null &&
+    updateState.availableVersion !== null
+  ) {
+    await checkForUpdates("renderer");
+    return { accepted: true, completed: false };
+  }
   if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
     return { accepted: false, completed: false };
   }
@@ -1751,7 +1967,7 @@ async function installDownloadedUpdate(): Promise<{
     return { accepted: false, completed: false };
   }
   const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
-  if (!isKnownUpdateVersionNewer(versionToInstall)) {
+  if (!versionToInstall || !isKnownUpdateVersionNewer(versionToInstall)) {
     await clearPendingUpdateCache("downloaded version is not newer than current app");
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
     console.info(
@@ -1760,21 +1976,47 @@ async function installDownloadedUpdate(): Promise<{
     return { accepted: false, completed: false };
   }
 
-  isQuitting = true;
-  isUpdaterInstallPreparing = true;
-  clearUpdatePollTimer();
+  const markerPath = getUpdateInstallMarkerPath();
+  const existingMarkerResult = readInstallMarker(markerPath);
+  const existingMarker =
+    existingMarkerResult.status === "valid" &&
+    existingMarkerResult.marker.toVersion === versionToInstall
+      ? existingMarkerResult.marker
+      : null;
+  const marker = createUpdateInstallMarker({
+    fromVersion: app.getVersion(),
+    toVersion: versionToInstall,
+    requestedAt: new Date().toISOString(),
+    consecutiveFailures: existingMarker?.consecutiveFailures ?? 0,
+    lastFailureAt: existingMarker?.lastFailureAt ?? null,
+  });
+  let markerWritten = false;
   try {
+    writeInstallMarker(markerPath, marker);
+    markerWritten = true;
+    isQuitting = true;
+    isUpdaterInstallPreparing = true;
+    clearUpdatePollTimer();
     await stopBackendAndWaitForExit();
+    await logMacUpdateDiagnostics("before install handoff");
     isUpdaterQuitAndInstallInFlight = true;
     autoUpdater.quitAndInstall();
     armInstallWatchdog();
-    return { accepted: true, completed: true };
+    return { accepted: true, completed: false };
   } catch (error: unknown) {
     const message = formatErrorMessage(error);
     isUpdaterInstallPreparing = false;
     isUpdaterQuitAndInstallInFlight = false;
     isQuitting = false;
-    setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
+    const consecutiveFailures = markerWritten
+      ? recordInstallMarkerFailure(new Date().toISOString())
+      : updateState.installFailureCount;
+    startBackend();
+    scheduleUpdatePoll();
+    setUpdateState({
+      ...reduceDesktopUpdateStateOnInstallFailure(updateState, message),
+      installFailureCount: consecutiveFailures,
+    });
     console.error(`[desktop-updater] Failed to install update: ${message}`);
     return { accepted: true, completed: false };
   }
@@ -1789,6 +2031,7 @@ function configureAutoUpdater(): void {
     enabled,
     status: enabled ? "idle" : "disabled",
   });
+  processInstallMarkerOnStartup();
   if (!enabled) {
     configuredGitHubUpdateSource = null;
     configuredUpdaterCacheDirName = null;
@@ -1804,8 +2047,9 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
+  // The dedicated channel keeps the permanent compatibility release on the
+  // default feed while Synara versions advance independently.
+  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged
@@ -1882,6 +2126,14 @@ function configureAutoUpdater(): void {
       return;
     }
     clearUpdaterInstallInFlightAfterError();
+    const installFailureCount =
+      errorContext === "install"
+        ? recordInstallMarkerFailure(new Date().toISOString())
+        : updateState.installFailureCount;
+    if (errorContext === "install") {
+      startBackend();
+      scheduleUpdatePoll();
+    }
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",
@@ -1890,6 +2142,7 @@ function configureAutoUpdater(): void {
         downloadPercent: null,
         errorContext,
         canRetry: updateState.availableVersion !== null || updateState.downloadedVersion !== null,
+        installFailureCount,
       });
     }
     console.error(`[desktop-updater] Updater error: ${message}`);
@@ -1924,6 +2177,13 @@ function configureAutoUpdater(): void {
   });
 
   clearUpdatePollTimer();
+
+  if (automaticUpdateActivitySuppressed) {
+    console.info(
+      "[desktop-updater] Startup and periodic update checks suppressed after failed install verification.",
+    );
+    return;
+  }
 
   updateStartupTimer = setTimeout(() => {
     updateStartupTimer = null;
@@ -2205,6 +2465,23 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
+  const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
+  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+    event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
+    saveSynaraStorageSnapshot(storageSnapshotPath, snapshot),
+  );
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+    await acknowledgeSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
   ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
   ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the
@@ -2767,6 +3044,13 @@ app.on("before-quit", (event) => {
 
   if (isUpdaterQuitAndInstallInFlight) {
     // Electron's updater owns this quit; canceling it would turn install into a plain app quit.
+    try {
+      markInstallHandoffSync(getUpdateInstallMarkerPath());
+    } catch (error) {
+      console.error(
+        `[desktop-updater] Failed to persist install handoff marker during quit: ${formatErrorMessage(error)}`,
+      );
+    }
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
   }
