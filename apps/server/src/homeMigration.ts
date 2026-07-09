@@ -252,6 +252,17 @@ const moveStagedArtifact = (sourcePath: string, targetPath: string) =>
     yield* fs.rename(sourcePath, targetPath);
   });
 
+const replaceStagedArtifact = (sourcePath: string, targetPath: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(path.dirname(targetPath), { recursive: true });
+    if (yield* fs.exists(targetPath)) {
+      yield* fs.remove(targetPath);
+    }
+    yield* fs.rename(sourcePath, targetPath);
+  });
+
 // On retries, fills directory entries that an earlier importer omitted without
 // replacing credentials or attachments already created in the Synara home.
 const mergeMissingDirectoryEntries = (sourceDirectory: string, targetDirectory: string) =>
@@ -384,6 +395,14 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     environmentId: yield* fs.exists(targetPaths.environmentIdPath),
   } satisfies Record<ImportableArtifact, boolean>;
 
+  // The published 0.4.1 importer omitted the legacy environment ID, then
+  // generated a replacement before the bridge could run. Its completed marker
+  // tells us the existing target value is not the imported user identity.
+  const shouldRestoreLegacyEnvironmentId =
+    marker?.status === "completed" &&
+    !marker.importedArtifacts.includes("environmentId") &&
+    sourceByArtifact.has("environmentId");
+
   const pendingArtifacts = new Set<ImportableArtifact>();
   for (const artifact of importedArtifacts) {
     const source = sourceByArtifact.get(artifact);
@@ -402,6 +421,10 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       if (yield* directoryHasMissingEntries(source.paths.secretsDir, targetPaths.secretsDir)) {
         pendingArtifacts.add(artifact);
       }
+      continue;
+    }
+    if (artifact === "environmentId" && shouldRestoreLegacyEnvironmentId) {
+      pendingArtifacts.add(artifact);
       continue;
     }
     if (!targetArtifacts[artifact]) {
@@ -541,7 +564,11 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       yield* moveStagedArtifact(stagingPaths.anonymousIdPath, targetPaths.anonymousIdPath);
     }
     if (pendingArtifacts.has("environmentId")) {
-      yield* moveStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
+      if (shouldRestoreLegacyEnvironmentId && targetArtifacts.environmentId) {
+        yield* replaceStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
+      } else {
+        yield* moveStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
+      }
     }
 
     yield* writeMigrationMarker(markerPath, {
