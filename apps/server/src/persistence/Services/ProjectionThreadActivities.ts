@@ -32,6 +32,15 @@ export const ProjectionThreadActivity = Schema.Struct({
 });
 export type ProjectionThreadActivity = typeof ProjectionThreadActivity.Type;
 
+export const ProjectionThreadActivitySummary = Schema.Struct({
+  activityId: EventId,
+  kind: Schema.String,
+  payload: Schema.Unknown,
+  sequence: Schema.optional(NonNegativeInt),
+  createdAt: IsoDateTime,
+});
+export type ProjectionThreadActivitySummary = typeof ProjectionThreadActivitySummary.Type;
+
 export const ListProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -65,6 +74,13 @@ export interface ProjectionThreadActivityRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadActivitiesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * List only interaction lifecycle rows needed to derive sidebar summary state.
+   */
+  readonly listSummaryByThreadId: (
+    input: ListProjectionThreadActivitiesInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivitySummary>, ProjectionRepositoryError>;
 
   /**
    * Delete projected thread activity rows by thread.

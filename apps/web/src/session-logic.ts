@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
@@ -823,6 +824,8 @@ export function deriveWorkLogEntries(
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    // Server-side Studio output attribution is environment-panel data, not transcript work.
+    .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);

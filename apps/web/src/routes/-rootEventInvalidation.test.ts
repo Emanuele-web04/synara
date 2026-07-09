@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
+  getStudioOutputInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -85,6 +86,40 @@ describe("root event invalidation", () => {
     expect(getGitInvalidationThreadIdForEvent(event("thread.message-sent", { threadId }))).toBe(
       null,
     );
+  });
+
+  it("invalidates Studio outputs for file-change activities and finalized checkpoints", () => {
+    const threadId = ThreadId.makeUnsafe("thread-studio");
+    const fileChangeActivity = event("thread.activity-appended", {
+      threadId,
+      activity: { kind: "tool.completed", payload: { itemType: "file_change" } },
+    });
+
+    expect(getStudioOutputInvalidationThreadIdForEvent(fileChangeActivity)).toBe(threadId);
+    expect(
+      getStudioOutputInvalidationThreadIdForEvent(
+        event("thread.activity-appended", {
+          threadId,
+          activity: { kind: "studio.outputs.captured", payload: { itemType: "studio_outputs" } },
+        }),
+      ),
+    ).toBe(threadId);
+    expect(
+      getStudioOutputInvalidationThreadIdForEvent(
+        event("thread.turn-diff-completed", { threadId }),
+      ),
+    ).toBe(threadId);
+    expect(
+      getStudioOutputInvalidationThreadIdForEvent(event("thread.message-sent", { threadId })),
+    ).toBe(null);
+    expect(
+      getStudioOutputInvalidationThreadIdForEvent(
+        event("thread.activity-appended", {
+          threadId,
+          activity: { kind: "tool.updated", payload: { itemType: "file_change" } },
+        }),
+      ),
+    ).toBe(null);
   });
 
   it("resolves local and worktree cwd from the current thread projection", () => {

@@ -168,7 +168,7 @@ export interface DispatchCommandNormalizerOptions<E> {
 // operation is safe to retry (it's idempotent recursive directory creation). Since this runs
 // AFTER the orchestration decider has already accepted the dispatch (see wsRpc), a single
 // transient failure here would otherwise permanently strand the project row without its
-// managed subdirectories — Studio self-heals via studio.listRecentOutputs, but per-thread CHAT
+// managed subdirectories — Studio self-heals via studio.listThreadOutputs, but per-thread CHAT
 // workspace roots have no other re-run site. Retry a bounded number of times with a short
 // backoff before letting the failure surface to the caller.
 const WORKSPACE_ROOT_PREPARE_RETRY_SCHEDULE = Schedule.exponential("100 millis").pipe(

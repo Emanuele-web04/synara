@@ -22,6 +22,14 @@ export const ProjectionThreadProposedPlan = Schema.Struct({
 });
 export type ProjectionThreadProposedPlan = typeof ProjectionThreadProposedPlan.Type;
 
+export const ProjectionThreadProposedPlanSummary = Schema.Struct({
+  planId: OrchestrationProposedPlanId,
+  turnId: Schema.NullOr(TurnId),
+  implementedAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+export type ProjectionThreadProposedPlanSummary = typeof ProjectionThreadProposedPlanSummary.Type;
+
 export const ListProjectionThreadProposedPlansInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -41,6 +49,9 @@ export interface ProjectionThreadProposedPlanRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadProposedPlansInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadProposedPlan>, ProjectionRepositoryError>;
+  readonly listSummaryByThreadId: (
+    input: ListProjectionThreadProposedPlansInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionThreadProposedPlanSummary>, ProjectionRepositoryError>;
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadProposedPlansInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

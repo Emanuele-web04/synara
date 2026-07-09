@@ -11,6 +11,7 @@ export type ProjectMetadataOrchestrationEvent = Extract<
 >;
 
 export const PROJECT_METADATA_SNAPSHOT_PROJECTORS = [
+  "projection.hot",
   "projection.projects",
   "projection.threads",
   "projection.thread-messages",

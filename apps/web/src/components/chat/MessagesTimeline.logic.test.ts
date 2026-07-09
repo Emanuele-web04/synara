@@ -8,6 +8,7 @@ import {
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
@@ -622,6 +623,81 @@ describe("resolveAssistantMessageCopyState", () => {
         streaming: false,
       }),
     ).toEqual({ text: null, visible: false });
+  });
+});
+
+describe("resolveAssistantMessageDisplayText", () => {
+  it("suppresses the empty placeholder when the turn visibly completed an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        collapsedTurnItems: [
+          {
+            kind: "work",
+            id: "generated-image",
+            entry: {
+              id: "generated-image",
+              createdAt: "2026-07-08T10:00:00.000Z",
+              label: "Generated image",
+              tone: "tool",
+              itemType: "image_generation",
+              activityKind: "tool.completed",
+            },
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the placeholder when a settled turn produced no visible content", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("does not mistake an unfinished or failed image tool row for produced content", () => {
+    const imageEntry = {
+      id: "generated-image",
+      createdAt: "2026-07-08T10:00:00.000Z",
+      label: "Generating image",
+      tone: "tool" as const,
+      itemType: "image_generation" as const,
+      activityKind: "tool.started",
+    };
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [imageEntry],
+      }),
+    ).toBe("(empty response)");
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [
+          { ...imageEntry, activityKind: "tool.completed", tone: "error" as const },
+        ],
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("preserves real assistant text even when the same turn generated an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "Here is your image.", streaming: false },
+        inlineWorkEntries: [
+          {
+            id: "generated-image",
+            createdAt: "2026-07-08T10:00:00.000Z",
+            label: "Generated image",
+            tone: "tool",
+            itemType: "image_generation",
+            activityKind: "tool.completed",
+          },
+        ],
+      }),
+    ).toBe("Here is your image.");
   });
 });
 

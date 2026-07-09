@@ -134,6 +134,48 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
+type AssistantMessageDisplayInput = {
+  readonly message: Pick<ChatMessage, "text" | "streaming">;
+  readonly leadingWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly inlineWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly collapsedTurnItems?: ReadonlyArray<CollapsedTurnItem>;
+};
+
+function isVisibleGeneratedImageEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.itemType === "image_generation" &&
+    entry.activityKind === "tool.completed" &&
+    entry.tone !== "error"
+  );
+}
+
+/**
+ * Resolves the markdown body for an assistant row. A completed image-generation
+ * work item is already visible non-text output, so an adjacent empty provider
+ * message must not add the misleading "(empty response)" placeholder. Truly
+ * empty settled turns retain the placeholder, and live empty text stays blank.
+ */
+export function resolveAssistantMessageDisplayText(
+  input: AssistantMessageDisplayInput,
+): string | null {
+  if (input.message.text) {
+    return input.message.text;
+  }
+  if (input.message.streaming) {
+    return "";
+  }
+
+  const hasVisibleGeneratedImage = [
+    ...(input.leadingWorkEntries ?? []),
+    ...(input.inlineWorkEntries ?? []),
+    ...(input.collapsedTurnItems ?? []).flatMap((item) =>
+      item.kind === "work" ? [item.entry] : [],
+    ),
+  ].some(isVisibleGeneratedImageEntry);
+
+  return hasVisibleGeneratedImage ? null : "(empty response)";
+}
+
 // Builds the "Files changed" lookup keyed by the last assistant row in the
 // user-visible response segment. Provider mini-turns can emit diffs before the
 // final answer, so the card follows the segment tail instead of the raw turn.
