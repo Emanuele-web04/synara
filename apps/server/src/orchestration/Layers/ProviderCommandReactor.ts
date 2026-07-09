@@ -1172,7 +1172,7 @@ const make = Effect.gen(function* () {
         },
       });
     }
-    if (sidechatBootstrapText) {
+    if (sidechatBootstrapText && input.reviewTarget === undefined) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
       freshSessionContextBootstrapThreadIds.delete(input.threadId);
     }

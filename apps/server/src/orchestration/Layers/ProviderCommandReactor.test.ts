@@ -212,6 +212,12 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-steer-1"),
       }),
     );
+    const startReview = vi.fn<ProviderServiceShape["startReview"]>((input) =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: asTurnId("turn-review-1"),
+      }),
+    );
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
       Effect.succeed(null),
     );
@@ -329,7 +335,7 @@ describe("ProviderCommandReactor", () => {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
-      startReview: unsupported as ProviderServiceShape["startReview"],
+      startReview,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
@@ -422,6 +428,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       steerTurn,
+      startReview,
       forkThread,
       interruptTurn,
       respondToRequest,
@@ -574,6 +581,93 @@ describe("ProviderCommandReactor", () => {
     expect(secondInput?.input).not.toContain("Earlier question");
     expect(secondInput?.input).not.toContain("Earlier answer");
     expect(secondInput?.input).toContain("Second side question");
+  });
+
+  it("preserves pending sidechat context when the first turn is a provider review", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Review sidechat",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("review-sidechat-imported-user"),
+            role: "user",
+            text: "Context that must survive the review",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("review-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Prior sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-review-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        message: {
+          messageId: asMessageId("review-sidechat-review-user"),
+          role: "user",
+          text: "Review the working tree",
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startReview.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-follow-up-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        message: {
+          messageId: asMessageId("review-sidechat-follow-up-user"),
+          role: "user",
+          text: "Continue with the side question",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<sidechat_context>");
+    expect(input?.input).toContain("Context that must survive the review");
+    expect(input?.input).toContain("Prior sidechat answer");
+    expect(input?.input).toContain("Continue with the side question");
   });
 
   it("blocks an overlong Droid fork turn and bootstraps its shorter retry", async () => {
