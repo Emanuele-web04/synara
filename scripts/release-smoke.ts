@@ -136,6 +136,11 @@ function verifyReleaseWorkflowSafety(): void {
     "needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_FINALIZE_RELEASE == '1'",
     "Expected release finalization to require explicit publication mode.",
   );
+  assertContains(
+    workflow,
+    "Windows signing is optional; building an unsigned installer",
+    "Expected Windows releases to support unsigned installers when signing is unavailable.",
+  );
 }
 
 function verifyDesktopStageProductionInstall(targetRoot: string): void {
