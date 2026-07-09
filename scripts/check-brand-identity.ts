@@ -42,14 +42,6 @@ const forbiddenPatterns = [
   new RegExp(escapeRegExp(incorrectBundleDomain), "i"),
 ] as const;
 
-const legalNotice = `Copyright (c) 2026 ${characters(84, 51)} ${characters(
-  84,
-  111,
-  111,
-  108,
-  115,
-)} Inc.`;
-
 // Raster images cannot be searched for embedded text. Keep the user-facing
 // screenshots behind reviewed digests so changing either one requires another
 // explicit visual identity audit instead of silently bypassing this guard.
@@ -94,7 +86,6 @@ export function findBrandIdentityViolations(
     }
     for (const [index, line] of file.contents.split(/\r?\n/).entries()) {
       if (!containsForbiddenIdentity(line)) continue;
-      if (file.path === "LICENSE" && line === legalNotice) continue;
       violations.push({ path: file.path, line: index + 1, text: line.trim() });
     }
   }
