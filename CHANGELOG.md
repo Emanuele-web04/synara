@@ -2,11 +2,33 @@
 
 ## 0.4.2 - 2026-07-09
 
-### Changed
+### Added
 
 - Added the Synara identity bridge that exports canonical renderer storage before the packaged origin changes.
-- Canonicalized migration and checkpoint metadata while keeping existing persisted refs readable.
+- Added per-thread 1M-token context window tracking for Claude sessions, with automatic compaction handling and context-usage warnings near the window limit.
+- Added fallback model pinning for Claude after a safeguard reroute, cleared when the user explicitly selects a different model.
+- Added a durable desktop update install marker that verifies installs across restarts, plus an install watchdog with recovery and macOS ShipIt/launchctl update diagnostics.
+- Added a build-only native release validation mode and a team-bound macOS signing requirement for seamless future updates.
 - Added a durable, bounded Codex-overlay suppression marker without modifying the user's source configuration.
+
+### Changed
+
+- Claude model and context-window switches now happen in-session instead of forcing a full session restart, sharply reducing restarts and runaway token usage.
+- Canonicalized migration and checkpoint metadata while keeping existing persisted refs readable.
+- Enforced the staged Synara update feed end to end, with fail-closed preflight checks in the release pipeline.
+- Made Windows code signing optional in the release pipeline and finalized Synara license attribution.
+
+### Fixed
+
+- Fixed the new-chat keyboard shortcut routing inside Studio.
+- Repaired incomplete legacy home imports and restored the legacy environment identity from the bridge marker.
+- Ordered renderer storage migration before app hydration and guarded renderer bootstrap ordering.
+- Preserved composer drafts more reliably through the storage-key migration.
+
+### Verification
+
+- `bun run fmt`, `bun run lint`, `bun run typecheck`, `bun run release:smoke`, `bun run build`, and the full `bun run test` suite (1688 passed, 6 skipped, 0 failed) all passed on the release commit.
+- Build-only native validation succeeded for macOS arm64/x64, Linux x64, and Windows x64 prior to tagging; the tagged release pipeline completed with all four platform builds green.
 
 ### Upgrade note
 

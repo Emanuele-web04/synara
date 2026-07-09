@@ -33,6 +33,30 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         details:
           "This bridge writes a validated Synara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
       },
+      {
+        id: "claude-usage-reliability",
+        title: "Claude threads use far fewer tokens and restart less",
+        description:
+          "Long Claude conversations now track their 1M-token context window per thread, compact automatically, and switch models without restarting the session — ending runaway usage.",
+        details:
+          "Each thread tracks its own context window and warns as usage approaches the limit. After a safeguard reroute, the fallback model stays pinned until you explicitly pick another model, and model or context-window changes apply in-session instead of tearing the session down.",
+      },
+      {
+        id: "desktop-update-verification",
+        title: "Desktop updates now verify their own installs",
+        description:
+          "Synara checks that an update actually installed after restart, detects failed installs, and recovers instead of silently staying on the old version.",
+        details:
+          "A durable install marker survives restarts and tracks handoff state, an install watchdog recovers from hung installs, and on macOS dedicated diagnostics capture updater state to make failures actionable.",
+      },
+      {
+        id: "studio-and-migration-fixes",
+        title: "Studio shortcut and migration fixes",
+        description:
+          "The new-chat keyboard shortcut now routes correctly inside Studio, composer drafts survive the storage migration, and incomplete legacy home imports repair themselves.",
+        details:
+          "Renderer storage migration is guaranteed to run before app hydration, the legacy environment identity is restored from the bridge marker, and checkpoint metadata is canonicalized while keeping existing persisted refs readable.",
+      },
     ],
   },
   {
@@ -1494,7 +1518,8 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "claude-opus-4-8",
         title: "Claude Opus 4.8 is available",
-        description: "Synara now includes Claude Opus 4.8 in the Claude model picker.",
+        description:
+          "Synara now includes Claude Opus 4.8 in the Claude model picker.",
       },
     ],
   },
@@ -2177,7 +2202,8 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "chats-are-now-available",
         title: "💬 Chats are now available!",
-        description: "Write without a selected project, or create threads from there.",
+        description:
+          "Write without a selected project, or create threads from there.",
       },
       {
         id: "new-shortcuts",
@@ -2194,7 +2220,8 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "bulk-thread-actions",
         title: "📁 Bulk thread actions",
-        description: "Select multiple threads at once and act on them together.",
+        description:
+          "Select multiple threads at once and act on them together.",
       },
       {
         id: "cleaner-reasoning-picker",
