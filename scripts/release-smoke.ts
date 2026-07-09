@@ -118,7 +118,11 @@ function verifyCanonicalIdentity(): void {
 
   const releasePolicy = readReleaseUpdatePolicyConfig(repoRoot);
   const resolvedPolicy = resolveReleaseUpdatePolicy("9.9.9-smoke.0", releasePolicy);
-  if (resolvedPolicy.lane !== "clean" || resolvedPolicy.makeLatest) {
+  if (
+    resolvedPolicy.lane !== "clean" ||
+    resolvedPolicy.makeLatest ||
+    resolvedPolicy.mirrorToStableChannel
+  ) {
     throw new Error("Expected clean Synara releases to preserve the pinned compatibility feed.");
   }
 }

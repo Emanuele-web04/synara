@@ -17,6 +17,7 @@ export interface ResolvedReleaseUpdatePolicy {
   readonly tag: string;
   readonly isPrerelease: boolean;
   readonly makeLatest: boolean;
+  readonly mirrorToStableChannel: boolean;
   readonly lane: ReleaseLane;
   readonly bridgeTag: string;
   readonly channel: string;
@@ -94,6 +95,7 @@ export function resolveReleaseUpdatePolicy(
     tag: `v${version}`,
     isPrerelease: requested.isPrerelease,
     makeLatest: normalizedConfig.lane === "bridge",
+    mirrorToStableChannel: normalizedConfig.lane === "clean" && !requested.isPrerelease,
     lane: normalizedConfig.lane,
     bridgeTag: `v${normalizedConfig.bridgeVersion}`,
     channel: normalizedConfig.channel,

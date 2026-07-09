@@ -14,7 +14,8 @@ This document covers how to run desktop releases from one tag, first without sig
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Synara releases never replace the permanent compatibility release as the repository's GitHub Latest release.
-- Mirrors versioned desktop payloads and dedicated `synara*.yml` metadata onto that pinned compatibility release.
+- Mirrors stable versioned desktop payloads and dedicated `synara*.yml` metadata onto that pinned compatibility release.
+- Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
 

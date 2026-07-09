@@ -22,17 +22,20 @@ describe("release update policy", () => {
       tag: "v0.4.2",
       lane: "bridge",
       makeLatest: true,
+      mirrorToStableChannel: false,
     });
     expect(resolveReleaseUpdatePolicy("v0.5.0", cleanConfig)).toMatchObject({
       tag: "v0.5.0",
       lane: "clean",
       makeLatest: false,
+      mirrorToStableChannel: true,
       bridgeTag: "v0.4.2",
       channel: "synara",
     });
     expect(resolveReleaseUpdatePolicy("0.6.0-beta.1", cleanConfig)).toMatchObject({
       isPrerelease: true,
       makeLatest: false,
+      mirrorToStableChannel: false,
     });
   });
 

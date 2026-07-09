@@ -29,6 +29,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
+      mirror_to_stable_channel: ${{ steps.release_meta.outputs.mirror_to_stable_channel }}
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
       update_channel: ${{ steps.release_meta.outputs.update_channel }}
@@ -368,7 +369,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed
-        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
