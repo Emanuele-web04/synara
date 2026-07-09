@@ -190,8 +190,7 @@ function availableProviderContextChars(input: {
 }): number {
   return Math.max(
     0,
-    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
-      wrapProviderContext({ ...input, contextText: "" }).length,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - wrapProviderContext({ ...input, contextText: "" }).length,
   );
 }
 
@@ -1297,11 +1296,7 @@ const make = Effect.gen(function* () {
         Effect.onError(() => cancelPendingStudioBaseline),
       );
     }
-    if (
-      handoffBootstrapText &&
-      thread.handoff !== null &&
-      input.reviewTarget === undefined
-    ) {
+    if (handoffBootstrapText && thread.handoff !== null && input.reviewTarget === undefined) {
       yield* orchestrationEngine.dispatch({
         type: "thread.meta.update",
         commandId: serverCommandId("handoff-bootstrap-complete"),
