@@ -45,6 +45,7 @@ import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
+import { EnvironmentStudioOutputsSection } from "./EnvironmentStudioOutputsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
@@ -89,6 +90,11 @@ export interface EnvironmentPanelProps {
   activeThreadId: ThreadId | null;
   /** Active provider for the usage row (same chip the header used to show). */
   activeProvider: ProviderKind;
+  /**
+   * Whether the active thread is a Studio chat. Studio chats show the Output section:
+   * the Outbox files THIS chat produced, so its output stays attached to the chat.
+   */
+  isStudioChat: boolean;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
@@ -198,6 +204,7 @@ export function EnvironmentPanel({
   availableEditors,
   activeThreadId,
   activeProvider,
+  isStudioChat,
   showGitActions,
   diffOpen,
   threadAutomations,
@@ -334,6 +341,10 @@ export function EnvironmentPanel({
           onOpenUrl={onOpenGithubRepository}
           onClose={onClose}
         />
+      ) : null}
+
+      {isStudioChat && activeThreadId ? (
+        <EnvironmentStudioOutputsSection threadId={activeThreadId} enabled={open} />
       ) : null}
 
       {settings.showEnvironmentEditor ? (

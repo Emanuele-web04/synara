@@ -20,7 +20,10 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
-import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import {
+  OrchestrationEventStore,
+  type OrchestrationEventStoreShape,
+} from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
   ORCHESTRATION_PROJECTOR_NAMES,
@@ -38,6 +41,21 @@ const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(NodeServices.layer),
   );
+
+const makeObservedEventStoreLayer = (readCursors: Array<number>) =>
+  Layer.effect(
+    OrchestrationEventStore,
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      return {
+        ...eventStore,
+        readFromSequence(sequenceExclusive, limit) {
+          readCursors.push(sequenceExclusive);
+          return eventStore.readFromSequence(sequenceExclusive, limit);
+        },
+      } satisfies OrchestrationEventStoreShape;
+    }),
+  ).pipe(Layer.provide(OrchestrationEventStoreLive));
 
 const exists = (filePath: string) =>
   Effect.gen(function* () {
@@ -276,6 +294,137 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 });
+
+it.effect("fast-forwards lagging hot projector cursors before restart replay", () =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const firstProjectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(persistenceLayer),
+    );
+    const readCursors: Array<number> = [];
+    const secondProjectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(makeObservedEventStoreLayer(readCursors)),
+      Layer.provideMerge(persistenceLayer),
+    );
+    const projectId = ProjectId.makeUnsafe("project-bootstrap-fast-forward");
+    const threadId = ThreadId.makeUnsafe("thread-bootstrap-fast-forward");
+    const createdAt = "2026-07-09T10:00:00.000Z";
+
+    const latestSequence = yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-bootstrap-fast-forward-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-bootstrap-fast-forward-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-fast-forward-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Bootstrap fast-forward project",
+          workspaceRoot: "/tmp/project-bootstrap-fast-forward",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-bootstrap-fast-forward-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-bootstrap-fast-forward-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-fast-forward-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Bootstrap fast-forward thread",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-5-20250929",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      let latestSequence = 0;
+      for (let index = 0; index < 20; index += 1) {
+        const occurredAt = `2026-07-09T10:00:${String(index + 1).padStart(2, "0")}.000Z`;
+        const savedEvent = yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(`evt-bootstrap-fast-forward-activity-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(`cmd-bootstrap-fast-forward-activity-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-bootstrap-fast-forward-activity-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`activity-bootstrap-fast-forward-${index}`),
+              tone: "info",
+              kind: "context-window.updated",
+              summary: "Context window updated",
+              payload: { usedTokens: index + 1, maxTokens: 200_000 },
+              turnId: null,
+              createdAt: occurredAt,
+            },
+          },
+        });
+        latestSequence = savedEvent.sequence;
+        yield* projectionPipeline.projectEvent(savedEvent);
+      }
+      return latestSequence;
+    }).pipe(Effect.provide(firstProjectionLayer));
+
+    const projectorStates = yield* Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      yield* projectionPipeline.bootstrap;
+      return yield* sql<{ readonly projector: string; readonly lastAppliedSequence: number }>`
+        SELECT
+          projector,
+          last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        WHERE projector <> ${ORCHESTRATION_PROJECTOR_NAMES.hot}
+        ORDER BY projector ASC
+      `;
+    }).pipe(Effect.provide(secondProjectionLayer));
+
+    assert.equal(readCursors.length, projectorStates.length);
+    assert.deepEqual([...new Set(readCursors)], [latestSequence]);
+    for (const row of projectorStates) {
+      assert.equal(row.lastAppliedSequence, latestSequence);
+    }
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3-projection-pipeline-fast-forward-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
   "OrchestrationProjectionPipeline",
@@ -2527,6 +2676,82 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           defaultModelSelection: '{"provider":"codex","model":"gpt-5"}',
           isPinned: 1,
         },
+      ]);
+    }),
+  );
+
+  it.effect("routes telemetry activities only through their owning hot projector", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-07-09T00:00:00.000Z";
+      const projectId = ProjectId.makeUnsafe("project-routed-telemetry");
+      const threadId = ThreadId.makeUnsafe("thread-routed-telemetry");
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-routed-project"),
+        projectId,
+        title: "Routed telemetry",
+        workspaceRoot: "/tmp/project-routed-telemetry",
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-routed-thread"),
+        threadId,
+        projectId,
+        title: "Routed telemetry",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+
+      yield* sql`CREATE TABLE projection_state_write_log (projector TEXT NOT NULL)`;
+      yield* sql`
+        CREATE TRIGGER log_projection_state_insert
+        AFTER INSERT ON projection_state
+        BEGIN
+          INSERT INTO projection_state_write_log (projector) VALUES (NEW.projector);
+        END
+      `;
+      yield* sql`
+        CREATE TRIGGER log_projection_state_update
+        AFTER UPDATE ON projection_state
+        BEGIN
+          INSERT INTO projection_state_write_log (projector) VALUES (NEW.projector);
+        END
+      `;
+
+      yield* engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-routed-context-window"),
+        threadId,
+        activity: {
+          id: EventId.makeUnsafe("activity-routed-context-window"),
+          tone: "info",
+          kind: "context-window.updated",
+          summary: "Context window updated",
+          payload: { usedTokens: 42, maxTokens: 200_000 },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      });
+
+      const writes = yield* sql<{ readonly projector: string }>`
+        SELECT projector
+        FROM projection_state_write_log
+        ORDER BY projector ASC
+      `;
+      assert.deepEqual(writes, [
+        { projector: "projection.hot" },
+        { projector: "projection.thread-activities" },
+        { projector: "projection.thread-shell-summaries" },
       ]);
     }),
   );

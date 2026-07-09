@@ -1,9 +1,13 @@
 // FILE: -rootEventInvalidation.ts
-// Purpose: Classifies streamed orchestration events that should invalidate shared query caches.
+// Purpose: Classifies streamed orchestration events that invalidate shared query caches.
 // Layer: Root route utility
-// Exports: Event invalidation predicates for provider/project and git query caches.
+// Exports: Event invalidation predicates for provider, project, Git, and Studio output caches.
 
-import type { OrchestrationEvent, ThreadId } from "@t3tools/contracts";
+import {
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
+  type OrchestrationEvent,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 import type { AppState } from "../store";
@@ -63,6 +67,25 @@ export function getProjectFileInvalidationThreadIdForEvent(
     return event.payload.threadId;
   }
   return null;
+}
+
+/** Invalidates one Studio output list after attribution or filesystem state changes. */
+export function getStudioOutputInvalidationThreadIdForEvent(
+  event: OrchestrationEvent,
+): ThreadId | null {
+  if (event.type === "thread.activity-appended") {
+    // Server-side per-turn output capture is the authoritative attribution signal.
+    if (event.payload.activity.kind === STUDIO_OUTPUTS_ACTIVITY_KIND) {
+      return event.payload.threadId;
+    }
+    return event.payload.activity.kind === "tool.completed"
+      ? getProjectFileInvalidationThreadIdForEvent(event)
+      : null;
+  }
+  if (!FILE_CHANGE_EVENT_TYPES.has(event.type)) {
+    return null;
+  }
+  return "threadId" in event.payload ? (event.payload.threadId as ThreadId) : null;
 }
 
 export function getGitInvalidationThreadIdForEvent(event: OrchestrationEvent): ThreadId | null {

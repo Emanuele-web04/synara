@@ -64,6 +64,7 @@ import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -249,6 +250,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
+  const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
@@ -1016,11 +1018,28 @@ const make = Effect.gen(function* () {
       ),
     );
 
+    // Both Git and non-Git Studio baselines must finish before provider execution
+    // starts. Otherwise a fast command can write a file while the baseline scan is
+    // still running and make that output look unchanged at turn completion.
+    const capturePreTurnBaselines = Effect.all(
+      [
+        captureMessageStartCheckpoint,
+        studioOutputReactor.captureBaselineBeforeTurn(input.threadId),
+      ],
+      { concurrency: 2, discard: true },
+    );
+    const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
+      input.threadId,
+    );
+
     if (input.reviewTarget !== undefined) {
-      yield* providerService.startReview({
-        threadId: input.threadId,
-        target: input.reviewTarget,
-      });
+      yield* capturePreTurnBaselines;
+      yield* providerService
+        .startReview({
+          threadId: input.threadId,
+          target: input.reviewTarget,
+        })
+        .pipe(Effect.onError(() => cancelPendingStudioBaseline));
     } else if (input.dispatchMode === "steer") {
       yield* providerService.steerTurn({
         threadId: input.threadId,
@@ -1032,7 +1051,7 @@ const make = Effect.gen(function* () {
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       });
     } else {
-      yield* captureMessageStartCheckpoint;
+      yield* capturePreTurnBaselines;
       yield* sendQueuedProviderTurn(normalizedInput).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
@@ -1089,6 +1108,7 @@ const make = Effect.gen(function* () {
             return yield* sendQueuedProviderTurn(retryNormalizedInput);
           }),
         ),
+        Effect.onError(() => cancelPendingStudioBaseline),
       );
     }
     if (handoffBootstrapText && thread.handoff !== null) {
