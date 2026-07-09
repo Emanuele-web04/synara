@@ -2194,6 +2194,87 @@ describe("composerDraftStore sticky composer settings", () => {
       activeProvider: "claudeAgent",
     });
   });
+
+  it("strips the Claude context window from sticky selections", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setStickyModelSelection(
+      modelSelection("claudeAgent", "claude-opus-4-6", {
+        effort: "max",
+        contextWindow: "1m",
+      }),
+    );
+
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),
+    );
+  });
+
+  it("drops sticky Claude options entirely when only the context window was set", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setStickyModelSelection(
+      modelSelection("claudeAgent", "claude-opus-4-6", { contextWindow: "1m" }),
+    );
+
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6"),
+    );
+  });
+
+  it("does not persist Claude context window changes through sticky provider options", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.makeUnsafe("thread-sticky-context-window");
+
+    store.setProviderModelOptions(
+      threadId,
+      "claudeAgent",
+      { effort: "xhigh", contextWindow: "1m" },
+      { persistSticky: true, model: "claude-opus-4-7" },
+    );
+
+    const state = useComposerDraftStore.getState();
+    // The thread keeps its own context window choice.
+    expect(state.draftsByThreadId[threadId]?.modelSelectionByProvider.claudeAgent?.options).toEqual(
+      {
+        effort: "xhigh",
+        contextWindow: "1m",
+      },
+    );
+    // The sticky snapshot only carries options that are safe to inherit.
+    expect(state.stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-7", { effort: "xhigh" }),
+    );
+  });
+
+  it("sanitizes a persisted sticky Claude context window during hydration", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (persistedState: unknown, currentState: unknown) => unknown;
+      };
+    };
+    const merged = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {},
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+        stickyModelSelectionByProvider: {
+          claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", {
+            effort: "max",
+            contextWindow: "1m",
+          }),
+        },
+        stickyActiveProvider: "claudeAgent",
+      },
+      useComposerDraftStore.getState(),
+    ) as {
+      stickyModelSelectionByProvider: Partial<Record<ModelSelection["provider"], ModelSelection>>;
+    };
+
+    expect(merged.stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),
+    );
+  });
 });
 
 describe("composerDraftStore provider-scoped option updates", () => {
