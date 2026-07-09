@@ -256,6 +256,7 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
       fs.writeFileSync(path.join(targetPaths.attachmentsDir, "existing.txt"), "newer");
       fs.writeFileSync(path.join(targetPaths.secretsDir, "server-signing-key.bin"), "newer-key");
       fs.writeFileSync(targetPaths.anonymousIdPath, "already-imported-anonymous-id");
+      fs.writeFileSync(targetPaths.environmentIdPath, "generated-target-environment-id\n");
       fs.mkdirSync(path.dirname(markerPath), { recursive: true });
       fs.writeFileSync(
         markerPath,
