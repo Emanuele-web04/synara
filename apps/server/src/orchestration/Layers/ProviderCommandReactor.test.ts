@@ -224,8 +224,25 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-review-1"),
       }),
     );
-    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
-      Effect.succeed(input?.forkThreadResult ?? null),
+    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>((forkInput) =>
+      Effect.sync(() => {
+        const result = input?.forkThreadResult ?? null;
+        if (result && !runtimeSessions.some((session) => session.threadId === forkInput.threadId)) {
+          runtimeSessions.push({
+            provider: forkInput.modelSelection.provider,
+            status: "ready",
+            runtimeMode: forkInput.runtimeMode,
+            ...(forkInput.modelSelection.model !== undefined
+              ? { model: forkInput.modelSelection.model }
+              : {}),
+            threadId: forkInput.threadId,
+            ...(result.resumeCursor !== undefined ? { resumeCursor: result.resumeCursor } : {}),
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        return result;
+      }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
@@ -639,6 +656,36 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-overlong-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("native-droid-sidechat-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "error"
+      );
+    });
+    expect(harness.forkThread).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const failedReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      failedReadModel.threads.find((thread) => thread.id === threadId)?.session?.lastError,
+    ).toContain("too long to include the sidechat context");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
         commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-turn-start"),
         threadId,
         message: {
@@ -653,8 +700,8 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.forkThread.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.forkThread).toHaveBeenCalledTimes(1);
     const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
     expect(input?.input).toContain("<sidechat_context>");
     expect(input?.input).toContain("Imported Droid sidechat question");
