@@ -8,6 +8,7 @@ export const MICROPHONE_USAGE_DESCRIPTION =
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
+export const MAC_BRIDGE_REQUIREMENTS_PATH = "apps/desktop/resources/requirements.mac.bridge";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
@@ -58,6 +59,7 @@ export function createDesktopPlatformBuildConfig(
       hardenedRuntime: true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      requirements: MAC_BRIDGE_REQUIREMENTS_PATH,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
       },
