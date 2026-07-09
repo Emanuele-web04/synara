@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -14,6 +14,7 @@ import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useRecentViewSwitcher } from "../hooks/useRecentViewSwitcher";
@@ -26,11 +27,13 @@ import {
 import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
+import { useWorkspaceStore } from "../workspaceStore";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -196,6 +199,9 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
+  const isStudioRoute = useLocation({
+    select: (location) => location.pathname.startsWith("/studio"),
+  });
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -221,6 +227,10 @@ function ChatRouteGlobalShortcuts() {
     projects,
   });
   const { handleNewChat } = useHandleNewChat();
+  const { handleNewStudioChat } = useHandleNewStudioChat();
+  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
@@ -246,6 +256,25 @@ function ChatRouteGlobalShortcuts() {
   });
   const currentProjectId = resolveCurrentProjectTargetId(projects, activeProject?.id ?? null);
   const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
+  const handleNewChatForActiveSurface = useCallback(
+    () =>
+      startFreshChatForActiveSurface({
+        activeProject,
+        isStudioRoute,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
+        handleNewChat,
+        handleNewStudioChat,
+      }),
+    [
+      activeProject,
+      chatWorkspaceRoot,
+      handleNewChat,
+      handleNewStudioChat,
+      homeDir,
+      isStudioRoute,
+      studioWorkspaceRoot,
+    ],
+  );
 
   useEffect(() => {
     if (!currentProjectId) {
@@ -340,7 +369,7 @@ function ChatRouteGlobalShortcuts() {
       if (command === "chat.newChat" || command === "chat.newLocal") {
         event.preventDefault();
         event.stopPropagation();
-        void handleNewChat({ fresh: true });
+        void handleNewChatForActiveSurface();
         return;
       }
 
@@ -435,7 +464,7 @@ function ChatRouteGlobalShortcuts() {
     clearSelection,
     commitRecentSwitcherSelection,
     currentProjectId,
-    handleNewChat,
+    handleNewChatForActiveSurface,
     handleNewThread,
     keybindings,
     latestUsableProjectId,
