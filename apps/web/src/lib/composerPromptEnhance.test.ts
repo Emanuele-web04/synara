@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  enhanceComposerPrompt,
-  resolvePromptEnhanceModelSelection,
-} from "./composerPromptEnhance";
+import { enhanceComposerPrompt, resolvePromptEnhanceModelSelection } from "./composerPromptEnhance";
 
 describe("composerPromptEnhance", () => {
   it("prefers the composer model when the provider supports text generation", () => {

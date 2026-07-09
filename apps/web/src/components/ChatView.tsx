@@ -3861,10 +3861,7 @@ export default function ChatView({
       return;
     }
 
-    const cwd =
-      activeProject?.cwd?.trim() ||
-      serverConfigQuery.data?.cwd?.trim() ||
-      null;
+    const cwd = activeProject?.cwd?.trim() || serverConfigQuery.data?.cwd?.trim() || null;
     if (!cwd) {
       toastManager.add({
         type: "error",
@@ -10646,9 +10643,7 @@ export default function ChatView({
                                 isEnhancingPrompt ||
                                 !prompt.trim()
                               }
-                              aria-label={
-                                isEnhancingPrompt ? "Enhancing prompt" : "Enhance prompt"
-                              }
+                              aria-label={isEnhancingPrompt ? "Enhancing prompt" : "Enhance prompt"}
                               onClick={() => void enhanceComposerDraftPrompt()}
                             >
                               {isEnhancingPrompt ? (
