@@ -7,6 +7,7 @@ import {
   MICROPHONE_USAGE_DESCRIPTION,
   NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
+  WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
@@ -55,6 +56,10 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(win.mac, undefined);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
+    assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
+    assert.deepStrictEqual(win.nsis, {
+      guid: WINDOWS_INSTALLER_GUID,
+    });
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
