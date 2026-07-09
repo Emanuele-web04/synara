@@ -3880,6 +3880,36 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("closes an uninstalled Claude query when post-spawn setup fails", () => {
+    const query = new FakeClaudeQuery();
+    (query as { supportedModels: () => Promise<[]> }).supportedModels = () => {
+      throw new Error("simulated post-spawn setup failure");
+    };
+    const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.ok(Exit.isFailure(result));
+      assert.equal(query.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      assert.equal((yield* adapter.listSessions()).length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("warns once when the per-request prompt nears the context window", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

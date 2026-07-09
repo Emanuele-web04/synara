@@ -3566,181 +3566,209 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }),
         });
 
-        // Populate model cache in background from first session
-        if (!cachedModels) {
-          queryRuntime
-            .supportedModels()
-            .then((models) => {
-              cachedModels = {
-                models: models.map((m) => ({ slug: m.value, name: m.displayName })),
-                source: "sdk",
-                cached: false,
-              };
-            })
-            .catch(() => {
-              /* ignore discovery failures */
-            });
-        }
+        let installationContext: ClaudeSessionContext | undefined;
+        let installationComplete = false;
 
-        // Populate agent cache in background from first session
-        if (!cachedAgents) {
-          queryRuntime
-            .supportedAgents()
-            .then((agents) => {
-              cachedAgents = {
-                agents: agents.map((a) => ({
-                  name: a.name,
-                  displayName: a.name,
-                  ...(a.description ? { description: a.description } : {}),
-                  ...(a.model ? { model: a.model } : {}),
-                })),
-                source: "sdk",
-                cached: false,
-              };
-            })
-            .catch(() => {
-              /* ignore discovery failures */
-            });
-        }
+        return yield* Effect.gen(function* () {
+          // Populate model cache in background from first session
+          if (!cachedModels) {
+            queryRuntime
+              .supportedModels()
+              .then((models) => {
+                cachedModels = {
+                  models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                  source: "sdk",
+                  cached: false,
+                };
+              })
+              .catch(() => {
+                /* ignore discovery failures */
+              });
+          }
 
-        const session: ProviderSession = {
-          threadId,
-          provider: PROVIDER,
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          ...(input.cwd ? { cwd: input.cwd } : {}),
-          ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-          ...(threadId ? { threadId } : {}),
-          resumeCursor: {
+          // Populate agent cache in background from first session
+          if (!cachedAgents) {
+            queryRuntime
+              .supportedAgents()
+              .then((agents) => {
+                cachedAgents = {
+                  agents: agents.map((a) => ({
+                    name: a.name,
+                    displayName: a.name,
+                    ...(a.description ? { description: a.description } : {}),
+                    ...(a.model ? { model: a.model } : {}),
+                  })),
+                  source: "sdk",
+                  cached: false,
+                };
+              })
+              .catch(() => {
+                /* ignore discovery failures */
+              });
+          }
+
+          const session: ProviderSession = {
+            threadId,
+            provider: PROVIDER,
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(modelSelection?.model ? { model: modelSelection.model } : {}),
             ...(threadId ? { threadId } : {}),
-            ...(sessionId ? { resume: sessionId } : {}),
-            ...(resumeState?.resumeSessionAt
-              ? { resumeSessionAt: resumeState.resumeSessionAt }
-              : {}),
-            turnCount: resumeState?.turnCount ?? 0,
-            ...(resumedRerouteOriginalApiModelId && resumedRerouteFallbackApiModelId
-              ? {
-                  rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
-                  rerouteFallbackApiModelId: resumedRerouteFallbackApiModelId,
-                }
-              : {}),
-          },
-          createdAt: startedAt,
-          updatedAt: startedAt,
-        };
+            resumeCursor: {
+              ...(threadId ? { threadId } : {}),
+              ...(sessionId ? { resume: sessionId } : {}),
+              ...(resumeState?.resumeSessionAt
+                ? { resumeSessionAt: resumeState.resumeSessionAt }
+                : {}),
+              turnCount: resumeState?.turnCount ?? 0,
+              ...(resumedRerouteOriginalApiModelId && resumedRerouteFallbackApiModelId
+                ? {
+                    rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
+                    rerouteFallbackApiModelId: resumedRerouteFallbackApiModelId,
+                  }
+                : {}),
+            },
+            createdAt: startedAt,
+            updatedAt: startedAt,
+          };
 
-        const context: ClaudeSessionContext = {
-          session,
-          promptQueue,
-          query: queryRuntime,
-          streamFiber: undefined,
-          startedAt,
-          basePermissionMode: permissionMode,
-          lastInteractionMode: undefined,
-          currentApiModelId: apiModelId,
-          resumeSessionId: sessionId,
-          pendingApprovals,
-          pendingUserInputs,
-          turns: [],
-          inFlightTools,
-          turnState: undefined,
-          interruptRequestedTurnId: undefined,
-          lastKnownContextWindow: resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId),
-          lastKnownTokenUsage: undefined,
-          lastAssistantUuid: resumeState?.resumeSessionAt,
-          lastThreadStartedId: undefined,
-          rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
-          emittedContextUsageWarnings: new Set(),
-          stopped: false,
-          warnedUnhandledSdkKinds: new Set(),
-        };
-        yield* withSessionLifecycleLock(
-          threadId,
-          Effect.gen(function* () {
-            // Create the replacement first so a spawn failure leaves the current
-            // session usable, then atomically retire the old runtime before install.
-            const existing = sessions.get(threadId);
-            if (existing && existing !== context) {
-              yield* stopSessionInternal(existing, { emitExitEvent: false });
-            }
+          const context: ClaudeSessionContext = {
+            session,
+            promptQueue,
+            query: queryRuntime,
+            streamFiber: undefined,
+            startedAt,
+            basePermissionMode: permissionMode,
+            lastInteractionMode: undefined,
+            currentApiModelId: apiModelId,
+            resumeSessionId: sessionId,
+            pendingApprovals,
+            pendingUserInputs,
+            turns: [],
+            inFlightTools,
+            turnState: undefined,
+            interruptRequestedTurnId: undefined,
+            lastKnownContextWindow: resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId),
+            lastKnownTokenUsage: undefined,
+            lastAssistantUuid: resumeState?.resumeSessionAt,
+            lastThreadStartedId: undefined,
+            rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
+            emittedContextUsageWarnings: new Set(),
+            stopped: false,
+            warnedUnhandledSdkKinds: new Set(),
+          };
+          installationContext = context;
+          yield* withSessionLifecycleLock(
+            threadId,
+            Effect.gen(function* () {
+              // Create the replacement first so a spawn failure leaves the current
+              // session usable, then atomically retire the old runtime before install.
+              const existing = sessions.get(threadId);
+              if (existing && existing !== context) {
+                yield* stopSessionInternal(existing, { emitExitEvent: false });
+              }
 
-            yield* Ref.set(contextRef, context);
-            sessions.set(threadId, context);
+              yield* Ref.set(contextRef, context);
+              sessions.set(threadId, context);
 
-            const sessionStartedStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "session.started",
-              eventId: sessionStartedStamp.eventId,
-              provider: PROVIDER,
-              createdAt: sessionStartedStamp.createdAt,
-              threadId,
-              payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
-              providerRefs: {},
-            });
+              const sessionStartedStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "session.started",
+                eventId: sessionStartedStamp.eventId,
+                provider: PROVIDER,
+                createdAt: sessionStartedStamp.createdAt,
+                threadId,
+                payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
+                providerRefs: {},
+              });
 
-            const configuredStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "session.configured",
-              eventId: configuredStamp.eventId,
-              provider: PROVIDER,
-              createdAt: configuredStamp.createdAt,
-              threadId,
-              payload: {
-                config: {
-                  ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-                  ...(apiModelId ? { apiModelId } : {}),
-                  ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
-                  ...(input.cwd ? { cwd: input.cwd } : {}),
-                  ...(effectiveEffort ? { effort: effectiveEffort } : {}),
-                  ...(permissionMode ? { permissionMode } : {}),
-                  ...(providerOptions?.maxThinkingTokens !== undefined
-                    ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
-                    : {}),
-                  ...(fastMode ? { fastMode: true } : {}),
-                  ...(ultracode ? { ultracode: true } : {}),
+              const configuredStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "session.configured",
+                eventId: configuredStamp.eventId,
+                provider: PROVIDER,
+                createdAt: configuredStamp.createdAt,
+                threadId,
+                payload: {
+                  config: {
+                    ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+                    ...(apiModelId ? { apiModelId } : {}),
+                    ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
+                    ...(input.cwd ? { cwd: input.cwd } : {}),
+                    ...(effectiveEffort ? { effort: effectiveEffort } : {}),
+                    ...(permissionMode ? { permissionMode } : {}),
+                    ...(providerOptions?.maxThinkingTokens !== undefined
+                      ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
+                      : {}),
+                    ...(fastMode ? { fastMode: true } : {}),
+                    ...(ultracode ? { ultracode: true } : {}),
+                  },
                 },
-              },
-              providerRefs: {},
-            });
+                providerRefs: {},
+              });
 
-            const readyStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "session.state.changed",
-              eventId: readyStamp.eventId,
-              provider: PROVIDER,
-              createdAt: readyStamp.createdAt,
-              threadId,
-              payload: {
-                state: "ready",
-              },
-              providerRefs: {},
-            });
+              const readyStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                type: "session.state.changed",
+                eventId: readyStamp.eventId,
+                provider: PROVIDER,
+                createdAt: readyStamp.createdAt,
+                threadId,
+                payload: {
+                  state: "ready",
+                },
+                providerRefs: {},
+              });
 
-            if (context.lastKnownContextWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
-              context.emittedContextUsageWarnings.add("one-million-window");
-              yield* emitRuntimeWarning(
-                context,
-                "Claude's 1M context window is enabled for this thread. Auto-compaction follows that larger window, so long conversations can consume usage limits much faster. Switch this thread to 200k if 1M was inherited unintentionally.",
-              );
-            }
-
-            const streamFiber = Effect.runFork(runSdkStream(context));
-            context.streamFiber = streamFiber;
-            streamFiber.addObserver((exit) => {
-              if (context.stopped) {
-                return;
+              if (context.lastKnownContextWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
+                context.emittedContextUsageWarnings.add("one-million-window");
+                yield* emitRuntimeWarning(
+                  context,
+                  "Claude's 1M context window is enabled for this thread. Auto-compaction follows that larger window, so long conversations can consume usage limits much faster. Switch this thread to 200k if 1M was inherited unintentionally.",
+                );
               }
-              if (context.streamFiber === streamFiber) {
-                context.streamFiber = undefined;
+
+              const streamFiber = Effect.runFork(runSdkStream(context));
+              context.streamFiber = streamFiber;
+              streamFiber.addObserver((exit) => {
+                if (context.stopped) {
+                  return;
+                }
+                if (context.streamFiber === streamFiber) {
+                  context.streamFiber = undefined;
+                }
+                Effect.runFork(handleStreamExit(context, exit));
+              });
+            }),
+          );
+
+          installationComplete = true;
+          return {
+            ...session,
+          };
+        }).pipe(
+          Effect.ensuring(
+            Effect.suspend(() => {
+              if (installationComplete) {
+                return Effect.void;
               }
-              Effect.runFork(handleStreamExit(context, exit));
-            });
-          }),
+              if (installationContext !== undefined) {
+                return stopSessionInternal(installationContext, { emitExitEvent: false });
+              }
+              return Effect.gen(function* () {
+                yield* Queue.shutdown(promptQueue);
+                const closeExit = yield* Effect.exit(Effect.sync(() => queryRuntime.close()));
+                if (Exit.isFailure(closeExit)) {
+                  yield* Effect.logWarning("claude.session.failed_install_cleanup", {
+                    threadId,
+                    cause: Cause.pretty(closeExit.cause),
+                  });
+                }
+              });
+            }),
+          ),
         );
-
-        return {
-          ...session,
-        };
       });
 
     const sendTurn: ClaudeAdapterShape["sendTurn"] = (input) =>
