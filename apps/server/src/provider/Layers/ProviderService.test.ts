@@ -315,7 +315,7 @@ function makeProviderServiceLayer(
           ? Effect.succeed(claude.adapter)
           : provider === "droid" && providers?.includeRestartRollbackDroid === true
             ? Effect.succeed(droid.adapter)
-          : Effect.fail(new ProviderUnsupportedError({ provider })),
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
       Effect.succeed(
         providers?.includeRestartRollbackDroid === true

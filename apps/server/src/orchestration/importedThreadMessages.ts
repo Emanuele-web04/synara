@@ -193,11 +193,7 @@ export function mapFactorySnapshotMessages(input: {
       };
       if (candidate.type !== "factoryMessage") return [];
       const role =
-        candidate.role === "user"
-          ? "user"
-          : candidate.role === "assistant"
-            ? "assistant"
-            : null;
+        candidate.role === "user" ? "user" : candidate.role === "assistant" ? "assistant" : null;
       const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
       if (!role || !text) return [];
       const sourceId =

@@ -37,7 +37,10 @@ function visibleMessageText(content: unknown): string {
     .trim();
 }
 
-async function findFactorySessionPath(sessionsDir: string, sessionId: string): Promise<string | null> {
+async function findFactorySessionPath(
+  sessionsDir: string,
+  sessionId: string,
+): Promise<string | null> {
   if (!/^[a-zA-Z0-9_-]+$/u.test(sessionId)) return null;
   let entries: Array<import("node:fs").Dirent>;
   try {
@@ -90,7 +93,8 @@ export async function readFactorySessionHistory(
     if (message.role !== "user" && message.role !== "assistant") continue;
     const text = visibleMessageText(message.content);
     if (!text) continue;
-    const id = typeof parsed.id === "string" && parsed.id.trim() ? parsed.id.trim() : `${messages.length}`;
+    const id =
+      typeof parsed.id === "string" && parsed.id.trim() ? parsed.id.trim() : `${messages.length}`;
     messages.push({
       id,
       role: message.role,

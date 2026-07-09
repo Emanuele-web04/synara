@@ -242,9 +242,7 @@ function findDroidSelectConfig(
 
 function droidModelDescriptor(
   model: EffectAcpSchema.SessionConfigSelectOption,
-  reasoning:
-    | Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }>
-    | undefined,
+  reasoning: Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined,
 ): ProviderModelDescriptor {
   const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
   return {

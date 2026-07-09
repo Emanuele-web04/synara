@@ -148,9 +148,7 @@ describe("AcpSessionRuntime", () => {
       const commands = yield* runtime.getAvailableCommands;
       const forked = yield* runtime.forkSession({ cwd: process.cwd(), mcpServers: [] });
 
-      expect(commands).toEqual([
-        { name: "compact", description: "Compact the current context" },
-      ]);
+      expect(commands).toEqual([{ name: "compact", description: "Compact the current context" }]);
       expect(forked.sessionId).toBe("mock-session-fork-1");
       const modeRequest = requestEvents.find(
         (event) => event.method === "session/set_config_option" && event.status === "started",

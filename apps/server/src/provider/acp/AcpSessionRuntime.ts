@@ -495,7 +495,7 @@ const makeAcpSessionRuntime = (
           mcpServers: [],
         } satisfies EffectAcpSchema.ResumeSessionRequest;
         const supportsResume =
-          initializeResult.agentCapabilities.sessionCapabilities?.resume != null;
+          initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
         const resumed = yield* (
           supportsResume
             ? runLoggedRequest(
@@ -698,7 +698,7 @@ const makeAcpSessionRuntime = (
       supportsSessionFork: getStartedState.pipe(
         Effect.map(
           (started) =>
-            started.initializeResult.agentCapabilities.sessionCapabilities?.fork != null,
+            started.initializeResult.agentCapabilities?.sessionCapabilities?.fork != null,
         ),
       ),
       setModel: (model) =>

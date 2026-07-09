@@ -29,6 +29,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Option,
   PubSub,
   Random,
   Scope,
@@ -46,6 +47,8 @@ import { readFactorySessionHistory } from "../FactorySessionHistory.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
   ProviderAdapterRequestError,
+  ProviderAdapterProcessError,
+  ProviderAdapterSessionClosedError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
@@ -1251,7 +1254,9 @@ export function makeDroidAdapter(
         }
         yield* applyDroidAcpInteractionMode({
           runtime: ctx.acp,
-          interactionMode: input.interactionMode,
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
           runtimeMode: ctx.session.runtimeMode,
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1663,9 +1668,7 @@ export function makeDroidAdapter(
                   ...(input.providerOptions?.droid?.binaryPath
                     ? { binaryPath: input.providerOptions.droid.binaryPath }
                     : {}),
-                  ...(input.runtimeMode === "full-access"
-                    ? { skipPermissionsUnsafe: true }
-                    : {}),
+                  ...(input.runtimeMode === "full-access" ? { skipPermissionsUnsafe: true } : {}),
                 },
                 childProcessSpawner,
                 cwd: sourceCwd,
@@ -1693,6 +1696,8 @@ export function makeDroidAdapter(
       }).pipe(
         Effect.mapError((cause) =>
           cause instanceof ProviderAdapterRequestError ||
+          cause instanceof ProviderAdapterProcessError ||
+          cause instanceof ProviderAdapterSessionClosedError ||
           cause instanceof ProviderAdapterSessionNotFoundError ||
           cause instanceof ProviderAdapterValidationError
             ? cause
@@ -1777,17 +1782,27 @@ export function makeDroidAdapter(
         Effect.mapError((cause) =>
           cause instanceof ProviderAdapterValidationError
             ? cause
-            : mapAcpToAdapterError(PROVIDER, ThreadId.makeUnsafe("droid-model-discovery"), "model/list", cause),
+            : mapAcpToAdapterError(
+                PROVIDER,
+                ThreadId.makeUnsafe("droid-model-discovery"),
+                "model/list",
+                cause,
+              ),
         ),
-        Effect.timeoutFail({
-          duration: DROID_MODEL_DISCOVERY_TIMEOUT_MS,
-          onTimeout: () =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "model/list",
-              detail: "Timed out while discovering Droid models over ACP.",
-            }),
-        }),
+        Effect.timeoutOption(DROID_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "model/list",
+                  detail: "Timed out while discovering Droid models over ACP.",
+                }),
+              ),
+            onSome: (result) => Effect.succeed(result),
+          }),
+        ),
       );
 
     const listPlugins: NonNullable<DroidAdapterShape["listPlugins"]> = (input) =>
@@ -1884,15 +1899,20 @@ export function makeDroidAdapter(
                 cause,
               ),
         ),
-        Effect.timeoutFail({
-          duration: DROID_MODEL_DISCOVERY_TIMEOUT_MS,
-          onTimeout: () =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "command/list",
-              detail: "Timed out while discovering Droid commands over ACP.",
-            }),
-        }),
+        Effect.timeoutOption(DROID_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "command/list",
+                  detail: "Timed out while discovering Droid commands over ACP.",
+                }),
+              ),
+            onSome: (result) => Effect.succeed(result),
+          }),
+        ),
       );
 
     const stopAll: DroidAdapterShape["stopAll"] = () =>

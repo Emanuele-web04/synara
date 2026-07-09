@@ -6,7 +6,10 @@
 import type { ProviderUserInputAnswers, UserInputQuestion } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-type FormElicitationRequest = Extract<EffectAcpSchema.ElicitationRequest, { readonly mode: "form" }>;
+type FormElicitationRequest = Extract<
+  EffectAcpSchema.ElicitationRequest,
+  { readonly mode: "form" }
+>;
 type ElicitationProperty = EffectAcpSchema.ElicitationPropertySchema;
 
 function propertyOptions(property: ElicitationProperty): ReadonlyArray<{
@@ -53,22 +56,19 @@ export function elicitationQuestionsFromRequest(
   }));
 }
 
-function firstAnswerValue(value: ProviderUserInputAnswers[string]): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value ?? undefined;
+function firstAnswerValue(value: ProviderUserInputAnswers[string] | undefined): string | undefined {
+  return typeof value === "string" ? value : value?.[0];
 }
 
 function coerceElicitationAnswer(
   property: ElicitationProperty,
-  answer: ProviderUserInputAnswers[string],
+  answer: ProviderUserInputAnswers[string] | undefined,
 ): EffectAcpSchema.ElicitationContentValue | undefined {
   if (answer === null || answer === undefined) {
     return undefined;
   }
   if (property.type === "array") {
-    return Array.isArray(answer) ? answer : [answer];
+    return typeof answer === "string" ? [answer] : answer;
   }
   const value = firstAnswerValue(answer);
   if (value === undefined) {

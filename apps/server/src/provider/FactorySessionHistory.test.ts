@@ -29,7 +29,11 @@ it("reads only user-visible Droid session messages", async () => {
       {
         type: "message",
         id: "hidden",
-        message: { role: "user", visibility: "llm_only", content: [{ type: "text", text: "hidden" }] },
+        message: {
+          role: "user",
+          visibility: "llm_only",
+          content: [{ type: "text", text: "hidden" }],
+        },
       },
       {
         type: "message",

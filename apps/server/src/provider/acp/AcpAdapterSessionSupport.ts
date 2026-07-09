@@ -37,14 +37,19 @@ export function makeAcpThreadLock(): Effect.Effect<AcpThreadLock> {
           });
         });
       return (<A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-        Effect.flatMap(get(threadId), (semaphore) => semaphore.withPermit(effect))) satisfies AcpThreadLock;
+        Effect.flatMap(get(threadId), (semaphore) =>
+          semaphore.withPermit(effect),
+        )) satisfies AcpThreadLock;
     }),
   );
 }
 
 // Resolves outstanding permission requests before an ACP child is closed.
 export function settleAcpPendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<unknown, { readonly decision: Deferred.Deferred<ProviderApprovalDecision> }>,
+  pendingApprovals: ReadonlyMap<
+    unknown,
+    { readonly decision: Deferred.Deferred<ProviderApprovalDecision> }
+  >,
 ): Effect.Effect<void> {
   return Effect.forEach(
     Array.from(pendingApprovals.values()),
@@ -55,7 +60,10 @@ export function settleAcpPendingApprovalsAsCancelled(
 
 // Resolves outstanding elicitation requests so shutdown cannot strand their handlers.
 export function settleAcpPendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: ReadonlyMap<unknown, { readonly answers: Deferred.Deferred<ProviderUserInputAnswers> }>,
+  pendingUserInputs: ReadonlyMap<
+    unknown,
+    { readonly answers: Deferred.Deferred<ProviderUserInputAnswers> }
+  >,
 ): Effect.Effect<void> {
   return Effect.forEach(
     Array.from(pendingUserInputs.values()),
@@ -65,9 +73,7 @@ export function settleAcpPendingUserInputsAsEmptyAnswers(
 }
 
 // Accepts only finite, non-negative USD totals from ACP cost notifications.
-export function readAcpUsdCost(
-  cost: EffectAcpSchema.Cost | null | undefined,
-): number | undefined {
+export function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
   if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
     return undefined;
   }

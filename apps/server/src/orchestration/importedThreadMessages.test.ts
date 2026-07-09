@@ -28,9 +28,7 @@ it("maps visible Factory session items and ignores unrelated rows", () => {
           ],
         },
         {
-          items: [
-            { type: "factoryMessage", id: "assistant-1", role: "assistant", text: "Answer" },
-          ],
+          items: [{ type: "factoryMessage", id: "assistant-1", role: "assistant", text: "Answer" }],
         },
       ],
     }),

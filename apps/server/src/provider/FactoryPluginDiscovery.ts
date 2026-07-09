@@ -66,7 +66,9 @@ async function factoryEnabledPlugins(
   cwd?: string,
 ): Promise<ReadonlyMap<string, boolean>> {
   const enabled = new Map<string, boolean>();
-  const featureFlags = await readJsonRecord(nodePath.join(factoryDir, "cache", "feature-flags.json"));
+  const featureFlags = await readJsonRecord(
+    nodePath.join(factoryDir, "cache", "feature-flags.json"),
+  );
   const featureConfigs = recordValue(featureFlags?.configs);
   const cliDefaults = recordValue(featureConfigs?.cli_default_settings);
   const sources = [
@@ -93,7 +95,9 @@ async function factoryEnabledPlugins(
 async function marketplaceRegistrations(
   factoryDir: string,
 ): Promise<ReadonlyArray<{ readonly name: string; readonly path: string }>> {
-  const known = await readJsonRecord(nodePath.join(factoryDir, "plugins", "known_marketplaces.json"));
+  const known = await readJsonRecord(
+    nodePath.join(factoryDir, "plugins", "known_marketplaces.json"),
+  );
   if (!known) return [];
   return Object.entries(known).flatMap(([name, raw]) => {
     const path = stringValue((raw as FactoryMarketplaceRegistration | null)?.installLocation);
@@ -219,7 +223,9 @@ export async function readFactoryPlugin(input: {
   );
   if (!registration) return null;
   const marketplace = await readMarketplace(registration.path);
-  const entry = marketplace?.plugins?.find((plugin) => stringValue(plugin.name) === input.pluginName);
+  const entry = marketplace?.plugins?.find(
+    (plugin) => stringValue(plugin.name) === input.pluginName,
+  );
   const marketplaceName = registration.name;
   const source = stringValue(entry?.source);
   if (!entry || !source) return null;

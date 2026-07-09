@@ -250,9 +250,7 @@ const program = Effect.gen(function* () {
           sessionId,
           update: {
             sessionUpdate: "available_commands_update",
-            availableCommands: [
-              { name: "compact", description: "Compact the current context" },
-            ],
+            availableCommands: [{ name: "compact", description: "Compact the current context" }],
           },
         });
       }
