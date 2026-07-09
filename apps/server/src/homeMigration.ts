@@ -190,6 +190,42 @@ const directoryHasEntries = (directoryPath: string) =>
     return (yield* fs.readDirectory(directoryPath)).length > 0;
   });
 
+const directoryHasMissingEntries = (sourceDirectory: string, targetDirectory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    if (!(yield* fs.exists(sourceDirectory))) {
+      return false;
+    }
+    if (!(yield* fs.exists(targetDirectory))) {
+      return (yield* fs.readDirectory(sourceDirectory)).length > 0;
+    }
+
+    const pendingDirectories = [[sourceDirectory, targetDirectory] as const];
+    while (pendingDirectories.length > 0) {
+      const current = pendingDirectories.pop();
+      if (!current) {
+        break;
+      }
+      const [currentSourceDirectory, currentTargetDirectory] = current;
+      for (const entry of yield* fs.readDirectory(currentSourceDirectory)) {
+        const sourcePath = path.join(currentSourceDirectory, entry);
+        const targetPath = path.join(currentTargetDirectory, entry);
+        if (!(yield* fs.exists(targetPath))) {
+          return true;
+        }
+
+        const sourceInfo = yield* fs.stat(sourcePath);
+        const targetInfo = yield* fs.stat(targetPath);
+        if (sourceInfo.type === "Directory" && targetInfo.type === "Directory") {
+          pendingDirectories.push([sourcePath, targetPath]);
+        }
+      }
+    }
+
+    return false;
+  });
+
 export const getLegacyImportMarkerPath = Effect.fn(function* (stateDir: string) {
   const path = yield* Path.Path;
   return path.join(stateDir, MIGRATIONS_DIRNAME, LEGACY_IMPORT_MARKER_BASENAME);
@@ -216,6 +252,41 @@ const moveStagedArtifact = (sourcePath: string, targetPath: string) =>
     yield* fs.rename(sourcePath, targetPath);
   });
 
+// On retries, fills directory entries that an earlier importer omitted without
+// replacing credentials or attachments already created in the Synara home.
+const mergeMissingDirectoryEntries = (sourceDirectory: string, targetDirectory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(targetDirectory, { recursive: true });
+
+    const pendingDirectories = [[sourceDirectory, targetDirectory] as const];
+    while (pendingDirectories.length > 0) {
+      const current = pendingDirectories.pop();
+      if (!current) {
+        break;
+      }
+      const [currentSourceDirectory, currentTargetDirectory] = current;
+      for (const entry of yield* fs.readDirectory(currentSourceDirectory)) {
+        const sourcePath = path.join(currentSourceDirectory, entry);
+        const targetPath = path.join(currentTargetDirectory, entry);
+        if (!(yield* fs.exists(targetPath))) {
+          yield* fs.copy(sourcePath, targetPath, {
+            overwrite: false,
+            preserveTimestamps: true,
+          });
+          continue;
+        }
+
+        const sourceInfo = yield* fs.stat(sourcePath);
+        const targetInfo = yield* fs.stat(targetPath);
+        if (sourceInfo.type === "Directory" && targetInfo.type === "Directory") {
+          pendingDirectories.push([sourcePath, targetPath]);
+        }
+      }
+    }
+  });
+
 const cleanUpStagingDir = (stagingBaseDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -237,13 +308,6 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
   const targetPaths = yield* deriveServerPaths(canonicalTargetBaseDir, input.devUrl);
   const markerPath = yield* getLegacyImportMarkerPath(targetPaths.stateDir);
   const marker: MigrationMarker | undefined = yield* readMigrationMarker(markerPath);
-  if (marker?.status === "completed") {
-    return {
-      status: "skipped",
-      reason: "marker-already-present",
-      importedArtifacts: [],
-    };
-  }
 
   const legacyHomes: LegacyHomeSnapshot[] = [];
   let sawLegacyHome = false;
@@ -275,6 +339,13 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
   }
 
   if (legacyHomes.length === 0) {
+    if (marker?.status === "completed") {
+      return {
+        status: "skipped",
+        reason: "marker-already-present",
+        importedArtifacts: [],
+      };
+    }
     return {
       status: "skipped",
       reason: sawLegacyHome ? "legacy-state-missing" : "legacy-home-missing",
@@ -313,11 +384,44 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     environmentId: yield* fs.exists(targetPaths.environmentIdPath),
   } satisfies Record<ImportableArtifact, boolean>;
 
+  const pendingArtifacts = new Set<ImportableArtifact>();
+  for (const artifact of importedArtifacts) {
+    const source = sourceByArtifact.get(artifact);
+    if (!source) {
+      continue;
+    }
+    if (artifact === "attachments") {
+      if (
+        yield* directoryHasMissingEntries(source.paths.attachmentsDir, targetPaths.attachmentsDir)
+      ) {
+        pendingArtifacts.add(artifact);
+      }
+      continue;
+    }
+    if (artifact === "secrets") {
+      if (yield* directoryHasMissingEntries(source.paths.secretsDir, targetPaths.secretsDir)) {
+        pendingArtifacts.add(artifact);
+      }
+      continue;
+    }
+    if (!targetArtifacts[artifact]) {
+      pendingArtifacts.add(artifact);
+    }
+  }
+
+  if (marker?.status === "completed" && pendingArtifacts.size === 0) {
+    return {
+      status: "skipped",
+      reason: "marker-already-present",
+      importedArtifacts: [],
+    };
+  }
+
   // A database or attachment set represents an authoritative initialized home.
   // Identity/credential files can be created before meaningful state exists, so
   // they must not prevent the bridge from importing the remaining user data.
   const targetAlreadyInitialized = targetArtifacts.database || targetArtifacts.attachments;
-  if (targetAlreadyInitialized && marker?.status !== "in-progress") {
+  if (targetAlreadyInitialized && marker === undefined) {
     return {
       status: "skipped",
       reason: "target-already-initialized",
@@ -366,12 +470,6 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
         "If startup stops midway, the next launch resumes this import instead of starting from scratch.",
       ],
     });
-
-    const pendingArtifacts = new Set(
-      IMPORTABLE_ARTIFACTS.filter(
-        (artifact) => sourceByArtifact.has(artifact) && !targetArtifacts[artifact],
-      ),
-    );
 
     if (pendingArtifacts.has("database")) {
       const source = sourceByArtifact.get("database");
@@ -434,10 +532,10 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       );
     }
     if (pendingArtifacts.has("attachments")) {
-      yield* moveStagedArtifact(stagingPaths.attachmentsDir, targetPaths.attachmentsDir);
+      yield* mergeMissingDirectoryEntries(stagingPaths.attachmentsDir, targetPaths.attachmentsDir);
     }
     if (pendingArtifacts.has("secrets")) {
-      yield* moveStagedArtifact(stagingPaths.secretsDir, targetPaths.secretsDir);
+      yield* mergeMissingDirectoryEntries(stagingPaths.secretsDir, targetPaths.secretsDir);
     }
     if (pendingArtifacts.has("anonymousId")) {
       yield* moveStagedArtifact(stagingPaths.anonymousIdPath, targetPaths.anonymousIdPath);
