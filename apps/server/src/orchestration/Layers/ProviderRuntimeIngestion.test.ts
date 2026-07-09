@@ -3869,6 +3869,41 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("suppresses identical consecutive context window updates", async () => {
+    const harness = await createHarness();
+    const now = "2026-07-09T00:00:00.000Z";
+    const makeUsageEvent = (eventId: string, usedTokens: number) => ({
+      type: "thread.token-usage.updated" as const,
+      eventId: asEventId(eventId),
+      provider: "claudeAgent" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        usage: {
+          usedTokens,
+          lastUsedTokens: usedTokens,
+          maxTokens: 200_000,
+          inputTokens: usedTokens,
+          outputTokens: 0,
+        },
+      },
+    });
+
+    harness.emit(makeUsageEvent("evt-context-first", 4_000));
+    harness.emit(makeUsageEvent("evt-context-duplicate", 4_000));
+    harness.emit(makeUsageEvent("evt-context-changed", 4_001));
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const contextActivities = readModel.threads
+      .find((thread) => thread.id === "thread-1")
+      ?.activities.filter((activity) => activity.kind === "context-window.updated");
+    expect(contextActivities?.map((activity) => activity.id).toSorted()).toEqual([
+      "evt-context-changed",
+      "evt-context-first",
+    ]);
+  });
+
   it("projects percent-only context window updates into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

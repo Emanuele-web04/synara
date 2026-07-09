@@ -1175,9 +1175,9 @@ describe("ProviderCommandReactor", () => {
     const captureGate = new Promise<void>((resolve) => {
       releaseCapture = resolve;
     });
-    const captureBaselineBeforeTurn = vi.fn<
-      StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(() => Effect.promise(() => captureGate));
+    const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
+      () => Effect.promise(() => captureGate),
+    );
     const harness = await createHarness({
       studioOutputReactor: { captureBaselineBeforeTurn },
     });

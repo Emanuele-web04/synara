@@ -57,6 +57,7 @@ function makeLayer(input: {
         getProjectShellById: () => unsupported(),
         getFirstActiveThreadIdByProjectId: () => unsupported(),
         getThreadCheckpointContext: () => unsupported(),
+        listGeneratedImageActivitiesByTurn: () => unsupported(),
         getFullThreadDiffContext: () => unsupported(),
         getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
         findSyntheticSubagentParentThread: () => unsupported(),
