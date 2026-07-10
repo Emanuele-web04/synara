@@ -7,16 +7,16 @@
       "outputs": ["dist-electron/**"],
     },
     "dev": {
-      "dependsOn": ["synara#build"],
+      "dependsOn": ["@synara/cli#build"],
       "persistent": true,
     },
     "start": {
-      "dependsOn": ["build", "@synara/web#build", "synara#build"],
+      "dependsOn": ["build", "@synara/web#build", "@synara/cli#build"],
       "cache": false,
       "persistent": true,
     },
     "smoke-test": {
-      "dependsOn": ["build", "@synara/web#build", "synara#build"],
+      "dependsOn": ["build", "@synara/web#build", "@synara/cli#build"],
       "cache": false,
       "outputs": [],
     },
