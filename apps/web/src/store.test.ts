@@ -28,6 +28,7 @@ import {
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
+  removeDeletedProjectFromClientState,
   removeDeletedThreadFromClientState,
   reorderProjects,
   setThreadWorkspace,
@@ -653,6 +654,54 @@ describe("store pure functions", () => {
     );
 
     expect(next.projects).toEqual([]);
+    expect(next.deletedProjectIdsById?.[ProjectId.makeUnsafe("project-live")]).toBe(true);
+  });
+
+  it("keeps a confirmed project deletion hidden from stale snapshots", () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ id: threadId, projectId })),
+      makeReadModel(makeReadModelThread({ id: threadId, projectId })),
+    );
+
+    const deletedState = removeDeletedProjectFromClientState(initialState, projectId);
+    const afterStaleShellSnapshot = syncServerShellSnapshot(
+      deletedState,
+      makeShellSnapshot({
+        id: threadId,
+        projectId,
+        title: "Stale project thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+      }),
+    );
+    const afterStaleReadModel = syncServerReadModel(
+      deletedState,
+      makeReadModel(makeReadModelThread({ id: threadId, projectId })),
+    );
+
+    expect(deletedState.deletedProjectIdsById?.[projectId]).toBe(true);
+    expect(deletedState.projects).toEqual([]);
+    expect(deletedState.threads).toEqual([]);
+    expect(afterStaleShellSnapshot.projects).toEqual([]);
+    expect(afterStaleShellSnapshot.threads).toEqual([]);
+    expect(afterStaleReadModel.projects).toEqual([]);
+    expect(afterStaleReadModel.threads).toEqual([]);
   });
 
   it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
