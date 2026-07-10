@@ -1,4 +1,4 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 

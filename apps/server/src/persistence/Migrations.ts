@@ -144,8 +144,8 @@ export const makeMigrationLoader = (throughId?: number) =>
   );
 
 /**
- * Highest migration ID whose content is identical across every lineage Synara
- * can import (T3 Code, DP Code, Synara). A name mismatch at or below this ID
+ * Highest migration ID whose content is identical across every supported
+ * imported lineage. A name mismatch at or below this ID
  * means the database does not come from any known lineage, so re-running
  * migrations could destroy data — refuse to start instead.
  */
@@ -155,8 +155,8 @@ const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
  * Repairs the migration tracker of an imported legacy database before the
  * migrator runs.
  *
- * Legacy ~/.t3 / ~/.dpcode imports (homeMigration.ts) carry their own
- * `effect_sql_migrations` rows, recorded under that lineage's migration names
+ * Imported databases can carry their own `effect_sql_migrations` rows,
+ * recorded under that lineage's migration names
  * at the same numeric IDs. The migrator gates purely on max(migration_id), so
  * once the imported tracker's high-water mark reaches Synara's latest ID,
  * every Synara migration is skipped silently and startup crashes on missing
@@ -183,16 +183,30 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
     return;
   }
 
-  const previousMigration32Name = "ReconcileLegacyT3SchemaImport";
-  yield* sql`
-    UPDATE effect_sql_migrations
-    SET name = 'ReconcileImportedSchemaLineage'
-    WHERE migration_id = 32 AND name = ${previousMigration32Name}
-  `;
-
-  const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+  let recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+  const recordedNamesBeforeCanonicalization = new Map(
+    recorded.map((row) => [row.migration_id, row.name]),
+  );
+  const hasCanonicalPrefixThrough31 = migrationEntries
+    .filter(([id]) => id < 32)
+    .every(([id, name]) => recordedNamesBeforeCanonicalization.get(id) === name);
+  const migration32Name = recordedNamesBeforeCanonicalization.get(32);
+  if (
+    hasCanonicalPrefixThrough31 &&
+    migration32Name !== undefined &&
+    migration32Name !== "ReconcileImportedSchemaLineage"
+  ) {
+    yield* sql`
+      UPDATE effect_sql_migrations
+      SET name = 'ReconcileImportedSchemaLineage'
+      WHERE migration_id = 32
+    `;
+    recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
+    `;
+  }
   const highWaterMark = recorded[recorded.length - 1]?.migration_id;
   if (highWaterMark === undefined) {
     return;

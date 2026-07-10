@@ -1,4 +1,4 @@
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@synara/contracts";
 
 export function resolveStableMessageTurnId(input: {
   readonly existingTurnId?: TurnId | null | undefined;

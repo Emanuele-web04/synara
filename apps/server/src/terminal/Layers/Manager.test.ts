@@ -7,7 +7,7 @@ import {
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -234,7 +234,7 @@ describe("TerminalManager", () => {
       ptyAdapter?: FakePtyAdapter;
     } = {},
   ) {
-    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-terminal-"));
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-terminal-"));
     tempDirs.push(logsDir);
     const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
     const manager = new TerminalManagerRuntime({
@@ -1127,7 +1127,7 @@ describe("TerminalManager", () => {
     };
 
     setEnv("PORT", "5173");
-    setEnv("T3CODE_PORT", "3773");
+    setEnv("SYNARA_PORT", "3773");
     setEnv("VITE_DEV_SERVER_URL", "http://localhost:5173");
     setEnv("TEST_TERMINAL_KEEP", "keep-me");
 
@@ -1139,7 +1139,7 @@ describe("TerminalManager", () => {
       if (!spawnInput) return;
 
       expect(spawnInput.env.PORT).toBeUndefined();
-      expect(spawnInput.env.T3CODE_PORT).toBeUndefined();
+      expect(spawnInput.env.SYNARA_PORT).toBeUndefined();
       expect(spawnInput.env.VITE_DEV_SERVER_URL).toBeUndefined();
       expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
 
@@ -1197,8 +1197,8 @@ describe("TerminalManager", () => {
     await manager.open(
       openInput({
         env: {
-          T3CODE_PROJECT_ROOT: "/repo",
-          T3CODE_WORKTREE_PATH: "/repo/worktree-a",
+          SYNARA_PROJECT_ROOT: "/repo",
+          SYNARA_WORKTREE_PATH: "/repo/worktree-a",
           CUSTOM_FLAG: "1",
         },
       }),
@@ -1207,8 +1207,8 @@ describe("TerminalManager", () => {
     expect(spawnInput).toBeDefined();
     if (!spawnInput) return;
 
-    expect(spawnInput.env.T3CODE_PROJECT_ROOT).toBe("/repo");
-    expect(spawnInput.env.T3CODE_WORKTREE_PATH).toBe("/repo/worktree-a");
+    expect(spawnInput.env.SYNARA_PROJECT_ROOT).toBe("/repo");
+    expect(spawnInput.env.SYNARA_WORKTREE_PATH).toBe("/repo/worktree-a");
     expect(spawnInput.env.CUSTOM_FLAG).toBe("1");
 
     manager.dispose();

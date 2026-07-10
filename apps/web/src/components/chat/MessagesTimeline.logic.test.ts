@@ -1,4 +1,4 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -822,6 +822,34 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.inlineWorkEntries).toBeUndefined();
     // Timed from the user message, not from the last intermediate narration.
     expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("folds settled reasoning traces into the terminal turn disclosure", () => {
+    const reasoning = workEntry("reasoning-1", "2026-01-01T00:00:02Z", "Reasoning trace");
+    if (reasoning.kind === "work") {
+      reasoning.entry = {
+        ...reasoning.entry,
+        detail: "Inspecting apps/web/src/store.ts",
+        toolTitle: "Reasoning trace",
+      };
+    }
+
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        reasoning,
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(collapsedSignature(terminal!)).toEqual(["work:reasoning-1"]);
     expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 

@@ -3,7 +3,7 @@
 // Layer: Orchestration mapping tests
 // Depends on: importedThreadMessages.
 
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { expect, it } from "vitest";
 
 import { mapFactorySnapshotMessages } from "./importedThreadMessages.ts";

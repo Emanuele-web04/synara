@@ -5,7 +5,7 @@
 
 import zlib from "node:zlib";
 
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { OrchestrationThread } from "@synara/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import {

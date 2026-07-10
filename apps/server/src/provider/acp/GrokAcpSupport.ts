@@ -3,7 +3,7 @@
  *
  * @module GrokAcpSupport
  */
-import { type GrokModelOptions } from "@t3tools/contracts";
+import { type GrokModelOptions } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import * as EffectAcpErrorsRuntime from "effect-acp/errors";

@@ -6,8 +6,8 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanCardContextMenu
 
-import type { ThreadId } from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+import type { ThreadId } from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, useCallback, useMemo, useState } from "react";
 

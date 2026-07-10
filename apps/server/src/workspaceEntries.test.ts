@@ -43,7 +43,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("returns files and directories relative to cwd", async () => {
-    const cwd = makeTempDir("t3code-workspace-entries-");
+    const cwd = makeTempDir("synara-workspace-entries-");
     writeFile(cwd, "src/components/Composer.tsx");
     writeFile(cwd, "src/index.ts");
     writeFile(cwd, "README.md");
@@ -63,7 +63,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("filters and ranks entries by query", async () => {
-    const cwd = makeTempDir("t3code-workspace-query-");
+    const cwd = makeTempDir("synara-workspace-query-");
     writeFile(cwd, "src/components/Composer.tsx");
     writeFile(cwd, "src/components/composePrompt.ts");
     writeFile(cwd, "docs/composition.md");
@@ -76,7 +76,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("can restrict search results to files before ranking", async () => {
-    const cwd = makeTempDir("t3code-workspace-kind-filter-");
+    const cwd = makeTempDir("synara-workspace-kind-filter-");
     writeFile(cwd, "src/components/Composer.tsx");
     writeFile(cwd, "src/components/composePrompt.ts");
     writeFile(cwd, "docs/components/guide.md");
@@ -93,7 +93,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("supports fuzzy subsequence queries for composer path search", async () => {
-    const cwd = makeTempDir("t3code-workspace-fuzzy-query-");
+    const cwd = makeTempDir("synara-workspace-fuzzy-query-");
     writeFile(cwd, "src/components/Composer.tsx");
     writeFile(cwd, "src/components/composePrompt.ts");
     writeFile(cwd, "docs/composition.md");
@@ -107,7 +107,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("tracks truncation without sorting every fuzzy match", async () => {
-    const cwd = makeTempDir("t3code-workspace-fuzzy-limit-");
+    const cwd = makeTempDir("synara-workspace-fuzzy-limit-");
     writeFile(cwd, "src/components/Composer.tsx");
     writeFile(cwd, "src/components/composePrompt.ts");
     writeFile(cwd, "docs/composition.md");
@@ -119,7 +119,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("excludes gitignored paths for git repositories", async () => {
-    const cwd = makeTempDir("t3code-workspace-gitignore-");
+    const cwd = makeTempDir("synara-workspace-gitignore-");
     runGit(cwd, ["init"]);
     writeFile(cwd, ".gitignore", ".convex/\nconvex/\nignored.txt\n");
     writeFile(cwd, "src/keep.ts", "export {};");
@@ -138,7 +138,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("excludes tracked paths that match ignore rules", async () => {
-    const cwd = makeTempDir("t3code-workspace-tracked-gitignore-");
+    const cwd = makeTempDir("synara-workspace-tracked-gitignore-");
     runGit(cwd, ["init"]);
     writeFile(cwd, ".convex/local-storage/data.json", "{}");
     writeFile(cwd, "src/keep.ts", "export {};");
@@ -154,7 +154,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("disables fsmonitor and untracked cache helpers during git workspace indexing", async () => {
-    const cwd = makeTempDir("t3code-workspace-hardened-git-");
+    const cwd = makeTempDir("synara-workspace-hardened-git-");
 
     const runProcessSpy = vi.spyOn(ProcessRunner, "runProcess");
     runProcessSpy.mockImplementation(async (command, args) => {
@@ -230,7 +230,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("excludes .convex in non-git workspaces", async () => {
-    const cwd = makeTempDir("t3code-workspace-non-git-convex-");
+    const cwd = makeTempDir("synara-workspace-non-git-convex-");
     writeFile(cwd, ".convex/local-storage/data.json", "{}");
     writeFile(cwd, "src/keep.ts", "export {};");
 
@@ -243,7 +243,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("deduplicates concurrent index builds for the same cwd", async () => {
-    const cwd = makeTempDir("t3code-workspace-concurrent-build-");
+    const cwd = makeTempDir("synara-workspace-concurrent-build-");
     writeFile(cwd, "src/components/Composer.tsx");
 
     let rootReadCount = 0;
@@ -268,7 +268,7 @@ describe("searchWorkspaceEntries", () => {
   });
 
   it("limits concurrent directory reads while walking the filesystem", async () => {
-    const cwd = makeTempDir("t3code-workspace-read-concurrency-");
+    const cwd = makeTempDir("synara-workspace-read-concurrency-");
     for (let index = 0; index < 80; index += 1) {
       writeFile(cwd, `group-${index}/entry-${index}.ts`, "export {};");
     }
@@ -308,7 +308,7 @@ describe("listWorkspaceDirectories", () => {
   });
 
   it("can include files after directories for local recursive browsing", async () => {
-    const cwd = makeTempDir("t3code-workspace-list-directories-");
+    const cwd = makeTempDir("synara-workspace-list-directories-");
     writeFile(cwd, "docs/guide.md", "# guide");
     writeFile(cwd, "docs/api/reference.txt", "api");
     writeFile(cwd, "README.md", "root");
@@ -322,7 +322,7 @@ describe("listWorkspaceDirectories", () => {
   });
 
   it("rejects relative paths that escape the workspace root", async () => {
-    const cwd = makeTempDir("t3code-workspace-list-directories-");
+    const cwd = makeTempDir("synara-workspace-list-directories-");
     writeFile(cwd, "docs/guide.md", "# guide");
 
     for (const relativePath of ["..", "../..", "docs/../../etc", "/etc"]) {
@@ -341,8 +341,8 @@ describe("listWorkspaceDirectories", () => {
   });
 
   it("rejects symlinked directories that escape the workspace root", async () => {
-    const cwd = makeTempDir("t3code-workspace-list-directories-");
-    const outside = makeTempDir("t3code-workspace-list-outside-");
+    const cwd = makeTempDir("synara-workspace-list-directories-");
+    const outside = makeTempDir("synara-workspace-list-outside-");
     writeFile(outside, "secret.txt", "top secret");
     fs.symlinkSync(outside, path.join(cwd, "innocent"));
 
@@ -371,7 +371,7 @@ describe("discoverProjectScripts", () => {
   });
 
   it("discovers root package scripts with lockfile-selected commands", async () => {
-    const cwd = makeTempDir("t3code-script-discovery-root-");
+    const cwd = makeTempDir("synara-script-discovery-root-");
     writeFile(
       cwd,
       "package.json",
@@ -396,7 +396,7 @@ describe("discoverProjectScripts", () => {
   });
 
   it("discovers shallow nested package scripts", async () => {
-    const cwd = makeTempDir("t3code-script-discovery-nested-");
+    const cwd = makeTempDir("synara-script-discovery-nested-");
     writeFile(cwd, "apps/web/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
     writeFile(cwd, "apps/web/pnpm-lock.yaml", "");
 
@@ -413,7 +413,7 @@ describe("discoverProjectScripts", () => {
   });
 
   it("ignores invalid package json files", async () => {
-    const cwd = makeTempDir("t3code-script-discovery-invalid-");
+    const cwd = makeTempDir("synara-script-discovery-invalid-");
     writeFile(cwd, "package.json", "{ nope");
     writeFile(cwd, "apps/ok/package.json", JSON.stringify({ scripts: { start: "vite" } }));
 
@@ -423,7 +423,7 @@ describe("discoverProjectScripts", () => {
   });
 
   it("skips ignored package directories", async () => {
-    const cwd = makeTempDir("t3code-script-discovery-ignored-");
+    const cwd = makeTempDir("synara-script-discovery-ignored-");
     writeFile(cwd, "node_modules/pkg/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
     writeFile(cwd, "dist/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
     writeFile(cwd, "packages/app/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
@@ -434,7 +434,7 @@ describe("discoverProjectScripts", () => {
   });
 
   it("prefers package manager lockfiles in discovery order", async () => {
-    const cwd = makeTempDir("t3code-script-discovery-package-manager-");
+    const cwd = makeTempDir("synara-script-discovery-package-manager-");
     writeFile(cwd, "apps/bun/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
     writeFile(cwd, "apps/bun/bun.lockb", "");
     writeFile(cwd, "apps/pnpm/package.json", JSON.stringify({ scripts: { dev: "vite" } }));

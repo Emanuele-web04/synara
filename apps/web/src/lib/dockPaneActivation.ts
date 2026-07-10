@@ -3,7 +3,7 @@
 // Layer: Web UI lifecycle helper
 // Depends on: rightDockStore pane kind taxonomy
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 
 import type { RightDockPaneKind } from "~/rightDockStore.logic";
 

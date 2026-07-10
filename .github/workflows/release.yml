@@ -34,6 +34,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
+      mirror_to_stable_channel: ${{ steps.release_meta.outputs.mirror_to_stable_channel }}
       publish_release: ${{ steps.release_mode.outputs.publish_release }}
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
@@ -82,6 +83,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BRIDGE_TAG: ${{ steps.release_meta.outputs.bridge_tag }}
+          UPDATE_CHANNEL: ${{ steps.release_meta.outputs.update_channel }}
         run: |
           actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
           if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
@@ -89,8 +91,21 @@ jobs:
             exit 1
           fi
 
-          bridge_assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" --jq '.assets[].name')"
-          for required_asset in latest-mac.yml latest.yml latest-linux.yml; do
+          bridge_release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" --jq .id)"
+          bridge_assets="$(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${bridge_release_id}/assets?per_page=100" \
+              --jq '.[].name'
+          )"
+          required_assets=(
+            latest-mac.yml
+            latest.yml
+            latest-linux.yml
+            "${UPDATE_CHANNEL}-mac.yml"
+            "${UPDATE_CHANNEL}.yml"
+            "${UPDATE_CHANNEL}-linux.yml"
+          )
+          for required_asset in "${required_assets[@]}"; do
             if ! grep -Fxq "$required_asset" <<< "$bridge_assets"; then
               echo "Pinned compatibility feed is missing $required_asset." >&2
               exit 1
@@ -104,6 +119,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Verify Synara identity
+        run: bun run brand:check
 
       - name: Lint
         run: bun run lint
@@ -287,7 +305,7 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_PUBLISH_CLI == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -317,7 +335,7 @@ jobs:
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build CLI package
-        run: bun run build --filter=@t3tools/web --filter=t3
+        run: bun run build --filter=@synara/web --filter=@synara/cli
 
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
@@ -356,6 +374,70 @@ jobs:
       - name: Prepare updater feed metadata
         run: node scripts/prepare-release-update-feed.ts release-assets
 
+      - name: Prevent compatibility channel rollback
+        if: ${{ needs.preflight.outputs.release_lane == 'bridge' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
+          BRIDGE_VERSION: ${{ needs.preflight.outputs.version }}
+          UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}
+        run: |
+          set -euo pipefail
+
+          if ! bridge_release_json="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" 2>&1
+          )"; then
+            if grep -q "HTTP 404" <<< "$bridge_release_json"; then
+              exit 0
+            fi
+            echo "$bridge_release_json" >&2
+            exit 1
+          fi
+          bridge_release_id="$(jq -r .id <<< "$bridge_release_json")"
+
+          bridge_assets="$(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${bridge_release_id}/assets?per_page=100" \
+              --jq '.[].name'
+          )"
+          channel_manifests=(
+            "${UPDATE_CHANNEL}-mac.yml"
+            "${UPDATE_CHANNEL}.yml"
+            "${UPDATE_CHANNEL}-linux.yml"
+          )
+          existing_manifests=()
+          for manifest in "${channel_manifests[@]}"; do
+            if grep -Fxq "$manifest" <<< "$bridge_assets"; then
+              existing_manifests+=("$manifest")
+            fi
+          done
+
+          if [[ "${#existing_manifests[@]}" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${#existing_manifests[@]}" -ne "${#channel_manifests[@]}" ]]; then
+            echo "Compatibility feed has a partial dedicated-channel manifest set: ${existing_manifests[*]}." >&2
+            exit 1
+          fi
+
+          manifest_directory="$(mktemp -d)"
+          trap 'rm -rf "$manifest_directory"' EXIT
+          for manifest in "${channel_manifests[@]}"; do
+            gh release download "$BRIDGE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$manifest" \
+              --dir "$manifest_directory"
+            manifest_version="$(
+              sed -n 's/^version:[[:space:]]*//p' "$manifest_directory/$manifest" \
+                | head -n 1 \
+                | tr -d "[:space:]'\""
+            )"
+            if [[ "$manifest_version" != "$BRIDGE_VERSION" ]]; then
+              echo "Refusing to replace $manifest version ${manifest_version:-unknown} with compatibility version $BRIDGE_VERSION." >&2
+              exit 1
+            fi
+          done
+
       - name: Recheck pinned compatibility feed
         if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
         env:
@@ -387,7 +469,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed
-        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -440,7 +522,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_FINALIZE_RELEASE == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

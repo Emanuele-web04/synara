@@ -4,8 +4,8 @@ import {
   type ClientOrchestrationCommand,
   type ChatAttachment,
   type OrchestrationCommand,
-} from "@t3tools/contracts";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+} from "@synara/contracts";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { FileSystem, Path } from "effect";
 import { Effect, Schedule } from "effect";
 

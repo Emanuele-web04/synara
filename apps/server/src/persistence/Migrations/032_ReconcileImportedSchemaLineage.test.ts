@@ -23,22 +23,22 @@ const projectionProjectsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("032_ReconcileImportedSchemaLineage", (it) => {
-  // Simulates a legacy ~/.t3 import where the imported `effect_sql_migrations`
-  // tracker has IDs 17-31 recorded under unrelated T3 Code names. The 17-31
+  // Simulates a legacy ~/.synara import where the imported `effect_sql_migrations`
+  // tracker has IDs 17-31 recorded under unrelated Synara names. The 17-31
   // body never ran, so the columns those migrations would have added are
   // missing. Without #032, the server crashes on the first SELECT that
   // references env_mode.
-  it.effect("heals an imported T3 Code DB whose tracker skipped 17-31", () =>
+  it.effect("heals an imported Synara DB whose tracker skipped 17-31", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Bring the schema to where T3 Code and Synara last agreed.
+      // Bring the schema to where Synara and Synara last agreed.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
-      // Mark IDs 17-31 applied under T3 Code's old names so the migrator
+      // Mark IDs 17-31 applied under Synara's old names so the migrator
       // skips Synara's renumbered 17-23. Names are illustrative; only the
       // IDs matter to the migrator's "run anything past max(id)" gate.
-      const legacyT3MigrationNames: ReadonlyArray<readonly [number, string]> = [
+      const importedMigrationNames: ReadonlyArray<readonly [number, string]> = [
         [17, "ProjectionThreadsArchivedAt"],
         [18, "ProjectionThreadsArchivedAtIndex"],
         [19, "ProjectionSnapshotLookupIndexes"],
@@ -55,14 +55,14 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
         [30, "ProjectionThreadMessagesDispatchMode"],
         [31, "ProjectionThreadsCreateBranchFlowCompleted"],
       ];
-      for (const [id, name] of legacyT3MigrationNames) {
+      for (const [id, name] of importedMigrationNames) {
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
           VALUES (${id}, ${name})
         `;
       }
 
-      // Seed a thread row with the T3 Code-era column set so the data-rewrite
+      // Seed a thread row with the Synara-era column set so the data-rewrite
       // branches in #032 have something to operate on.
       yield* sql`
         INSERT INTO projection_threads (

@@ -8,7 +8,7 @@ import type {
   ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -19,7 +19,7 @@ import {
   ProviderItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -169,7 +169,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   async function createHarness() {
-    const workspaceRoot = makeTempDir("t3-provider-project-");
+    const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
@@ -1228,6 +1228,193 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(false);
     expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects only completed Codex reasoning with a readable summary", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const detail = `**${"Verify the protocol mapping ".repeat(12).trim()}**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->`;
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-reasoning-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail,
+      },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity: ProviderRuntimeTestActivity) => {
+        if (activity.id !== stableActivityId || typeof activity.payload !== "object") {
+          return false;
+        }
+        return (activity.payload as { status?: unknown }).status === "completed";
+      }),
+    );
+    const reasoningActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+    );
+
+    expect(reasoningActivities).toHaveLength(1);
+    expect(reasoningActivities[0]).toMatchObject({
+      kind: "task.progress",
+      tone: "tool",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail,
+        data: { toolCallId: "reasoning-1" },
+      },
+    });
+  });
+
+  it("omits empty completed Codex reasoning just like thread/read", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-empty-reasoning-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-empty-reasoning-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail: "<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-empty-reasoning-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-empty-reasoning-turn-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not project non-Codex or unidentified reasoning lifecycle rows", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-pi-reasoning-started"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("pi-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-pi-reasoning-completed"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("pi-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-codex-reasoning-without-item-id"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-filter-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-reasoning-filter-turn-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
+      ),
+    ).toHaveLength(0);
   });
 
   it("persists a compact per-model token breakdown on turn.completed activities", async () => {

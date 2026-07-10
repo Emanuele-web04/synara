@@ -11,7 +11,7 @@ import type {
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   decodeKeychainJson,

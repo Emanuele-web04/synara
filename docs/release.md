@@ -16,9 +16,11 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing.
-  - The compatibility release is marked as GitHub Latest permanently; later clean releases never replace it.
-- Publishes default-channel compatibility metadata, then uses the dedicated `synara` channel after migration.
+  - The compatibility release remains GitHub Latest permanently; later clean Synara releases never replace it.
+- Publishes default-channel compatibility metadata plus byte-identical, same-version `synara*.yml` placeholders, then advances the dedicated channel after migration.
+- Mirrors stable versioned desktop payloads and dedicated `synara*.yml` metadata onto the pinned compatibility release.
+- Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
+- Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
 
 ## Desktop auto-update notes
@@ -32,22 +34,24 @@ This document covers build-only native validation and publishing desktop release
 - Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
 - Runtime channel: `synara`. The default `latest` channel is reserved for the permanent compatibility hop.
 - Repository slug source:
-  - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
+  - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
+  - the compatibility release also retains `latest-mac.yml`, `latest.yml`, and `latest-linux.yml`
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
 - Enforced upgrade path:
-  - The compatibility version from `scripts/release-update-policy.json` remains GitHub Latest permanently and owns `latest*.yml`.
+  - The compatibility version from `scripts/release-update-policy.json` remains GitHub Latest permanently and owns `latest*.yml` plus byte-identical, same-version `synara*.yml` placeholders.
   - Predecessor installations can therefore see only that compatibility version on their default channel.
-  - The compatibility build migrates local state and then checks the dedicated `synara` channel.
+  - The compatibility build migrates local state and then checks the dedicated `synara` channel, whose placeholders report that the compatibility build is already current.
   - Every clean Synara release is created with `make_latest=false`. Its payloads are uploaded to the pinned compatibility release first, and its three channel manifests are uploaded last.
-  - Both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
+  - Re-publishing the compatibility release fails closed once its dedicated-channel manifests advertise a newer version, preventing an accidental channel rollback.
+  - Clean-release preflight also requires all six compatibility/default and dedicated-channel manifests, and both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
   - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
-  - The workflow merges the per-arch manifests and then renames the merged file to `synara-mac.yml` before publication.
+  - The workflow merges the per-arch macOS metadata, then copies the merged manifest to `synara-mac.yml` for the compatibility release or renames it for a clean release.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
   - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact signed archive validated by release build.
 - Local smoke test:
@@ -62,7 +66,7 @@ the package version to the release tag version.
 
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm the npm account controls the `@synara` scope and can publish `@synara/cli`.
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -80,8 +84,8 @@ Checklist:
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
-  - `DPCODE_PUBLISH_CLI=1`
-  - `DPCODE_FINALIZE_RELEASE=1`
+  - `SYNARA_PUBLISH_CLI=1`
+  - `SYNARA_FINALIZE_RELEASE=1`
 
 ## 1) Build-only native CI validation
 

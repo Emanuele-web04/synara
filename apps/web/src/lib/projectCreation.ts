@@ -3,12 +3,8 @@
 // Layer: Web orchestration helper
 // Exports: createOrRecoverProjectFromPath
 
-import {
-  type NativeApi,
-  type OrchestrationShellSnapshot,
-  type ProjectId,
-} from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 
 import {
   extractDuplicateProjectCreateProjectId,

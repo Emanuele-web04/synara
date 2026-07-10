@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
@@ -16,15 +17,15 @@ import {
   type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   extractSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import {
   generatedImageMarkdown,
@@ -85,7 +86,7 @@ const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
-const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.SYNARA_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type RuntimeIngestionDomainEvent = Extract<
   OrchestrationEvent,
@@ -894,6 +895,37 @@ function runtimeEventToActivities(
       ? { sequence: eventWithSequence.sessionSequence }
       : {};
   })();
+  // Codex only renders completed reasoning items with a readable summary.
+  // Empty starts/completions are private/encrypted reasoning boundaries, not
+  // transcript rows. Waiting for the authoritative completion also avoids
+  // per-token activity writes and transcript height churn.
+  if (
+    event.provider === "codex" &&
+    event.type === "item.completed" &&
+    event.payload.itemType === "reasoning" &&
+    event.itemId !== undefined &&
+    event.payload.detail !== undefined &&
+    event.payload.detail.replace(/<!--[\s\S]*?-->/gu, "").trim().length > 0
+  ) {
+    const reasoningItemId = String(event.itemId);
+    const reasoningDetail = event.payload.detail.trim();
+    return [
+      {
+        id: EventId.makeUnsafe(`provider-reasoning:${event.threadId}:${reasoningItemId}`),
+        createdAt: event.createdAt,
+        tone: "tool",
+        kind: "task.progress",
+        summary: "Reasoning trace",
+        payload: toActivityPayload({
+          ...(event.payload.status ? { status: event.payload.status } : {}),
+          detail: truncateDetail(reasoningDetail, MAX_ACTIVITY_DATA_STRING_CHARS),
+          data: { toolCallId: reasoningItemId },
+        }),
+        turnId: toTurnId(event.turnId) ?? null,
+        ...maybeSequence,
+      },
+    ];
+  }
   switch (event.type) {
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);

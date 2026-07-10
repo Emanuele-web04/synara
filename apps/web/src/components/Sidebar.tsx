@@ -80,12 +80,12 @@ import {
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
-} from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
-import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { getDefaultModel } from "@synara/shared/model";
+import { pluralize } from "@synara/shared/text";
+import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
@@ -101,8 +101,8 @@ import {
   reconcileDeletedThreadFromClient,
   reconcileDeletedThreadsFromClient,
 } from "../lib/deletedThreadClientReconciliation";
+import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
-import { flushSynaraStorageSnapshot } from "../storageKeyMigration";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -476,8 +476,6 @@ function findTrackedProjectRunServer(
 type DebugFeatureFlagsWindow = Window & {
   synaraShowFeatureFlags?: () => void;
   synaraHideFeatureFlags?: () => void;
-  dpcodeShowFeatureFlags?: () => void;
-  dpcodeHideFeatureFlags?: () => void;
 };
 
 function readDebugFeatureFlagsMenuVisibility(): boolean {
@@ -1371,6 +1369,9 @@ export default function Sidebar() {
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
+  const removeDeletedProjectFromClientState = useStore(
+    (store) => store.removeDeletedProjectFromClientState,
+  );
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
@@ -1514,8 +1515,6 @@ export default function Sidebar() {
 
     debugWindow.synaraShowFeatureFlags = showFeatureFlags;
     debugWindow.synaraHideFeatureFlags = hideFeatureFlags;
-    debugWindow.dpcodeShowFeatureFlags = showFeatureFlags;
-    debugWindow.dpcodeHideFeatureFlags = hideFeatureFlags;
     window.addEventListener("storage", updateVisibility);
     updateVisibility();
 
@@ -1526,12 +1525,6 @@ export default function Sidebar() {
       }
       if (debugWindow.synaraHideFeatureFlags === hideFeatureFlags) {
         delete debugWindow.synaraHideFeatureFlags;
-      }
-      if (debugWindow.dpcodeShowFeatureFlags === showFeatureFlags) {
-        delete debugWindow.dpcodeShowFeatureFlags;
-      }
-      if (debugWindow.dpcodeHideFeatureFlags === hideFeatureFlags) {
-        delete debugWindow.dpcodeHideFeatureFlags;
       }
     };
   }, []);
@@ -4138,10 +4131,10 @@ export default function Sidebar() {
           return;
         }
 
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
+        await deleteProjectFromClient({
+          api: api.orchestration,
           projectId,
+          removeDeletedProjectFromClientState,
         });
         clearProjectDraftThreads(projectId);
         toastManager.add({
@@ -4172,6 +4165,7 @@ export default function Sidebar() {
       handleStopProjectRun,
       navigate,
       projectById,
+      removeDeletedProjectFromClientState,
       sidebarThreads,
       toggleProjectPinned,
     ],
@@ -6522,8 +6516,8 @@ export default function Sidebar() {
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
-      void flushSynaraStorageSnapshot()
-        .then(() => bridge.installUpdate())
+      void bridge
+        .installUpdate()
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);

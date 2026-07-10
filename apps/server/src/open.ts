@@ -11,11 +11,8 @@ import { accessSync, constants, statSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import pathWin32 from "node:path/win32";
 
-import { EDITORS, type EditorId } from "@t3tools/contracts";
-import {
-  prepareWindowsSafeProcess,
-  resolveWindowsSystemRoot,
-} from "@t3tools/shared/windowsProcess";
+import { EDITORS, type EditorId } from "@synara/contracts";
+import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
@@ -433,7 +430,7 @@ export interface OpenShape {
 /**
  * Open - Service tag for browser/editor launch operations.
  */
-export class Open extends ServiceMap.Service<Open, OpenShape>()("t3/open") {}
+export class Open extends ServiceMap.Service<Open, OpenShape>()("synara/open") {}
 
 // ==============================
 // Implementations

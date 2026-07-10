@@ -12,7 +12,7 @@ import type {
   ProviderPluginMarketplaceDescriptor,
   ProviderPluginMarketplaceLoadError,
   ProviderReadPluginResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { collectSkillsFromRoots } from "./skillsCatalog.ts";
 

@@ -3,7 +3,7 @@
 // Layer: Provider ACP protocol mapping
 // Exports: question extraction and typed ACP response construction.
 
-import type { ProviderUserInputAnswers, UserInputQuestion } from "@t3tools/contracts";
+import type { ProviderUserInputAnswers, UserInputQuestion } from "@synara/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 type FormElicitationRequest = Extract<

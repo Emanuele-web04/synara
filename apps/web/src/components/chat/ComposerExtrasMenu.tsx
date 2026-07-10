@@ -3,7 +3,7 @@
 // Layer: Chat composer presentation
 // Depends on: shared menu primitives, icon buttons, and caller-owned composer state callbacks.
 
-import { type ProviderInteractionMode } from "@t3tools/contracts";
+import { type ProviderInteractionMode } from "@synara/contracts";
 import { memo, useId, useRef, type ChangeEvent } from "react";
 import { GoTasklist } from "react-icons/go";
 

@@ -26,7 +26,7 @@ import {
   ProviderStartOptions,
   type ProviderRuntimeEvent,
   type ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -50,7 +50,7 @@ export interface ProviderServiceLiveOptions {
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
 const configuredProviderRuntimeIdleStopMs =
   process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS ??
-  process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS;
+  process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;

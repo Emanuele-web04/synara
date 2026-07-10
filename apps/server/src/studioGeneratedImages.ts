@@ -16,8 +16,8 @@ import {
   type EventId as EventIdType,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
-import { isSupportedLocalImagePath } from "@t3tools/shared/localPreviewFiles";
+} from "@synara/contracts";
+import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { Effect } from "effect";
 
 import { resolveCodexGeneratedImagesRoots } from "./codexGeneratedImages.ts";

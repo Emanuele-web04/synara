@@ -1,7 +1,14 @@
 // FILE: release-update-policy.ts
 // Purpose: Enforces the permanent compatibility hop and prepares channel manifests.
 
-import { existsSync, readFileSync, renameSync, readdirSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+} from "node:fs";
 import { resolve } from "node:path";
 
 export type ReleaseLane = "bridge" | "clean";
@@ -17,6 +24,7 @@ export interface ResolvedReleaseUpdatePolicy {
   readonly tag: string;
   readonly isPrerelease: boolean;
   readonly makeLatest: boolean;
+  readonly mirrorToStableChannel: boolean;
   readonly lane: ReleaseLane;
   readonly bridgeTag: string;
   readonly channel: string;
@@ -94,6 +102,7 @@ export function resolveReleaseUpdatePolicy(
     tag: `v${version}`,
     isPrerelease: requested.isPrerelease,
     makeLatest: normalizedConfig.lane === "bridge",
+    mirrorToStableChannel: normalizedConfig.lane === "clean" && !requested.isPrerelease,
     lane: normalizedConfig.lane,
     bridgeTag: `v${normalizedConfig.bridgeVersion}`,
     channel: normalizedConfig.channel,
@@ -113,15 +122,28 @@ export function prepareReleaseUpdateManifests(
 ): readonly string[] {
   const normalizedConfig = validateReleaseUpdatePolicyConfig(config);
   const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;
+  const destinationNames = channelManifestNames(normalizedConfig.channel);
   if (normalizedConfig.lane === "bridge") {
     const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
     if (missing.length > 0) {
       throw new Error(`Compatibility release is missing update manifests: ${missing.join(", ")}`);
     }
-    return sourceNames;
+    const existing = destinationNames.filter((name) => existsSync(resolve(assetDirectory, name)));
+    if (existing.length > 0) {
+      throw new Error(`Refusing to overwrite existing update manifest: ${existing.join(", ")}`);
+    }
+    for (const [index, sourceName] of sourceNames.entries()) {
+      const destinationName = destinationNames[index];
+      if (!destinationName) throw new Error(`Missing channel manifest mapping for ${sourceName}.`);
+      copyFileSync(
+        resolve(assetDirectory, sourceName),
+        resolve(assetDirectory, destinationName),
+        constants.COPYFILE_EXCL,
+      );
+    }
+    return [...sourceNames, ...destinationNames];
   }
 
-  const destinationNames = channelManifestNames(normalizedConfig.channel);
   const renamed: string[] = [];
   for (const [index, sourceName] of sourceNames.entries()) {
     const sourcePath = resolve(assetDirectory, sourceName);

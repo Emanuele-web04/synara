@@ -183,8 +183,8 @@ Notes:
 
 1. For each fixed metric, run the OLD vs NEW SQL against BOTH DBs with `sqlite3` and paste the numbers in
    your summary, showing the per-turn vs thread-weighted difference is resolved.
-2. `npx turbo run typecheck --filter=@t3tools/contracts --filter=t3` must pass. DO NOT run the web
-   (`@t3tools/web`) typecheck — its UI is being rewritten in parallel and will be red until Opus finishes.
+2. `npx turbo run typecheck --filter=@synara/contracts --filter=@synara/cli` must pass. DO NOT run the web
+   (`@synara/web`) typecheck — its UI is being rewritten in parallel and will be red until Opus finishes.
 3. `bun fmt` and `bun lint` (lint must have 0 errors; warnings ok). NEVER run `bun test`.
 4. In your final summary, document: the exact final `ProfileStats` + `ProfileTokenStats` field list, the
    exact exported query-factory names in `serverReactQuery.ts`, and any contract deviation from the pin.

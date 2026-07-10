@@ -24,9 +24,9 @@ import {
   ThreadId,
   type ProviderRuntimeEvent,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";

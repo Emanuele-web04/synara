@@ -3,8 +3,8 @@
 // Layer: Web orchestration helper
 // Exports: Studio project lookup, creation, and prewarm helpers.
 
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import {
@@ -250,5 +250,13 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
 }
 
 export function prewarmStudioProject(paths: ServerWorkspacePaths): void {
-  void ensureStudioProject(paths);
+  // Prewarming is best-effort. The interactive creation path reports failures;
+  // background startup must not leak a rejected promise into the app or test runner.
+  void ensureStudioProject(paths).catch(() => undefined);
+}
+
+export async function resetStudioProjectPrewarmStateForTests(): Promise<void> {
+  const pendingCreations = [...pendingStudioCreationByWorkspaceRoot.values()];
+  pendingStudioCreationByWorkspaceRoot.clear();
+  await Promise.allSettled(pendingCreations);
 }

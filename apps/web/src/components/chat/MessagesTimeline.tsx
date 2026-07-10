@@ -9,9 +9,9 @@ import {
   ThreadId,
   type ThreadMarker,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/contracts";
+import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -111,7 +111,12 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
-import { isAgentActivityWorkEntry } from "./agentActivity.logic";
+import {
+  formatAgentActivityEntryPreview,
+  isAgentActivityWorkEntry,
+  isCodexActivityStatusWorkEntry,
+  isReasoningUpdateWorkEntry,
+} from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -2644,20 +2649,10 @@ function extractFilePathFromDetail(detail: string): string | null {
   return null;
 }
 
-function workEntryPreview(
-  workEntry: Pick<
-    TimelineWorkEntry,
-    | "detail"
-    | "command"
-    | "rawCommand"
-    | "preview"
-    | "changedFiles"
-    | "requestKind"
-    | "itemType"
-    | "subagents"
-    | "subagentAction"
-  >,
-): string | null {
+function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
+  if (isReasoningUpdateWorkEntry(workEntry)) {
+    return formatAgentActivityEntryPreview(workEntry);
+  }
   const isFileRelated =
     workEntry.requestKind === "file-read" ||
     workEntry.requestKind === "file-change" ||
@@ -2779,6 +2774,9 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // compact density so every tool-call line shares one height regardless of whether
 // it carries a disclosure chevron.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  if (isCodexActivityStatusWorkEntry(workEntry)) {
+    return true;
+  }
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
   // inspections like `cat` now use the file-read search icon).
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
@@ -2973,13 +2971,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onOpenAutomation,
   } = props;
   const compact = density === "compact";
+  const isCodexStatusRow = isCodexActivityStatusWorkEntry(workEntry);
   const EntryIcon = workEntryIcon(workEntry);
   // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
   // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
   // composer and markdown links so every site reference looks identical.
   const webFetchUrl = extractWebFetchUrl(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs discoverable
-  // for command rows and app-backed tool rows.
+  // Standard tool rows keep one discoverable left glyph. Codex status rows
+  // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
   const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
@@ -2994,7 +2993,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const preview = workEntryPreview(workEntry);
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
-    : combineWorkEntryDisplayText(heading, preview);
+    : isReasoningUpdateWorkEntry(workEntry) && preview
+      ? preview
+      : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -3281,20 +3282,23 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center",
-                  WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                  compact ? "size-4" : "size-5",
-                )}
-                data-tool-icon={leftIconKind}
-              >
-                {webFetchUrl ? (
-                  <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
-                ) : (
-                  <LeftIcon className={compact ? "size-3.5" : "size-4"} />
-                )}
-              </span>
+              {!isCodexStatusRow ? (
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center",
+                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                    compact ? "size-4" : "size-5",
+                  )}
+                  data-tool-icon={leftIconKind}
+                  data-work-entry-icon="true"
+                >
+                  {webFetchUrl ? (
+                    <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                  ) : (
+                    <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                  )}
+                </span>
+              ) : null}
               <div
                 className={cn(
                   "min-w-0 overflow-hidden",
@@ -3333,6 +3337,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                     )}
+                    data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>

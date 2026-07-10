@@ -3,7 +3,7 @@
 // Layer: Client utility
 // Exports: recap source derivation plus per-thread localStorage cache helpers.
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import type { Thread, ChatMessage } from "~/types";
 import { isPlainObject, sanitizeStringKeyedRecord } from "~/persistedRecord";
 

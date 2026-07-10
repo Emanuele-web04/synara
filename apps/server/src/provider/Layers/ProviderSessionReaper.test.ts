@@ -1,4 +1,4 @@
-import { ThreadId, TurnId, type OrchestrationThreadShell } from "@t3tools/contracts";
+import { ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
 import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 

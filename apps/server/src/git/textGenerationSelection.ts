@@ -1,4 +1,4 @@
-import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@t3tools/contracts";
+import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara/contracts";
 
 export interface TextGenerationProviderInput {
   readonly modelSelection: ModelSelection;

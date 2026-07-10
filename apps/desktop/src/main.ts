@@ -8,6 +8,9 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
+// Electron-only builtin that sees app.asar as a real file instead of a virtual
+// directory — required to stat the archive itself for swap detection.
+import * as OriginalFS from "original-fs";
 
 import {
   app,
@@ -35,15 +38,29 @@ import type {
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 
-import type { ContextMenuItem } from "@t3tools/contracts";
-import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
-import { NetService } from "@t3tools/shared/Net";
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import type { ContextMenuItem } from "@synara/contracts";
+import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
+import {
+  SYNARA_DESKTOP_ENTRY_URL,
+  SYNARA_DESKTOP_SCHEME,
+  SYNARA_DESKTOP_UPDATE_CHANNEL,
+  synaraBundleId,
+} from "@synara/shared/desktopIdentity";
+import { NetService } from "@synara/shared/Net";
+import { RotatingFileSink } from "@synara/shared/logging";
+import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
+import {
+  bundleSignatureFromStats,
+  isBundleStable,
+  isBundleSwapped,
+  isWatchableBundlePath,
+  type BundleSignature,
+} from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -119,10 +136,8 @@ import {
 } from "./browserIpc";
 import {
   BrowserUsePipeServer,
-  DPCODE_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_PATH,
-  T3CODE_BROWSER_USE_PIPE_ENV,
 } from "./browserUsePipeServer";
 import {
   DESKTOP_WS_URL_CHANNEL,
@@ -130,19 +145,22 @@ import {
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
 import {
+  repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
-  resolveLegacyDesktopUserDataPaths,
-  seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
   resolveSynaraStorageSnapshotPath,
-  saveSynaraStorageSnapshot,
   STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+
+// Capture the real archive identity before any explicit app.asar lookup. Static
+// snapshotting and the runtime watcher both use this same generation as their
+// baseline, so a replacement during startup cannot silently become "normal."
+const startupBundleIdentity = captureStartupBundleIdentity();
 
 syncShellEnvironment();
 
@@ -170,17 +188,13 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const BASE_DIR =
-  process.env.SYNARA_HOME?.trim() ||
-  process.env.DPCODE_HOME?.trim() ||
-  process.env.T3CODE_HOME?.trim() ||
-  Path.join(OS.homedir(), ".synara");
+const BASE_DIR = process.env.SYNARA_HOME?.trim() || Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
-const DESKTOP_SCHEME = "t3";
+const DESKTOP_SCHEME = SYNARA_DESKTOP_SCHEME;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
-const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.synara.dev" : "com.t3tools.synara";
+const APP_USER_MODEL_ID = synaraBundleId(isDevelopment);
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -206,22 +220,14 @@ const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
 const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
-const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
-  "SYNARA_BACKEND_MAX_OLD_SPACE_MB",
-  "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
-  "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
-] as const;
-const SYNARA_DESKTOP_UPDATE_CHANNEL = "synara";
+const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
 const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
 const SYNARA_BROWSER_LABEL = "Synara browser";
-const browserPerfLoggingEnabled =
-  process.env.SYNARA_BROWSER_PERF === "1" ||
-  process.env.DPCODE_BROWSER_PERF === "1" ||
-  process.env.T3CODE_BROWSER_PERF === "1";
+const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -462,8 +468,6 @@ async function reserveBackendEndpoint(reason: string): Promise<void> {
   backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
-  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
-  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
   writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
 }
 
@@ -832,8 +836,8 @@ function resolveEmbeddedCommitHash(): string | null {
 
   try {
     const raw = FS.readFileSync(packageJsonPath, "utf8");
-    const parsed = JSON.parse(raw) as { t3codeCommitHash?: unknown };
-    return normalizeCommitHash(parsed.t3codeCommitHash);
+    const parsed = JSON.parse(raw) as { synaraCommitHash?: unknown };
+    return normalizeCommitHash(parsed.synaraCommitHash);
   } catch {
     return null;
   }
@@ -844,7 +848,7 @@ function resolveAboutCommitHash(): string | null {
     return aboutCommitHashCache;
   }
 
-  const envCommitHash = normalizeCommitHash(process.env.T3CODE_COMMIT_HASH);
+  const envCommitHash = normalizeCommitHash(process.env.SYNARA_COMMIT_HASH);
   if (envCommitHash) {
     aboutCommitHashCache = envCommitHash;
     return aboutCommitHashCache;
@@ -886,6 +890,124 @@ function resolveDesktopStaticDir(): string | null {
   }
 
   return null;
+}
+
+interface ServedStaticRoot {
+  readonly dir: string;
+  /** True when serving a real-disk snapshot instead of reading through the asar. */
+  readonly snapshotted: boolean;
+}
+
+interface BundleIdentity {
+  readonly path: string;
+  readonly signature: BundleSignature | null;
+}
+
+class BundleChangedDuringStartupError extends Error {
+  readonly bundlePath: string;
+  readonly baseline: BundleSignature | null;
+  readonly current: BundleSignature | null;
+
+  constructor(input: {
+    bundlePath: string;
+    baseline: BundleSignature | null;
+    current: BundleSignature | null;
+  }) {
+    super("The packaged application changed while its static assets were being prepared.");
+    this.name = "BundleChangedDuringStartupError";
+    this.bundlePath = input.bundlePath;
+    this.baseline = input.baseline;
+    this.current = input.current;
+  }
+}
+
+let servedStaticRootCache: ServedStaticRoot | null | undefined;
+
+// Serving static assets straight out of app.asar is vulnerable to the archive
+// being replaced beneath the running app (Electron caches the header per process,
+// so every later read returns bytes from the wrong offsets). Extract the client
+// to a per-archive snapshot on real disk and serve that instead — both for the
+// synara:// protocol here and, via SYNARA_STATIC_DIR, for the backend's HTTP static
+// route. Memoized so one app run serves one coherent asset generation.
+function resolveServedStaticRoot(): ServedStaticRoot | null {
+  if (servedStaticRootCache === undefined) {
+    servedStaticRootCache = computeServedStaticRoot();
+  }
+  return servedStaticRootCache;
+}
+
+function computeServedStaticRoot(): ServedStaticRoot | null {
+  const sourceDir = resolveDesktopStaticDir();
+  if (!sourceDir) {
+    return null;
+  }
+  const archivePath = findAsarArchivePath(sourceDir);
+  if (!archivePath) {
+    // Plain-directory client (dev, unpacked build): real files already survive swaps.
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startupArchiveSignature =
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(archivePath)
+      ? startupBundleIdentity.signature
+      : undefined;
+  if (startupArchiveSignature === null) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: null,
+      current: readBundleSignature(archivePath),
+    });
+  }
+  const archiveSignature = startupArchiveSignature ?? readBundleSignature(archivePath);
+  if (!archiveSignature) {
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startedAtMs = Date.now();
+  let snapshot: ReturnType<typeof ensureStaticSnapshot>;
+  try {
+    snapshot = ensureStaticSnapshot({
+      sourceDir,
+      cacheRoot: Path.join(app.getPath("userData"), "static-snapshots"),
+      signature: `${archiveSignature.size}-${archiveSignature.mtimeMs}-${archiveSignature.inode}`,
+    });
+  } catch (error) {
+    const currentArchiveSignature = readBundleSignature(archivePath);
+    if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+      throw new BundleChangedDuringStartupError({
+        bundlePath: archivePath,
+        baseline: archiveSignature,
+        current: currentArchiveSignature,
+      });
+    }
+    console.warn(
+      "[desktop] Failed to snapshot static assets; serving from the archive",
+      formatErrorMessage(error),
+    );
+    return { dir: sourceDir, snapshotted: false };
+  }
+
+  const currentArchiveSignature = readBundleSignature(archivePath);
+  if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+    // A newly-created snapshot may contain reads from both archive generations.
+    // Never leave it behind for a future launch to reuse.
+    if (!snapshot.reused) {
+      try {
+        FS.rmSync(snapshot.dir, { recursive: true, force: true });
+      } catch {
+        // The signature changes the snapshot key, so failed cleanup is disk waste
+        // rather than a path the replacement generation can accidentally reuse.
+      }
+    }
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: archiveSignature,
+      current: currentArchiveSignature,
+    });
+  }
+
+  writeDesktopLogHeader(
+    `static snapshot ${snapshot.reused ? "reused" : "created"} dir=${snapshot.dir} in ${Date.now() - startedAtMs}ms`,
+  );
+  return { dir: snapshot.dir, snapshotted: true };
 }
 
 function resolveDesktopStaticPath(staticRoot: string, requestUrl: string): string {
@@ -938,7 +1060,17 @@ function handleFatalStartupError(stage: string, error: unknown): void {
 function registerDesktopProtocol(): void {
   if (isDevelopment || desktopProtocolRegistered) return;
 
-  const staticRoot = resolveDesktopStaticDir();
+  // An unreadable first observation cannot be replaced by a later baseline:
+  // Electron may already hold the header for the generation that disappeared.
+  if (startupBundleIdentity && !startupBundleIdentity.signature) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: startupBundleIdentity.path,
+      baseline: null,
+      current: readBundleSignature(startupBundleIdentity.path),
+    });
+  }
+
+  const staticRoot = resolveServedStaticRoot()?.dir ?? null;
   if (!staticRoot) {
     throw new Error(
       "Desktop static bundle missing. Build apps/server (with bundled client) first.",
@@ -1032,7 +1164,7 @@ function adjustWindowZoomFromMenu(multiplier: number): void {
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
 // auto-update activity; centralized so the menu and the enable check stay in lockstep.
 function hasConfiguredUpdateFeed(): boolean {
-  return readAppUpdateYml() !== null || Boolean(process.env.T3CODE_DESKTOP_MOCK_UPDATES);
+  return readAppUpdateYml() !== null || Boolean(process.env.SYNARA_DESKTOP_MOCK_UPDATES);
 }
 
 function resolveAutoUpdateDisabledReason(): string | null {
@@ -1041,7 +1173,7 @@ function resolveAutoUpdateDisabledReason(): string | null {
     isPackaged: app.isPackaged,
     platform: process.platform,
     appImage: process.env.APPIMAGE,
-    disabledByEnv: process.env.T3CODE_DISABLE_AUTO_UPDATE === "1",
+    disabledByEnv: process.env.SYNARA_DISABLE_AUTO_UPDATE === "1",
     hasUpdateFeedConfig: hasConfiguredUpdateFeed(),
   });
 }
@@ -1340,34 +1472,28 @@ function showDesktopNotification(input: {
  * Resolve the Electron userData directory path.
  *
  * Electron derives the default userData path from `productName` in
- * package.json. We override it to a clean lowercase Synara name while seeding
- * from legacy app profiles when needed.
+ * package.json. We override it to a clean lowercase Synara name.
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
-  const seedResult = seedDesktopUserDataProfileFromLegacy({
-    targetPath: userDataPath,
-    legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
-  });
-  if (seedResult.status === "seeded") {
-    console.info("[desktop] Seeded Synara Electron profile from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
+  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+}
+
+function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {
+  const browserProfileRepair = repairBrowserProfileFromBridgeManifest(userDataPath);
+  if (browserProfileRepair.status === "repaired") {
+    console.info("[desktop] Completed Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      copiedEntries: browserProfileRepair.copiedEntries,
     });
-  } else if (seedResult.status === "repaired-browser-partition") {
-    console.info("[desktop] Restored Synara browser session from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
-    });
-  } else if (seedResult.status === "seed-failed") {
-    console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
-      error: seedResult.error,
+  } else if (browserProfileRepair.status === "repair-failed") {
+    console.warn("[desktop] Failed to complete Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      error: browserProfileRepair.error,
     });
   }
-  return userDataPath;
 }
 
 function configureAppIdentity(): void {
@@ -1478,6 +1604,122 @@ function refreshMacIconCacheOnVersionChange(): void {
       `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
     );
   });
+}
+
+// How often the bundle-swap watcher stats app.asar. A stat is cheap; the cost of
+// missing a swap is every subsequent asar read returning bytes from the wrong
+// file (invisible icons, corrupted lazy-loaded route chunks), so poll briskly.
+const BUNDLE_SWAP_POLL_INTERVAL_MS = 15_000;
+
+let bundleSwapPollTimer: NodeJS.Timeout | null = null;
+let bundleSwapPromptOpen = false;
+
+function readBundleSignature(bundlePath: string): BundleSignature | null {
+  try {
+    return bundleSignatureFromStats(OriginalFS.statSync(bundlePath));
+  } catch {
+    return null;
+  }
+}
+
+function captureStartupBundleIdentity(): BundleIdentity | null {
+  if (!app.isPackaged) {
+    return null;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return null;
+  }
+  return { path: bundlePath, signature: readBundleSignature(bundlePath) };
+}
+
+function restartAfterStartupBundleSwap(error: BundleChangedDuringStartupError): void {
+  const baselineSize = error.baseline?.size ?? "unreadable";
+  const currentSize = error.current?.size ?? "unreadable";
+  writeDesktopLogHeader(
+    `bundle changed during startup path=${error.bundlePath} size=${baselineSize}->${currentSize}`,
+  );
+  console.warn("[desktop] Packaged application changed during startup; restarting", error);
+
+  void dialog
+    .showMessageBox({
+      type: "warning",
+      title: "Synara needs to restart",
+      message: "Synara changed while it was opening.",
+      detail:
+        "The current process cannot safely read the replaced application bundle. Restart Synara to finish opening with one consistent version.",
+      buttons: ["Restart Synara"],
+      defaultId: 0,
+    })
+    .catch(() => undefined)
+    .then(() => {
+      app.relaunch();
+      requestGracefulAppQuit("startup-bundle-swap");
+    });
+}
+
+// Electron caches the asar header per process, so once app.asar changes on disk
+// (updater retry racing a relaunch, a reinstall, a build copied over the bundle)
+// every archive read in this process — the synara:// protocol, the backend's static
+// files, lazily-loaded renderer chunks — resolves to stale offsets and silently
+// returns the wrong bytes. Detect the swap and offer a restart; continuing is
+// never safe.
+function startBundleSwapWatcher(): void {
+  if (!app.isPackaged || bundleSwapPollTimer) {
+    return;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return;
+  }
+  let baseline =
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(bundlePath)
+      ? (startupBundleIdentity.signature ?? readBundleSignature(bundlePath))
+      : readBundleSignature(bundlePath);
+  if (!baseline) {
+    return;
+  }
+
+  bundleSwapPollTimer = setInterval(() => {
+    // The updater owns the quit/relaunch during its own install handoff, and a
+    // quitting app is about to re-read the new archive anyway.
+    if (isQuitting || isUpdaterInstallPreparing || bundleSwapPromptOpen) {
+      return;
+    }
+    const current = readBundleSignature(bundlePath);
+    if (!baseline || !isBundleSwapped(baseline, current)) {
+      return;
+    }
+    writeDesktopLogHeader(
+      `bundle swap detected path=${bundlePath} size=${baseline.size}->${current?.size ?? "unknown"}`,
+    );
+    // Re-arm on the new identity so declining the restart still catches the
+    // next replacement instead of re-prompting for the same one.
+    baseline = current;
+    bundleSwapPromptOpen = true;
+    void dialog
+      .showMessageBox({
+        type: "warning",
+        title: "Synara was replaced on disk",
+        message: "The installed Synara app changed while it was running.",
+        detail:
+          "The interface keeps running from a safeguarded copy, but parts of the app loaded later can still read the replaced file. Restart now to pick up the new version safely.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        bundleSwapPromptOpen = false;
+        if (response === 0) {
+          app.relaunch();
+          requestGracefulAppQuit("bundle-swap-restart");
+        }
+      })
+      .catch(() => {
+        bundleSwapPromptOpen = false;
+      });
+  }, BUNDLE_SWAP_POLL_INTERVAL_MS);
+  bundleSwapPollTimer.unref();
 }
 
 function clearUpdatePollTimer(): void {
@@ -2207,22 +2449,18 @@ function backendNodeArgs(): string[] {
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
+  const servedStaticRoot = resolveServedStaticRoot();
   return {
     ...process.env,
-    DPCODE_MODE: "desktop",
-    DPCODE_NO_BROWSER: "1",
-    DPCODE_PORT: String(backendPort),
-    DPCODE_HOME: BASE_DIR,
-    DPCODE_AUTH_TOKEN: backendAuthToken,
-    [DPCODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
-    [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
-    T3CODE_MODE: "desktop",
-    T3CODE_NO_BROWSER: "1",
-    T3CODE_PORT: String(backendPort),
-    T3CODE_HOME: BASE_DIR,
-    T3CODE_AUTH_TOKEN: backendAuthToken,
+    // Point the backend's HTTP static route at the same swap-immune snapshot the
+    // synara:// protocol serves, so both surfaces survive app.asar being replaced.
+    ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
+    SYNARA_MODE: "desktop",
+    SYNARA_NO_BROWSER: "1",
+    SYNARA_PORT: String(backendPort),
     SYNARA_HOME: BASE_DIR,
-    [T3CODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
+    SYNARA_AUTH_TOKEN: backendAuthToken,
+    [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
   };
 }
 
@@ -2471,11 +2709,6 @@ function registerIpcHandlers(): void {
   ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
     event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
   });
-
-  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
-  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
-    saveSynaraStorageSnapshot(storageSnapshotPath, snapshot),
-  );
 
   ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
   ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
@@ -2826,7 +3059,7 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
   }
   return {
     titleBarStyle: "hiddenInset",
-    // Derived from the shared chat-surface header geometry (@t3tools/shared/desktopChrome)
+    // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
     // so the native lights and the renderer's leading toggle/arrow controls always share
     // the same vertical center. Tune the height/radius there, never the raw px here.
     trafficLightPosition: getMacTrafficLightPosition(),
@@ -2927,7 +3160,7 @@ function createWindow(): BrowserWindow {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
-    void window.loadURL(`${DESKTOP_SCHEME}://app/index.html`);
+    void window.loadURL(SYNARA_DESKTOP_ENTRY_URL);
   }
 
   window.on("closed", () => {
@@ -2986,7 +3219,11 @@ function configureMediaPermissions(): void {
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
-app.setPath("userData", resolveUserDataPath());
+const userDataPath = resolveUserDataPath();
+if (hasSingleInstanceLock) {
+  repairBrowserProfileBeforeElectronReady(userDataPath);
+}
+app.setPath("userData", userDataPath);
 
 configureAppIdentity();
 
@@ -3076,7 +3313,16 @@ if (hasSingleInstanceLock) {
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
-      registerDesktopProtocol();
+      try {
+        registerDesktopProtocol();
+      } catch (error) {
+        if (error instanceof BundleChangedDuringStartupError) {
+          restartAfterStartupBundleSwap(error);
+          return;
+        }
+        throw error;
+      }
+      startBundleSwapWatcher();
       configureAutoUpdater();
       void bootstrap().catch((error) => {
         handleFatalStartupError("bootstrap", error);

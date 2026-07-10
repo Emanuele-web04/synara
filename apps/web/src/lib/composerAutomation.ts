@@ -4,7 +4,7 @@
 // Exports: composer automation resolver plus draft builder for ChatView.
 // Depends on: automationIntent parsing and automation form helpers.
 
-import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@t3tools/contracts";
+import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contracts";
 import type {
   AutomationMode,
   ModelSelection,
@@ -13,7 +13,7 @@ import type {
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   applyScheduleToForm,

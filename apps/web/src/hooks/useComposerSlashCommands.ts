@@ -7,9 +7,9 @@ import {
   type ProviderModelOptions,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
-import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
-import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
+} from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
 import { useCallback, useEffect, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";

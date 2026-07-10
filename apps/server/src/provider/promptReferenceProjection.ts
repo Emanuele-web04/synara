@@ -3,7 +3,7 @@
 // Layer: Provider prompt compatibility
 // Exports: appendProviderReferencesPromptBlock.
 
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 
 function referenceLine(reference: ProviderMentionReference): string {
   const kind = reference.path.startsWith("plugin://") ? "Factory plugin" : "local path";

@@ -3,7 +3,7 @@ import {
   type BrowserCaptureScreenshotResult,
   type NativeApi,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { ComposerImageAttachment } from "../composerDraftStore";
 

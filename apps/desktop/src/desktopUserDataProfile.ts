@@ -1,6 +1,5 @@
 // FILE: desktopUserDataProfile.ts
-// Purpose: Resolves and seeds Electron userData profile paths during app renames.
-// Exports: helpers used by desktop startup and focused migration tests.
+// Purpose: Resolves Synara's Electron userData paths and completes bridge profile repair.
 
 import * as FS from "node:fs";
 import * as OS from "node:os";
@@ -8,46 +7,29 @@ import * as Path from "node:path";
 
 const DEV_USER_DATA_DIR_NAME = "synara-dev";
 const PROD_USER_DATA_DIR_NAME = "synara";
-const DEV_LEGACY_USER_DATA_DIR_NAMES = ["dpcode-dev", "t3code-dev", "DP Code (Dev)"] as const;
-const PROD_LEGACY_USER_DATA_DIR_NAMES = ["dpcode", "t3code", "DP Code (Alpha)"] as const;
-const PROFILE_SEED_ENTRY_NAMES = [
-  "Local Storage",
-  "IndexedDB",
-  "Session Storage",
-  "Preferences",
-  "Cookies",
-  "Cookies-journal",
-  "Network Persistent State",
-] as const;
+const BRIDGE_PROFILE_MANIFEST_FILE_NAME = "synara-profile-seed.json";
 const CANONICAL_BROWSER_PARTITION_NAME = "synara-browser";
-const LEGACY_BROWSER_PARTITION_NAMES = ["dpcode-browser", "t3code-browser"] as const;
-const BROWSER_PARTITION_SEED_ENTRY_NAMES = [
-  "Cookies",
-  "Cookies-journal",
-  "Local Storage",
-  "IndexedDB",
-  "Session Storage",
-  "WebStorage",
-  "Service Worker",
-  "Preferences",
-  "Network Persistent State",
-  "TransportSecurity",
-  "Trust Tokens",
-  "Trust Tokens-journal",
-  "SharedStorage",
-  "SharedStorage-wal",
-  "shared_proto_db",
+const BROWSER_PARTITION_SEED_ENTRY_GROUPS = [
+  ["Cookies", "Cookies-journal", "Cookies-wal", "Cookies-shm"],
+  ["Local Storage"],
+  ["IndexedDB"],
+  ["Session Storage"],
+  ["WebStorage"],
+  ["Service Worker"],
+  ["Preferences"],
+  ["Network Persistent State"],
+  ["TransportSecurity"],
+  ["Trust Tokens", "Trust Tokens-journal", "Trust Tokens-wal", "Trust Tokens-shm"],
+  ["SharedStorage", "SharedStorage-journal", "SharedStorage-wal", "SharedStorage-shm"],
+  ["shared_proto_db"],
 ] as const;
+const BROWSER_PARTITION_SEED_ENTRY_NAMES = BROWSER_PARTITION_SEED_ENTRY_GROUPS.flat();
 
-export interface DesktopUserDataProfileSeedResult {
-  readonly status:
-    | "seeded"
-    | "repaired-browser-partition"
-    | "target-exists"
-    | "legacy-missing"
-    | "seed-failed";
+export interface BrowserProfileBridgeRepairResult {
+  readonly status: "repaired" | "not-needed" | "bridge-unavailable" | "repair-failed";
   readonly sourcePath: string | null;
   readonly targetPath: string;
+  readonly copiedEntries: readonly string[];
   readonly error?: unknown;
 }
 
@@ -79,141 +61,193 @@ export function resolveDesktopUserDataPath(input: {
   );
 }
 
-export function resolveLegacyDesktopUserDataPaths(input: {
-  readonly appDataBase: string;
-  readonly isDevelopment: boolean;
-}): string[] {
-  const legacyNames = input.isDevelopment
-    ? DEV_LEGACY_USER_DATA_DIR_NAMES
-    : PROD_LEGACY_USER_DATA_DIR_NAMES;
-  return legacyNames.map((name) => Path.join(input.appDataBase, name));
+function readBridgeProfileSourcePath(targetPath: string): string | null {
+  const manifestPath = Path.join(targetPath, BRIDGE_PROFILE_MANIFEST_FILE_NAME);
+  if (!FS.existsSync(manifestPath)) return null;
+
+  let parsed: { readonly sourcePath?: unknown };
+  try {
+    parsed = JSON.parse(FS.readFileSync(manifestPath, "utf8")) as {
+      readonly sourcePath?: unknown;
+    };
+  } catch {
+    return null;
+  }
+  if (typeof parsed.sourcePath !== "string" || !Path.isAbsolute(parsed.sourcePath)) {
+    return null;
+  }
+
+  const sourcePath = Path.resolve(parsed.sourcePath);
+  const resolvedTargetPath = Path.resolve(targetPath);
+  if (
+    sourcePath === resolvedTargetPath ||
+    Path.dirname(sourcePath) !== Path.dirname(resolvedTargetPath)
+  ) {
+    return null;
+  }
+  return sourcePath;
 }
 
-export function seedDesktopUserDataProfileFromLegacy(input: {
-  readonly targetPath: string;
-  readonly legacyPaths: readonly string[];
-}): DesktopUserDataProfileSeedResult {
-  if (FS.existsSync(input.targetPath)) {
-    const sourcePath = input.legacyPaths.find(
-      (candidate) => resolveLegacyBrowserPartitionPath(candidate) !== null,
-    );
-    try {
-      const copiedEntries = sourcePath
-        ? seedCanonicalBrowserPartition(sourcePath, input.targetPath)
-        : [];
-      return {
-        status: copiedEntries.length > 0 ? "repaired-browser-partition" : "target-exists",
-        sourcePath: copiedEntries.length > 0 ? (sourcePath ?? null) : null,
-        targetPath: input.targetPath,
-      };
-    } catch (error) {
-      return {
-        status: "seed-failed",
-        sourcePath: sourcePath ?? null,
-        targetPath: input.targetPath,
-        error,
-      };
-    }
-  }
+function findBridgeBrowserPartitionPaths(sourceProfilePath: string): string[] {
+  const partitionsPath = Path.join(sourceProfilePath, "Partitions");
+  if (!FS.existsSync(partitionsPath)) return [];
 
-  const sourcePath =
-    input.legacyPaths.find(
-      (candidate) => FS.existsSync(candidate) && hasSeedableProfileData(candidate),
-    ) ?? null;
-  if (!sourcePath) {
-    return {
-      status: "legacy-missing",
-      sourcePath: null,
-      targetPath: input.targetPath,
-    };
-  }
+  return FS.readdirSync(partitionsPath, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        entry.name.endsWith("-browser") &&
+        entry.name !== CANONICAL_BROWSER_PARTITION_NAME,
+    )
+    .map((entry) => Path.join(partitionsPath, entry.name))
+    .filter((partitionPath) =>
+      BROWSER_PARTITION_SEED_ENTRY_NAMES.some((entryName) =>
+        FS.existsSync(Path.join(partitionPath, entryName)),
+      ),
+    )
+    .sort((left, right) => FS.statSync(right).mtimeMs - FS.statSync(left).mtimeMs);
+}
 
+/**
+ * Finishes any browser-partition copy described by the compatibility bridge.
+ *
+ * The bridge manifest identifies the exact sibling profile that supplied the Synara profile.
+ * Discovering its `*-browser` partition from that trusted path avoids shipping predecessor names
+ * while still repairing cookies or storage entries that were absent during the first bridge run.
+ */
+export function repairBrowserProfileFromBridgeManifest(
+  targetPath: string,
+): BrowserProfileBridgeRepairResult {
+  let sourcePath: string | null = null;
+  const copiedEntries: string[] = [];
   try {
-    FS.mkdirSync(input.targetPath, { recursive: true });
-    for (const entryName of PROFILE_SEED_ENTRY_NAMES) {
-      const sourceEntryPath = Path.join(sourcePath, entryName);
-      if (!FS.existsSync(sourceEntryPath)) {
-        continue;
-      }
-      FS.cpSync(sourceEntryPath, Path.join(input.targetPath, entryName), {
-        recursive: true,
-        errorOnExist: false,
-        force: false,
-      });
+    sourcePath = readBridgeProfileSourcePath(targetPath);
+    if (!sourcePath || !FS.existsSync(sourcePath)) {
+      return {
+        status: "bridge-unavailable",
+        sourcePath,
+        targetPath,
+        copiedEntries: [],
+      };
     }
-    const copiedBrowserPartitionEntries = seedCanonicalBrowserPartition(
-      sourcePath,
-      input.targetPath,
+
+    const sourcePartitionPath = findBridgeBrowserPartitionPaths(sourcePath)[0];
+    if (!sourcePartitionPath) {
+      return {
+        status: "not-needed",
+        sourcePath,
+        targetPath,
+        copiedEntries: [],
+      };
+    }
+
+    const targetPartitionPath = Path.join(
+      targetPath,
+      "Partitions",
+      CANONICAL_BROWSER_PARTITION_NAME,
     );
-    FS.writeFileSync(
-      Path.join(input.targetPath, "synara-profile-seed.json"),
-      `${JSON.stringify(
-        {
-          sourcePath,
-          seededAt: new Date().toISOString(),
-          entries: [
-            ...PROFILE_SEED_ENTRY_NAMES,
-            ...(copiedBrowserPartitionEntries.length > 0
-              ? [`Partitions/${CANONICAL_BROWSER_PARTITION_NAME}`]
-              : []),
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    for (const entryGroup of BROWSER_PARTITION_SEED_ENTRY_GROUPS) {
+      const baseEntryName = entryGroup[0];
+      if (!FS.existsSync(Path.join(sourcePartitionPath, baseEntryName))) continue;
+      if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
+
+      const sourceEntryNames = entryGroup.filter((entryName) =>
+        FS.existsSync(Path.join(sourcePartitionPath, entryName)),
+      );
+      FS.mkdirSync(targetPartitionPath, { recursive: true });
+      const stagedGroupPath = FS.mkdtempSync(Path.join(targetPartitionPath, ".synara-bridge-"));
+      const stagedSourcePath = Path.join(stagedGroupPath, "source");
+      const stagedTargetBackupPath = Path.join(stagedGroupPath, "target-backup");
+      try {
+        // Stage the whole source generation before removing orphaned target
+        // sidecars, so a failed source copy leaves the target untouched.
+        FS.mkdirSync(stagedSourcePath, { recursive: true });
+        for (const entryName of sourceEntryNames) {
+          FS.cpSync(
+            Path.join(sourcePartitionPath, entryName),
+            Path.join(stagedSourcePath, entryName),
+            {
+              recursive: true,
+              errorOnExist: true,
+              force: false,
+            },
+          );
+        }
+
+        // Another startup may have completed the repair while this group was
+        // staged. Preserve its database and leave its sidecars untouched.
+        if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
+
+        const installOrder = [
+          ...sourceEntryNames.filter((entryName) => entryName !== baseEntryName),
+          baseEntryName,
+        ];
+        const displacedTargetEntries: string[] = [];
+        const installedSourceEntries: string[] = [];
+        try {
+          FS.mkdirSync(stagedTargetBackupPath, { recursive: true });
+          for (const sidecarEntryName of entryGroup.slice(1)) {
+            const targetEntryPath = Path.join(targetPartitionPath, sidecarEntryName);
+            if (!FS.existsSync(targetEntryPath)) continue;
+            FS.renameSync(targetEntryPath, Path.join(stagedTargetBackupPath, sidecarEntryName));
+            displacedTargetEntries.push(sidecarEntryName);
+          }
+          for (const entryName of installOrder) {
+            FS.renameSync(
+              Path.join(stagedSourcePath, entryName),
+              Path.join(targetPartitionPath, entryName),
+            );
+            installedSourceEntries.push(entryName);
+          }
+        } catch (installError) {
+          const rollbackErrors: unknown[] = [];
+          for (const entryName of installedSourceEntries.reverse()) {
+            try {
+              FS.rmSync(Path.join(targetPartitionPath, entryName), {
+                recursive: true,
+                force: true,
+              });
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError);
+            }
+          }
+          for (const entryName of displacedTargetEntries) {
+            try {
+              FS.renameSync(
+                Path.join(stagedTargetBackupPath, entryName),
+                Path.join(targetPartitionPath, entryName),
+              );
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError);
+            }
+          }
+          if (rollbackErrors.length > 0) {
+            throw new AggregateError(
+              [installError, ...rollbackErrors],
+              "Browser profile bridge repair and rollback failed",
+            );
+          }
+          throw installError;
+        }
+        copiedEntries.push(...sourceEntryNames);
+      } finally {
+        FS.rmSync(stagedGroupPath, { recursive: true, force: true });
+      }
+    }
+
     return {
-      status: "seeded",
+      status: copiedEntries.length > 0 ? "repaired" : "not-needed",
       sourcePath,
-      targetPath: input.targetPath,
+      targetPath,
+      copiedEntries,
     };
   } catch (error) {
     return {
-      status: "seed-failed",
+      status: "repair-failed",
       sourcePath,
-      targetPath: input.targetPath,
+      targetPath,
+      copiedEntries,
       error,
     };
   }
-}
-
-function hasSeedableProfileData(profilePath: string): boolean {
-  return (
-    PROFILE_SEED_ENTRY_NAMES.some((entryName) =>
-      FS.existsSync(Path.join(profilePath, entryName)),
-    ) || resolveLegacyBrowserPartitionPath(profilePath) !== null
-  );
-}
-
-function resolveLegacyBrowserPartitionPath(profilePath: string): string | null {
-  for (const partitionName of LEGACY_BROWSER_PARTITION_NAMES) {
-    const partitionPath = Path.join(profilePath, "Partitions", partitionName);
-    if (FS.existsSync(partitionPath)) return partitionPath;
-  }
-  return null;
-}
-
-function seedCanonicalBrowserPartition(sourceProfilePath: string, targetProfilePath: string) {
-  const sourcePartitionPath = resolveLegacyBrowserPartitionPath(sourceProfilePath);
-  if (!sourcePartitionPath) return [];
-
-  const targetPartitionPath = Path.join(
-    targetProfilePath,
-    "Partitions",
-    CANONICAL_BROWSER_PARTITION_NAME,
-  );
-  const copiedEntries: string[] = [];
-  for (const entryName of BROWSER_PARTITION_SEED_ENTRY_NAMES) {
-    const sourceEntryPath = Path.join(sourcePartitionPath, entryName);
-    const targetEntryPath = Path.join(targetPartitionPath, entryName);
-    if (!FS.existsSync(sourceEntryPath) || FS.existsSync(targetEntryPath)) continue;
-    FS.mkdirSync(targetPartitionPath, { recursive: true });
-    FS.cpSync(sourceEntryPath, targetEntryPath, {
-      recursive: true,
-      errorOnExist: false,
-      force: false,
-    });
-    copiedEntries.push(entryName);
-  }
-  return copiedEntries;
 }

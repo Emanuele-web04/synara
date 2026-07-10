@@ -4,8 +4,8 @@
 //          that hands open review comments to the agent.
 // Layer: Web domain helpers (no React)
 
-import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
-import { pluralize } from "@t3tools/shared/text";
+import type { GitPullRequestCheck, GitPullRequestComment } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
 
 export type PullRequestChecksTone = "pending" | "success" | "failure" | "none";
 
@@ -216,7 +216,7 @@ export function buildFixReviewCommentsPrompt(input: {
 
 // Handed to the agent by the conflicts row's "Fix" button. The prompt names the PR branch
 // as it exists on GitHub but points the agent at the current checkout: fork threads check
-// the PR out under a different local branch name (e.g. `t3code/pr-N/<branch>`).
+// the PR out under a different local branch name (e.g. `synara/pr-N/<branch>`).
 export function buildResolveConflictsPrompt(input: {
   prNumber: number;
   prUrl: string;

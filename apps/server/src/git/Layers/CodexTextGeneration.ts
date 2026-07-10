@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
-import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { resolveCodexHome } from "@t3tools/shared/codexConfig";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
+import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { resolveCodexHome } from "@synara/shared/codexConfig";
+import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
@@ -150,7 +150,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     prefix: string,
     content: string,
   ): Effect.Effect<string, TextGenerationError> => {
-    const filePath = path.join(tempDir, `t3code-${prefix}-${process.pid}-${randomUUID()}.tmp`);
+    const filePath = path.join(tempDir, `synara-${prefix}-${process.pid}-${randomUUID()}.tmp`);
     return fileSystem.writeFileString(filePath, content).pipe(
       Effect.mapError(
         (cause) =>
@@ -178,7 +178,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
       const isolatedHomePath = path.join(
         tempDir,
-        `t3code-codex-home-${process.pid}-${randomUUID()}`,
+        `synara-codex-home-${process.pid}-${randomUUID()}`,
       );
 
       yield* fileSystem.makeDirectory(isolatedHomePath, { recursive: true }).pipe(

@@ -37,24 +37,24 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
-} from "@t3tools/contracts";
-import { getModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
-import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
+import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { threadExportBlockedReason } from "@synara/shared/threadExport";
+import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
-} from "@t3tools/shared/chatThreads";
+} from "@synara/shared/chatThreads";
 import {
   resolveThreadWorkspaceState,
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
-} from "@t3tools/shared/threadEnvironment";
+} from "@synara/shared/threadEnvironment";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
-} from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadWorkspace";
 import {
   useCallback,
   useEffect,
@@ -7391,6 +7391,17 @@ export default function ChatView({
       nextThreadWorktreePath = null;
     }
 
+    // The branch query can finish just after the user chooses New worktree. Use the
+    // resolved active branch at send time instead of rejecting an otherwise valid fast send.
+    if (
+      isFirstMessage &&
+      nextThreadEnvMode === "worktree" &&
+      !nextThreadWorktreePath &&
+      !nextThreadBranch
+    ) {
+      nextThreadBranch = activeRootBranch ?? null;
+    }
+
     const baseBranchForWorktree =
       isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath
         ? nextThreadBranch
@@ -10019,7 +10030,7 @@ export default function ChatView({
         // bottom corners (z-0), so its tint fills those corner notches and its straight full-width
         // top edge stays covered by the composer's solid sides — no gap/poke at the sides. The
         // composer keeps its own rounded shape; the tray keeps its tint + rounded bottom.
-        "chat-composer-shell relative z-0 -mt-5 flex min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-6 transition-colors duration-150 ease-out motion-reduce:transition-none",
+        "chat-composer-shell relative z-0 -mt-5 flex min-h-8 min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-6 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7",
         COMPOSER_COLUMN_FRAME_CLASS_NAME,
       )}
     >
@@ -10027,7 +10038,7 @@ export default function ChatView({
         <ProjectPicker
           align="start"
           side="top"
-          triggerClassName="h-auto py-1 sm:h-auto"
+          triggerClassName="h-7 py-1"
           showResetToHome={Boolean(resolvedThreadWorktreePath)}
           selectedWorkspaceRoot={resolvedThreadWorktreePath}
           onSelectProject={handleSelectProjectForEmptyDraft}
@@ -10039,7 +10050,7 @@ export default function ChatView({
         <ProjectPicker
           align="start"
           side="top"
-          triggerClassName="h-auto py-1 sm:h-auto"
+          triggerClassName="h-7 py-1"
           selectionMode="project"
           selectedProjectId={activeProject.id}
           selectedWorkspaceRoot={activeProject.cwd}

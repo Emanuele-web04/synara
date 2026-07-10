@@ -4,7 +4,7 @@
 // Layer: UI component (read-only; drag & drop lives in the project board)
 // Exports: KanbanOverview
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import { memo } from "react";
 
 import { Button } from "~/components/ui/button";

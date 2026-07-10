@@ -1,9 +1,9 @@
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import type { CursorModelSelection, ProviderStartOptions } from "@t3tools/contracts";
-import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import type { CursorModelSelection, ProviderStartOptions } from "@synara/contracts";
+import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import {
   applyCursorAcpModelSelection,
@@ -111,7 +111,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
         cursorSettings: resolveCursorSettings(providerOptions),
         childProcessSpawner: commandSpawner,
         cwd,
-        clientInfo: { name: "dp-code-git-text", version: "0.0.0" },
+        clientInfo: { name: "synara-git-text", version: "0.0.0" },
       });
 
       yield* runtime.handleSessionUpdate((notification) => {

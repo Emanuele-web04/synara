@@ -17,7 +17,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -326,4 +326,4 @@ export interface AutomationRepositoryShape {
 export class AutomationRepository extends ServiceMap.Service<
   AutomationRepository,
   AutomationRepositoryShape
->()("t3/persistence/Services/AutomationRepository") {}
+>()("synara/persistence/Services/AutomationRepository") {}

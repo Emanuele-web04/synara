@@ -10,7 +10,7 @@
 // Exports: InlineMentionChip
 
 import { memo, type MouseEvent, type ReactNode } from "react";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 import { basenameOfPath, pathLooksLikeKnownFile } from "~/file-icons";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "~/lib/workspaceFileOpener";
 import {

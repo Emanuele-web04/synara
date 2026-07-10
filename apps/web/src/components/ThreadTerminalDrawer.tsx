@@ -12,8 +12,8 @@ import {
   Trash2,
   TriangleAlertIcon,
 } from "~/lib/icons";
-import { type ThreadId } from "@t3tools/contracts";
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type ThreadId } from "@synara/contracts";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type TerminalContextSelection } from "~/lib/terminalContext";

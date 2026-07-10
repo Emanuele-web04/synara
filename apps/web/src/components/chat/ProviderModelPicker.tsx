@@ -3,8 +3,8 @@
 // Layer: Chat composer presentation
 // Depends on: provider availability metadata, shared menu primitives, and picker trigger styling.
 
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
-import { resolveSelectableModel } from "@t3tools/shared/model";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
+import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";

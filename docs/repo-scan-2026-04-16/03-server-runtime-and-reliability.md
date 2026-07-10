@@ -15,7 +15,7 @@ That is a strong base for a WIP product.
 
 ## 1. Narrow the failure surface of provider session management
 
-[`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/codexAppServerManager.ts) appears to own too many runtime concerns in one place:
+[`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/codexAppServerManager.ts) appears to own too many runtime concerns in one place:
 
 - child process lifecycle
 - shell/env decisions

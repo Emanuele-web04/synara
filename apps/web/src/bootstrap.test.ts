@@ -12,11 +12,11 @@ describe("renderer bootstrap ordering", () => {
   it("migrates desktop storage before loading modules that hydrate app stores", () => {
     expect(INDEX_SOURCE).toContain('<script type="module" src="/src/bootstrap.ts"></script>');
 
-    const migrationImportIndex = BOOTSTRAP_SOURCE.indexOf('import "./storageKeyMigration";');
+    const migrationImportIndex = BOOTSTRAP_SOURCE.indexOf('import "./storageOriginMigration";');
     const appImportIndex = BOOTSTRAP_SOURCE.indexOf('import("./main")');
     expect(migrationImportIndex).toBeGreaterThanOrEqual(0);
     expect(appImportIndex).toBeGreaterThan(migrationImportIndex);
 
-    expect(MAIN_SOURCE).not.toContain('import "./storageKeyMigration";');
+    expect(MAIN_SOURCE).not.toContain('import "./storageOriginMigration";');
   });
 });

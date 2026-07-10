@@ -4,7 +4,7 @@
 
 import "../../../index.css";
 
-import { MessageId, type PinnedMessage } from "@t3tools/contracts";
+import { MessageId, type PinnedMessage } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

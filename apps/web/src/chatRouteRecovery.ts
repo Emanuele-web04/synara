@@ -7,7 +7,7 @@ import type {
   NativeApi,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
 import { useStore } from "./store";

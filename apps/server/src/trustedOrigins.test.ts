@@ -33,7 +33,7 @@ describe("trustedOrigins", () => {
     ).toBe(true);
     expect(
       isTrustedAppOrigin({
-        origin: "t3://app",
+        origin: "synara://app",
         requestOrigin: "http://127.0.0.1:58090",
         config,
       }),
@@ -82,7 +82,7 @@ describe("trustedOrigins", () => {
   });
 
   it("normalizes desktop origins with trailing slashes", () => {
-    expect(normalizeCorsOrigin("t3://app/")).toBe("t3://app");
+    expect(normalizeCorsOrigin("synara://app/")).toBe("synara://app");
   });
 
   it("rejects present but untrusted request origins for websocket-style gates", () => {

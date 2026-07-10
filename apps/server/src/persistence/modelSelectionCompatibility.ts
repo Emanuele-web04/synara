@@ -3,7 +3,7 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { MODEL_OPTIONS_BY_PROVIDER } from "@t3tools/contracts";
+import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 
 type ModelProviderKind =
   | "codex"
@@ -162,7 +162,7 @@ export function normalizePersistedModelSelection(input: unknown): unknown {
     return input;
   }
 
-  // Newer T3 Code writes provider-less selections as { instanceId, model } and
+  // Newer Synara writes provider-less selections as { instanceId, model } and
   // option rows as [{ id, value }]; Synara stores canonical provider/options objects.
   return normalizeLegacyModelSelection({
     provider: input.provider ?? input.instanceId,

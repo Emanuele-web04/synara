@@ -2,7 +2,7 @@
 // Purpose: Map each supported ProviderKind to its live usage fetcher. Adding a provider is a
 // one-file change: implement a ProviderUsageFetcher and register it here.
 
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 
 import { claudeUsageFetcher } from "./providers/claude";
 import { codexUsageFetcher } from "./providers/codex";

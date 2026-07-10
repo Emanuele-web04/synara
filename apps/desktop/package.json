@@ -1,6 +1,6 @@
 {
-  "name": "@t3tools/desktop",
-  "version": "0.4.2",
+  "name": "@synara/desktop",
+  "version": "0.5.0",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -19,8 +19,8 @@
     "electron-updater": "^6.6.2"
   },
   "devDependencies": {
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
+    "@synara/contracts": "workspace:*",
+    "@synara/shared": "workspace:*",
     "@types/node": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",

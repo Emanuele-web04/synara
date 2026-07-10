@@ -6,9 +6,9 @@ import type {
   ProjectKind,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
-import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@t3tools/shared/errorMessages";
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+} from "@synara/contracts";
+import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

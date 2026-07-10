@@ -6,7 +6,7 @@
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
 
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 import { memo } from "react";
 
 import { ChangesIcon } from "~/lib/icons";

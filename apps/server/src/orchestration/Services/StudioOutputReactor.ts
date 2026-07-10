@@ -8,7 +8,7 @@
  *
  * @module StudioOutputReactor
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
@@ -53,4 +53,4 @@ export interface StudioOutputReactorShape {
 export class StudioOutputReactor extends ServiceMap.Service<
   StudioOutputReactor,
   StudioOutputReactorShape
->()("t3/orchestration/Services/StudioOutputReactor") {}
+>()("synara/orchestration/Services/StudioOutputReactor") {}

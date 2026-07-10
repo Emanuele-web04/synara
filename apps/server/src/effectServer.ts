@@ -1,7 +1,7 @@
 import http from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import type { ServerSettingsError } from "@t3tools/contracts";
+import type { ServerSettingsError } from "@synara/contracts";
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 
@@ -54,7 +54,9 @@ export interface ServerShape {
   readonly stopSignal: Effect.Effect<void, never>;
 }
 
-export class Server extends ServiceMap.Service<Server, ServerShape>()("t3/effectServer/Server") {}
+export class Server extends ServiceMap.Service<Server, ServerShape>()(
+  "synara/effectServer/Server",
+) {}
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",

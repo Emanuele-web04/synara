@@ -4,7 +4,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -1704,7 +1704,7 @@ describe("deriveWorkLogEntries", () => {
                   type: "read",
                   command: "sed -n '1,220p' README.md",
                   name: "README.md",
-                  path: "/Users/emanueledipietro/Developer/Testing/t3code/README.md",
+                  path: "/Users/emanueledipietro/Developer/Testing/synara/README.md",
                 },
               ],
             },
@@ -1813,7 +1813,7 @@ describe("deriveWorkLogEntries", () => {
               type: "commandExecution",
               id: "call_6OII41pekq8cFCpOCF9pbeMu",
               command: "/bin/zsh -lc 'git status --short'",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               status: "completed",
               commandActions: [{ type: "unknown", command: "git status --short" }],
               aggregatedOutput: " M apps/desktop/src/main.ts\n...",
@@ -3535,7 +3535,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "inProgress",
@@ -3573,7 +3573,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "completed",
