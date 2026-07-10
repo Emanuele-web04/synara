@@ -101,6 +101,7 @@ import {
   reconcileDeletedThreadFromClient,
   reconcileDeletedThreadsFromClient,
 } from "../lib/deletedThreadClientReconciliation";
+import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -1368,6 +1369,9 @@ export default function Sidebar() {
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
+  const removeDeletedProjectFromClientState = useStore(
+    (store) => store.removeDeletedProjectFromClientState,
+  );
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
@@ -4127,10 +4131,10 @@ export default function Sidebar() {
           return;
         }
 
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
+        await deleteProjectFromClient({
+          api: api.orchestration,
           projectId,
+          removeDeletedProjectFromClientState,
         });
         clearProjectDraftThreads(projectId);
         toastManager.add({
@@ -4161,6 +4165,7 @@ export default function Sidebar() {
       handleStopProjectRun,
       navigate,
       projectById,
+      removeDeletedProjectFromClientState,
       sidebarThreads,
       toggleProjectPinned,
     ],
