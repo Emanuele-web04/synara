@@ -103,7 +103,6 @@ const DROID_RESUME_VERSION = 1 as const;
 const DROID_ACP_TRANSPORT_DEBUG_MARKER = "droid-acp-meta-stripper-v2";
 const DROID_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const DROID_ACP_DEBUG_ENV = "SYNARA_DROID_ACP_DEBUG";
-const DPCODE_DROID_ACP_DEBUG_ENV = "DPCODE_DROID_ACP_DEBUG";
 const LEGACY_DROID_ACP_DEBUG_ENV = "DP_DROID_ACP_DEBUG";
 const DROID_RESUME_REPLAY_QUIET_MS = 350;
 // Bounds how long startSession blocks on the replay settling; the background
@@ -157,9 +156,7 @@ function summarizeDroidAcpRequestPayload(method: string, payload: unknown): unkn
 
 function isDroidAcpDebugEnabled(): boolean {
   return (
-    process.env[DROID_ACP_DEBUG_ENV] === "1" ||
-    process.env[DPCODE_DROID_ACP_DEBUG_ENV] === "1" ||
-    process.env[LEGACY_DROID_ACP_DEBUG_ENV] === "1"
+    process.env[DROID_ACP_DEBUG_ENV] === "1" || process.env[LEGACY_DROID_ACP_DEBUG_ENV] === "1"
   );
 }
 

@@ -125,7 +125,7 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
           requestLogger: (event) =>
             Effect.sync(() => {
@@ -171,7 +171,7 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           clientCapabilities: { _meta: { parameterizedModelPicker: true } },
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
           requestLogger: (event) =>
             Effect.sync(() => {
