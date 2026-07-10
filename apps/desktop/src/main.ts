@@ -1691,8 +1691,7 @@ function startBundleSwapWatcher(): void {
     return;
   }
   let baseline =
-    startupBundleIdentity &&
-    Path.resolve(startupBundleIdentity.path) === Path.resolve(bundlePath)
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(bundlePath)
       ? (startupBundleIdentity.signature ?? readBundleSignature(bundlePath))
       : readBundleSignature(bundlePath);
   if (!baseline) {
