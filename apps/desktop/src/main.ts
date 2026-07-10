@@ -1476,7 +1476,10 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+}
+
+function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {
   const browserProfileRepair = repairBrowserProfileFromBridgeManifest(userDataPath);
   if (browserProfileRepair.status === "repaired") {
     console.info("[desktop] Completed Synara browser profile bridge repair", {
@@ -1491,7 +1494,6 @@ function resolveUserDataPath(): string {
       error: browserProfileRepair.error,
     });
   }
-  return userDataPath;
 }
 
 function configureAppIdentity(): void {
@@ -3217,7 +3219,11 @@ function configureMediaPermissions(): void {
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
-app.setPath("userData", resolveUserDataPath());
+const userDataPath = resolveUserDataPath();
+if (hasSingleInstanceLock) {
+  repairBrowserProfileBeforeElectronReady(userDataPath);
+}
+app.setPath("userData", userDataPath);
 
 configureAppIdentity();
 

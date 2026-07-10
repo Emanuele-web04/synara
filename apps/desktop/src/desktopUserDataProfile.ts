@@ -119,6 +119,7 @@ export function repairBrowserProfileFromBridgeManifest(
   targetPath: string,
 ): BrowserProfileBridgeRepairResult {
   let sourcePath: string | null = null;
+  const copiedEntries: string[] = [];
   try {
     sourcePath = readBridgeProfileSourcePath(targetPath);
     if (!sourcePath || !FS.existsSync(sourcePath)) {
@@ -145,7 +146,6 @@ export function repairBrowserProfileFromBridgeManifest(
       "Partitions",
       CANONICAL_BROWSER_PARTITION_NAME,
     );
-    const copiedEntries: string[] = [];
     for (const entryGroup of BROWSER_PARTITION_SEED_ENTRY_GROUPS) {
       const baseEntryName = entryGroup[0];
       if (!FS.existsSync(Path.join(sourcePartitionPath, baseEntryName))) continue;
@@ -156,13 +156,16 @@ export function repairBrowserProfileFromBridgeManifest(
       );
       FS.mkdirSync(targetPartitionPath, { recursive: true });
       const stagedGroupPath = FS.mkdtempSync(Path.join(targetPartitionPath, ".synara-bridge-"));
+      const stagedSourcePath = Path.join(stagedGroupPath, "source");
+      const stagedTargetBackupPath = Path.join(stagedGroupPath, "target-backup");
       try {
         // Stage the whole source generation before removing orphaned target
         // sidecars, so a failed source copy leaves the target untouched.
+        FS.mkdirSync(stagedSourcePath, { recursive: true });
         for (const entryName of sourceEntryNames) {
           FS.cpSync(
             Path.join(sourcePartitionPath, entryName),
-            Path.join(stagedGroupPath, entryName),
+            Path.join(stagedSourcePath, entryName),
             {
               recursive: true,
               errorOnExist: true,
@@ -175,21 +178,56 @@ export function repairBrowserProfileFromBridgeManifest(
         // staged. Preserve its database and leave its sidecars untouched.
         if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
 
-        for (const sidecarEntryName of entryGroup.slice(1)) {
-          FS.rmSync(Path.join(targetPartitionPath, sidecarEntryName), {
-            recursive: true,
-            force: true,
-          });
-        }
         const installOrder = [
           ...sourceEntryNames.filter((entryName) => entryName !== baseEntryName),
           baseEntryName,
         ];
-        for (const entryName of installOrder) {
-          FS.renameSync(
-            Path.join(stagedGroupPath, entryName),
-            Path.join(targetPartitionPath, entryName),
-          );
+        const displacedTargetEntries: string[] = [];
+        const installedSourceEntries: string[] = [];
+        try {
+          FS.mkdirSync(stagedTargetBackupPath, { recursive: true });
+          for (const sidecarEntryName of entryGroup.slice(1)) {
+            const targetEntryPath = Path.join(targetPartitionPath, sidecarEntryName);
+            if (!FS.existsSync(targetEntryPath)) continue;
+            FS.renameSync(targetEntryPath, Path.join(stagedTargetBackupPath, sidecarEntryName));
+            displacedTargetEntries.push(sidecarEntryName);
+          }
+          for (const entryName of installOrder) {
+            FS.renameSync(
+              Path.join(stagedSourcePath, entryName),
+              Path.join(targetPartitionPath, entryName),
+            );
+            installedSourceEntries.push(entryName);
+          }
+        } catch (installError) {
+          const rollbackErrors: unknown[] = [];
+          for (const entryName of installedSourceEntries.reverse()) {
+            try {
+              FS.rmSync(Path.join(targetPartitionPath, entryName), {
+                recursive: true,
+                force: true,
+              });
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError);
+            }
+          }
+          for (const entryName of displacedTargetEntries) {
+            try {
+              FS.renameSync(
+                Path.join(stagedTargetBackupPath, entryName),
+                Path.join(targetPartitionPath, entryName),
+              );
+            } catch (rollbackError) {
+              rollbackErrors.push(rollbackError);
+            }
+          }
+          if (rollbackErrors.length > 0) {
+            throw new AggregateError(
+              [installError, ...rollbackErrors],
+              "Browser profile bridge repair and rollback failed",
+            );
+          }
+          throw installError;
         }
         copiedEntries.push(...sourceEntryNames);
       } finally {
@@ -208,7 +246,7 @@ export function repairBrowserProfileFromBridgeManifest(
       status: "repair-failed",
       sourcePath,
       targetPath,
-      copiedEntries: [],
+      copiedEntries,
       error,
     };
   }
