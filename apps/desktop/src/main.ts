@@ -144,7 +144,11 @@ import {
   normalizeDesktopWsUrl,
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
-import { resolveDesktopAppDataBase, resolveDesktopUserDataPath } from "./desktopUserDataProfile";
+import {
+  repairBrowserProfileFromBridgeManifest,
+  resolveDesktopAppDataBase,
+  resolveDesktopUserDataPath,
+} from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import {
   acknowledgeSynaraStorageSnapshot,
@@ -1472,7 +1476,22 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const browserProfileRepair = repairBrowserProfileFromBridgeManifest(userDataPath);
+  if (browserProfileRepair.status === "repaired") {
+    console.info("[desktop] Completed Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      copiedEntries: browserProfileRepair.copiedEntries,
+    });
+  } else if (browserProfileRepair.status === "repair-failed") {
+    console.warn("[desktop] Failed to complete Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      error: browserProfileRepair.error,
+    });
+  }
+  return userDataPath;
 }
 
 function configureAppIdentity(): void {
