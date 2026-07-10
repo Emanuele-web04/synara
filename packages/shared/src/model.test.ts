@@ -962,6 +962,16 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
+
+  it("treats an unknown effort as a no-op", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "future-effort" }),
+      ),
+    ).toBe(false);
+  });
+
   it("does not restart when fast mode toggles", () => {
     // fastMode is a Settings key applied live via applyFlagSettings.
     expect(
