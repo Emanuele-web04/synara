@@ -1034,7 +1034,11 @@ const make = Effect.gen(function* () {
         : null;
     const hasSidechatBootstrapContent =
       shouldBootstrapSidechatContext && listImportedForkMessages(thread).length > 0;
-    if (hasSidechatBootstrapContent && sidechatBootstrapAvailableChars === 0) {
+    if (
+      input.reviewTarget === undefined &&
+      hasSidechatBootstrapContent &&
+      sidechatBootstrapAvailableChars === 0
+    ) {
       return yield* new ProviderAdapterRequestError({
         provider: selectedProvider as ProviderKind,
         method: "thread.turn.start",
@@ -1057,6 +1061,7 @@ const make = Effect.gen(function* () {
       wrapLatestUserMessage: true,
     });
     if (
+      input.reviewTarget === undefined &&
       hasPendingPriorTranscriptBootstrap &&
       shouldBootstrapPriorTranscriptContext &&
       priorTranscriptBootstrapAvailableChars === 0 &&

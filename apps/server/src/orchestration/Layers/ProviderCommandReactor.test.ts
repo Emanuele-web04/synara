@@ -711,7 +711,7 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("preserves pending sidechat context when the first turn is a provider review", async () => {
+  it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     await Effect.runPromise(
@@ -760,7 +760,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("review-sidechat-review-user"),
           role: "user",
-          text: "Review the working tree",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
           attachments: [],
         },
         reviewTarget: { type: "uncommittedChanges" },
@@ -798,7 +798,7 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Continue with the side question");
   });
 
-  it("prefers a full transcript bootstrap when a pending sidechat session restarts", async () => {
+  it("preserves full transcript bootstrap when an overlong review restarts a sidechat", async () => {
     const threadId = ThreadId.makeUnsafe("thread-restarted-droid-sidechat");
     const harness = await createHarness({
       sessionModelSwitch: "restart-session",
@@ -868,6 +868,29 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-overlong-review"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-overlong-review-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        modelSelection: {
+          provider: "droid",
+          model: "claude-opus-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startReview.mock.calls.length === 2);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
         commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-turn"),
         threadId,
         message: {
@@ -875,10 +898,6 @@ describe("ProviderCommandReactor", () => {
           role: "user",
           text: "Continue after restarting",
           attachments: [],
-        },
-        modelSelection: {
-          provider: "droid",
-          model: "claude-opus-4-6",
         },
         runtimeMode: "approval-required",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
