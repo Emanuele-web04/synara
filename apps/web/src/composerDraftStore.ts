@@ -486,7 +486,7 @@ export interface ComposerDraftStoreState {
     options?: DraftThreadMutationOptions,
   ) => void;
   /**
-   * Registers a standalone chat draft thread without claiming the project's
+   * Registers a standalone draft thread without claiming the project's
    * composer-draft mapping. Unlike setProjectDraftThreadId this never replaces
    * (and therefore never deletes) the mapped draft, so any number of standalone
    * drafts — e.g. kanban tasks — can coexist per project. Create-only: an
@@ -502,6 +502,8 @@ export interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      entryPoint?: ThreadPrimarySurface;
+      isTemporary?: boolean;
     },
   ) => void;
   setDraftThreadContext: (
@@ -3218,11 +3220,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             createdAt: options.createdAt ?? new Date().toISOString(),
             runtimeMode: options.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             interactionMode: options.interactionMode ?? DEFAULT_INTERACTION_MODE,
-            entryPoint: "chat",
+            entryPoint: options.entryPoint ?? "chat",
             branch: options.branch ?? null,
             worktreePath,
             lastKnownPr: null,
             envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
+            ...(options.isTemporary ? { isTemporary: true } : {}),
           };
           return {
             draftThreadsByThreadId: {

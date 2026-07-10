@@ -58,6 +58,8 @@ const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const PROJECT_ID = "project-1" as ProjectId;
 const OTHER_PROJECT_ID = "project-2" as ProjectId;
 const HOME_PROJECT_ID = "project-home" as ProjectId;
+const STUDIO_PROJECT_ID = "project-studio" as ProjectId;
+const STUDIO_DRAFT_THREAD_ID = "thread-studio-draft" as ThreadId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
@@ -581,6 +583,29 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
         kind: "chat",
         title: "Home",
         workspaceRoot: "/Users/tester",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        scripts: [],
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
+  };
+}
+
+function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    projects: [
+      ...snapshot.projects,
+      {
+        id: STUDIO_PROJECT_ID,
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/Users/tester/Documents/Synara/Studio",
         defaultModelSelection: {
           provider: "codex",
           model: "gpt-5",
@@ -1465,6 +1490,7 @@ async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
+  initialEntry?: string;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -1482,7 +1508,7 @@ async function mountChatView(options: {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [`/${THREAD_ID}`],
+      initialEntries: [options.initialEntry ?? `/${THREAD_ID}`],
     }),
   );
 
@@ -3369,6 +3395,102 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
       expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("coalesces repeated Studio new-chat clicks and stays in Studio after navigation settles", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [STUDIO_DRAFT_THREAD_ID]: {
+          projectId: STUDIO_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [STUDIO_PROJECT_ID]: STUDIO_DRAFT_THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      // Keep one non-Studio server thread in the snapshot. This matches the real failure: Studio
+      // has no persisted chats, while the global missing-thread recovery sees known threads and
+      // immediately redirects a transiently-cleared Studio draft to the home index.
+      snapshot: withStudioProject(
+        withHomeChatProject(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-studio-draft-regression" as MessageId,
+            targetText: "projects-side thread",
+          }),
+        ),
+      ),
+      initialEntry: `/${STUDIO_DRAFT_THREAD_ID}`,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+      },
+    });
+
+    try {
+      const newStudioChatButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="New studio chat"]'),
+        "Unable to find the Studio new-chat action.",
+      );
+      newStudioChatButton.click();
+      newStudioChatButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "A fresh Studio chat should navigate to a new draft UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            projectId: STUDIO_PROJECT_ID,
+            entryPoint: "chat",
+          });
+          expect(
+            useComposerDraftStore.getState().projectDraftThreadIdByProjectId[HOME_PROJECT_ID],
+          ).toBeUndefined();
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      // A superseded navigation resolves the older navigate() promise before the newer route has
+      // committed. Give route effects enough time to expose a late Home redirect, then assert the
+      // stable final state and cleanup of the displaced Studio draft.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+      await vi.waitFor(
+        () => {
+          const state = useComposerDraftStore.getState();
+          const studioDraftIds = Object.entries(state.draftThreadsByThreadId)
+            .filter(([, draft]) => draft.projectId === STUDIO_PROJECT_ID)
+            .map(([threadId]) => threadId);
+          expect(mounted.router.state.status).toBe("idle");
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          expect(state.getDraftThread(STUDIO_DRAFT_THREAD_ID)).toBeNull();
+          expect(studioDraftIds).toEqual([newThreadId]);
+          expect(state.projectDraftThreadIdByProjectId[STUDIO_PROJECT_ID]).toBe(newThreadId);
+          expect(state.projectDraftThreadIdByProjectId[HOME_PROJECT_ID]).toBeUndefined();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

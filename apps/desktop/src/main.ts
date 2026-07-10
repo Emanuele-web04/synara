@@ -8,6 +8,9 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
+// Electron-only builtin that sees app.asar as a real file instead of a virtual
+// directory — required to stat the archive itself for swap detection.
+import * as OriginalFS from "original-fs";
 
 import {
   app,
@@ -44,6 +47,14 @@ import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
+import {
+  bundleSignatureFromStats,
+  isBundleStable,
+  isBundleSwapped,
+  isWatchableBundlePath,
+  type BundleSignature,
+} from "./bundleSwapDetection";
+import { ensureStaticSnapshot, findAsarArchivePath } from "@t3tools/shared/staticSnapshot";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -143,6 +154,11 @@ import {
   saveSynaraStorageSnapshot,
   STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+
+// Capture the real archive identity before any explicit app.asar lookup. Static
+// snapshotting and the runtime watcher both use this same generation as their
+// baseline, so a replacement during startup cannot silently become "normal."
+const startupBundleIdentity = captureStartupBundleIdentity();
 
 syncShellEnvironment();
 
@@ -888,6 +904,124 @@ function resolveDesktopStaticDir(): string | null {
   return null;
 }
 
+interface ServedStaticRoot {
+  readonly dir: string;
+  /** True when serving a real-disk snapshot instead of reading through the asar. */
+  readonly snapshotted: boolean;
+}
+
+interface BundleIdentity {
+  readonly path: string;
+  readonly signature: BundleSignature | null;
+}
+
+class BundleChangedDuringStartupError extends Error {
+  readonly bundlePath: string;
+  readonly baseline: BundleSignature | null;
+  readonly current: BundleSignature | null;
+
+  constructor(input: {
+    bundlePath: string;
+    baseline: BundleSignature | null;
+    current: BundleSignature | null;
+  }) {
+    super("The packaged application changed while its static assets were being prepared.");
+    this.name = "BundleChangedDuringStartupError";
+    this.bundlePath = input.bundlePath;
+    this.baseline = input.baseline;
+    this.current = input.current;
+  }
+}
+
+let servedStaticRootCache: ServedStaticRoot | null | undefined;
+
+// Serving static assets straight out of app.asar is vulnerable to the archive
+// being replaced beneath the running app (Electron caches the header per process,
+// so every later read returns bytes from the wrong offsets). Extract the client
+// to a per-archive snapshot on real disk and serve that instead — both for the
+// t3:// protocol here and, via T3CODE_STATIC_DIR, for the backend's HTTP static
+// route. Memoized so one app run serves one coherent asset generation.
+function resolveServedStaticRoot(): ServedStaticRoot | null {
+  if (servedStaticRootCache === undefined) {
+    servedStaticRootCache = computeServedStaticRoot();
+  }
+  return servedStaticRootCache;
+}
+
+function computeServedStaticRoot(): ServedStaticRoot | null {
+  const sourceDir = resolveDesktopStaticDir();
+  if (!sourceDir) {
+    return null;
+  }
+  const archivePath = findAsarArchivePath(sourceDir);
+  if (!archivePath) {
+    // Plain-directory client (dev, unpacked build): real files already survive swaps.
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startupArchiveSignature =
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(archivePath)
+      ? startupBundleIdentity.signature
+      : undefined;
+  if (startupArchiveSignature === null) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: null,
+      current: readBundleSignature(archivePath),
+    });
+  }
+  const archiveSignature = startupArchiveSignature ?? readBundleSignature(archivePath);
+  if (!archiveSignature) {
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startedAtMs = Date.now();
+  let snapshot: ReturnType<typeof ensureStaticSnapshot>;
+  try {
+    snapshot = ensureStaticSnapshot({
+      sourceDir,
+      cacheRoot: Path.join(app.getPath("userData"), "static-snapshots"),
+      signature: `${archiveSignature.size}-${archiveSignature.mtimeMs}-${archiveSignature.inode}`,
+    });
+  } catch (error) {
+    const currentArchiveSignature = readBundleSignature(archivePath);
+    if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+      throw new BundleChangedDuringStartupError({
+        bundlePath: archivePath,
+        baseline: archiveSignature,
+        current: currentArchiveSignature,
+      });
+    }
+    console.warn(
+      "[desktop] Failed to snapshot static assets; serving from the archive",
+      formatErrorMessage(error),
+    );
+    return { dir: sourceDir, snapshotted: false };
+  }
+
+  const currentArchiveSignature = readBundleSignature(archivePath);
+  if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+    // A newly-created snapshot may contain reads from both archive generations.
+    // Never leave it behind for a future launch to reuse.
+    if (!snapshot.reused) {
+      try {
+        FS.rmSync(snapshot.dir, { recursive: true, force: true });
+      } catch {
+        // The signature changes the snapshot key, so failed cleanup is disk waste
+        // rather than a path the replacement generation can accidentally reuse.
+      }
+    }
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: archiveSignature,
+      current: currentArchiveSignature,
+    });
+  }
+
+  writeDesktopLogHeader(
+    `static snapshot ${snapshot.reused ? "reused" : "created"} dir=${snapshot.dir} in ${Date.now() - startedAtMs}ms`,
+  );
+  return { dir: snapshot.dir, snapshotted: true };
+}
+
 function resolveDesktopStaticPath(staticRoot: string, requestUrl: string): string {
   const url = new URL(requestUrl);
   const rawPath = decodeURIComponent(url.pathname);
@@ -938,7 +1072,17 @@ function handleFatalStartupError(stage: string, error: unknown): void {
 function registerDesktopProtocol(): void {
   if (isDevelopment || desktopProtocolRegistered) return;
 
-  const staticRoot = resolveDesktopStaticDir();
+  // An unreadable first observation cannot be replaced by a later baseline:
+  // Electron may already hold the header for the generation that disappeared.
+  if (startupBundleIdentity && !startupBundleIdentity.signature) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: startupBundleIdentity.path,
+      baseline: null,
+      current: readBundleSignature(startupBundleIdentity.path),
+    });
+  }
+
+  const staticRoot = resolveServedStaticRoot()?.dir ?? null;
   if (!staticRoot) {
     throw new Error(
       "Desktop static bundle missing. Build apps/server (with bundled client) first.",
@@ -1478,6 +1622,123 @@ function refreshMacIconCacheOnVersionChange(): void {
       `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
     );
   });
+}
+
+// How often the bundle-swap watcher stats app.asar. A stat is cheap; the cost of
+// missing a swap is every subsequent asar read returning bytes from the wrong
+// file (invisible icons, corrupted lazy-loaded route chunks), so poll briskly.
+const BUNDLE_SWAP_POLL_INTERVAL_MS = 15_000;
+
+let bundleSwapPollTimer: NodeJS.Timeout | null = null;
+let bundleSwapPromptOpen = false;
+
+function readBundleSignature(bundlePath: string): BundleSignature | null {
+  try {
+    return bundleSignatureFromStats(OriginalFS.statSync(bundlePath));
+  } catch {
+    return null;
+  }
+}
+
+function captureStartupBundleIdentity(): BundleIdentity | null {
+  if (!app.isPackaged) {
+    return null;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return null;
+  }
+  return { path: bundlePath, signature: readBundleSignature(bundlePath) };
+}
+
+function restartAfterStartupBundleSwap(error: BundleChangedDuringStartupError): void {
+  const baselineSize = error.baseline?.size ?? "unreadable";
+  const currentSize = error.current?.size ?? "unreadable";
+  writeDesktopLogHeader(
+    `bundle changed during startup path=${error.bundlePath} size=${baselineSize}->${currentSize}`,
+  );
+  console.warn("[desktop] Packaged application changed during startup; restarting", error);
+
+  void dialog
+    .showMessageBox({
+      type: "warning",
+      title: "Synara needs to restart",
+      message: "Synara changed while it was opening.",
+      detail:
+        "The current process cannot safely read the replaced application bundle. Restart Synara to finish opening with one consistent version.",
+      buttons: ["Restart Synara"],
+      defaultId: 0,
+    })
+    .catch(() => undefined)
+    .then(() => {
+      app.relaunch();
+      requestGracefulAppQuit("startup-bundle-swap");
+    });
+}
+
+// Electron caches the asar header per process, so once app.asar changes on disk
+// (updater retry racing a relaunch, a reinstall, a build copied over the bundle)
+// every archive read in this process — the t3:// protocol, the backend's static
+// files, lazily-loaded renderer chunks — resolves to stale offsets and silently
+// returns the wrong bytes. Detect the swap and offer a restart; continuing is
+// never safe.
+function startBundleSwapWatcher(): void {
+  if (!app.isPackaged || bundleSwapPollTimer) {
+    return;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return;
+  }
+  let baseline =
+    startupBundleIdentity &&
+    Path.resolve(startupBundleIdentity.path) === Path.resolve(bundlePath)
+      ? (startupBundleIdentity.signature ?? readBundleSignature(bundlePath))
+      : readBundleSignature(bundlePath);
+  if (!baseline) {
+    return;
+  }
+
+  bundleSwapPollTimer = setInterval(() => {
+    // The updater owns the quit/relaunch during its own install handoff, and a
+    // quitting app is about to re-read the new archive anyway.
+    if (isQuitting || isUpdaterInstallPreparing || bundleSwapPromptOpen) {
+      return;
+    }
+    const current = readBundleSignature(bundlePath);
+    if (!baseline || !isBundleSwapped(baseline, current)) {
+      return;
+    }
+    writeDesktopLogHeader(
+      `bundle swap detected path=${bundlePath} size=${baseline.size}->${current?.size ?? "unknown"}`,
+    );
+    // Re-arm on the new identity so declining the restart still catches the
+    // next replacement instead of re-prompting for the same one.
+    baseline = current;
+    bundleSwapPromptOpen = true;
+    void dialog
+      .showMessageBox({
+        type: "warning",
+        title: "Synara was replaced on disk",
+        message: "The installed Synara app changed while it was running.",
+        detail:
+          "The interface keeps running from a safeguarded copy, but parts of the app loaded later can still read the replaced file. Restart now to pick up the new version safely.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        bundleSwapPromptOpen = false;
+        if (response === 0) {
+          app.relaunch();
+          requestGracefulAppQuit("bundle-swap-restart");
+        }
+      })
+      .catch(() => {
+        bundleSwapPromptOpen = false;
+      });
+  }, BUNDLE_SWAP_POLL_INTERVAL_MS);
+  bundleSwapPollTimer.unref();
 }
 
 function clearUpdatePollTimer(): void {
@@ -2207,8 +2468,12 @@ function backendNodeArgs(): string[] {
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
+  const servedStaticRoot = resolveServedStaticRoot();
   return {
     ...process.env,
+    // Point the backend's HTTP static route at the same swap-immune snapshot the
+    // t3:// protocol serves, so both surfaces survive app.asar being replaced.
+    ...(servedStaticRoot?.snapshotted ? { T3CODE_STATIC_DIR: servedStaticRoot.dir } : {}),
     DPCODE_MODE: "desktop",
     DPCODE_NO_BROWSER: "1",
     DPCODE_PORT: String(backendPort),
@@ -3076,7 +3341,16 @@ if (hasSingleInstanceLock) {
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
-      registerDesktopProtocol();
+      try {
+        registerDesktopProtocol();
+      } catch (error) {
+        if (error instanceof BundleChangedDuringStartupError) {
+          restartAfterStartupBundleSwap(error);
+          return;
+        }
+        throw error;
+      }
+      startBundleSwapWatcher();
       configureAutoUpdater();
       void bootstrap().catch((error) => {
         handleFatalStartupError("bootstrap", error);

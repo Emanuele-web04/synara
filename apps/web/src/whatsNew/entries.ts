@@ -1518,8 +1518,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "claude-opus-4-8",
         title: "Claude Opus 4.8 is available",
-        description:
-          "Synara now includes Claude Opus 4.8 in the Claude model picker.",
+        description: "Synara now includes Claude Opus 4.8 in the Claude model picker.",
       },
     ],
   },
@@ -2202,8 +2201,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "chats-are-now-available",
         title: "💬 Chats are now available!",
-        description:
-          "Write without a selected project, or create threads from there.",
+        description: "Write without a selected project, or create threads from there.",
       },
       {
         id: "new-shortcuts",
@@ -2220,8 +2218,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       {
         id: "bulk-thread-actions",
         title: "📁 Bulk thread actions",
-        description:
-          "Select multiple threads at once and act on them together.",
+        description: "Select multiple threads at once and act on them together.",
       },
       {
         id: "cleaner-reasoning-picker",
