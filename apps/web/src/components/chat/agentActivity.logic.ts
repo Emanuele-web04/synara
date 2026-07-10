@@ -40,8 +40,7 @@ export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
   const isStatusOnlyCommand =
     entry.itemType === "command_execution" && !entry.command && !entry.rawCommand;
   return (
-    isStatusOnlyCommand ||
-    normalizeWorkText(entry.toolTitle ?? entry.label) === "command execution"
+    isStatusOnlyCommand || normalizeWorkText(entry.toolTitle ?? entry.label) === "command execution"
   );
 }
 

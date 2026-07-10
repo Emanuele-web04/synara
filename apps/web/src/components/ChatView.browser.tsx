@@ -1082,7 +1082,9 @@ function installDeterministicSendNativeApi(): () => void {
             ...input,
           };
           wsRequests.push(request);
-          return resolveWsRpc(request) as Awaited<ReturnType<typeof wsNativeApi.git.createWorktree>>;
+          return resolveWsRpc(request) as Awaited<
+            ReturnType<typeof wsNativeApi.git.createWorktree>
+          >;
         },
       },
       terminal: {
@@ -4131,9 +4133,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
             request,
             `Expected create worktree request; draft=${JSON.stringify(
               useComposerDraftStore.getState().getDraftThread(newThreadId),
-            )}; path=${mounted.router.state.location.pathname}; forms=${document.querySelectorAll(
-              'form[data-chat-composer-form="true"]',
-            ).length}; ui=${(document.body.textContent ?? "").slice(-300)}; saw ${wsRequests
+            )}; path=${mounted.router.state.location.pathname}; forms=${
+              document.querySelectorAll('form[data-chat-composer-form="true"]').length
+            }; ui=${(document.body.textContent ?? "").slice(-300)}; saw ${wsRequests
               .map((candidate) => {
                 const command = readDispatchedCommand(candidate);
                 return command ? `${candidate._tag}:${command.type}` : candidate._tag;

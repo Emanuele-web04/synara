@@ -2556,11 +2556,7 @@ describe("store read model sync", () => {
     });
 
     const next = applyOrchestrationEventsHotPath(makeState(makeThread()), [
-      makeDomainEvent(
-        "thread.activity-appended",
-        { threadId, activity: started },
-        { sequence: 1 },
-      ),
+      makeDomainEvent("thread.activity-appended", { threadId, activity: started }, { sequence: 1 }),
       makeDomainEvent(
         "thread.activity-appended",
         { threadId, activity: completed },
