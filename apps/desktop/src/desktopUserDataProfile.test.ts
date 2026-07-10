@@ -134,7 +134,11 @@ describe("desktopUserDataProfile", () => {
     FS.mkdirSync(targetPartitionPath, { recursive: true });
     FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies"), "bridge-cookie");
     FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies-journal"), "bridge-journal");
+    FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies-wal"), "bridge-wal");
+    FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies-shm"), "bridge-shm");
     FS.writeFileSync(Path.join(targetPartitionPath, "Cookies-journal"), "orphaned-journal");
+    FS.writeFileSync(Path.join(targetPartitionPath, "Cookies-wal"), "orphaned-wal");
+    FS.writeFileSync(Path.join(targetPartitionPath, "Cookies-shm"), "orphaned-shm");
     FS.writeFileSync(
       Path.join(targetPath, "synara-profile-seed.json"),
       JSON.stringify({ sourcePath }),
@@ -142,13 +146,19 @@ describe("desktopUserDataProfile", () => {
 
     expect(repairBrowserProfileFromBridgeManifest(targetPath)).toMatchObject({
       status: "repaired",
-      copiedEntries: ["Cookies", "Cookies-journal"],
+      copiedEntries: ["Cookies", "Cookies-journal", "Cookies-wal", "Cookies-shm"],
     });
     expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies"), "utf8")).toBe(
       "bridge-cookie",
     );
     expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies-journal"), "utf8")).toBe(
       "bridge-journal",
+    );
+    expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies-wal"), "utf8")).toBe(
+      "bridge-wal",
+    );
+    expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies-shm"), "utf8")).toBe(
+      "bridge-shm",
     );
     expect(
       FS.readdirSync(targetPartitionPath).some((entryName) =>

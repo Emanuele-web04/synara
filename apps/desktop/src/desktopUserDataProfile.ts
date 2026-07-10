@@ -10,7 +10,7 @@ const PROD_USER_DATA_DIR_NAME = "synara";
 const BRIDGE_PROFILE_MANIFEST_FILE_NAME = "synara-profile-seed.json";
 const CANONICAL_BROWSER_PARTITION_NAME = "synara-browser";
 const BROWSER_PARTITION_SEED_ENTRY_GROUPS = [
-  ["Cookies", "Cookies-journal"],
+  ["Cookies", "Cookies-journal", "Cookies-wal", "Cookies-shm"],
   ["Local Storage"],
   ["IndexedDB"],
   ["Session Storage"],
@@ -19,8 +19,8 @@ const BROWSER_PARTITION_SEED_ENTRY_GROUPS = [
   ["Preferences"],
   ["Network Persistent State"],
   ["TransportSecurity"],
-  ["Trust Tokens", "Trust Tokens-journal"],
-  ["SharedStorage", "SharedStorage-wal"],
+  ["Trust Tokens", "Trust Tokens-journal", "Trust Tokens-wal", "Trust Tokens-shm"],
+  ["SharedStorage", "SharedStorage-journal", "SharedStorage-wal", "SharedStorage-shm"],
   ["shared_proto_db"],
 ] as const;
 const BROWSER_PARTITION_SEED_ENTRY_NAMES = BROWSER_PARTITION_SEED_ENTRY_GROUPS.flat();
