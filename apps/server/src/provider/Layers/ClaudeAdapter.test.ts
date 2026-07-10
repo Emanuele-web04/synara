@@ -8675,6 +8675,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-8",
         },
       });
@@ -8683,6 +8684,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "hello",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-8",
         },
         attachments: [],
@@ -8741,6 +8743,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5-1[1m]",
         },
       });
@@ -8801,6 +8804,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
       });
@@ -8810,6 +8814,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "hello",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
         attachments: [],
@@ -8857,6 +8862,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "continue",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
         },
         attachments: [],
@@ -8883,6 +8889,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8912,6 +8919,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8930,6 +8938,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         input: "continue after resume",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5",
           options: { autoCompactWindow: "1m" },
         },
@@ -8950,7 +8959,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
-        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        modelSelection: {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
       });
       const firstQuery = harness.queries[0];
       assert.ok(firstQuery);
@@ -8962,6 +8975,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           runtimeMode: "full-access",
           modelSelection: {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-opus-4-8",
             options: { effort: "max" },
           },
@@ -9888,6 +9902,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
         modelSelection: {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-fable-5-1",
         },
       });

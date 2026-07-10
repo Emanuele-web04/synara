@@ -5254,7 +5254,11 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         projectId,
         title: "Routed telemetry",
         workspaceRoot: "/tmp/project-routed-telemetry",
-        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        defaultModelSelection: {
+          provider: "codex",
+          instanceId: "codex",
+          model: "gpt-5-codex",
+        },
         createdAt,
       });
       yield* engine.dispatch({
