@@ -1,4 +1,4 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +52,7 @@ function makeFullThreadDiffContext(input: {
   readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
   readonly latestCheckpointTurnCount: number;
+  readonly baselineCheckpointRef?: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;
 }): ProjectionFullThreadDiffContext {
   return {
@@ -62,6 +63,7 @@ function makeFullThreadDiffContext(input: {
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
     latestCheckpointTurnCount: input.latestCheckpointTurnCount,
+    baselineCheckpointRef: input.baselineCheckpointRef ?? input.toCheckpointRef,
     toCheckpointRef: input.toCheckpointRef,
   };
 }
@@ -70,7 +72,9 @@ describe("CheckpointDiffQueryLive", () => {
   it("prefers exact turn-start checkpoints for single-turn diffs", async () => {
     const projectId = ProjectId.makeUnsafe("project-1");
     const threadId = ThreadId.makeUnsafe("thread-1");
-    const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+    const toCheckpointRef = CheckpointRef.makeUnsafe(
+      checkpointRefForThreadTurn(threadId, 1).replace("refs/synara/", "refs/historical/"),
+    );
     const hasCheckpointRefCalls: Array<CheckpointRef> = [];
     const diffCheckpointsCalls: Array<{
       readonly fromCheckpointRef: CheckpointRef;
@@ -120,6 +124,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -141,7 +146,12 @@ describe("CheckpointDiffQueryLive", () => {
       }).pipe(Effect.provide(layer)),
     );
 
-    const expectedFromRef = checkpointRefForThreadTurnStart(threadId, TurnId.makeUnsafe("turn-1"));
+    const expectedFromRef = CheckpointRef.makeUnsafe(
+      checkpointRefForThreadTurnStart(threadId, TurnId.makeUnsafe("turn-1")).replace(
+        "refs/synara/",
+        "refs/historical/",
+      ),
+    );
     expect(hasCheckpointRefCalls).toEqual([expectedFromRef]);
     expect(diffCheckpointsCalls).toEqual([
       {
@@ -163,6 +173,9 @@ describe("CheckpointDiffQueryLive", () => {
     const projectId = ProjectId.makeUnsafe("project-full-diff");
     const threadId = ThreadId.makeUnsafe("thread-full-diff");
     const toCheckpointRef = checkpointRefForThreadTurn(threadId, 2);
+    const historicalBaselineRef = CheckpointRef.makeUnsafe(
+      checkpointRefForThreadTurn(threadId, 1).replace("refs/synara/", "refs/historical/"),
+    );
     const diffCheckpointsCalls: Array<{
       readonly fromCheckpointRef: CheckpointRef;
       readonly toCheckpointRef: CheckpointRef;
@@ -176,6 +189,7 @@ describe("CheckpointDiffQueryLive", () => {
       workspaceRoot: "/tmp/workspace",
       worktreePath: null,
       latestCheckpointTurnCount: 2,
+      baselineCheckpointRef: historicalBaselineRef,
       toCheckpointRef,
     });
 
@@ -206,6 +220,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.succeed(Option.some(fullThreadDiffContext)),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -229,7 +244,9 @@ describe("CheckpointDiffQueryLive", () => {
     expect(diffCheckpointsCalls).toEqual([
       {
         cwd: "/tmp/workspace",
-        fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+        fromCheckpointRef: CheckpointRef.makeUnsafe(
+          historicalBaselineRef.replace(/\/turn\/1$/, "/turn/0"),
+        ),
         toCheckpointRef,
         ignoreWhitespace: true,
       },
@@ -268,6 +285,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -330,6 +348,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -393,6 +412,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -461,6 +481,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
@@ -525,6 +546,7 @@ describe("CheckpointDiffQueryLive", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),

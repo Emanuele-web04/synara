@@ -1,7 +1,7 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
+import type { ThreadId, RuntimeMode } from "@synara/contracts";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -18,7 +18,7 @@ import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { useStore } from "../store";
 import {

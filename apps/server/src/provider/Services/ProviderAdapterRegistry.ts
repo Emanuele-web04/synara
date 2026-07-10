@@ -7,7 +7,7 @@
  *
  * @module ProviderAdapterRegistry
  */
-import type { ProviderInstanceId, ProviderKind } from "@t3tools/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -52,6 +52,6 @@ export interface ProviderAdapterRegistryShape {
 export class ProviderAdapterRegistry extends ServiceMap.Service<
   ProviderAdapterRegistry,
   ProviderAdapterRegistryShape
->()("t3/provider/Services/ProviderAdapterRegistry") {}
+>()("synara/provider/Services/ProviderAdapterRegistry") {}
 
 // Dummy comment for workflow testing.

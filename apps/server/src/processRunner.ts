@@ -1,5 +1,5 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;

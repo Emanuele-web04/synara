@@ -1,10 +1,10 @@
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
-import { getModelSelectionStringOptionValue, resolveApiModelId } from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import { getModelSelectionStringOptionValue, resolveApiModelId } from "@synara/shared/model";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { TextGenerationError } from "../Errors.ts";
 import {

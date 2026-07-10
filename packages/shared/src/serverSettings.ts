@@ -4,7 +4,7 @@ import {
   type ProviderKind,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { deepMerge, type DeepPartial } from "./Struct";
 import { defaultInstanceIdForProvider, deriveProviderInstances } from "./providerInstances";
 

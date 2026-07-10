@@ -5,13 +5,13 @@ import {
   type AutomationWorktreeMode,
   type ModelSelection,
   type ProviderOptionDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getModelCapabilities,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
-} from "@t3tools/shared/model";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+} from "@synara/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 

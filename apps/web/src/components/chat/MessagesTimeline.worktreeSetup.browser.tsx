@@ -4,7 +4,7 @@
 
 import "../../index.css";
 
-import { MessageId } from "@t3tools/contracts";
+import { MessageId } from "@synara/contracts";
 import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";

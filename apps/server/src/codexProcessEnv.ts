@@ -12,34 +12,42 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
-import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
+import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
   type ShellEnvironmentReader,
-} from "@t3tools/shared/shell";
+} from "@synara/shared/shell";
 
 import {
   resolveBaseCodexHomePath,
   resolveCodexHomeOverlayAccountSegment,
-  resolveDpCodeCodexHomeOverlayPath,
-  shouldDisableDpCodeBrowserPlugin,
+  resolveSynaraCodexHomeOverlayPath,
 } from "./codexHomePaths.ts";
 import { codexPathsReferenceSameLocation } from "./codexPathIdentity.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const CODEX_ACCOUNT_PRIVATE_STATE_FILES = new Set(["auth.json", "models_cache.json"]);
+const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
+const SYNARA_AUTH_COPY_MARKER_FILE = "synara-auth-copy-v1.json";
+const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
+const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
+// Retired local browser integrations used a stable six-character namespace.
+// Match the structural conflict without retaining any previous product name.
+const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
+  /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
-interface CodexOverlayEntryLinker {
+export interface CodexOverlayEntryLinker {
   readonly symlink: typeof symlinkSync;
   readonly copyFile: typeof copyFileSync;
 }
@@ -51,10 +59,7 @@ export function resolveCodexBrowserUsePipePath(
   } = {},
 ): string {
   const env = input.env ?? process.env;
-  const configured =
-    env.SYNARA_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+  const configured = env.SYNARA_BROWSER_USE_PIPE_PATH?.trim();
   if (configured) {
     return configured;
   }
@@ -63,11 +68,48 @@ export function resolveCodexBrowserUsePipePath(
     : "/tmp/codex-browser-use.sock";
 }
 
-export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
+function isSafePluginSectionHeader(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_CONFIG_SUPPRESSION_HEADER_LENGTH &&
+    /^\[plugins\."[^"\r\n]+"\]$/.test(value)
+  );
+}
+
+export function readSynaraConfigSuppressions(markerPath: string): readonly string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const marker = parsed as { version?: unknown; sectionHeaders?: unknown };
+    if (marker.version !== 1 || !Array.isArray(marker.sectionHeaders)) return [];
+    if (marker.sectionHeaders.length > MAX_CONFIG_SUPPRESSION_SECTIONS) return [];
+    return [...new Set(marker.sectionHeaders.filter(isSafePluginSectionHeader))];
+  } catch {
+    return [];
+  }
+}
+
+function findConflictingLocalBrowserPluginSections(config: string): readonly string[] {
+  return [
+    ...new Set(
+      config
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN.test(line)),
+    ),
+  ];
+}
+
+export function disableCodexConfigSections(
+  config: string,
+  sectionHeaders: readonly string[],
+  appendMissing = false,
+): string {
+  const targets = new Set(sectionHeaders.filter(isSafePluginSectionHeader));
   const lines = config.split(/\r?\n/);
   const output: string[] = [];
   let inTargetSection = false;
-  let sawTargetSection = false;
+  const seenTargetSections = new Set<string>();
   let targetSectionHasEnabled = false;
 
   const closeTargetSection = () => {
@@ -80,8 +122,8 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
     const trimmed = line.trim();
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       closeTargetSection();
-      inTargetSection = trimmed === DPCODE_BROWSER_PLUGIN_CONFIG_HEADER;
-      sawTargetSection ||= inTargetSection;
+      inTargetSection = targets.has(trimmed);
+      if (inTargetSection) seenTargetSections.add(trimmed);
       targetSectionHasEnabled = false;
       output.push(line);
       continue;
@@ -98,14 +140,281 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
 
   closeTargetSection();
 
-  if (!sawTargetSection) {
-    if (output.length > 0 && output.at(-1)?.trim()) {
-      output.push("");
+  if (appendMissing) {
+    for (const header of targets) {
+      if (seenTargetSections.has(header)) continue;
+      if (output.length > 0 && output.at(-1)?.trim()) {
+        output.push("");
+      }
+      output.push(header, "enabled = false");
     }
-    output.push(DPCODE_BROWSER_PLUGIN_CONFIG_HEADER, "enabled = false");
   }
 
   return output.join("\n");
+}
+
+export type CodexAuthCredentialsStoreMode = "file" | "keyring" | "auto" | "ephemeral";
+
+export interface CodexAuthTracking {
+  readonly sourceConfigPath: string;
+  readonly authoritativeAuthFilePath: string;
+  readonly effectiveAuthFilePath?: string;
+}
+
+export interface CodexProcessLaunchContext {
+  readonly env: NodeJS.ProcessEnv;
+  readonly authTracking: CodexAuthTracking;
+}
+
+export interface CodexProcessEnvInput {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly readEnvironment?: ShellEnvironmentReader;
+  readonly overlayEntryLinker?: CodexOverlayEntryLinker;
+}
+
+interface CodexOverlayResolution {
+  readonly sourceHomePath: string;
+  readonly hasDedicatedAccountHome: boolean;
+  readonly shadowHomePath?: string;
+  readonly accountSegment?: string;
+  readonly overlayHomePath: string;
+}
+
+function readTomlStringAssignment(line: string, key: string): string | undefined {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const keyToken = `(?:${escapedKey}|"${escapedKey}"|'${escapedKey}')`;
+  const match = line.match(
+    new RegExp(`^\\s*${keyToken}\\s*=\\s*(?:"([^"]*)"|'([^']*)')\\s*(?:#.*)?$`),
+  );
+  return match?.[1] ?? match?.[2];
+}
+
+function readDottedProfileStoreAssignment(
+  line: string,
+): { readonly profile: string; readonly mode: string } | undefined {
+  const keyToken = (key: string) => `(?:${key}|"${key}"|'${key}')`;
+  const profileToken = `(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))`;
+  const match = line.match(
+    new RegExp(
+      `^\\s*${keyToken("profiles")}\\s*\\.\\s*${profileToken}\\s*\\.\\s*${keyToken("cli_auth_credentials_store")}\\s*=\\s*(?:"([^"]*)"|'([^']*)')\\s*(?:#.*)?$`,
+    ),
+  );
+  const profile = match?.[1] ?? match?.[2] ?? match?.[3];
+  const mode = match?.[4] ?? match?.[5];
+  return profile && mode ? { profile, mode } : undefined;
+}
+
+function readCodexProfileSectionName(line: string): string | undefined {
+  const match = line.match(
+    /^\s*\[\s*profiles\.(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*\]\s*(?:#.*)?$/,
+  );
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+export function readEffectiveCodexAuthCredentialsStoreMode(
+  config: string,
+): CodexAuthCredentialsStoreMode {
+  let activeProfile: string | undefined;
+  let rootMode: CodexAuthCredentialsStoreMode | undefined;
+  let currentProfile: string | undefined;
+  let inRoot = true;
+  const profileModes = new Map<string, CodexAuthCredentialsStoreMode>();
+
+  for (const line of config.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) {
+      inRoot = false;
+      currentProfile = readCodexProfileSectionName(line);
+      continue;
+    }
+    if (inRoot) {
+      activeProfile ??= readTomlStringAssignment(line, "profile");
+      const dottedProfileMode = readDottedProfileStoreAssignment(line);
+      if (
+        dottedProfileMode &&
+        (dottedProfileMode.mode === "file" ||
+          dottedProfileMode.mode === "keyring" ||
+          dottedProfileMode.mode === "auto" ||
+          dottedProfileMode.mode === "ephemeral")
+      ) {
+        profileModes.set(dottedProfileMode.profile, dottedProfileMode.mode);
+        continue;
+      }
+    }
+    const rawMode = readTomlStringAssignment(line, "cli_auth_credentials_store");
+    if (
+      rawMode !== "file" &&
+      rawMode !== "keyring" &&
+      rawMode !== "auto" &&
+      rawMode !== "ephemeral"
+    ) {
+      continue;
+    }
+    if (inRoot) {
+      rootMode = rawMode;
+    } else if (currentProfile !== undefined) {
+      profileModes.set(currentProfile, rawMode);
+    }
+  }
+
+  return (activeProfile ? profileModes.get(activeProfile) : undefined) ?? rootMode ?? "file";
+}
+
+function assertManagedCodexHomeUsesObservableAuth(input: {
+  readonly sourceConfig: string;
+  readonly accountId?: string;
+}): void {
+  const mode = readEffectiveCodexAuthCredentialsStoreMode(input.sourceConfig);
+  if (mode !== "keyring" && mode !== "auto") {
+    return;
+  }
+  const accountLabel = input.accountId?.trim() || "default";
+  throw new Error(
+    `Codex account '${accountLabel}' uses cli_auth_credentials_store = "${mode}". Synara-managed Codex homes require file-backed Codex auth so account changes can invalidate long-lived app-server sessions; set cli_auth_credentials_store = "file" for the active Codex profile before starting this account.`,
+  );
+}
+
+function resolveCodexOverlayResolution(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+}): CodexOverlayResolution {
+  const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
+  const defaultHomePath = resolveBaseCodexHomePath(input.env);
+  const hasDedicatedAccountHome = Boolean(
+    input.homePath?.trim() && !codexPathsReferenceSameLocation(sourceHomePath, defaultHomePath),
+  );
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
+    : undefined;
+  const accountSegment = resolveCodexHomeOverlayAccountSegment({
+    homePath: sourceHomePath,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+  });
+  return {
+    sourceHomePath,
+    hasDedicatedAccountHome,
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+    ...(accountSegment ? { accountSegment } : {}),
+    overlayHomePath: resolveSynaraCodexHomeOverlayPath(
+      input.env,
+      sourceHomePath,
+      accountSegment,
+    ),
+  };
+}
+
+function uniqueResolvedPaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of paths) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    result.push(candidate);
+  }
+  return result;
+}
+
+export function resolveCodexAuthTracking(
+  input: Pick<
+    CodexProcessEnvInput,
+    "env" | "homePath" | "shadowHomePath" | "accountId"
+  > = {},
+): CodexAuthTracking {
+  const env = { ...(input.env ?? process.env) };
+  const resolution = resolveCodexOverlayResolution({
+    env,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
+  const sourceConfigPath = path.join(resolution.sourceHomePath, "config.toml");
+  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  assertManagedCodexHomeUsesObservableAuth({
+    sourceConfig,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
+
+  const authoritativeAuthHomePath =
+    resolution.shadowHomePath ??
+    (resolution.accountSegment && !resolution.hasDedicatedAccountHome
+      ? resolution.overlayHomePath
+      : resolution.sourceHomePath);
+  const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
+  const [, effectiveAuthFilePath] = uniqueResolvedPaths([
+    authoritativeAuthFilePath,
+    path.join(resolution.overlayHomePath, "auth.json"),
+  ]);
+  return {
+    sourceConfigPath,
+    authoritativeAuthFilePath,
+    ...(effectiveAuthFilePath ? { effectiveAuthFilePath } : {}),
+  };
+}
+
+function readFileFingerprint(filePath: string): string {
+  try {
+    return `sha256:${createHash("sha256").update(readFileSync(filePath)).digest("hex")}`;
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    return code === "ENOENT" ? "missing" : "unreadable";
+  }
+}
+
+export function readCodexAuthTrackingFingerprint(tracking: CodexAuthTracking): string {
+  let sourceConfig = "";
+  try {
+    sourceConfig = readFileSync(tracking.sourceConfigPath, "utf8");
+  } catch {
+    // Missing config uses Codex's file-backed default.
+  }
+  const storeMode = readEffectiveCodexAuthCredentialsStoreMode(sourceConfig);
+  const authoritative = readFileFingerprint(tracking.authoritativeAuthFilePath);
+  const effective = tracking.effectiveAuthFilePath
+    ? readFileFingerprint(tracking.effectiveAuthFilePath)
+    : undefined;
+  // Before first launch the effective overlay may not exist yet. Once it is
+  // linked/copied it normally has the same bytes as the authoritative source;
+  // omit that redundant state. The authoritative role is never suppressed:
+  // deleting/logging out of the source must invalidate a stale copied overlay.
+  const normalizedEffective =
+    effective === authoritative ||
+    (authoritative.startsWith("sha256:") && effective === "missing")
+      ? undefined
+      : effective;
+  return JSON.stringify({
+    storeMode,
+    authoritative,
+    ...(normalizedEffective !== undefined ? { effective: normalizedEffective } : {}),
+  });
+}
+
+function writeSynaraConfigSuppressions(
+  markerPath: string,
+  sectionHeaders: readonly string[],
+): void {
+  const normalized = [...new Set(sectionHeaders.filter(isSafePluginSectionHeader))].slice(
+    0,
+    MAX_CONFIG_SUPPRESSION_SECTIONS,
+  );
+  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    `${JSON.stringify({ version: 1, sectionHeaders: normalized }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  renameSync(temporaryPath, markerPath);
 }
 
 export function linkOrCopyCodexOverlayEntry(
@@ -119,13 +428,14 @@ export function linkOrCopyCodexOverlayEntry(
     symlink: symlinkSync,
     copyFile: copyFileSync,
   },
-): void {
+): "symlink" | "copy" {
   try {
     linker.symlink(input.sourcePath, input.targetPath, input.type);
+    return "symlink";
   } catch (error: unknown) {
     if (input.type === "file" && CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
       linker.copyFile(input.sourcePath, input.targetPath);
-      return;
+      return "copy";
     }
     throw error;
   }
@@ -146,13 +456,57 @@ export function prioritizeCodexOverlayEntries(entries: readonly string[]): strin
   return [...sharedStateEntries, ...otherEntries];
 }
 
-function ensureCodexOverlaySymlink(input: {
-  readonly entryName: string;
-  readonly sourcePath: string;
-  readonly targetPath: string;
-  readonly type: "dir" | "file";
-  readonly force?: boolean;
-}): void {
+function authCopyMarkerPath(targetPath: string): string {
+  return path.join(path.dirname(targetPath), SYNARA_AUTH_COPY_MARKER_FILE);
+}
+
+function writeAuthCopyMarker(sourcePath: string, targetPath: string): void {
+  const markerPath = authCopyMarkerPath(targetPath);
+  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    `${JSON.stringify({
+      version: 1,
+      sourcePath: path.resolve(sourcePath),
+      copyFingerprint: readFileFingerprint(targetPath),
+    })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  renameSync(temporaryPath, markerPath);
+}
+
+function readAuthCopyMarker(targetPath: string):
+  | {
+      readonly sourcePath: string;
+      readonly copyFingerprint: string;
+    }
+  | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(authCopyMarkerPath(targetPath), "utf8")) as {
+      version?: unknown;
+      sourcePath?: unknown;
+      copyFingerprint?: unknown;
+    };
+    return parsed.version === 1 &&
+      typeof parsed.sourcePath === "string" &&
+      typeof parsed.copyFingerprint === "string"
+      ? { sourcePath: parsed.sourcePath, copyFingerprint: parsed.copyFingerprint }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function ensureCodexOverlaySymlink(
+  input: {
+    readonly entryName: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly type: "dir" | "file";
+    readonly force?: boolean;
+  },
+  linker?: CodexOverlayEntryLinker,
+): void {
   let targetStat: ReturnType<typeof lstatSync> | undefined;
   try {
     targetStat = lstatSync(input.targetPath);
@@ -162,6 +516,9 @@ function ensureCodexOverlaySymlink(input: {
 
   if (targetStat) {
     if (targetStat.isSymbolicLink() && readlinkSync(input.targetPath) === input.sourcePath) {
+      if (input.entryName === "auth.json") {
+        rmSync(authCopyMarkerPath(input.targetPath), { force: true });
+      }
       return;
     }
 
@@ -179,12 +536,93 @@ function ensureCodexOverlaySymlink(input: {
     }
   }
 
-  linkOrCopyCodexOverlayEntry(input);
+  const result = linkOrCopyCodexOverlayEntry(input, linker);
+  if (input.entryName === "auth.json") {
+    if (result === "copy") {
+      try {
+        writeAuthCopyMarker(input.sourcePath, input.targetPath);
+      } catch (error) {
+        // An unmarked copy cannot be distinguished safely from independent
+        // overlay auth during logout, so never leave it behind.
+        rmSync(input.targetPath, { force: true });
+        throw error;
+      }
+    } else {
+      rmSync(authCopyMarkerPath(input.targetPath), { force: true });
+    }
+  }
+}
+
+function removeStaleMirroredAuthWhenSourceIsMissing(
+  resolution: CodexOverlayResolution,
+): void {
+  // Shared-home account overlays own their auth file. It is not a mirror and
+  // must survive even while the shared/default source account is logged out.
+  if (
+    resolution.accountSegment &&
+    !resolution.shadowHomePath &&
+    !resolution.hasDedicatedAccountHome
+  ) {
+    return;
+  }
+
+  const authoritativeHomePath = resolution.shadowHomePath ?? resolution.sourceHomePath;
+  const sourceAuthPath = path.join(authoritativeHomePath, "auth.json");
+  const targetAuthPath = path.join(resolution.overlayHomePath, "auth.json");
+  if (codexPathsReferenceSameLocation(sourceAuthPath, targetAuthPath)) {
+    return;
+  }
+  const sourceFingerprint = readFileFingerprint(sourceAuthPath);
+  if (sourceFingerprint !== "missing") {
+    return;
+  }
+  // Only a missing authoritative source allows stale mirror cleanup. An
+  // unreadable source is preserved so a transient permission failure cannot
+  // destroy the effective login.
+
+  const markerPath = authCopyMarkerPath(targetAuthPath);
+  let targetStat: ReturnType<typeof lstatSync> | undefined;
+  try {
+    targetStat = lstatSync(targetAuthPath);
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    if (code === "ENOENT") {
+      rmSync(markerPath, { force: true });
+    }
+    return;
+  }
+
+  if (targetStat.isSymbolicLink()) {
+    const linkTarget = readlinkSync(targetAuthPath);
+    const resolvedLinkTarget = path.isAbsolute(linkTarget)
+      ? path.resolve(linkTarget)
+      : path.resolve(path.dirname(targetAuthPath), linkTarget);
+    if (codexPathsReferenceSameLocation(resolvedLinkTarget, sourceAuthPath)) {
+      rmSync(targetAuthPath, { force: true });
+    }
+    rmSync(markerPath, { force: true });
+    return;
+  }
+
+  const marker = readAuthCopyMarker(targetAuthPath);
+  if (
+    marker &&
+    codexPathsReferenceSameLocation(marker.sourcePath, sourceAuthPath) &&
+    marker.copyFingerprint === readFileFingerprint(targetAuthPath)
+  ) {
+    rmSync(targetAuthPath, { recursive: true, force: true });
+  }
+  // A changed target is now independent state; preserve it but drop obsolete
+  // copy provenance so a later logout never mistakes it for the old mirror.
+  rmSync(markerPath, { force: true });
 }
 
 // A symlinked shadow home (or one resolving to the source home) aliases
-// another account's credentials through the directory itself; both overlay
-// and direct plugin-enabled launches must reject that configuration.
+// another account's credentials through the directory itself, so account
+// overlays must reject that configuration.
 function validateCodexShadowHomePath(sourceHomePath: string, shadowHomePath: string): void {
   if (codexPathsReferenceSameLocation(sourceHomePath, shadowHomePath)) {
     throw new Error("Codex account shadow home must be different from CODEX_HOME.");
@@ -226,44 +664,33 @@ function lstatShadowPrivateState(
   return sourceStat;
 }
 
-// Materialize the source home's config.toml unmodified so direct
-// (plugin-enabled) launches keep the user's plugin/model-provider
-// configuration in the home Codex actually runs against.
-function materializeSourceCodexConfig(sourceHomePath: string, targetHomePath: string): void {
-  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
-  writeFileSync(path.join(targetHomePath, "config.toml"), sourceConfig, "utf8");
-}
-
-function prepareDpCodeCodexHomeOverlay(input: {
+function prepareSynaraCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
   readonly shadowHomePath?: string;
   readonly accountId?: string;
+  readonly overlayEntryLinker?: CodexOverlayEntryLinker;
 }): string | undefined {
-  const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  // An explicit path that resolves to the ambient/default Codex home is still
-  // shared. Only a genuinely separate account home may mirror private state.
-  const defaultHomePath = resolveBaseCodexHomePath(input.env);
-  const hasDedicatedAccountHome = Boolean(
-    input.homePath?.trim() && !codexPathsReferenceSameLocation(sourceHomePath, defaultHomePath),
-  );
-  const shadowHomePath = input.shadowHomePath
-    ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
-    : undefined;
+  const resolution = resolveCodexOverlayResolution(input);
+  const {
+    sourceHomePath,
+    hasDedicatedAccountHome,
+    shadowHomePath,
+    accountSegment,
+    overlayHomePath,
+  } = resolution;
   if (shadowHomePath) {
     validateCodexShadowHomePath(sourceHomePath, shadowHomePath);
   }
-  const accountSegment = resolveCodexHomeOverlayAccountSegment({
-    homePath: sourceHomePath,
+  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  // Keyring-backed auth cannot be fingerprinted portably, so a long-lived
+  // app-server could keep serving a previous account after an external login.
+  // Reject it before creating or repairing any managed home.
+  assertManagedCodexHomeUsesObservableAuth({
+    sourceConfig,
     ...(input.accountId ? { accountId: input.accountId } : {}),
-    ...(shadowHomePath ? { shadowHomePath } : {}),
   });
-  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(
-    input.env,
-    sourceHomePath,
-    accountSegment,
-  );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -292,12 +719,15 @@ function prepareDpCodeCodexHomeOverlay(input: {
       const sourcePath = path.join(sourceHomePath, entry);
       const targetPath = path.join(overlayHomePath, entry);
       const stat = lstatSync(sourcePath);
-      ensureCodexOverlaySymlink({
-        entryName: entry,
-        sourcePath,
-        targetPath,
-        type: stat.isDirectory() ? "dir" : "file",
-      });
+      ensureCodexOverlaySymlink(
+        {
+          entryName: entry,
+          sourcePath,
+          targetPath,
+          type: stat.isDirectory() ? "dir" : "file",
+        },
+        input.overlayEntryLinker,
+      );
     }
   } catch {
     // If the source home is partially missing, Codex can still start with the
@@ -315,23 +745,34 @@ function prepareDpCodeCodexHomeOverlay(input: {
         continue;
       }
       const targetPath = path.join(overlayHomePath, entry);
-      ensureCodexOverlaySymlink({
-        entryName: entry,
-        sourcePath: path.join(shadowHomePath, entry),
-        targetPath,
-        type: sourceStat.isDirectory() ? "dir" : "file",
-        force: true,
-      });
+      ensureCodexOverlaySymlink(
+        {
+          entryName: entry,
+          sourcePath: path.join(shadowHomePath, entry),
+          targetPath,
+          type: sourceStat.isDirectory() ? "dir" : "file",
+          force: true,
+        },
+        input.overlayEntryLinker,
+      );
     }
   }
 
-  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  removeStaleMirroredAuthWhenSourceIsMissing(resolution);
+
+  const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
+  const suppressedSections = [
+    ...new Set([
+      ...findConflictingLocalBrowserPluginSections(sourceConfig),
+      ...readSynaraConfigSuppressions(suppressionMarkerPath),
+    ]),
+  ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   writeFileSync(
     path.join(overlayHomePath, "config.toml"),
-    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
+    disableCodexConfigSections(sourceConfig, suppressedSections, true),
     "utf8",
   );
+  writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   return overlayHomePath;
 }
@@ -352,118 +793,26 @@ function dropStaleAccountPrivateStateSymlinks(accountHomePath: string): void {
   }
 }
 
-// With the dpcode-browser plugin enabled Synara skips the managed overlay,
-// but an accountId-only instance still must not share the default Codex
-// home/auth. Point CODEX_HOME at the same per-account directory overlay mode
-// uses, so login state survives toggling the plugin sentinel.
-function prepareDirectCodexAccountHome(
-  env: NodeJS.ProcessEnv,
-  input: { readonly sourceHomePath?: string; readonly accountId?: string | undefined },
-): string | undefined {
-  const sourceHomePath = input.sourceHomePath ?? resolveBaseCodexHomePath(env);
-  const accountSegment = resolveCodexHomeOverlayAccountSegment({
-    homePath: sourceHomePath,
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-  });
-  if (!accountSegment) {
-    return undefined;
-  }
-  const accountHomePath = resolveDpCodeCodexHomeOverlayPath(env, sourceHomePath, accountSegment);
-  if (path.resolve(sourceHomePath) === path.resolve(accountHomePath)) {
-    return undefined;
-  }
-  mkdirSync(accountHomePath, { recursive: true });
-  dropStaleAccountPrivateStateSymlinks(accountHomePath);
-  // Overlay mode may have left a config.toml with the dpcode-browser plugin
-  // forced off, and a fresh directory has no config at all.
-  materializeSourceCodexConfig(sourceHomePath, accountHomePath);
-  return accountHomePath;
-}
-
-// Direct (plugin-enabled) shadow homes become the child CODEX_HOME outright,
-// so they need the same aliasing guards overlay mode applies plus the source
-// home's config that the overlay would otherwise materialize.
-function prepareDirectCodexShadowHome(
-  env: NodeJS.ProcessEnv,
-  input: { readonly homePath?: string | undefined; readonly shadowHomePath: string },
-): string {
-  const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
-  const shadowHomePath = resolveBaseCodexHomePath(env, input.shadowHomePath);
-  validateCodexShadowHomePath(sourceHomePath, shadowHomePath);
-  for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
-    lstatShadowPrivateState(shadowHomePath, entry);
-  }
-  mkdirSync(shadowHomePath, { recursive: true });
-  materializeSourceCodexConfig(sourceHomePath, shadowHomePath);
-  return shadowHomePath;
-}
-
-function shouldUseDirectCodexAccountHome(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly sourceHomePath: string;
-  readonly explicitHomePath?: string | undefined;
-  readonly accountId?: string | undefined;
-}): boolean {
-  const accountSegment = resolveCodexHomeOverlayAccountSegment({
-    homePath: input.sourceHomePath,
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-  });
-  if (!accountSegment) {
-    return false;
-  }
-  if (!input.explicitHomePath?.trim()) {
-    return true;
-  }
-  return codexPathsReferenceSameLocation(input.sourceHomePath, resolveBaseCodexHomePath(input.env));
-}
-
-export function buildCodexProcessEnv(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly shadowHomePath?: string;
-    readonly accountId?: string;
-    readonly platform?: NodeJS.Platform;
-    readonly readEnvironment?: ShellEnvironmentReader;
-  } = {},
-): NodeJS.ProcessEnv {
+export function buildCodexProcessLaunchContext(
+  input: CodexProcessEnvInput = {},
+): CodexProcessLaunchContext {
   const baseEnv = { ...(input.env ?? process.env) };
-  const directSourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
-  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
-    ? prepareDpCodeCodexHomeOverlay({
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-        ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
-        ...(input.accountId ? { accountId: input.accountId } : {}),
-      })
-    : undefined;
-  // Only prepared when the overlay is skipped: overlay mode already owns the
-  // effective home, so direct-mode side effects (validation, config writes)
-  // must not run for it.
-  const directAccountHomePath =
-    overlayHomePath !== undefined
-      ? undefined
-      : input.shadowHomePath
-        ? prepareDirectCodexShadowHome(baseEnv, {
-            ...(input.homePath ? { homePath: input.homePath } : {}),
-            shadowHomePath: input.shadowHomePath,
-          })
-        : shouldUseDirectCodexAccountHome({
-              env: baseEnv,
-              sourceHomePath: directSourceHomePath,
-              explicitHomePath: input.homePath,
-              accountId: input.accountId,
-            })
-          ? prepareDirectCodexAccountHome(baseEnv, {
-              sourceHomePath: directSourceHomePath,
-              accountId: input.accountId,
-            })
-          : input.homePath
-            ? directSourceHomePath
-            : undefined;
+  const authTracking = resolveCodexAuthTracking({
+    env: baseEnv,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
+  const overlayHomePath = prepareSynaraCodexHomeOverlay({
+    env: baseEnv,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
+  });
   const effectiveEnv =
-    overlayHomePath || directAccountHomePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? directAccountHomePath }
+    overlayHomePath || input.homePath
+      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? resolveBaseCodexHomePath(baseEnv, input.homePath) }
       : baseEnv;
   const platform = input.platform ?? process.platform;
 
@@ -507,5 +856,9 @@ export function buildCodexProcessEnv(
     }
   }
 
-  return effectiveEnv;
+  return { env: effectiveEnv, authTracking };
+}
+
+export function buildCodexProcessEnv(input: CodexProcessEnvInput = {}): NodeJS.ProcessEnv {
+  return buildCodexProcessLaunchContext(input).env;
 }

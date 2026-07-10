@@ -4,7 +4,7 @@
 
 import "../../index.css";
 
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@t3tools/contracts";
+import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { createRef, type RefObject } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

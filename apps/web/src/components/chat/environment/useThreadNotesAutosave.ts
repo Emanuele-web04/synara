@@ -4,7 +4,7 @@
 // Exports: useThreadNotesAutosave
 
 import { useCallback, useEffect, useRef, useState, type ChangeEventHandler } from "react";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 
 const DEFAULT_NOTES_AUTOSAVE_DEBOUNCE_MS = 500;
 

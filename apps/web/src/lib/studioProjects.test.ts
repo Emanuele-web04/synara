@@ -2,7 +2,7 @@
 // Purpose: Verifies hidden Studio container detection and creation dispatches.
 // Layer: Web orchestration tests
 
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../store";

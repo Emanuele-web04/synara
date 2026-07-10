@@ -3,8 +3,8 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
-import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
 import {
   Cause,
   Deferred,
@@ -467,42 +467,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       yield* Effect.forEach(
         committedCommand.committedEvents,
         (event) =>
-          isProjectMetadataEvent(event)
-            ? Effect.void
-            : Effect.gen(function* () {
-                const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
-                if (isDeferredProjectionDirty) {
-                  yield* scheduleDeferredProjectionCatchUp({
-                    eventType: event.type,
-                    sequence: event.sequence,
-                  });
-                  return;
-                }
+          Effect.gen(function* () {
+            const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
+            if (isDeferredProjectionDirty) {
+              yield* scheduleDeferredProjectionCatchUp({
+                eventType: event.type,
+                sequence: event.sequence,
+              });
+              return;
+            }
 
-                const deferredProjectionOutcome = yield* projectionPipeline
-                  .projectDeferredEvent(event)
-                  .pipe(
-                    Effect.matchCause({
-                      onFailure: (cause) => ({ _tag: "failure" as const, cause }),
-                      onSuccess: () => ({ _tag: "success" as const }),
-                    }),
-                  );
+            const deferredProjectionOutcome = yield* projectionPipeline
+              .projectDeferredEvent(event)
+              .pipe(
+                Effect.matchCause({
+                  onFailure: (cause) => ({ _tag: "failure" as const, cause }),
+                  onSuccess: () => ({ _tag: "success" as const }),
+                }),
+              );
 
-                if (deferredProjectionOutcome._tag === "success") {
-                  return;
-                }
+            if (deferredProjectionOutcome._tag === "success") {
+              return;
+            }
 
-                yield* Ref.set(deferredProjectionDirty, true);
-                yield* Effect.logWarning("deferred orchestration projector failed", {
-                  sequence: event.sequence,
-                  eventType: event.type,
-                  cause: Cause.pretty(deferredProjectionOutcome.cause),
-                });
-                yield* scheduleDeferredProjectionCatchUp({
-                  eventType: event.type,
-                  sequence: event.sequence,
-                });
-              }),
+            yield* Ref.set(deferredProjectionDirty, true);
+            yield* Effect.logWarning("deferred orchestration projector failed", {
+              sequence: event.sequence,
+              eventType: event.type,
+              cause: Cause.pretty(deferredProjectionOutcome.cause),
+            });
+            yield* scheduleDeferredProjectionCatchUp({
+              eventType: event.type,
+              sequence: event.sequence,
+            });
+          }),
         { concurrency: 1 },
       );
       for (const event of committedCommand.committedEvents) {

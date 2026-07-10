@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
 
-import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@synara/contracts";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
@@ -83,43 +83,22 @@ describe("generatedImagePathFromRuntimeEvent", () => {
 
 describe("resolveCodexGeneratedImagesRoot(s)", () => {
   const previousSynaraHome = process.env.SYNARA_HOME;
-  const previousDpcodeHome = process.env.DPCODE_HOME;
-  const previousT3codeHome = process.env.T3CODE_HOME;
-  const previousDisableFlag = process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
 
   afterEach(() => {
     if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
     else process.env.SYNARA_HOME = previousSynaraHome;
-    if (previousDpcodeHome === undefined) delete process.env.DPCODE_HOME;
-    else process.env.DPCODE_HOME = previousDpcodeHome;
-    if (previousT3codeHome === undefined) delete process.env.T3CODE_HOME;
-    else process.env.T3CODE_HOME = previousT3codeHome;
-    if (previousDisableFlag === undefined)
-      delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
-    else process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = previousDisableFlag;
   });
 
   it("returns the overlay generated_images directory as the active write root by default", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
     assert.equal(
       resolveCodexGeneratedImagesRoot("/codex-test/.codex"),
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     );
   });
 
-  it("returns the source generated_images directory when the dpcode-browser plugin is enabled", () => {
-    process.env.SYNARA_HOME = "/synara-test/runtime";
-    process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = "0";
-    assert.equal(
-      resolveCodexGeneratedImagesRoot("/codex-test/.codex"),
-      path.join("/codex-test/.codex", "generated_images"),
-    );
-  });
-
   it("predicts against the account overlay for account-scoped instance context", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
     const root = resolveCodexGeneratedImagesRoot({
       homePath: "/codex-test/.codex",
       accountId: "codex_2",
@@ -133,21 +112,16 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     assert.ok(root.endsWith(path.join("generated_images")));
   });
 
-  it("honors a per-instance environment that enables the browser plugin", () => {
-    process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
-    // The server stays in overlay mode, but this instance's child env flips
-    // the sentinel, so it writes under its dedicated home directly.
+  it("honors a per-instance environment that relocates the overlay", () => {
     const root = resolveCodexGeneratedImagesRoot({
       homePath: "/codex-test/.codex-work",
-      environment: { DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" },
+      environment: { SYNARA_HOME: "/instance/runtime" },
     });
-    assert.equal(root, path.join("/codex-test/.codex-work", "generated_images"));
+    assert.equal(root, path.join("/instance/runtime", "codex-home-overlay", "generated_images"));
   });
 
   it("predicts missing saved_path references from the selected account home", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
 
     const reference = extractCodexGeneratedImageReference({
       value: {
@@ -177,22 +151,19 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
 
   it("returns both source and overlay generated_images roots for the allowlist", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
     assert.deepEqual(resolveCodexGeneratedImagesRoots("/codex-test/.codex"), [
       path.join("/codex-test/.codex", "generated_images"),
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     ]);
   });
 
-  it("keeps historical account overlay roots when an instance enables direct-home mode", () => {
+  it("keeps account roots scoped to their overlay and shadow home", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
 
     const roots = resolveCodexGeneratedImagesRoots({
       homePath: "/codex-test/.codex-work",
       shadowHomePath: "/codex-test/.codex-work-auth",
       accountId: "codex_work",
-      environment: { DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" },
     });
 
     assert.ok(
@@ -223,7 +194,6 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
         environment: {
           CODEX_HOME: defaultHome,
           SYNARA_HOME: runtimeHome,
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
       });
 
@@ -238,8 +208,6 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
 
   it("collapses to a single root when overlay equals source", () => {
     delete process.env.SYNARA_HOME;
-    delete process.env.DPCODE_HOME;
-    delete process.env.T3CODE_HOME;
     // The overlay falls under `<dirname(source)>/.synara/runtime/codex-home-overlay`,
     // which is always distinct from `<source>` itself, so the helper still returns
     // both candidates; this test guards the dedupe path with an artificial home
@@ -252,14 +220,10 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
 });
 
 describe("codexConfiguredHomePathsFromSettings", () => {
-  const previousDisableFlag = process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
   const previousSynaraHome = process.env.SYNARA_HOME;
   const previousCodexHome = process.env.CODEX_HOME;
 
   afterEach(() => {
-    if (previousDisableFlag === undefined)
-      delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
-    else process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = previousDisableFlag;
     if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
     else process.env.SYNARA_HOME = previousSynaraHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -281,7 +245,6 @@ describe("codexConfiguredHomePathsFromSettings", () => {
   });
 
   it("includes the env-scoped write home for instances relocating the overlay root", () => {
-    delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,
       providerInstances: {
@@ -309,8 +272,7 @@ describe("codexConfiguredHomePathsFromSettings", () => {
     );
   });
 
-  it("preserves configured account context so old overlay images survive plugin toggles", () => {
-    process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = "0";
+  it("preserves configured account context for account-scoped images", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,

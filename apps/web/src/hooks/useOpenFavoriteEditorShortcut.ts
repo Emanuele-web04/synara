@@ -7,7 +7,7 @@
 //          host (the chat header) and gate it with `enabled`.
 // Layer: Chat editor action hook
 
-import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useEffect } from "react";
 
 import { usePreferredEditor } from "../editorPreferences";

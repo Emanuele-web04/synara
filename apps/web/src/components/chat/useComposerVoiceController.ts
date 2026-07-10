@@ -8,7 +8,7 @@ import {
   type ProviderKind,
   type ServerProviderStatus,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project } from "../../types";

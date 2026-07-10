@@ -10,7 +10,7 @@ import {
   type ProviderModelDescriptor,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { page } from "vitest/browser";
 import { useCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -288,7 +288,7 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("persists sticky claude context window when changed", async () => {
+  it("keeps the claude context window per-thread instead of sticky", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-6",
       options: { contextWindow: "200k" },
@@ -297,12 +297,11 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
     await page.getByRole("menuitemradio", { name: "1M" }).click();
 
-    expect(
-      useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
-    ).toMatchObject({
-      instanceId: "claudeAgent",
-      options: [{ id: "contextWindow", value: "1m" }],
-    });
+    // A 1M thread can grow far beyond the normal compaction point: keep the explicit
+    // thread choice, but never leak it into sticky defaults for future threads.
+    const sticky = useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent;
+    expect(sticky).toMatchObject({ instanceId: "claudeAgent" });
+    expect(sticky?.options?.find((option) => option.id === "contextWindow")).toBeUndefined();
   });
 });
 

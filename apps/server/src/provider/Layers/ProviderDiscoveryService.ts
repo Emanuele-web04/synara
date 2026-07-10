@@ -12,11 +12,11 @@ import {
   ProviderReadPluginInput,
   type ProviderStartOptions,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   providerStartOptionsFromInstance,
   resolveProviderInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { Effect, Layer, Schema, SchemaIssue } from "effect";
 
 import { ServerConfig } from "../../config.ts";

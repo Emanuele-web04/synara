@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
+import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
 import {
   resolveAvailableEditorOptions,
   resolveEditorIcon,

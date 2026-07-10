@@ -21,17 +21,17 @@ import {
   type ProviderStartOptions,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import {
   codexAccountInstanceId,
   inferLegacyProviderKindFromModelSelection,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -50,7 +50,7 @@ import {
 } from "./lib/appDensity";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
-const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
+const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
 
 function hasCompletedServerSettingsMigration(): boolean {
   return globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1";
@@ -714,28 +714,17 @@ export function resolveSelectableProviderInstanceId(
   provider: ProviderKind,
   requestedInstanceId?: ProviderInstanceId | null,
 ): ProviderInstanceId {
-  const instances = getProviderInstanceOptions(settings).filter(
-    (instance) => instance.provider === provider,
-  );
-  const requested = requestedInstanceId
-    ? instances.find((instance) => instance.instanceId === requestedInstanceId)
-    : undefined;
-  if (requested?.enabled) {
-    return requested.instanceId;
+  // Explicit account selections are identity-bearing. Preserve missing or disabled
+  // ids so the exact availability/server validation path can fail closed instead
+  // of silently rewriting a draft or automation to another account.
+  if (requestedInstanceId) {
+    return requestedInstanceId;
   }
 
-  const defaultInstanceId = resolveDefaultProviderInstanceId(settings, provider);
-  const defaultInstance = instances.find((instance) => instance.instanceId === defaultInstanceId);
-  if (defaultInstance?.enabled) {
-    return defaultInstance.instanceId;
-  }
-
-  const enabledInstance = instances.find((instance) => instance.enabled);
-  if (enabledInstance) {
-    return enabledInstance.instanceId;
-  }
-
-  return defaultInstance?.instanceId ?? providerInstanceId(provider);
+  // With no explicit selection, use only the configured default identity. A
+  // disabled default remains selected and is blocked by availability checks;
+  // array order must never choose an arbitrary same-driver account.
+  return resolveDefaultProviderInstanceId(settings, provider);
 }
 
 type CodexAccountLaunchSettingsInput = Pick<

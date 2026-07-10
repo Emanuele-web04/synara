@@ -3,7 +3,7 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { isProviderKind } from "../providerOrdering";
 
 const CUSTOM_BINARY_CONFIRMATION_SUFFIX =
@@ -84,7 +84,7 @@ export function isProviderUsable(status: ServerProviderStatus | null | undefined
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  return status.available && status.authStatus !== "unauthenticated";
+  return status.enabled !== false && status.available && status.authStatus !== "unauthenticated";
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {
@@ -109,16 +109,14 @@ export function findProviderStatus(
   provider: ProviderKind,
   instanceId?: ProviderInstanceId | null | undefined,
 ): ServerProviderStatus | null {
-  if (instanceId) {
-    return (
-      statuses.find(
-        (status) =>
-          (status.driver ?? status.provider) === provider &&
-          (status.instanceId ?? status.provider) === instanceId,
-      ) ?? null
-    );
-  }
-  return statuses.find((status) => (status.driver ?? status.provider) === provider) ?? null;
+  const targetInstanceId = instanceId ?? provider;
+  return (
+    statuses.find(
+      (status) =>
+        (status.driver ?? status.provider) === provider &&
+        (status.instanceId ?? status.provider) === targetInstanceId,
+    ) ?? null
+  );
 }
 
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.

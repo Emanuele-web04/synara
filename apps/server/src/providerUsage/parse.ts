@@ -9,8 +9,8 @@ import type {
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
-import { providerUsageNeedsAuthDetail } from "@t3tools/shared/providerUsage";
+} from "@synara/contracts";
+import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;

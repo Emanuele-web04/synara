@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import {
   findProviderStatus,
   isProviderUsable,
@@ -213,6 +213,15 @@ describe("isProviderUsable", () => {
     ).toBe(true);
   });
 
+  it("blocks disabled providers even when their stale health status is ready", () => {
+    expect(
+      isProviderUsable({
+        ...READY_STATUS,
+        enabled: false,
+      }),
+    ).toBe(false);
+  });
+
   it("allows the local custom-binary confirmation fallback to start a session", () => {
     const normalized = normalizeProviderStatusForLocalConfig({
       provider: "gemini",
@@ -337,6 +346,34 @@ describe("providerUnavailableReason", () => {
 });
 
 describe("findProviderStatus", () => {
+  it("uses the provider default identity when no instance id is supplied", () => {
+    const workStatus: ServerProviderStatus = {
+      ...READY_STATUS,
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claude_work",
+      displayName: "Work",
+    };
+    const defaultStatus: ServerProviderStatus = {
+      ...BASE_STATUS,
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claudeAgent",
+      displayName: "Claude",
+    };
+
+    expect(findProviderStatus([workStatus, defaultStatus], "claudeAgent")).toEqual(defaultStatus);
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        statuses: [workStatus, defaultStatus],
+      }),
+    ).toMatchObject({
+      usable: false,
+      status: { instanceId: "claudeAgent" },
+    });
+  });
+
   it("selects the exact provider instance when multiple instances share a provider", () => {
     const statuses: ServerProviderStatus[] = [
       {

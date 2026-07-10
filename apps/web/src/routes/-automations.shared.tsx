@@ -14,12 +14,12 @@ import {
   type ProviderKind,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModelSelection,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 

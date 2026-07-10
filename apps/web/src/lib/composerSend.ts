@@ -12,13 +12,13 @@ import {
   type ClaudeCodeEffort,
   type ProviderKind,
   type UploadChatAttachment,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   applyClaudePromptEffortPrefix,
   getModelCapabilities,
   getModelSelectionStringOptionValue,
-} from "@t3tools/shared/model";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+} from "@synara/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 
 import type {
   ComposerAssistantSelectionAttachment,

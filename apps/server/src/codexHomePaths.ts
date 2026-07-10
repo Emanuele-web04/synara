@@ -11,10 +11,8 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-export const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
-export const DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR = "accounts";
-export const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
-  "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
+export const SYNARA_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
+export const SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR = "accounts";
 
 export interface CodexHomePathsInput {
   readonly env?: NodeJS.ProcessEnv;
@@ -44,21 +42,16 @@ export function resolveBaseCodexHomePath(
   );
 }
 
-export function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolean {
-  // The plugin is disabled by default; the only way to opt out is the explicit "0" sentinel.
-  return env[DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV] !== "0";
-}
-
-export function resolveDpCodeCodexHomeOverlayPath(
+export function resolveSynaraCodexHomeOverlayPath(
   env: NodeJS.ProcessEnv,
   sourceHomePath: string,
   accountSegment?: string,
 ): string {
-  const runtimeHome = env.SYNARA_HOME?.trim() || env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
+  const runtimeHome = env.SYNARA_HOME?.trim();
   const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".synara", "runtime");
-  const overlayHome = path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
+  const overlayHome = path.join(overlayRoot, SYNARA_CODEX_HOME_OVERLAY_DIR);
   return accountSegment
-    ? path.join(overlayHome, DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR, accountSegment)
+    ? path.join(overlayHome, SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR, accountSegment)
     : overlayHome;
 }
 
@@ -83,68 +76,15 @@ export function resolveCodexHomeOverlayAccountSegment(
   return `${label}-${digest}`;
 }
 
-function shouldUseDirectAccountOverlay(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly sourceHomePath: string;
-  readonly explicitHomePath?: string | undefined;
-  readonly accountId?: string | undefined;
-  readonly accountSourceHomeIsDedicated?: boolean | undefined;
-}): boolean {
-  const accountSegment = resolveCodexHomeOverlayAccountSegment({
-    homePath: input.sourceHomePath,
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-  });
-  if (!accountSegment) {
-    return false;
-  }
-  if (!input.explicitHomePath?.trim()) {
-    return true;
-  }
-  if (input.accountSourceHomeIsDedicated !== undefined) {
-    return !input.accountSourceHomeIsDedicated;
-  }
-  return path.resolve(input.sourceHomePath) === path.resolve(resolveBaseCodexHomePath(input.env));
-}
-
 /**
  * Returns the home directory that the codex app-server child process actually
- * writes under. This is the overlay home when Synara wraps Codex with the
- * dpcode-browser plugin disabled (the production default), otherwise the
- * caller-supplied or env-provided home.
+ * writes under. Synara keeps its generated config isolated from the user's
+ * source Codex home while linking shared state such as authentication.
  */
 export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {}): string {
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
-  if (!shouldDisableDpCodeBrowserPlugin(env)) {
-    if (input.shadowHomePath) {
-      return resolveBaseCodexHomePath(env, input.shadowHomePath);
-    }
-    if (
-      shouldUseDirectAccountOverlay({
-        env,
-        sourceHomePath: source,
-        explicitHomePath: input.homePath,
-        accountId: input.accountId,
-        accountSourceHomeIsDedicated: input.accountSourceHomeIsDedicated,
-      })
-    ) {
-      const directAccountSegment = resolveCodexHomeOverlayAccountSegment({
-        homePath: source,
-        ...(input.accountId ? { accountId: input.accountId } : {}),
-      });
-      const accountHome = directAccountSegment
-        ? resolveDpCodeCodexHomeOverlayPath(env, source, directAccountSegment)
-        : source;
-      if (path.resolve(source) !== path.resolve(accountHome)) {
-        return accountHome;
-      }
-    }
-    if (input.homePath?.trim()) {
-      return source;
-    }
-    return source;
-  }
-  const overlay = resolveDpCodeCodexHomeOverlayPath(
+  const overlay = resolveSynaraCodexHomeOverlayPath(
     env,
     source,
     resolveCodexHomeOverlayAccountSegment({
@@ -163,9 +103,8 @@ export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {})
  * allowlisting locally-generated image files: the source home and the overlay
  * home if they are distinct. Callers pre-`realpath`-resolve these as needed.
  *
- * The overlay candidate is included even when the plugin is currently
- * "enabled" (no overlay active) so that images Codex wrote under the overlay
- * during a previous session remain serveable until they are removed.
+ * The overlay candidate remains included so generated images from earlier
+ * sessions stay serveable until they are removed.
  */
 export function resolveCodexHomeAllowlistCandidates(
   input: CodexHomePathsInput = {},
@@ -180,9 +119,9 @@ export function resolveCodexHomeAllowlistCandidates(
     ...(input.accountId ? { accountId: input.accountId } : {}),
     ...(shadow ? { shadowHomePath: shadow } : {}),
   });
-  const overlay = resolveDpCodeCodexHomeOverlayPath(env, source);
+  const overlay = resolveSynaraCodexHomeOverlayPath(env, source);
   const accountOverlay = accountSegment
-    ? resolveDpCodeCodexHomeOverlayPath(env, source, accountSegment)
+    ? resolveSynaraCodexHomeOverlayPath(env, source, accountSegment)
     : undefined;
 
   // Account-scoped instances must not inherit the default source/overlay roots.
@@ -204,7 +143,6 @@ export function resolveCodexHomeAllowlistCandidates(
         ) === index,
     );
   }
-
   const sourceResolved = path.resolve(source);
   const overlayResolved = path.resolve(overlay);
   const candidates = sourceResolved === overlayResolved ? [source] : [source, overlay];

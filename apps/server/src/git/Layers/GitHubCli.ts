@@ -5,7 +5,7 @@ import {
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";

@@ -4,6 +4,8 @@ import {
   deriveAgentActivityTimelineState,
   formatAgentActivityEntryPreview,
   isAgentActivityWorkEntry,
+  isCodexActivityStatusWorkEntry,
+  isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
@@ -42,8 +44,8 @@ describe("deriveAgentActivityTimelineState", () => {
       "tool-1",
     ]);
     expect(state.timelineWorkEntries[0]).toMatchObject({
-      label: "Reasoning",
-      toolTitle: "Reasoning",
+      label: "Reasoning trace",
+      toolTitle: "Reasoning trace",
       preview: "2 updates - Verify diffToggleControl uses valid props",
     });
     expect(state.detailById.get("agent-reasoning:reasoning-1")?.entries).toHaveLength(2);
@@ -59,6 +61,92 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(formatAgentActivityEntryPreview(entry)).toBe(
       "Complete analysis of the floating panel issue",
     );
+  });
+
+  it("keeps canonical reasoning tool calls as separate timeline rows", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-item-1",
+        label: "Reasoning",
+        toolTitle: "Reasoning",
+        toolCallId: "provider-reasoning-1",
+        detail: "Inspect the protocol",
+      }),
+      workEntry({
+        id: "reasoning-item-2",
+        label: "Reasoning",
+        toolTitle: "Reasoning",
+        toolCallId: "provider-reasoning-2",
+        detail: "Update the adapter",
+      }),
+      workEntry({
+        id: "reasoning-item-3",
+        label: "Reasoning",
+        toolTitle: "Reasoning",
+        toolCallId: "provider-reasoning-3",
+        detail: "Verify the result",
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "reasoning-item-1",
+      "reasoning-item-2",
+      "reasoning-item-3",
+    ]);
+    expect(state.timelineWorkEntries.every((entry) => entry.tone === "tool")).toBe(true);
+  });
+
+  it("shows the latest readable Codex summary and omits empty placeholders", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-visible",
+        label: "Reasoning trace",
+        toolTitle: "Reasoning trace",
+        toolCallId: "provider-reasoning-visible",
+        detail:
+          "**Planning Codex threads inspection**\n\n<!-- -->\n\n**Refining the display logic**\n\n<!-- -->",
+      }),
+      workEntry({
+        id: "reasoning-empty",
+        label: "Reasoning trace",
+        toolTitle: "Reasoning trace",
+        toolCallId: "provider-reasoning-empty",
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries).toHaveLength(1);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      id: "reasoning-visible",
+      preview: "Refining the display logic",
+    });
+  });
+
+  it("recognizes reasoning trace and summary labels as reasoning activity", () => {
+    const trace = workEntry({
+      id: "reasoning-trace-1",
+      label: "Reasoning trace",
+      detail: "Reasoning trace Running Inspect the protocol",
+    });
+    const summary = workEntry({
+      id: "reasoning-summary-1",
+      label: "Reasoning summary",
+      detail: "Reasoning summary Update the adapter",
+    });
+
+    expect(isReasoningUpdateWorkEntry(trace)).toBe(true);
+    expect(isReasoningUpdateWorkEntry(summary)).toBe(true);
+    expect(
+      isCodexActivityStatusWorkEntry(
+        workEntry({
+          id: "command-execution-1",
+          label: "Ran command",
+          toolTitle: "Ran command",
+          itemType: "command_execution",
+        }),
+      ),
+    ).toBe(true);
+    expect(formatAgentActivityEntryPreview(trace)).toBe("Inspect the protocol");
+    expect(formatAgentActivityEntryPreview(summary)).toBe("Update the adapter");
   });
 
   it("keeps generic agent task rows openable without compacting them away", () => {

@@ -10,13 +10,13 @@ import type {
   ProviderKind,
   ThreadEnvironmentMode,
   ThreadId,
-} from "@t3tools/contracts";
-import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
+} from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModelSelection,
-} from "@t3tools/shared/providerInstances";
-import { isPendingThreadWorktree } from "@t3tools/shared/threadEnvironment";
+} from "@synara/shared/providerInstances";
+import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
 import type { ComposerThreadDraftState } from "../../composerDraftStore";
 import {
   canSessionAnswerPendingRequests,

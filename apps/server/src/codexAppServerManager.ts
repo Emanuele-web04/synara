@@ -1,6 +1,8 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import readline from "node:readline";
 
 import {
@@ -38,9 +40,9 @@ import {
   ProviderInteractionMode,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
-import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -49,7 +51,14 @@ import {
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
-import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  buildCodexProcessLaunchContext,
+  readCodexAuthTrackingFingerprint,
+  resolveCodexAuthTracking,
+  type CodexAuthTracking,
+  type CodexProcessEnvInput,
+} from "./codexProcessEnv.ts";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
@@ -117,6 +126,10 @@ interface CodexSessionContext {
   nextRequestId: number;
   stopping: boolean;
   codexOptions?: CodexDiscoveryOptions;
+  authTracking?: CodexAuthTracking;
+  // Compatibility fallback for older in-memory/test contexts.
+  authHomePath?: string;
+  authFingerprint?: string;
   discovery?: boolean;
   discoveryKey?: string;
 }
@@ -276,6 +289,26 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
     return true;
   }
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
+}
+
+function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
+  if (typeof value.method === "string") {
+    return true;
+  }
+  const hasId = Object.prototype.hasOwnProperty.call(value, "id");
+  return (
+    hasId &&
+    (Object.prototype.hasOwnProperty.call(value, "result") ||
+      Object.prototype.hasOwnProperty.call(value, "error"))
+  );
+}
+
+function logIgnoredCodexStdout(rawLine: string, reason: string): void {
+  log.warn("ignoring non-protocol codex app-server stdout", {
+    reason,
+    preview: normalizeCodexProcessLine(rawLine).slice(0, 160),
+    length: rawLine.length,
+  });
 }
 
 function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
@@ -792,6 +825,42 @@ function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefine
   return normalized ? JSON.stringify(codexDiscoveryOptionsCacheSafe(normalized)) : "__default__";
 }
 
+export function readCodexAuthFileFingerprint(codexHomePath: string | undefined): string {
+  if (!codexHomePath?.trim()) {
+    return "missing-home";
+  }
+  try {
+    return `sha256:${createHash("sha256")
+      .update(readFileSync(path.join(codexHomePath, "auth.json")))
+      .digest("hex")}`;
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    return code === "ENOENT" ? "missing" : "unreadable";
+  }
+}
+
+function codexProcessEnvInputForOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexProcessEnvInput {
+  return {
+    ...(options?.environment
+      ? { env: { ...process.env, ...options.environment } }
+      : {}),
+    ...(options?.homePath ? { homePath: options.homePath } : {}),
+    ...(options?.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options?.accountId ? { accountId: options.accountId } : {}),
+  };
+}
+
+function codexAuthFingerprintForOptions(options: CodexDiscoveryOptions | undefined): string {
+  return readCodexAuthTrackingFingerprint(
+    resolveCodexAuthTracking(codexProcessEnvInputForOptions(options)),
+  );
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -871,15 +940,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
       });
+      const { env: codexProcessEnv, authTracking } = buildCodexProcessLaunchContext({
+        ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+      });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-          ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
-          ...(codexAccountId ? { accountId: codexAccountId } : {}),
-        }),
+        env: codexProcessEnv,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -900,6 +970,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        authTracking,
+        authFingerprint: readCodexAuthTrackingFingerprint(authTracking),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
@@ -1507,15 +1579,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
       });
+      const { env: codexProcessEnv, authTracking } = buildCodexProcessLaunchContext({
+        ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+      });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-          ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
-          ...(codexAccountId ? { accountId: codexAccountId } : {}),
-        }),
+        env: codexProcessEnv,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1536,6 +1609,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        authTracking,
+        authFingerprint: readCodexAuthTrackingFingerprint(authTracking),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
@@ -1819,13 +1894,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   listSessions(): ProviderSession[] {
+    this.pruneStaleAuthSessions();
     return Array.from(this.sessions.values(), ({ session }) => ({
       ...session,
     }));
   }
 
   hasSession(threadId: ThreadId): boolean {
-    return this.sessions.has(threadId);
+    const context = this.sessions.get(threadId);
+    if (context && !this.isContextAuthCurrent(context)) {
+      this.stopSession(threadId);
+      return false;
+    }
+    return context !== undefined;
   }
 
   /**
@@ -1833,7 +1914,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
    * generated-image paths against the account home the session writes under.
    */
   getSessionCodexOptions(threadId: ThreadId): CodexDiscoveryOptions | undefined {
-    return this.sessions.get(threadId)?.codexOptions;
+    return this.hasSession(threadId) ? this.sessions.get(threadId)?.codexOptions : undefined;
   }
 
   stopAll(): void {
@@ -1852,6 +1933,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       cwd,
       threadId: input.threadId?.trim() || null,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: codexAuthFingerprintForOptions(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
@@ -1897,6 +1979,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: input.threadId?.trim() || null,
       forceRemoteSync: input.forceRemoteSync === true,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: codexAuthFingerprintForOptions(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
@@ -1934,6 +2017,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       marketplacePath,
       pluginName,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: codexAuthFingerprintForOptions(codexOptions),
     });
     const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
@@ -1973,6 +2057,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: threadId?.trim() || null,
       cwd: cwd?.trim() || null,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: codexAuthFingerprintForOptions(codexOptions),
     });
     const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
@@ -2027,6 +2112,27 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
+  private isContextAuthCurrent(context: CodexSessionContext): boolean {
+    if (context.authFingerprint === undefined) {
+      return true;
+    }
+    if (context.authTracking) {
+      return readCodexAuthTrackingFingerprint(context.authTracking) === context.authFingerprint;
+    }
+    if (!context.authHomePath) {
+      return true;
+    }
+    return readCodexAuthFileFingerprint(context.authHomePath) === context.authFingerprint;
+  }
+
+  private pruneStaleAuthSessions(): void {
+    for (const [threadId, context] of this.sessions) {
+      if (!this.isContextAuthCurrent(context)) {
+        this.stopSession(threadId);
+      }
+    }
+  }
+
   private requireSession(threadId: ThreadId): CodexSessionContext {
     const context = this.sessions.get(threadId);
     if (!context) {
@@ -2035,6 +2141,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     if (context.session.status === "closed") {
       throw new Error(`Session is closed for thread: ${threadId}`);
+    }
+    if (!this.isContextAuthCurrent(context)) {
+      this.stopSession(threadId);
+      throw new Error(
+        "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.",
+      );
     }
 
     return context;
@@ -2049,7 +2161,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const normalizedCwd = cwd?.trim() || undefined;
     const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
     const isCompatibleContext = (context: CodexSessionContext): boolean =>
-      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
+      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
+      this.isContextAuthCurrent(context);
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -2067,6 +2180,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
+        if (!this.isContextAuthCurrent(activeSession)) {
+          this.stopSession(activeSession.session.threadId);
+          continue;
+        }
         if (
           !activeSession.stopping &&
           !activeSession.child.killed &&
@@ -2079,6 +2196,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions);
     }
     const firstActive = this.sessions.values().next().value;
+    if (firstActive && !this.isContextAuthCurrent(firstActive)) {
+      this.stopSession(firstActive.session.threadId);
+      return this.getOrCreateDiscoverySession(process.cwd(), codexOptions);
+    }
     if (firstActive && isCompatibleContext(firstActive)) {
       return firstActive;
     }
@@ -2133,10 +2254,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
     const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(normalizedCodexOptions);
     const discoveryKey = JSON.stringify({
       cwd: normalizedCwd,
       account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
+      auth: authFingerprint,
     });
+    for (const [existingKey, context] of this.discoverySessions) {
+      if (!this.isContextAuthCurrent(context)) {
+        this.stopDiscoverySession(existingKey);
+      }
+    }
     const existing = this.discoverySessions.get(discoveryKey);
     if (existing && !existing.stopping && !existing.child.killed) {
       this.scheduleDiscoverySessionIdleStop(discoveryKey);
@@ -2157,21 +2285,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { environment: normalizedCodexOptions.environment }
         : {}),
     });
+    const { env: codexProcessEnv, authTracking } = buildCodexProcessLaunchContext(
+      codexProcessEnvInputForOptions(normalizedCodexOptions),
+    );
     const child = spawnCodexAppServer({
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv({
-        ...(normalizedCodexOptions?.environment
-          ? { env: { ...process.env, ...normalizedCodexOptions.environment } }
-          : {}),
-        ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
-        ...(normalizedCodexOptions?.shadowHomePath
-          ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
-          : {}),
-        ...(normalizedCodexOptions?.accountId
-          ? { accountId: normalizedCodexOptions.accountId }
-          : {}),
-      }),
+      env: codexProcessEnv,
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -2200,6 +2320,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
+      authTracking,
+      authFingerprint: readCodexAuthTrackingFingerprint(authTracking),
       ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       discovery: true,
       discoveryKey,
@@ -2347,20 +2469,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       parsed = JSON.parse(line);
     } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
+      // App-server stdout is JSONL, but Codex subprocesses and hooks can leak
+      // arbitrary output onto the same pipe, including fragments that begin
+      // like JSON-RPC. An unparseable line cannot be a usable protocol frame;
+      // ignore it and let any affected request fail through its normal timeout.
+      logIgnoredCodexStdout(line, "invalid JSON fragment");
       return;
     }
 
-    if (!parsed || typeof parsed !== "object") {
-      this.emitErrorEvent(
-        context,
-        "protocol/invalidMessage",
-        "Received non-object protocol message.",
-      );
+    const protocolEnvelope = asObject(parsed);
+    if (!protocolEnvelope || !isCodexProtocolEnvelope(protocolEnvelope)) {
+      // Command output can also be valid standalone JSON (`{}`, `[]`, strings,
+      // numbers). Only JSON-RPC-shaped envelopes belong to app-server itself.
+      logIgnoredCodexStdout(line, "valid JSON without a JSON-RPC envelope");
       return;
     }
 

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import type { ServerConfig, ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerConfig, ServerProviderStatus } from "@synara/contracts";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
 import { serverQueryKeys } from "../lib/serverReactQuery";

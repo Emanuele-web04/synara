@@ -4,23 +4,23 @@ import type {
   OrchestrationReadModel,
   ProjectKind,
   ThreadMarker,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
-} from "@t3tools/shared/threadWorkspace";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
-import { doThreadMarkerRangesOverlap } from "@t3tools/shared/threadMarkers";
+} from "@synara/shared/threadWorkspace";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
+import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
-} from "@t3tools/shared/conversationEdit";
+} from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

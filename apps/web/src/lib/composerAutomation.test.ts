@@ -3,7 +3,7 @@
 // Layer: Web lib test
 // Depends on: composerAutomation resolver and automation form helpers.
 
-import type { ModelSelection, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {

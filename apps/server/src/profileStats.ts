@@ -16,12 +16,12 @@ import type {
   ProviderKind,
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
-} from "@t3tools/contracts";
-import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
+} from "@synara/contracts";
+import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModel,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

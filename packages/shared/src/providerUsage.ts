@@ -5,7 +5,7 @@
 // read-only "sign in via CLI" hint used when a credential is missing or expired.
 // Layer: cross-cutting (no runtime deps beyond the ProviderKind type).
 
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 
 interface ProviderUsageMeta {
   /** Short human label, e.g. "Claude". */

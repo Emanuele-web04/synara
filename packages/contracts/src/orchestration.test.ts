@@ -219,7 +219,7 @@ it.effect("normalizes mixed legacy option payloads when decoding model selection
   }),
 );
 
-it.effect("decodes providerless instance-id model selections from newer T3 payloads", () =>
+  it.effect("decodes providerless instance-id model selections from newer Synara payloads", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeModelSelection({
       instanceId: "claude_work",
@@ -261,7 +261,7 @@ it.effect("infers OpenCode for providerless OpenCode model selections", () =>
   }),
 );
 
-it.effect("decodes providerless Codex account selections from newer T3 payloads", () =>
+  it.effect("decodes providerless Codex account selections from newer Synara payloads", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeModelSelection({
       instanceId: "codex_personal",

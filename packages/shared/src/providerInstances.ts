@@ -12,8 +12,8 @@ import type {
   ProviderKind,
   ProviderStartOptions,
   ServerSettings,
-} from "@t3tools/contracts";
-import { ProviderKind as ProviderKindSchema } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { ProviderKind as ProviderKindSchema } from "@synara/contracts";
 import { Schema } from "effect";
 
 export const BUILT_IN_PROVIDER_KINDS = [

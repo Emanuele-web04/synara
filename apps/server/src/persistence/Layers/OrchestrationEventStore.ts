@@ -11,7 +11,7 @@ import {
   ProjectId,
   type ServerSettings,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema, Stream } from "effect";

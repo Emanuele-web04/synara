@@ -6,7 +6,7 @@
 
 import nodePath from "node:path";
 
-import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@t3tools/contracts";
+import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
 import { decodeKeychainJson, readJsonFile, readKeychainPassword } from "../credentials";
 import { fetchJson, isAuthFailureStatus } from "../http";

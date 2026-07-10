@@ -16,18 +16,18 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
   ServerProviderUpdateState,
-} from "@t3tools/contracts";
-import { ProviderKind, ServerProviderUpdateError } from "@t3tools/contracts";
-import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
+} from "@synara/contracts";
+import { ProviderKind, ServerProviderUpdateError } from "@synara/contracts";
+import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import {
   deriveProviderInstances,
   deriveUnsupportedProviderInstances,
   providerStartOptionsFromInstance,
   type ResolvedProviderInstance,
   type UnsupportedProviderInstance,
-} from "@t3tools/shared/providerInstances";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/shared/providerInstances";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,

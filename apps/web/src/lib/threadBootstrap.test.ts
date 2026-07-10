@@ -1,4 +1,4 @@
-import { ProjectId, type ModelSelection, type ProviderKind, ThreadId } from "@t3tools/contracts";
+import { ProjectId, type ModelSelection, type ProviderKind, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { type ComposerThreadDraftState, type DraftThreadState } from "../composerDraftStore";
 import {

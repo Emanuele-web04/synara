@@ -22,7 +22,7 @@ import {
   type ProviderStartOptions,
   type ServerSettings,
   type ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
   inferLegacyProviderKindFromModelSelection,
@@ -30,7 +30,7 @@ import {
   type ResolvedProviderInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";

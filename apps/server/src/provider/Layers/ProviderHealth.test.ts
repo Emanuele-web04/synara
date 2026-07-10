@@ -1,18 +1,18 @@
 import { symlinkSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
   ServerProviderUpdateError,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
+import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { ProviderHealth } from "../Services/ProviderHealth";
@@ -187,19 +187,18 @@ function withTempCodexHome(configContent?: string) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-codex-" });
-    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-runtime-" });
+    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-test-codex-" });
+    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "synara-test-runtime-",
+    });
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        // Override every runtime-home var the overlay resolver consults (SYNARA_HOME wins over
-        // DPCODE_HOME/T3CODE_HOME) plus CODEX_HOME, so an ambient SYNARA_HOME can't shadow the
-        // temp dir and skew the resolved CODEX_HOME during this test.
+        // Override the runtime and source homes so ambient state cannot skew
+        // the resolved CODEX_HOME during this test.
         const overrides: Record<string, string> = {
           CODEX_HOME: tmpDir,
           SYNARA_HOME: runtimeDir,
-          DPCODE_HOME: runtimeDir,
-          T3CODE_HOME: runtimeDir,
         };
         const restore: Record<string, string | undefined> = {};
         for (const [key, value] of Object.entries(overrides)) {
@@ -917,13 +916,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           'model_provider = "portkey"\n',
         );
         const configuredHome = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-configured-codex-",
+          prefix: "synara-configured-codex-",
         });
         yield* fileSystem.writeFileString(
           path.join(configuredHome, "config.toml"),
           'model_provider = "openai"\n',
         );
-        expectedCodexHome = path.join(runtimeDir, DPCODE_CODEX_HOME_OVERLAY_DIR);
+        expectedCodexHome = path.join(runtimeDir, SYNARA_CODEX_HOME_OVERLAY_DIR);
 
         const status = yield* makeCheckCodexProviderStatus("codex", configuredHome);
         assert.strictEqual(status.status, "ready");
@@ -952,7 +951,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const path = yield* Path.Path;
         const { tmpDir } = yield* withTempCodexHome();
         const shadowHome = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-codex-shadow-",
+          prefix: "synara-codex-shadow-",
         });
         yield* fileSystem.writeFileString(path.join(tmpDir, "auth.json"), "{}");
         yield* Effect.sync(() =>
@@ -1411,6 +1410,50 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(env.HOME, "/tmp/synara-test-home/.claude-work");
       assert.strictEqual(env.SYNARA_TEST_INSTANCE, "claude-work");
     });
+
+    it.effect("isolates explicit Claude home probes from an inherited config directory", () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const previous = process.env.CLAUDE_CONFIG_DIR;
+          process.env.CLAUDE_CONFIG_DIR = "/tmp/default-claude-config";
+          return previous;
+        }),
+        () =>
+          makeCheckClaudeProviderStatus(
+            undefined,
+            "claude",
+            "/tmp/claude-home-work",
+          ).pipe(
+            Effect.tap((status) => Effect.sync(() => assert.strictEqual(status.status, "ready"))),
+            Effect.provide(
+              mockSpawnerLayer((args, _command, env) => {
+                assert.strictEqual(env?.HOME, "/tmp/claude-home-work");
+                assert.strictEqual(env?.CLAUDE_CONFIG_DIR, undefined);
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return { stdout: "1.0.0\n", stderr: "", code: 0 };
+                }
+                if (joined === "auth status") {
+                  return {
+                    stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          ),
+        (previous) =>
+          Effect.sync(() => {
+            if (previous === undefined) {
+              delete process.env.CLAUDE_CONFIG_DIR;
+            } else {
+              process.env.CLAUDE_CONFIG_DIR = previous;
+            }
+          }),
+      ),
+    );
 
     it.effect(
       "strips stale direct Claude credentials from health probes when local OAuth is usable",

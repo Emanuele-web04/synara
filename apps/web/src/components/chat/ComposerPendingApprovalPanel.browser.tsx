@@ -7,7 +7,7 @@ import {
   ApprovalRequestId,
   type ProviderApprovalDecision,
   type ProviderRequestKind,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { page } from "vitest/browser";
 import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

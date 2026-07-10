@@ -2,7 +2,7 @@
 
 ## Recap
 
-Add a GitHub Issues and Pull Requests panel to dpcode so users can browse, review,
+Add a GitHub Issues and Pull Requests panel to synara so users can browse, review,
 and tackle issues/PRs directly from the UI — without leaving the app. The coding
 agent can be assigned to fix an issue or address PR review feedback in-context.
 

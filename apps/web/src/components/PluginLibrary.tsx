@@ -8,8 +8,8 @@ import {
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+} from "@synara/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { IconType } from "react-icons";

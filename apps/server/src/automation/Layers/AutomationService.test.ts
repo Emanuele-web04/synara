@@ -18,7 +18,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   type ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

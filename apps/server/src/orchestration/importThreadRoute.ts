@@ -19,17 +19,17 @@ import {
   type ServerSettings,
   type ThreadHandoffImportedMessage,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
   type ResolvedProviderInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
-} from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadWorkspace";
 import type { FileSystem, Path } from "effect";
 import { Data, Effect, Option } from "effect";
 
@@ -87,7 +87,7 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
   const moduleUrl = pathToFileURL(
     createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
   ).href;
-  const scriptDir = await fsPromises.mkdtemp(nodePath.join(tmpdir(), "t3code-claude-import-"));
+  const scriptDir = await fsPromises.mkdtemp(nodePath.join(tmpdir(), "synara-claude-import-"));
   const scriptPath = nodePath.join(scriptDir, "claudeSessionQuery.mjs");
   try {
     await fsPromises.writeFile(scriptPath, CLAUDE_SESSION_QUERY_SCRIPT, "utf8");

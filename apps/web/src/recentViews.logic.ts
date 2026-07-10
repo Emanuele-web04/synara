@@ -3,12 +3,12 @@
 // Layer: UI state logic
 // Exports: recent view types plus MRU update, pruning, and display derivation helpers
 
-import type { ProjectId, ProviderKind, ThreadId } from "@t3tools/contracts";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import type {
   ResolvedTerminalVisualIdentity,
   TerminalIconKey,
-} from "@t3tools/shared/terminalThreads";
+} from "@synara/shared/terminalThreads";
 import type { Project, SidebarThreadSummary } from "./types";
 
 export const MAX_RECENT_VIEWS = 5;

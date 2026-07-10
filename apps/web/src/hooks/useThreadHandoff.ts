@@ -5,8 +5,8 @@
 
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
-import { type ProviderInstanceId, type ProviderKind } from "@t3tools/contracts";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+import { type ProviderInstanceId, type ProviderKind } from "@synara/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
@@ -60,7 +60,7 @@ export function useThreadHandoff() {
       }
       const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: targetProvider,
-        ...(targetProviderInstanceId ? { instanceId: targetProviderInstanceId } : {}),
+        instanceId: targetInstanceId,
         statuses: providerStatuses,
         refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       });

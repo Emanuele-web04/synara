@@ -11,7 +11,7 @@ import type {
   ProviderMentionReference,
   ProviderSkillReference,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   useCallback,
   type Dispatch,

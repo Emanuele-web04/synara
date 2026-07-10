@@ -12,7 +12,7 @@ import {
   ProviderInstanceEnvironmentVariableName,
   type ProviderInstanceEnvironment,
   type ProviderInstanceEnvironmentVariable,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";

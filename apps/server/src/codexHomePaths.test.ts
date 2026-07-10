@@ -11,20 +11,17 @@ import {
   resolveActiveCodexHomeWritePath,
   resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
-  resolveDpCodeCodexHomeOverlayPath,
-  shouldDisableDpCodeBrowserPlugin,
+  resolveSynaraCodexHomeOverlayPath,
 } from "./codexHomePaths.ts";
 
-describe("resolveBaseCodexHomePath", () => {
-  it("prefers the explicit home path over CODEX_HOME and the default", () => {
+describe("Codex home paths", () => {
+  it("resolves the source home using explicit, environment, then default precedence", () => {
     assert.equal(
       resolveBaseCodexHomePath({ CODEX_HOME: "/env/codex" }, "/explicit/codex"),
       "/explicit/codex",
     );
-  });
-
-  it("falls back to CODEX_HOME when no explicit home is supplied", () => {
     assert.equal(resolveBaseCodexHomePath({ CODEX_HOME: "/env/codex" }), "/env/codex");
+    assert.ok(resolveBaseCodexHomePath({}).endsWith(`${path.sep}.codex`));
   });
 
   it("falls back to ~/.codex when nothing is provided", () => {
@@ -40,35 +37,20 @@ describe("resolveBaseCodexHomePath", () => {
   });
 });
 
-describe("resolveDpCodeCodexHomeOverlayPath", () => {
+describe("resolveSynaraCodexHomeOverlayPath", () => {
   it("anchors the overlay under SYNARA_HOME when set", () => {
     assert.equal(
-      resolveDpCodeCodexHomeOverlayPath({ SYNARA_HOME: "/synara/runtime" }, "/users/me/.codex"),
+      resolveSynaraCodexHomeOverlayPath({ SYNARA_HOME: "/synara/runtime" }, "/users/me/.codex"),
       path.join("/synara/runtime", "codex-home-overlay"),
     );
   });
 
-  it("honours the legacy DPCODE_HOME variable", () => {
+  it("derives a default overlay beside the source home", () => {
     assert.equal(
-      resolveDpCodeCodexHomeOverlayPath({ DPCODE_HOME: "/dp/runtime" }, "/users/me/.codex"),
-      path.join("/dp/runtime", "codex-home-overlay"),
-    );
-  });
-
-  it("honours the legacy T3CODE_HOME variable", () => {
-    assert.equal(
-      resolveDpCodeCodexHomeOverlayPath({ T3CODE_HOME: "/t3/runtime" }, "/users/me/.codex"),
-      path.join("/t3/runtime", "codex-home-overlay"),
-    );
-  });
-
-  it("derives a default overlay sibling of the source home", () => {
-    assert.equal(
-      resolveDpCodeCodexHomeOverlayPath({}, "/users/me/.codex"),
+      resolveSynaraCodexHomeOverlayPath({}, "/users/me/.codex"),
       path.join("/users/me", ".synara", "runtime", "codex-home-overlay"),
     );
   });
-
   it("derives nested account overlays when given an account segment", () => {
     const segment = resolveCodexHomeOverlayAccountSegment({
       accountId: "work",
@@ -78,7 +60,7 @@ describe("resolveDpCodeCodexHomeOverlayPath", () => {
 
     assert.ok(segment?.startsWith("work-"));
     assert.equal(
-      resolveDpCodeCodexHomeOverlayPath(
+      resolveSynaraCodexHomeOverlayPath(
         { SYNARA_HOME: "/synara/runtime" },
         "/users/me/.codex",
         segment,
@@ -98,21 +80,8 @@ describe("resolveDpCodeCodexHomeOverlayPath", () => {
   });
 });
 
-describe("shouldDisableDpCodeBrowserPlugin", () => {
-  it("disables the plugin (overlay active) by default", () => {
-    assert.equal(shouldDisableDpCodeBrowserPlugin({}), true);
-  });
-
-  it("respects the explicit '0' opt-out", () => {
-    assert.equal(
-      shouldDisableDpCodeBrowserPlugin({ DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" }),
-      false,
-    );
-  });
-});
-
 describe("resolveActiveCodexHomeWritePath", () => {
-  it("returns the overlay home when the plugin is disabled (default)", () => {
+  it("uses the isolated overlay as Codex's write home", () => {
     assert.equal(
       resolveActiveCodexHomeWritePath({
         env: { SYNARA_HOME: "/synara/runtime" },
@@ -122,24 +91,20 @@ describe("resolveActiveCodexHomeWritePath", () => {
     );
   });
 
-  it("returns the source home when the plugin is explicitly enabled", () => {
-    assert.equal(
-      resolveActiveCodexHomeWritePath({
-        env: {
-          DPCODE_HOME: "/dp/runtime",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
-        },
+  it("allowlists source and overlay homes when distinct", () => {
+    assert.deepEqual(
+      resolveCodexHomeAllowlistCandidates({
+        env: { SYNARA_HOME: "/synara/runtime" },
         homePath: "/users/me/.codex",
       }),
-      "/users/me/.codex",
+      ["/users/me/.codex", path.join("/synara/runtime", "codex-home-overlay")],
     );
   });
 
-  it("keeps account-id-only homes isolated when the plugin is explicitly enabled", () => {
+  it("keeps account-id-only homes isolated", () => {
     const env = {
       CODEX_HOME: "/users/me/.codex",
       SYNARA_HOME: "/synara/runtime",
-      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
     };
     const segment = resolveCodexHomeOverlayAccountSegment({
       accountId: "codex_2",
@@ -152,11 +117,10 @@ describe("resolveActiveCodexHomeWritePath", () => {
     );
   });
 
-  it("keeps explicit shared homes isolated for non-default accounts when the plugin is enabled", () => {
+  it("keeps explicit shared homes isolated for non-default accounts", () => {
     const env = {
       CODEX_HOME: "/users/me/.codex",
       SYNARA_HOME: "/synara/runtime",
-      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
     };
     const segment = resolveCodexHomeOverlayAccountSegment({
       accountId: "codex_2",
@@ -173,18 +137,21 @@ describe("resolveActiveCodexHomeWritePath", () => {
     );
   });
 
-  it("keeps dedicated explicit account homes direct when the plugin is enabled", () => {
+  it("keeps dedicated explicit account homes in their account overlay", () => {
+    const segment = resolveCodexHomeOverlayAccountSegment({
+      accountId: "codex_2",
+      homePath: "/users/me/.codex-work",
+    });
     assert.equal(
       resolveActiveCodexHomeWritePath({
         env: {
           CODEX_HOME: "/users/me/.codex",
           SYNARA_HOME: "/synara/runtime",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
         homePath: "/users/me/.codex-work",
         accountId: "codex_2",
       }),
-      "/users/me/.codex-work",
+      path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
     );
   });
 });
@@ -203,13 +170,13 @@ describe("resolveCodexHomeAllowlistCandidates", () => {
 
   it("returns just the source when overlay equals source", () => {
     const candidates = resolveCodexHomeAllowlistCandidates({
-      env: { DPCODE_HOME: "/users/me" },
+      env: { SYNARA_HOME: "/users/me" },
       homePath: path.join("/users/me", "codex-home-overlay"),
     });
     assert.deepEqual(candidates, [path.join("/users/me", "codex-home-overlay")]);
   });
 
-  it("includes the shadow home for direct account writes", () => {
+  it("includes the shadow home for account-scoped writes", () => {
     const segment = resolveCodexHomeOverlayAccountSegment({
       homePath: "/users/me/.codex",
       shadowHomePath: "/users/me/.codex_work",

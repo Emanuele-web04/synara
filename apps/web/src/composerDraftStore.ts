@@ -27,7 +27,7 @@ import {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
@@ -36,12 +36,12 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
   resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModel,
   inferLegacyProviderKindFromModelSelection,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
@@ -494,7 +494,7 @@ export interface ComposerDraftStoreState {
     options?: DraftThreadMutationOptions,
   ) => void;
   /**
-   * Registers a standalone chat draft thread without claiming the project's
+   * Registers a standalone draft thread without claiming the project's
    * composer-draft mapping. Unlike setProjectDraftThreadId this never replaces
    * (and therefore never deletes) the mapped draft, so any number of standalone
    * drafts — e.g. kanban tasks — can coexist per project. Create-only: an
@@ -510,6 +510,8 @@ export interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      entryPoint?: ThreadPrimarySurface;
+      isTemporary?: boolean;
     },
   ) => void;
   setDraftThreadContext: (
@@ -1621,6 +1623,46 @@ function normalizeModelSelection(
                     ? modelOptions?.pi
                     : undefined;
   return makeModelSelection(provider, model, options, instanceId);
+}
+
+// ── Sticky selection sanitization ─────────────────────────────────────
+
+// The Claude context window must stay a per-thread choice: a 1M thread can grow far
+// beyond the normal 200k compaction point and consume usage limits much faster, so a
+// one-off pick must never silently become every future thread's sticky default.
+function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
+  if (inferLegacyProviderKindFromModelSelection(selection) !== "claudeAgent") {
+    return selection;
+  }
+  const options = selection.options;
+  if (!options) {
+    return selection;
+  }
+  const stickyOptions = options.filter((option) => option.id !== "contextWindow");
+  if (stickyOptions.length === options.length) {
+    return selection;
+  }
+  return stickyOptions.length > 0
+    ? { ...selection, options: stickyOptions }
+    : { instanceId: selection.instanceId, model: selection.model };
+}
+
+function sanitizeStickyModelSelectionMap(map: ModelSelectionByProviderInstance) {
+  let sanitized = map;
+  for (const [instanceId, selection] of Object.entries(map)) {
+    if (!selection) {
+      continue;
+    }
+    const stickySelection = stripNonStickyModelOptions(selection);
+    if (stickySelection === selection) {
+      continue;
+    }
+    if (sanitized === map) {
+      sanitized = { ...map };
+    }
+    sanitized[instanceId as ProviderInstanceId] = stickySelection;
+  }
+  return sanitized;
 }
 
 // ── Legacy sync helpers (used only during migration from v2 storage) ──
@@ -2944,7 +2986,7 @@ function normalizeCurrentPersistedComposerDraftStoreState(
     draftsByThreadId: normalizePersistedDraftsByThreadId(normalizedPersistedState.draftsByThreadId),
     draftThreadsByThreadId,
     projectDraftThreadIdByProjectId,
-    stickyModelSelectionByProvider,
+    stickyModelSelectionByProvider: sanitizeStickyModelSelectionMap(stickyModelSelectionByProvider),
     stickyActiveProvider,
   };
 }
@@ -3343,11 +3385,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             createdAt: options.createdAt ?? new Date().toISOString(),
             runtimeMode: options.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             interactionMode: options.interactionMode ?? DEFAULT_INTERACTION_MODE,
-            entryPoint: "chat",
+            entryPoint: options.entryPoint ?? "chat",
             branch: options.branch ?? null,
             worktreePath,
             lastKnownPr: null,
             envMode: options.envMode ?? (worktreePath ? "worktree" : "local"),
+            ...(options.isTemporary ? { isTemporary: true } : {}),
           };
           return {
             draftThreadsByThreadId: {
@@ -3609,7 +3652,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         });
       },
       setStickyModelSelection: (modelSelection) => {
-        const normalized = normalizeModelSelection(modelSelection);
+        const rawNormalized = normalizeModelSelection(modelSelection);
+        const normalized = rawNormalized ? stripNonStickyModelOptions(rawNormalized) : null;
         set((state) => {
           if (!normalized) {
             return state;
@@ -4051,11 +4095,13 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               return state;
             }
             if (providerOpts) {
-              nextStickyMap[selectionKey] = makeModelSelection(
-                normalizedProvider,
-                stickyBase.model,
-                providerOpts,
-                stickyBase.instanceId ?? options?.instanceId,
+              nextStickyMap[selectionKey] = stripNonStickyModelOptions(
+                makeModelSelection(
+                  normalizedProvider,
+                  stickyBase.model,
+                  providerOpts,
+                  stickyBase.instanceId ?? options?.instanceId,
+                ),
               );
             } else if (stickyBase.options) {
               nextStickyMap[selectionKey] = buildModelSelection(

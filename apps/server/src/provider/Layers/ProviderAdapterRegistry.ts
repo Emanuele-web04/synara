@@ -12,8 +12,8 @@ import type {
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderSessionStartInput,
-} from "@t3tools/contracts";
-import { deriveProviderInstances } from "@t3tools/shared/providerInstances";
+} from "@synara/contracts";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { Effect, Layer, Stream } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";

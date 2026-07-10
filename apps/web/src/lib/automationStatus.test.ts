@@ -1,4 +1,4 @@
-import type { AutomationSchedule } from "@t3tools/contracts";
+import type { AutomationSchedule } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

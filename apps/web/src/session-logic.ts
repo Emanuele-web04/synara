@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
@@ -9,15 +10,15 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   decodeSubagentAgentStates,
   extractSubagentIdentityHints,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
-} from "@t3tools/shared/subagents";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/shared/subagents";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
+import { pluralize } from "@synara/shared/text";
 import {
   deriveReadableToolTitle,
   isGenericToolTitle,
@@ -823,6 +824,8 @@ export function deriveWorkLogEntries(
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    // Server-side Studio output attribution is environment-panel data, not transcript work.
+    .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);

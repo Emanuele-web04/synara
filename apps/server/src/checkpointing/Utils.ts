@@ -6,15 +6,56 @@ import {
   type ProjectKind,
   type ThreadId,
   TurnId,
-} from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
-export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
+export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
+
+const MANAGED_CHECKPOINT_REF_PATTERN =
+  /^refs\/([A-Za-z0-9._-]+)\/checkpoints\/([A-Za-z0-9_-]+)\/(turn|message-start|turn-start|turn-live)\/([A-Za-z0-9_-]+)$/;
+
+export interface ManagedCheckpointRefParts {
+  readonly namespace: string;
+  readonly threadToken: string;
+  readonly kind: "turn" | "message-start" | "turn-start" | "turn-live";
+  readonly valueToken: string;
+  readonly familyPrefix: string;
+}
+
+export function parseManagedCheckpointRef(value: string): ManagedCheckpointRefParts | null {
+  const match = MANAGED_CHECKPOINT_REF_PATTERN.exec(value);
+  if (!match) return null;
+  const [, namespace, threadToken, kind, valueToken] = match;
+  if (!namespace || !threadToken || !kind || !valueToken) return null;
+  if (kind === "turn" && !/^\d+$/.test(valueToken)) return null;
+  return {
+    namespace,
+    threadToken,
+    kind: kind as ManagedCheckpointRefParts["kind"],
+    valueToken,
+    familyPrefix: `refs/${namespace}/checkpoints/${threadToken}`,
+  };
+}
+
+export function isManagedCheckpointRefForThread(value: string, threadId: ThreadId): boolean {
+  const parsed = parseManagedCheckpointRef(value);
+  return parsed?.threadToken === Encoding.encodeBase64Url(threadId);
+}
 
 export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn/${turnCount}`,
   );
+}
+
+export function checkpointRefForThreadTurnInManagedFamily(
+  managedRef: string,
+  threadId: ThreadId,
+  turnCount: number,
+): CheckpointRef | null {
+  const parsed = parseManagedCheckpointRef(managedRef);
+  if (parsed?.threadToken !== Encoding.encodeBase64Url(threadId)) return null;
+  return CheckpointRef.makeUnsafe(`${parsed.familyPrefix}/turn/${turnCount}`);
 }
 
 export function checkpointRefForThreadMessageStart(
@@ -29,6 +70,18 @@ export function checkpointRefForThreadMessageStart(
 export function checkpointRefForThreadTurnStart(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
+  );
+}
+
+export function checkpointRefForThreadTurnStartInManagedFamily(
+  managedRef: string,
+  threadId: ThreadId,
+  turnId: TurnId,
+): CheckpointRef | null {
+  const parsed = parseManagedCheckpointRef(managedRef);
+  if (parsed?.threadToken !== Encoding.encodeBase64Url(threadId)) return null;
+  return CheckpointRef.makeUnsafe(
+    `${parsed.familyPrefix}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
   );
 }
 

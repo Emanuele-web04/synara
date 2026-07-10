@@ -7,7 +7,7 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { SettingsIcon, UserIcon } from "~/lib/icons";

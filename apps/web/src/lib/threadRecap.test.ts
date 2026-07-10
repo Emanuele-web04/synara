@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { MessageId, ThreadId } from "@t3tools/contracts";
+import type { MessageId, ThreadId } from "@synara/contracts";
 import type { ChatMessage, Thread } from "~/types";
 import {
   DEFAULT_INITIAL_THREAD_RECAP_IDLE_MS,

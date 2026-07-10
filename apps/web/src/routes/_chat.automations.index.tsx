@@ -1,4 +1,4 @@
-import { type AutomationDefinition, type AutomationRun } from "@t3tools/contracts";
+import { type AutomationDefinition, type AutomationRun } from "@synara/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState, type ReactNode } from "react";
 

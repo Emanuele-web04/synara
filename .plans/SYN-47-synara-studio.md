@@ -168,7 +168,7 @@ compiling. Run the full verification gate **once** at the end (see §6).
 ### Phase 2 — Shared (`packages/shared`)
 
 - No required change: `resolveThreadWorkspaceCwd` only special-cases `"chat"`. Confirm
-  `@t3tools/shared/threadWorkspace` helpers (`isWorkspaceRootWithin`, `workspaceRootsEqual`) are exported for
+  `@synara/shared/threadWorkspace` helpers (`isWorkspaceRootWithin`, `workspaceRootsEqual`) are exported for
   reuse by the new web `studioProjects.ts` (they already are; used by `chatProjects.ts`).
 
 ### Phase 3 — Web state & helpers (`apps/web/src`)

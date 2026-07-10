@@ -73,6 +73,12 @@ export function buildClaudeProcessEnv(input?: {
   }
   if (resolvedHomePath) {
     Object.assign(env, claudeHomeEnvironment(resolvedHomePath));
+    // An inherited config directory takes precedence over HOME in Claude's
+    // credential lookup. Do not let the server account leak into an instance
+    // with an explicit home unless that instance deliberately configured it.
+    if (!input?.environment || !("CLAUDE_CONFIG_DIR" in input.environment)) {
+      delete env.CLAUDE_CONFIG_DIR;
+    }
   }
 
   // Credentials live in the selected instance home when one is configured;

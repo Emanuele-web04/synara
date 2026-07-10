@@ -3,12 +3,12 @@
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
 // Usage is fetched read-only from each CLI's stored credentials by the server.
 
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import {
   PROVIDER_USAGE_PROVIDERS,
   providerUsageDisplayName,
   providerUsageNeedsAuthDetail,
-} from "@t3tools/shared/providerUsage";
+} from "@synara/shared/providerUsage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 

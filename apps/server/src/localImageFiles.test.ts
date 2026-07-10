@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("resolveAllowedLocalPreviewFile", () => {
   it("allows images inside the current workspace", async () => {
-    const workspace = makeTempDir("dpcode-image-workspace-");
+    const workspace = makeTempDir("synara-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const imagePath = path.join(workspace, "preview.png");
     writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -38,7 +38,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("allows images inside Codex generated_images without a cwd", async () => {
-    const codexHome = makeTempDir("dpcode-codex-home-");
+    const codexHome = makeTempDir("synara-codex-home-");
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
@@ -94,7 +94,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
 
   it("allows images written to the SYNARA_HOME codex-home-overlay generated_images root", async () => {
     // Codex app-server is launched with CODEX_HOME pointing at a Synara overlay
-    // directory (see resolveDpCodeCodexHomeOverlayPath). Generated images therefore
+    // directory (see resolveSynaraCodexHomeOverlayPath). Generated images therefore
     // live under <SYNARA_HOME>/codex-home-overlay/generated_images/<thread>/<call>.png,
     // which sits outside both the user's `~/.codex` source home and any workspace
     // root. The allowlist must still serve them.
@@ -211,7 +211,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
             homePath: sourceHome,
             shadowHomePath: shadowHome,
             accountId: "work",
-            environment: { DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" },
+            environment: {},
           },
         ],
       });
@@ -228,7 +228,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("allows PDFs inside the current workspace", async () => {
-    const workspace = makeTempDir("dpcode-pdf-workspace-");
+    const workspace = makeTempDir("synara-pdf-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const pdfPath = path.join(workspace, "docs", "spec.pdf");
     mkdirSync(path.dirname(pdfPath), { recursive: true });
@@ -272,7 +272,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   it("rejects PDFs outside the workspace even under the temp-dir image roots", async () => {
     // Temp/generated-image roots exist for agent-produced images in chat
     // markdown; documents must only ever be served from the workspace.
-    const tempDir = makeTempDir("dpcode-pdf-outside-");
+    const tempDir = makeTempDir("synara-pdf-outside-");
     const pdfPath = path.join(tempDir, "leak.pdf");
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
 
@@ -285,7 +285,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("still allows images under the temp-dir roots without a workspace", async () => {
-    const tempDir = makeTempDir("dpcode-image-tmp-root-");
+    const tempDir = makeTempDir("synara-image-tmp-root-");
     const imagePath = path.join(tempDir, "clip.png");
     writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 

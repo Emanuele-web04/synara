@@ -7,7 +7,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
   type ProviderInstanceId as ProviderInstanceIdType,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 import {

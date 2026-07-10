@@ -14,8 +14,8 @@ import type {
   RuntimeMode,
   ServerProviderStatus,
   ThreadId,
-} from "@t3tools/contracts";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+} from "@synara/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 

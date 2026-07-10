@@ -3,7 +3,7 @@
 // Layer: Provider adapter utility tests
 // Depends on: promptAttachments helper and shared chat attachment contracts.
 
-import { MessageId, type ChatAttachment } from "@t3tools/contracts";
+import { MessageId, type ChatAttachment } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { filterProviderPromptImageAttachments } from "./promptAttachments.ts";

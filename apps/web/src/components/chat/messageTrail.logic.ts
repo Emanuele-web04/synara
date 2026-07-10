@@ -4,7 +4,7 @@
 // Layer: Chat transcript shell (presentation-adjacent logic, unit-tested)
 // Depends on: timeline entry shape only — no React, no DOM.
 
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId } from "@synara/contracts";
 import { type TimelineEntry } from "../../session-logic";
 
 /** One tick on the navigation trail — a single message the user sent. */

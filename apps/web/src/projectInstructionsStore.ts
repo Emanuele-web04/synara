@@ -3,8 +3,8 @@
 // Layer: Web UI state store
 // Exports: useProjectInstructionsStore, mergeProjectInstructionsIntoThreadNotes
 
-import type { ProjectId } from "@t3tools/contracts";
-import { clampThreadNotes } from "@t3tools/shared/pinnedMessages";
+import type { ProjectId } from "@synara/contracts";
+import { clampThreadNotes } from "@synara/shared/pinnedMessages";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 

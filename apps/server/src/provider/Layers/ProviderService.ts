@@ -32,14 +32,14 @@ import {
   ProviderKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   mergeProviderStartOptions,
   providerStartOptionsFromInstance,
   type ResolvedProviderInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -65,7 +65,7 @@ export interface ProviderServiceLiveOptions {
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
 const configuredProviderRuntimeIdleStopMs =
   process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS ??
-  process.env.DPCODE_PROVIDER_RUNTIME_IDLE_STOP_MS;
+  process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
@@ -471,6 +471,7 @@ function runtimeStatusForEvent(
 function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean {
   return (
     event.type === "thread.started" ||
+    event.type === "model.rerouted" ||
     (event.type === "thread.state.changed" &&
       event.payload.state === "compacted" &&
       event.turnId === undefined) ||
@@ -989,6 +990,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         case "thread.started":
         case "thread.state.changed":
         case "turn.started":
+        case "model.rerouted":
         case "turn.completed":
         case "turn.aborted":
         case "session.exited":

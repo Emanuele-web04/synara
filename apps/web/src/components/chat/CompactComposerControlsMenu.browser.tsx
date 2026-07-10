@@ -1,6 +1,6 @@
-import { ModelSelection, ThreadId } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+import { ModelSelection, ThreadId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import "../../index.css";
 
 import { page } from "vitest/browser";

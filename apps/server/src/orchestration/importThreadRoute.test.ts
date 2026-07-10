@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { DEFAULT_SERVER_SETTINGS, type ProviderStartOptions } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderStartOptions } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

@@ -3,7 +3,7 @@
 //          the instance-id shape and provider_instance_id is backfilled.
 // Layer: Persistence migration test
 
-import { ModelSelection } from "@t3tools/contracts";
+import { ModelSelection } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -20,7 +20,7 @@ layer("052_ProviderSessionRuntimeInstanceId", (it) => {
       const sql = yield* SqlClient.SqlClient;
       const now = "2026-07-02T20:00:00.000Z";
 
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 53 });
 
       yield* sql`
         INSERT INTO provider_session_runtime (

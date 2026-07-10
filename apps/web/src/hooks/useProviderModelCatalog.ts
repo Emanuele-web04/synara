@@ -10,7 +10,7 @@ import type {
   ProviderKind,
   ProviderListModelsResult,
   ProviderModelDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 

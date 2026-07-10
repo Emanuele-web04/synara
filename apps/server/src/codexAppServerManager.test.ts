@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,15 +9,18 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
-  disableDpCodeBrowserPluginInCodexConfig,
+  buildCodexProcessLaunchContext,
+  disableCodexConfigSections,
+  readCodexAuthTrackingFingerprint,
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
@@ -27,6 +31,7 @@ import {
   classifyCodexStderrLine,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
+  readCodexAuthFileFingerprint,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
@@ -364,7 +369,7 @@ describe("classifyCodexStderrLine", () => {
 
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -387,7 +392,6 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
         homePath: tempDir,
         platform: "darwin",
@@ -399,7 +403,7 @@ describe("buildCodexProcessEnv", () => {
         "SSH_AUTH_SOCK",
         "MY_COMPANY_PROXY_KEY",
       ]);
-      expect(env.CODEX_HOME).toBe(tempDir);
+      expect(env.CODEX_HOME).toContain("codex-home-overlay");
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
@@ -416,7 +420,6 @@ describe("buildCodexProcessEnv", () => {
         PATH: "/usr/bin",
         CODEX_HOME: "/tmp/.codex",
         AZURE_OPENAI_API_KEY: "existing-secret",
-        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
       readEnvironment,
@@ -431,7 +434,6 @@ describe("buildCodexProcessEnv", () => {
       env: {
         SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
-        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
     });
@@ -444,15 +446,15 @@ describe("buildCodexProcessEnv", () => {
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
-        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/t3.sock" },
+        env: { SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock" },
         platform: "darwin",
       }),
-    ).toBe("/tmp/codex-browser-use/t3.sock");
+    ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
-  it("disables the local dpcode-browser plugin in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+  it("applies durable section suppressions inside Synara's Codex overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -460,9 +462,20 @@ describe("buildCodexProcessEnv", () => {
           '[plugins."github@openai-curated"]',
           "enabled = true",
           "",
-          '[plugins."dpcode-browser@local"]',
+          '[plugins."historical-plugin@local"]',
           "enabled = true",
         ].join("\n"),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
         "utf8",
       );
 
@@ -478,7 +491,86 @@ describe("buildCodexProcessEnv", () => {
         throw new Error("Expected CODEX_HOME to be set.");
       }
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
-        '[plugins."dpcode-browser@local"]\nenabled = false',
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = true',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("seeds markerless suppressions for conflicting local browser plugins", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const conflictingHeader = '[plugins."bridge-browser@local"]';
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [conflictingHeader, "enabled = true", "", '[plugins."other@local"]', "enabled = true"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(`${conflictingHeader}\nenabled = false`);
+      expect(overlayConfig).toContain('[plugins."other@local"]\nenabled = true');
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        `${conflictingHeader}\nenabled = true`,
+      );
+      const suppressionMarker = JSON.parse(
+        readFileSync(path.join(overlayHome, "synara-config-suppressions-v1.json"), "utf8"),
+      ) as { sectionHeaders?: string[] };
+      expect(suppressionMarker.sectionHeaders).toContain(conflictingHeader);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a recorded suppression after its plugin disappears from source config", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
+        "utf8",
+      );
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).not.toContain(
+        "historical-plugin@local",
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -487,8 +579,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale real files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -515,8 +607,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale auth.json files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceAuthPath = path.join(tempDir, "auth.json");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -544,13 +636,17 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("uses an account-scoped overlay with private files from the Codex shadow home", () => {
-    const sharedHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-shared-"));
-    const shadowHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-shadow-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const sharedHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shared-"));
+    const shadowHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shadow-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sharedSessionsDir = path.join(sharedHome, "sessions");
       mkdirSync(sharedSessionsDir, { recursive: true });
-      writeFileSync(path.join(sharedHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(
+        path.join(sharedHome, "config.toml"),
+        'model = "gpt-5.5"\ncli_auth_credentials_store = "file"\n',
+        "utf8",
+      );
       writeFileSync(path.join(sharedHome, "auth.json"), '{"source":"shared"}', "utf8");
       writeFileSync(path.join(sharedHome, "models_cache.json"), '{"models":["shared"]}', "utf8");
       writeFileSync(path.join(shadowHome, "auth.json"), '{"source":"shadow"}', "utf8");
@@ -570,7 +666,7 @@ describe("buildCodexProcessEnv", () => {
         throw new Error("Expected CODEX_HOME to be set.");
       }
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
-        '[plugins."dpcode-browser@local"]\nenabled = false',
+        'cli_auth_credentials_store = "file"',
       );
       expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(sharedSessionsDir);
@@ -589,8 +685,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("links configured account private auth files into account overlays without a shadow home", () => {
-    const accountHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-account-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const accountHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-account-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const accountSessionsDir = path.join(accountHome, "sessions");
       mkdirSync(accountSessionsDir, { recursive: true });
@@ -626,8 +722,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("preserves real generated image directories in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
       const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");
@@ -655,9 +751,14 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("adds a disabled dpcode-browser plugin section when Codex config does not contain one", () => {
-    expect(disableDpCodeBrowserPluginInCodexConfig('model = "gpt-5.5"')).toContain(
-      '[plugins."dpcode-browser@local"]\nenabled = false',
+  it("disables only explicitly recorded plugin sections", () => {
+    expect(
+      disableCodexConfigSections(
+        '[plugins."historical-plugin@local"]\nenabled = true\n\n[plugins."other@local"]\nenabled = true',
+        ['[plugins."historical-plugin@local"]'],
+      ),
+    ).toBe(
+      '[plugins."historical-plugin@local"]\nenabled = false\n\n[plugins."other@local"]\nenabled = true',
     );
   });
 });
@@ -674,6 +775,48 @@ describe("handleStdoutLine", () => {
       context,
       "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)",
     );
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores human-readable diagnostics leaked onto app-server stdout", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["Reasoning trace", "Reasoning summary", "Command execution"]) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores multiline and standalone JSON leaked from command output", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["{", "[", '{"scripts": {', "{}", "[]", '{"name":"synara"}']) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed JSON-looking fragments without poisoning the session", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(context, '{"method":"item/started"');
 
     expect(emitEvent).not.toHaveBeenCalled();
   });
@@ -798,6 +941,253 @@ describe("startSession", () => {
   it("uses an isolated scratch workspace path when no cwd is provided", () => {
     const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"));
     expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
+  });
+
+  it("evicts a live app-server session when auth.json changes on disk", () => {
+    const authHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-fingerprint-"));
+    const authPath = path.join(authHome, "auth.json");
+    writeFileSync(authPath, '{"account":"first"}', "utf8");
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-refresh");
+    const kill = vi.fn();
+    const close = vi.fn();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authHomePath: authHome,
+      authFingerprint: readCodexAuthFileFingerprint(authHome),
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    writeFileSync(authPath, '{"account":"second"}', "utf8");
+
+    expect(manager.listSessions()).toEqual([]);
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    rmSync(authHome, { recursive: true, force: true });
+  });
+
+  it("evicts a live session when copied overlay auth diverges from its source", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-copy-source-"));
+    const sourceHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(sourceHome, { recursive: true });
+    writeFileSync(path.join(sourceHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const sourceAuthPath = path.join(sourceHome, "auth.json");
+    writeFileSync(sourceAuthPath, '{"account":"first"}', "utf8");
+    const launch = buildCodexProcessLaunchContext({
+      env: { HOME: root, SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+      platform: "win32",
+      overlayEntryLinker: {
+        symlink: () => {
+          throw new Error("symlinks unavailable");
+        },
+        copyFile: copyFileSync,
+      },
+    });
+    const overlayHome = launch.env.CODEX_HOME;
+    expect(overlayHome).toBeTruthy();
+    if (!overlayHome) throw new Error("Expected managed Codex home");
+    const overlayAuthPath = path.join(overlayHome, "auth.json");
+    expect(lstatSync(overlayAuthPath).isFile()).toBe(true);
+
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-copy-refresh");
+    const kill = vi.fn();
+    const close = vi.fn();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authTracking: launch.authTracking,
+      authFingerprint: readCodexAuthTrackingFingerprint(launch.authTracking),
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+
+    try {
+      writeFileSync(sourceAuthPath, '{"account":"second"}', "utf8");
+      expect(manager.listSessions()).toEqual([]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe('{"account":"first"}');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("evicts a live session when authoritative auth is deleted after a fallback copy", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-copy-logout-"));
+    const sourceHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(sourceHome, { recursive: true });
+    writeFileSync(path.join(sourceHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const sourceAuthPath = path.join(sourceHome, "auth.json");
+    writeFileSync(sourceAuthPath, '{"account":"first"}', "utf8");
+    const launch = buildCodexProcessLaunchContext({
+      env: { HOME: root, SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+      platform: "win32",
+      overlayEntryLinker: {
+        symlink: () => {
+          throw new Error("symlinks unavailable");
+        },
+        copyFile: copyFileSync,
+      },
+    });
+    const overlayHome = launch.env.CODEX_HOME;
+    expect(overlayHome).toBeTruthy();
+    if (!overlayHome) throw new Error("Expected managed Codex home");
+    const overlayAuthPath = path.join(overlayHome, "auth.json");
+    expect(lstatSync(overlayAuthPath).isFile()).toBe(true);
+
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-copy-logout");
+    const kill = vi.fn();
+    const close = vi.fn();
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authTracking: launch.authTracking,
+      authFingerprint: readCodexAuthTrackingFingerprint(launch.authTracking),
+    });
+
+    try {
+      unlinkSync(sourceAuthPath);
+      expect(manager.listSessions()).toEqual([]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe('{"account":"first"}');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("evicts file-backed sessions and rejects refreshes after config switches to keyring", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-store-switch-"));
+    const sourceHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(sourceHome, { recursive: true });
+    const configPath = path.join(sourceHome, "config.toml");
+    writeFileSync(configPath, 'cli_auth_credentials_store = "file"\n', "utf8");
+    writeFileSync(path.join(sourceHome, "auth.json"), '{"account":"first"}', "utf8");
+    const launch = buildCodexProcessLaunchContext({
+      env: { HOME: root, SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+      platform: "win32",
+    });
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-store-switch");
+    const kill = vi.fn();
+    const close = vi.fn();
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authTracking: launch.authTracking,
+      authFingerprint: readCodexAuthTrackingFingerprint(launch.authTracking),
+    });
+
+    try {
+      writeFileSync(configPath, 'cli_auth_credentials_store = "keyring"\n', "utf8");
+      expect(manager.listSessions()).toEqual([]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      await expect(
+        manager.listModels({
+          cwd: "/repo",
+          codexOptions: {
+            homePath: sourceHome,
+            environment: { HOME: root, SYNARA_HOME: runtimeHome },
+          },
+        }),
+      ).rejects.toThrow(/require file-backed Codex auth/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
@@ -1232,6 +1622,100 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("invalidates discovery on source auth changes and clears copied auth after logout", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-discovery-auth-"));
+    const homePath = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(homePath, { recursive: true });
+    writeFileSync(path.join(homePath, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+    const authPath = path.join(homePath, "auth.json");
+    writeFileSync(authPath, '{"account":"first"}', "utf8");
+    const launch = buildCodexProcessLaunchContext({
+      env: { ...process.env, SYNARA_HOME: runtimeHome },
+      homePath,
+      platform: "win32",
+      overlayEntryLinker: {
+        symlink: () => {
+          throw new Error("symlinks unavailable");
+        },
+        copyFile: copyFileSync,
+      },
+    });
+    const overlayHome = launch.env.CODEX_HOME;
+    expect(overlayHome).toBeTruthy();
+    if (!overlayHome) throw new Error("Expected managed Codex home");
+    const overlayAuthPath = path.join(overlayHome, "auth.json");
+    expect(lstatSync(overlayAuthPath).isFile()).toBe(true);
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: () => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({ result: { items: [] } });
+    const input = {
+      cwd: "/repo",
+      codexOptions: {
+        homePath,
+        environment: { SYNARA_HOME: runtimeHome },
+      },
+    } as const;
+
+    try {
+      await manager.listModels(input);
+      await manager.listModels(input);
+      expect(sendRequest).toHaveBeenCalledTimes(1);
+
+      writeFileSync(authPath, '{"account":"second"}', "utf8");
+      await manager.listModels(input);
+      expect(sendRequest).toHaveBeenCalledTimes(2);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe('{"account":"first"}');
+
+      unlinkSync(authPath);
+      await manager.listModels(input);
+      expect(sendRequest).toHaveBeenCalledTimes(3);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe('{"account":"first"}');
+
+      buildCodexProcessEnv({
+        env: { ...process.env, SYNARA_HOME: runtimeHome },
+        homePath,
+        platform: "win32",
+        overlayEntryLinker: {
+          symlink: () => {
+            throw new Error("symlinks unavailable");
+          },
+          copyFile: copyFileSync,
+        },
+      });
+      expect(existsSync(overlayAuthPath)).toBe(false);
+    } finally {
+      manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes model/list fast mode metadata from runtime discovery", async () => {
     const manager = new CodexAppServerManager();
     const context = {

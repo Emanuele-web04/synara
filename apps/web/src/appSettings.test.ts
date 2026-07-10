@@ -5,8 +5,8 @@
 
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
-import { codexAccountInstanceId } from "@t3tools/shared/providerInstances";
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@synara/contracts";
+import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 
 import {
   AppSettingsSchema,
@@ -1399,7 +1399,7 @@ describe("resolveSelectableProviderInstanceId", () => {
     );
   });
 
-  it("falls back from a deleted or disabled custom instance to the provider default", () => {
+  it("preserves deleted or disabled explicit instances so callers fail closed", () => {
     const settings = {
       codexAccounts: [],
       codexHomePath: "",
@@ -1414,11 +1414,33 @@ describe("resolveSelectableProviderInstanceId", () => {
     } as const;
 
     expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_work")).toBe(
-      "claudeAgent",
+      "claude_work",
     );
     expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_deleted")).toBe(
-      "claudeAgent",
+      "claude_deleted",
     );
+  });
+
+  it("does not substitute an enabled same-driver account for a disabled default", () => {
+    const settings = {
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          enabled: false,
+          config: {},
+        },
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+      selectedCodexAccountId: "default",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent")).toBe("claudeAgent");
   });
 });
 

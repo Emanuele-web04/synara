@@ -89,13 +89,33 @@ describe("claudeProcessEnv", () => {
 
   it("overlays the instance home and looks up credentials there", () => {
     const result = buildClaudeProcessEnv({
-      env: { HOME: "/home/default", ANTHROPIC_API_KEY: "stale-key" },
+      env: {
+        HOME: "/home/default",
+        CLAUDE_CONFIG_DIR: "/home/default/.claude",
+        ANTHROPIC_API_KEY: "stale-key",
+      },
       homePath: "/home/work-account",
       hasClaudeCliCredentials: true,
     });
 
     assert.equal(result.HOME, "/home/work-account");
+    assert.equal(result.CLAUDE_CONFIG_DIR, undefined);
     assert.equal(result.ANTHROPIC_API_KEY, undefined);
+  });
+
+  it("keeps an instance-configured Claude config directory with an explicit home", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        HOME: "/home/default",
+        CLAUDE_CONFIG_DIR: "/home/default/.claude",
+      },
+      homePath: "/home/work-account",
+      environment: { CLAUDE_CONFIG_DIR: "/home/work-account/config" },
+      hasClaudeCliCredentials: true,
+    });
+
+    assert.equal(result.HOME, "/home/work-account");
+    assert.equal(result.CLAUDE_CONFIG_DIR, "/home/work-account/config");
   });
 
   it("expands tilde instance homes before setting HOME and checking credentials", () => {

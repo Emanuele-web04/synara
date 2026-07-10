@@ -3,7 +3,7 @@ import {
   geminiModelOptionsFromEffortValue,
   humanizeModelSlug,
   normalizeModelSlug,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import type {
   ClaudeModelOptions,
   ClaudeModelSelection,
@@ -25,7 +25,7 @@ import type {
   ProviderKind,
   ProviderModelOptions,
   ProviderOptionSelections,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
 

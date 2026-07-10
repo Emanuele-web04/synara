@@ -1,5 +1,5 @@
 import type { SessionMessage as ClaudeSessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { MessageId, type ThreadHandoffImportedMessage, type ThreadId } from "@t3tools/contracts";
+import { MessageId, type ThreadHandoffImportedMessage, type ThreadId } from "@synara/contracts";
 
 function readTranscriptTextParts(value: unknown): ReadonlyArray<string> {
   if (!Array.isArray(value)) return [];

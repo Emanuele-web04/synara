@@ -16,7 +16,7 @@ layer("054_ProfileStatsDeletedTurnsProviderInstance", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 53 });
+      yield* runMigrations({ toMigrationInclusive: 54 });
       yield* sql`
         INSERT INTO profile_stats_deleted_turns (
           thread_id,

@@ -28,7 +28,7 @@ const tableIndexNames = (sql: SqlClient.SqlClient, tableName: string) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("reconcileMigrationLineage", (it) => {
-  // The SYN-99 failure shape: a legacy ~/.t3 import whose tracker high-water
+  // An imported database whose tracker high-water
   // mark is at or beyond Synara's latest migration ID. The migrator's max-ID
   // gate then skips every Synara migration — including the #032 self-heal —
   // and startup crashes on the missing env_mode column.
@@ -36,19 +36,19 @@ layer("reconcileMigrationLineage", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Bring the schema to where T3 Code and Synara last agreed.
+      // Bring the schema to the last shared migration.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
-      // Record foreign T3 Code migrations 17 through past Synara's latest ID.
+      // Record a foreign lineage from 17 through past Synara's latest ID.
       const latestSynaraId = Math.max(...migrationEntries.map(([id]) => id));
       for (let id = 17; id <= latestSynaraId + 3; id++) {
         yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (${id}, ${`T3CodeMigration${id}`})
+          VALUES (${id}, ${`ForeignMigration${id}`})
         `;
       }
 
-      // T3 Code's own later migrations added some of the same columns, so the
+      // The foreign lineage added some of the same columns, so the
       // re-run must tolerate columns that already exist.
       yield* sql`ALTER TABLE projection_threads ADD COLUMN archived_at TEXT`;
 
@@ -86,6 +86,27 @@ layer("reconcileMigrationLineage", (it) => {
       assert.deepStrictEqual(
         rows.map((row) => [row.migration_id, row.name]),
         migrationEntries.map(([id, name]) => [id, name]),
+      );
+    }),
+  );
+
+  it.effect("canonicalizes migration 32 when the preceding lineage is exact", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations();
+      yield* sql`
+        UPDATE effect_sql_migrations
+        SET name = 'PreviousMigration32Name'
+        WHERE migration_id = 32
+      `;
+
+      const executed = yield* runMigrations();
+      assert.lengthOf(executed, 0);
+      const rows = yield* trackerRows(sql);
+      assert.strictEqual(
+        rows.find((row) => row.migration_id === 32)?.name,
+        "ReconcileImportedSchemaLineage",
       );
     }),
   );
@@ -254,10 +275,10 @@ layer("reconcileMigrationLineage", (it) => {
           )
       `;
 
-      const executed = yield* runMigrations({ toMigrationInclusive: 53 });
+      const executed = yield* runMigrations({ toMigrationInclusive: 54 });
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [49, 50, 51, 52, 53],
+        [49, 50, 51, 52, 53, 54],
       );
 
       const projectionSessionColumns = yield* tableColumnNames(sql, "projection_thread_sessions");

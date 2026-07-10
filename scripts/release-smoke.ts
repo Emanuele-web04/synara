@@ -9,7 +9,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  SYNARA_DESKTOP_UPDATE_CHANNEL,
+  SYNARA_PRODUCTION_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
+
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+import {
+  readReleaseUpdatePolicyConfig,
+  resolveReleaseUpdatePolicy,
+} from "./lib/release-update-policy.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -87,6 +96,76 @@ function writeJsonFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function verifyCanonicalIdentity(): void {
+  const serverPackage = JSON.parse(
+    readFileSync(resolve(repoRoot, "apps/server/package.json"), "utf8"),
+  ) as { name?: string; bin?: Record<string, string> };
+  if (serverPackage.name !== "@synara/cli") {
+    throw new Error(`Expected CLI package @synara/cli, got ${serverPackage.name ?? "<missing>"}.`);
+  }
+  if (
+    Object.keys(serverPackage.bin ?? {}).length !== 1 ||
+    serverPackage.bin?.synara !== "./dist/index.mjs"
+  ) {
+    throw new Error("Expected the CLI to expose only the synara binary.");
+  }
+  if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
+    throw new Error(`Unexpected production bundle ID: ${SYNARA_PRODUCTION_BUNDLE_ID}.`);
+  }
+  if (SYNARA_DESKTOP_UPDATE_CHANNEL !== "synara") {
+    throw new Error(`Unexpected desktop update channel: ${SYNARA_DESKTOP_UPDATE_CHANNEL}.`);
+  }
+
+  const releasePolicy = readReleaseUpdatePolicyConfig(repoRoot);
+  const resolvedPolicy = resolveReleaseUpdatePolicy("9.9.9-smoke.0", releasePolicy);
+  if (
+    resolvedPolicy.lane !== "clean" ||
+    resolvedPolicy.makeLatest ||
+    resolvedPolicy.mirrorToStableChannel
+  ) {
+    throw new Error("Expected clean Synara releases to preserve the pinned compatibility feed.");
+  }
+}
+
+function verifyReleaseWorkflowSafety(): void {
+  const workflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+  assertContains(
+    workflow,
+    "publish_release:\n        description:",
+    "Expected a manual publication opt-in input.",
+  );
+  assertContains(
+    workflow,
+    "default: false\n        type: boolean",
+    "Expected manual release runs to default to build-only mode.",
+  );
+  assertContains(
+    workflow,
+    "publish_release: ${{ steps.release_mode.outputs.publish_release }}",
+    "Expected preflight to expose the resolved publication mode.",
+  );
+  assertContains(
+    workflow,
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' }}",
+    "Expected GitHub publication to require explicit publication mode.",
+  );
+  assertContains(
+    workflow,
+    "needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1'",
+    "Expected CLI publication to require explicit publication mode.",
+  );
+  assertContains(
+    workflow,
+    "needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1'",
+    "Expected release finalization to require explicit publication mode.",
+  );
+  assertContains(
+    workflow,
+    "Windows signing is optional; building an unsigned installer",
+    "Expected Windows releases to support unsigned installers when signing is unavailable.",
+  );
+}
+
 function verifyDesktopStageProductionInstall(targetRoot: string): void {
   const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
   mkdirSync(stageInstallRoot, { recursive: true });
@@ -118,9 +197,11 @@ function verifyDesktopStageProductionInstall(targetRoot: string): void {
   }
 }
 
-const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));
 
 try {
+  verifyCanonicalIdentity();
+  verifyReleaseWorkflowSafety();
   copyWorkspaceManifestFixture(tempRoot);
 
   execFileSync(

@@ -2,7 +2,7 @@
 // Purpose: Persist terminal-only workspace pages plus their stable synthetic terminal scopes.
 // Layer: Workspace view-model state
 
-import { type ThreadId } from "@t3tools/contracts";
+import { type ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {

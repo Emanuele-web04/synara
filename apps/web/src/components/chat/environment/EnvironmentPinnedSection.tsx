@@ -4,7 +4,7 @@
 //          inline rename (double-click), and unpin. Pins are per-thread, server-synced.
 // Layer: Environment panel section
 
-import type { MessageId, PinnedMessage } from "@t3tools/contracts";
+import type { MessageId, PinnedMessage } from "@synara/contracts";
 import {
   memo,
   useCallback,

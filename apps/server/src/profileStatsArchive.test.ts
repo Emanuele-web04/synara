@@ -5,7 +5,7 @@
 // Exports: Vitest coverage for ProfileStatsArchive.
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -245,13 +245,13 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         'thread-keep', 'turn-keep-1', NULL, NULL, 'completed',
         '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:10.000Z',
         '2026-06-13T08:06:00.000Z', 1,
-        'refs/t3/checkpoints/thread-keep/turn/1', 'captured', '[]'
+        'refs/historical/checkpoints/dGhyZWFkLWtlZXA/turn/1', 'captured', '[]'
       ),
       (
         'thread-purge', 'turn-purge-1', NULL, NULL, 'completed',
         '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:10.000Z',
         '2026-06-13T09:06:00.000Z', 1,
-        'refs/t3/checkpoints/thread-purge/turn/1', 'captured', '[]'
+        'refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1', 'captured', '[]'
       ),
       (
         'thread-purge', 'turn-purge-2', NULL, NULL, 'completed',
@@ -400,7 +400,7 @@ describe("ProfileStatsArchive", () => {
           {
             cwd: "/work/archive",
             checkpointRefs: [
-              "refs/t3/checkpoints/thread-purge/turn/1",
+              "refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1",
               String(
                 checkpointRefForThreadTurnStart(
                   ThreadId.makeUnsafe("thread-purge"),
@@ -734,7 +734,7 @@ describe("ProfileStatsArchive", () => {
             '2026-06-13T09:01:10.000Z',
             '2026-06-13T09:02:00.000Z',
             1,
-            'refs/t3/checkpoints/thread-stale-checkpoint/turn/1',
+            'refs/historical/checkpoints/dGhyZWFkLXN0YWxlLWNoZWNrcG9pbnQ/turn/1',
             'captured',
             '[]'
           )
@@ -843,7 +843,7 @@ describe("ProfileStatsArchive", () => {
             '2026-06-13T09:01:10.000Z',
             '2026-06-13T09:02:00.000Z',
             1,
-            'refs/t3/checkpoints/thread-failed-purge/turn/1',
+            'refs/historical/checkpoints/dGhyZWFkLWZhaWxlZC1wdXJnZQ/turn/1',
             'captured',
             '[]'
           )

@@ -1,4 +1,4 @@
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { parseClaudeUsage } from "./providers/claude.ts";

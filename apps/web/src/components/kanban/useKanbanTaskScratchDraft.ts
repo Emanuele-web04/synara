@@ -3,12 +3,12 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import {
   inferLegacyProviderKindFromInstanceId,
   inferLegacyProviderKindFromModelSelection,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {

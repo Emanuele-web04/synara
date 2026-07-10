@@ -1,11 +1,11 @@
-import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@t3tools/contracts";
+import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara/contracts";
 import {
   inferLegacyProviderKindFromModel,
   mergeProviderStartOptions,
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 import { Effect, Layer } from "effect";
 
 import { ServerSettingsService } from "../../serverSettings.ts";

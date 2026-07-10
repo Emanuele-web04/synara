@@ -8,21 +8,18 @@ import { lstat } from "node:fs/promises";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
-import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
+import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
   resolveBaseCodexHomePath,
   resolveCodexHomeOverlayAccountSegment,
-  resolveDpCodeCodexHomeOverlayPath,
+  resolveSynaraCodexHomeOverlayPath,
 } from "../../codexHomePaths.ts";
-import {
-  buildCodexProcessEnv,
-  disableDpCodeBrowserPluginInCodexConfig,
-} from "../../codexProcessEnv.ts";
+import { buildCodexProcessEnv, resolveCodexAuthTracking } from "../../codexProcessEnv.ts";
 import { codexPathsReferenceSameLocation } from "../../codexPathIdentity.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -163,7 +160,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     prefix: string,
     content: string,
   ): Effect.Effect<string, TextGenerationError> => {
-    const filePath = path.join(tempDir, `t3code-${prefix}-${process.pid}-${randomUUID()}.tmp`);
+    const filePath = path.join(tempDir, `synara-${prefix}-${process.pid}-${randomUUID()}.tmp`);
     return fileSystem.writeFileString(filePath, content).pipe(
       Effect.mapError(
         (cause) =>
@@ -226,7 +223,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     accountId?: string,
     // Sessions launch with the instance environment layered over the server's,
     // which can relocate the env-derived home and the account overlay root
-    // (SYNARA_HOME/DPCODE_HOME/CODEX_HOME); auth lookup must see the same view.
+    // (SYNARA_HOME/CODEX_HOME); auth lookup must see the same view.
     launchEnv: NodeJS.ProcessEnv = process.env,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
@@ -234,6 +231,24 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const sourceAuthHome = authHomePath?.trim()
         ? resolveBaseCodexHomePath(launchEnv, authHomePath)
         : undefined;
+      yield* Effect.try({
+        try: () =>
+          resolveCodexAuthTracking({
+            env: launchEnv,
+            ...(sourceHomePath ? { homePath: sourceHomePath } : {}),
+            ...(authHomePath ? { shadowHomePath: authHomePath } : {}),
+            ...(accountId ? { accountId } : {}),
+          }),
+        catch: (cause) =>
+          new TextGenerationError({
+            operation,
+            detail:
+              cause instanceof Error
+                ? cause.message
+                : "Codex authentication storage cannot be safely isolated.",
+            cause,
+          }),
+      });
       // Accounts read auth from their shadow home or their own dedicated home;
       // accounts routed at the shared env-derived home keep their login inside
       // Synara's account overlay, so copy from there instead of the default
@@ -253,12 +268,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           accountId: trimmedAccountId,
         });
         return accountSegment
-          ? resolveDpCodeCodexHomeOverlayPath(launchEnv, sourceCodexHome, accountSegment)
+          ? resolveSynaraCodexHomeOverlayPath(launchEnv, sourceCodexHome, accountSegment)
           : undefined;
       })();
       const isolatedHomePath = path.join(
         tempDir,
-        `t3code-codex-home-${process.pid}-${randomUUID()}`,
+        `synara-codex-home-${process.pid}-${randomUUID()}`,
       );
 
       yield* fileSystem.makeDirectory(isolatedHomePath, { recursive: true }).pipe(
@@ -275,25 +290,21 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const sourceConfig = yield* fileSystem
         .readFileString(path.join(sourceCodexHome, "config.toml"))
         .pipe(Effect.catch(() => Effect.succeed(null)));
-      {
-        yield* fileSystem
-          .writeFileString(
-            path.join(isolatedHomePath, "config.toml"),
-            disableDpCodeBrowserPluginInCodexConfig(
-              sanitizeCodexConfigForTextGeneration(sourceConfig ?? ""),
-            ),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new TextGenerationError({
-                  operation,
-                  detail: "Failed to copy Codex config for isolated text generation.",
-                  cause,
-                }),
-            ),
-          );
-      }
+      yield* fileSystem
+        .writeFileString(
+          path.join(isolatedHomePath, "config.toml"),
+          sanitizeCodexConfigForTextGeneration(sourceConfig ?? ""),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "Failed to copy Codex config for isolated text generation.",
+                cause,
+              }),
+          ),
+        );
 
       {
         // A shadow auth home is authoritative: missing or rejected auth there
@@ -427,19 +438,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       );
 
       const runCodexCommand = Effect.gen(function* () {
-        // The isolated home is already fully materialized (sanitized config
-        // with the browser plugin disabled, account auth copied in), so opt
-        // out of the overlay machinery: hashing the per-call temp path with
-        // the account id would leak a fresh overlay directory per generation.
+        // Keep Synara's config-suppression overlay inside the per-call home so
+        // account auth stays isolated and cleanup removes every generated file.
         const env = buildCodexProcessEnv({
           env: {
-            ...process.env,
-            ...providerOptions?.codex?.environment,
-            DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+            ...instanceLaunchEnv,
+            SYNARA_HOME: isolatedCodexHome.homePath,
           },
           homePath: isolatedCodexHome.homePath,
         });
-        delete env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
         const args = [
           "exec",
           "--ephemeral",

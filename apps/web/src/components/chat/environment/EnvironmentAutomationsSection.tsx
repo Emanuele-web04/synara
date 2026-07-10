@@ -4,7 +4,7 @@
 // Exports: EnvironmentAutomationsSection, EnvironmentAutomationPanelItem
 // Depends on: automation shared formatters and Environment panel row primitives.
 
-import type { AutomationDefinition } from "@t3tools/contracts";
+import type { AutomationDefinition } from "@synara/contracts";
 
 import { formatCadence } from "~/routes/-automations.shared";
 import { ClockIcon } from "~/lib/icons";

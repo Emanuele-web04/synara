@@ -2,7 +2,7 @@
 // Purpose: Locks down provider-usage snapshot normalization edge cases used by
 // compact usage surfaces and Settings usage cards.
 
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { isProviderUsageSnapshotNonOk } from "./providerUsageSnapshot";

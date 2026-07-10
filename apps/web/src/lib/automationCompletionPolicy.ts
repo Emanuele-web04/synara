@@ -8,7 +8,7 @@ import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationCompletionPolicy,
   type AutomationMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export function completionPolicyFromStopWhen(stopWhen: string): AutomationCompletionPolicy {
   const normalized = stopWhen.trim();

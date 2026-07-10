@@ -80,7 +80,7 @@ import {
   ProjectStopDevServerInput,
   ProjectWriteFileInput,
 } from "./project";
-import { StudioListRecentOutputsInput } from "./studio";
+import { StudioListThreadOutputsInput } from "./studio";
 import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
@@ -130,7 +130,7 @@ export const WS_METHODS = {
   subscribeProjectDevServerEvents: "projects.subscribeDevServerEvents",
 
   // Studio methods
-  studioListRecentOutputs: "studio.listRecentOutputs",
+  studioListThreadOutputs: "studio.listThreadOutputs",
 
   // Filesystem browse methods
   filesystemBrowse: "filesystem.browse",
@@ -286,7 +286,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Filesystem browse
   // Studio
-  tagRequestBody(WS_METHODS.studioListRecentOutputs, StudioListRecentOutputsInput),
+  tagRequestBody(WS_METHODS.studioListThreadOutputs, StudioListThreadOutputsInput),
 
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
 

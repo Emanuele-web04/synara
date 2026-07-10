@@ -8,9 +8,9 @@ import {
   type ProviderInstanceId,
   ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
-import { resolveSelectableModel } from "@t3tools/shared/model";
-import { inferLegacyProviderKindFromInstanceId } from "@t3tools/shared/providerInstances";
+} from "@synara/contracts";
+import { resolveSelectableModel } from "@synara/shared/model";
+import { inferLegacyProviderKindFromInstanceId } from "@synara/shared/providerInstances";
 import * as Schema from "effect/Schema";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";

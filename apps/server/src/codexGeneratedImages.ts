@@ -13,12 +13,12 @@ import {
   type ProviderInstanceId,
   type ServerSettings,
   type ThreadId,
-} from "@t3tools/contracts";
-import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localPreviewFiles";
+} from "@synara/contracts";
+import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@synara/shared/localPreviewFiles";
 import {
   deriveProviderInstances,
   providerStartOptionsFromInstance,
-} from "@t3tools/shared/providerInstances";
+} from "@synara/shared/providerInstances";
 
 import {
   type CodexHomePathsInput,
@@ -85,23 +85,13 @@ export interface CodexGeneratedImageHomeContext {
   readonly homePath?: string | undefined;
   readonly shadowHomePath?: string | undefined;
   readonly accountId?: string | undefined;
-  /**
-   * Per-instance launch environment. It can flip the browser-plugin sentinel
-   * for the child process, which changes the home Codex writes under even
-   * though the server process itself keeps the default mode.
-   */
+  /** Per-instance launch environment, including any relocated Synara home. */
   readonly environment?: Readonly<Record<string, string>> | undefined;
 }
 
 export type CodexGeneratedImageHomeCandidate = string | CodexGeneratedImageHomeContext;
 
-const CODEX_HOME_CONTEXT_ENV_KEYS = [
-  "CODEX_HOME",
-  "SYNARA_HOME",
-  "DPCODE_HOME",
-  "T3CODE_HOME",
-  "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN",
-] as const;
+const CODEX_HOME_CONTEXT_ENV_KEYS = ["CODEX_HOME", "SYNARA_HOME"] as const;
 
 function codexHomePathsInputFromContext(
   codexHome?: CodexGeneratedImageHomeCandidate,
@@ -145,10 +135,9 @@ function codexHomeCandidateKey(candidate: CodexGeneratedImageHomeCandidate): str
 
 /**
  * Resolves the home directory the codex app-server child process actually
- * writes images under for the current process env. When Synara wraps Codex
- * with the dpcode-browser overlay (production default), this is the overlay
- * home — not the user's `~/.codex` — and for account-scoped instances it is
- * that account's own overlay.
+ * writes images under for the current process env. This is Synara's isolated
+ * overlay—not the user's source `~/.codex`—and account-scoped instances use
+ * their own overlay.
  */
 export function resolveCodexHomePath(codexHome?: string | CodexGeneratedImageHomeContext): string {
   return resolveActiveCodexHomeWritePath(codexHomePathsInputFromContext(codexHome));
@@ -185,8 +174,7 @@ export function codexConfiguredHomePathsFromSettings(
       continue;
     }
     // Keep the full account/shadow/environment context. Collapsing this to a
-    // plain home path loses the historical account overlay roots needed after
-    // plugin/direct-home mode changes.
+    // plain home path loses account overlay roots and can cross-allowlist data.
     const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
     // The enabled default instance normally has no explicit launch options;
     // an empty context intentionally resolves its ambient/default Codex roots.

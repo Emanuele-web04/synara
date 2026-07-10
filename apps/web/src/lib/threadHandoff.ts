@@ -12,9 +12,9 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ThreadHandoffImportedMessage,
-} from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
+} from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";

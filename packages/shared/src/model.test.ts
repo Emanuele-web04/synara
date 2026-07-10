@@ -10,10 +10,11 @@ import {
   CODEX_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
   type ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   applyClaudePromptEffortPrefix,
+  claudeSelectionRequiresRestart,
   formatModelDisplayName,
   getDefaultContextWindow,
   getDefaultModel,
@@ -620,6 +621,139 @@ describe("resolveApiModelId", () => {
         options: [{ id: "contextWindow", value: "200k" }],
       }),
     ).toBe("claude-opus-4-6");
+  });
+});
+
+describe("claudeSelectionRequiresRestart", () => {
+  const selection = (
+    model: string,
+    options?: { effort?: string; contextWindow?: string; fastMode?: boolean; thinking?: boolean },
+  ) =>
+    ({
+      instanceId: "claudeAgent",
+      model,
+      ...(options
+        ? {
+            options: Object.entries(options).map(([id, value]) => ({ id, value })),
+          }
+        : {}),
+    }) as Parameters<typeof claudeSelectionRequiresRestart>[1];
+
+  it("never restarts for non-Claude selections", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        { instanceId: "codex", model: "gpt-5.5" },
+        { instanceId: "codex", model: "gpt-5.4" },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart on the first observed selection", () => {
+    expect(
+      claudeSelectionRequiresRestart(undefined, selection("claude-opus-4-8", { effort: "max" })),
+    ).toBe(false);
+  });
+
+  it("does not restart for a model-only change", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "max" }),
+        selection("claude-fable-5", { effort: "max" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart when a model switch carries an unsupported thinking override", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5", { thinking: false }),
+        selection("claude-opus-4-8", { thinking: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart when a model switch carries an unsupported fast-mode flag", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
+        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still restarts when spawn-fixed options change together with the model", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-sonnet-5", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not restart for a context-window-only change", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "xhigh", contextWindow: "200k" }),
+        selection("claude-opus-4-8", { effort: "xhigh", contextWindow: "1m" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("restarts when the effective effort changes", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats ultrathink as prompt-injected, not a spawn change", () => {
+    // ultrathink carries no API effort, so switching from no effort to ultrathink
+    // must not respawn the subprocess.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "ultrathink" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("restarts when ultracode toggles", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "xhigh" }),
+        selection("claude-opus-4-8", { effort: "ultracode" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts when fast mode toggles", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts when the thinking toggle changes on a supported model", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5"),
+        selection("claude-haiku-4-5", { thinking: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores options the target model does not support", () => {
+    // fastMode is not supported on Sonnet models, so toggling it is a no-op.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-sonnet-5", { effort: "high" }),
+        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(false);
   });
 });
 

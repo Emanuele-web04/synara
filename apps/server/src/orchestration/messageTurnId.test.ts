@@ -1,4 +1,4 @@
-import { TurnId } from "@t3tools/contracts";
+import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";

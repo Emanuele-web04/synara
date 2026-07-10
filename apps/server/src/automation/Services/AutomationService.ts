@@ -14,7 +14,7 @@ import {
   AutomationStreamEvent,
   AutomationUpdateInput,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -65,4 +65,4 @@ export interface AutomationServiceShape {
 export class AutomationService extends ServiceMap.Service<
   AutomationService,
   AutomationServiceShape
->()("t3/automation/Services/AutomationService") {}
+>()("synara/automation/Services/AutomationService") {}
