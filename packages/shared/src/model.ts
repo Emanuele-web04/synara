@@ -1,4 +1,5 @@
 import {
+  CLAUDE_CODE_EFFORT_OPTIONS,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
@@ -42,6 +43,7 @@ export interface SelectableModelOption {
   name: string;
 }
 
+const CLAUDE_CODE_EFFORT_SET: ReadonlySet<string> = new Set(CLAUDE_CODE_EFFORT_OPTIONS);
 const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "off",
   "minimal",
@@ -58,6 +60,11 @@ export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   promptInjectedEffortLevels: [],
   contextWindowOptions: [],
 };
+
+function isClaudeCodeEffort(value: string): value is ClaudeCodeEffort {
+  return CLAUDE_CODE_EFFORT_SET.has(value);
+}
+
 export function getModelOptions(provider: ProviderKind = "codex") {
   return MODEL_OPTIONS_BY_PROVIDER[provider];
 }
@@ -819,7 +826,10 @@ interface ClaudeSpawnProfile {
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
-  const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+  const effort =
+    requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
+      ? requestedEffort
+      : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
   } satisfies ClaudeSpawnProfile;
