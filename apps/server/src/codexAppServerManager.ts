@@ -267,6 +267,26 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
 }
 
+function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
+  if (typeof value.method === "string") {
+    return true;
+  }
+  const hasId = Object.prototype.hasOwnProperty.call(value, "id");
+  return (
+    hasId &&
+    (Object.prototype.hasOwnProperty.call(value, "result") ||
+      Object.prototype.hasOwnProperty.call(value, "error"))
+  );
+}
+
+function logIgnoredCodexStdout(rawLine: string, reason: string): void {
+  log.warn("ignoring non-protocol codex app-server stdout", {
+    reason,
+    preview: normalizeCodexProcessLine(rawLine).slice(0, 160),
+    length: rawLine.length,
+  });
+}
+
 function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
   const message = normalizeCodexProcessLine(rawMessage);
 
@@ -2168,20 +2188,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       parsed = JSON.parse(line);
     } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
+      // App-server stdout is JSONL, but Codex subprocesses and hooks can leak
+      // arbitrary output onto the same pipe, including fragments that begin
+      // like JSON-RPC. An unparseable line cannot be a usable protocol frame;
+      // ignore it and let any affected request fail through its normal timeout.
+      logIgnoredCodexStdout(line, "invalid JSON fragment");
       return;
     }
 
-    if (!parsed || typeof parsed !== "object") {
-      this.emitErrorEvent(
-        context,
-        "protocol/invalidMessage",
-        "Received non-object protocol message.",
-      );
+    const protocolEnvelope = asObject(parsed);
+    if (!protocolEnvelope || !isCodexProtocolEnvelope(protocolEnvelope)) {
+      // Command output can also be valid standalone JSON (`{}`, `[]`, strings,
+      // numbers). Only JSON-RPC-shaped envelopes belong to app-server itself.
+      logIgnoredCodexStdout(line, "valid JSON without a JSON-RPC envelope");
       return;
     }
 

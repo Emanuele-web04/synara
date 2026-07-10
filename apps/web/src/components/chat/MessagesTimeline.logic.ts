@@ -420,9 +420,8 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The generic "Working..." shimmer yields to the setup card only while the
-  // card is open; once the card starts its close animation the turn's own
-  // shimmer is already rendering after it, so the handoff has no gap.
+  // The generic Thinking shimmer remains the single live status. Provider work
+  // rows are transcript history and must never replace it.
   if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",

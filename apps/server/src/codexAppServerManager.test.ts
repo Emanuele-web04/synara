@@ -594,6 +594,48 @@ describe("handleStdoutLine", () => {
 
     expect(emitEvent).not.toHaveBeenCalled();
   });
+
+  it("ignores human-readable diagnostics leaked onto app-server stdout", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["Reasoning trace", "Reasoning summary", "Command execution"]) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores multiline and standalone JSON leaked from command output", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["{", "[", '{"scripts": {', "{}", "[]", '{"name":"synara"}']) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed JSON-looking fragments without poisoning the session", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(context, '{"method":"item/started"');
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe("normalizeCodexModelSlug", () => {

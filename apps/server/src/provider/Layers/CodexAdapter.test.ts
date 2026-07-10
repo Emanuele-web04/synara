@@ -309,6 +309,137 @@ const lifecycleLayer = it.layer(
 );
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps Codex 0.144 reasoning summaries from canonical item arrays", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-reasoning-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning_1"),
+        payload: {
+          item: {
+            type: "reasoning",
+            id: "reasoning_1",
+            summary: ["Inspect the protocol.", "Update the adapter."],
+            content: [],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "reasoning");
+      assert.equal(firstEvent.value.payload.detail, "Inspect the protocol.\n\nUpdate the adapter.");
+    }),
+  );
+
+  it.effect("keeps Codex reasoning trace and summary delta streams distinct", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-reasoning-trace-delta"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/reasoning/textDelta",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning_1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning_1",
+          delta: "raw trace",
+          contentIndex: 2,
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-reasoning-summary-delta"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/reasoning/summaryTextDelta",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning_1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning_1",
+          delta: "readable summary",
+          summaryIndex: 1,
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events[0]?.type, "content.delta");
+      assert.equal(events[1]?.type, "content.delta");
+      if (events[0]?.type === "content.delta") {
+        assert.equal(events[0].payload.streamKind, "reasoning_text");
+        assert.equal(events[0].payload.contentIndex, 2);
+      }
+      if (events[1]?.type === "content.delta") {
+        assert.equal(events[1].payload.streamKind, "reasoning_summary_text");
+        assert.equal(events[1].payload.summaryIndex, 1);
+      }
+    }),
+  );
+
+  it.effect("preserves failed commandExecution status from canonical completed items", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-command-failed"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("command_1"),
+        payload: {
+          item: {
+            type: "commandExecution",
+            id: "command_1",
+            command: "bun run test --runInBand",
+            cwd: "/repo",
+            status: "failed",
+            commandActions: [],
+            aggregatedOutput: "Unknown option --runInBand",
+            exitCode: 1,
+            durationMs: 42,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "command_execution");
+      assert.equal(firstEvent.value.payload.status, "failed");
+      assert.equal(firstEvent.value.payload.title, "Ran command");
+      assert.equal(firstEvent.value.payload.detail, "bun run test --runInBand");
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

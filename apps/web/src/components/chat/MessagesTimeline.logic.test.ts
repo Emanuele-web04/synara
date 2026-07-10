@@ -825,6 +825,38 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
+  it("folds settled reasoning traces into the terminal turn disclosure", () => {
+    const reasoning = workEntry(
+      "reasoning-1",
+      "2026-01-01T00:00:02Z",
+      "Reasoning trace",
+    );
+    if (reasoning.kind === "work") {
+      reasoning.entry = {
+        ...reasoning.entry,
+        detail: "Inspecting apps/web/src/store.ts",
+        toolTitle: "Reasoning trace",
+      };
+    }
+
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        reasoning,
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(collapsedSignature(terminal!)).toEqual(["work:reasoning-1"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
   it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
     // Mirrors a provider failure + retry: the first attempt's assistant message
     // completes 22m20s in, the retry answers 40s later. The disclosure folds
