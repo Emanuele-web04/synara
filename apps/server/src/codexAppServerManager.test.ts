@@ -496,6 +496,43 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("seeds markerless suppressions for conflicting local browser plugins", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const conflictingHeader = '[plugins."bridge-browser@local"]';
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [conflictingHeader, "enabled = true", "", '[plugins."other@local"]', "enabled = true"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(`${conflictingHeader}\nenabled = false`);
+      expect(overlayConfig).toContain('[plugins."other@local"]\nenabled = true');
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        `${conflictingHeader}\nenabled = true`,
+      );
+      const suppressionMarker = JSON.parse(
+        readFileSync(path.join(overlayHome, "synara-config-suppressions-v1.json"), "utf8"),
+      ) as { sectionHeaders?: string[] };
+      expect(suppressionMarker.sectionHeaders).toContain(conflictingHeader);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("preserves a recorded suppression after its plugin disappears from source config", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));

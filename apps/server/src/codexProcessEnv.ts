@@ -34,6 +34,10 @@ const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
+// Retired local browser integrations used a stable six-character namespace.
+// Match the structural conflict without retaining any previous product name.
+const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
+  /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
 interface CodexOverlayEntryLinker {
   readonly symlink: typeof symlinkSync;
@@ -75,6 +79,17 @@ export function readSynaraConfigSuppressions(markerPath: string): readonly strin
   } catch {
     return [];
   }
+}
+
+function findConflictingLocalBrowserPluginSections(config: string): readonly string[] {
+  return [
+    ...new Set(
+      config
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN.test(line)),
+    ),
+  ];
 }
 
 export function disableCodexConfigSections(
@@ -256,7 +271,12 @@ function prepareSynaraCodexHomeOverlay(input: {
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
   const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
-  const suppressedSections = readSynaraConfigSuppressions(suppressionMarkerPath);
+  const suppressedSections = [
+    ...new Set([
+      ...findConflictingLocalBrowserPluginSections(sourceConfig),
+      ...readSynaraConfigSuppressions(suppressionMarkerPath),
+    ]),
+  ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   writeFileSync(
     path.join(overlayHomePath, "config.toml"),
     disableCodexConfigSections(sourceConfig, suppressedSections, true),

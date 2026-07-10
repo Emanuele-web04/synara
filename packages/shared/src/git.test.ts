@@ -19,14 +19,16 @@ describe("isTemporaryWorktreeBranch", () => {
     expect(isTemporaryWorktreeBranch(` ${WORKTREE_BRANCH_PREFIX}/DEADBEEF `)).toBe(true);
   });
 
-  it("keeps recognizing legacy temporary worktree branches", () => {
-    expect(isTemporaryWorktreeBranch("synara/deadbeef")).toBe(true);
-    expect(isTemporaryWorktreeBranch("synara/deadbeef")).toBe(true);
+  it("keeps recognizing pre-cutover temporary worktree branches by shape", () => {
+    expect(isTemporaryWorktreeBranch("bridge/deadbeef")).toBe(true);
+    expect(isTemporaryWorktreeBranch(" former/DEADBEEF ")).toBe(true);
   });
 
   it("rejects semantic branch names", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/feature/demo`)).toBe(false);
     expect(isTemporaryWorktreeBranch("feature/demo")).toBe(false);
+    expect(isTemporaryWorktreeBranch("feature/deadbeef")).toBe(false);
+    expect(isTemporaryWorktreeBranch("bridge/semantic-branch")).toBe(false);
   });
 });
 

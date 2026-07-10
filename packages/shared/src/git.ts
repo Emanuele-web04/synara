@@ -3,7 +3,10 @@
  * Strips quotes, collapses separators, limits to 64 chars.
  */
 export const WORKTREE_BRANCH_PREFIX = "synara";
-const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+// Worktree placeholders have always used a six-character namespace followed
+// by an eight-character hex token. Keep recognizing that stable shape across
+// identity cutovers while generating new placeholders with Synara only.
+const TEMP_WORKTREE_BRANCH_PATTERN = /^[a-z0-9][a-z0-9-]{5}\/[0-9a-f]{8}$/;
 
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = raw
