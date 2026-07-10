@@ -1175,6 +1175,149 @@ describe("ProviderCommandReactor", () => {
     expect(retryInput?.input).toContain("Retry now");
   });
 
+  it("retains a Droid transcript bootstrap when the forked prompt later fails", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-droid-async-bootstrap-failure");
+    const firstTurnId = asTurnId("turn-droid-bootstrap-failed");
+    const retryTurnId = asTurnId("turn-droid-bootstrap-retry");
+    const followUpTurnId = asTurnId("turn-droid-bootstrap-follow-up");
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+      },
+    });
+    const now = new Date().toISOString();
+    const importedAt = new Date(Date.parse(now) - 1_000).toISOString();
+    harness.sendTurn
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: firstTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: followUpTurnId }));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-fork"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Droid async bootstrap failure",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("droid-async-bootstrap-imported-user"),
+            role: "user",
+            text: "Context retained across the failed prompt",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-first-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-first-user"),
+          role: "user",
+          text: "First attempt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const firstInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(firstInput?.input).toContain("<thread_context>");
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-droid-async-bootstrap-failed"),
+      provider: "droid",
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: firstTurnId,
+      payload: {
+        state: "failed",
+        errorMessage: "ACP prompt failed after dispatch",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-retry-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-retry-user"),
+          role: "user",
+          text: "Retry after async failure",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(retryInput?.input).toContain("<thread_context>");
+    expect(retryInput?.input).toContain("Context retained across the failed prompt");
+    expect(retryInput?.input).toContain("Retry after async failure");
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-droid-async-bootstrap-retry-completed"),
+      provider: "droid",
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: retryTurnId,
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-follow-up-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-follow-up-user"),
+          role: "user",
+          text: "Continue after successful retry",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    const followUpInput = harness.sendTurn.mock.calls[2]?.[0] as { input?: string } | undefined;
+    expect(followUpInput?.input).not.toContain("<thread_context>");
+    expect(followUpInput?.input).toBe("Continue after successful retry");
+  });
+
   it("rolls back provider conversation state for message edits", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

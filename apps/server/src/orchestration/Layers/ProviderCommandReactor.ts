@@ -358,6 +358,13 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
+  type PendingContextBootstrapAttempt = {
+    turnId?: TurnId;
+    terminalEvent?: ProviderQueueDrainEvent;
+    readonly clearSidechat: boolean;
+    readonly clearPriorTranscript: boolean;
+  };
+  const pendingContextBootstrapAttempts = new Map<string, PendingContextBootstrapAttempt>();
   // Explicit stop resets context once: the next successful session start must
   // begin clean even if fork metadata would normally register a bootstrap.
   const suppressContextBootstrapOnNextStartThreadIds = new Set<string>();
@@ -365,6 +372,41 @@ const make = Effect.gen(function* () {
     sidechatContextBootstrapThreadIds.delete(threadId);
     freshSessionContextBootstrapThreadIds.delete(threadId);
     rollbackContextBootstrapThreadIds.delete(threadId);
+    pendingContextBootstrapAttempts.delete(threadId);
+  };
+
+  const completePendingContextBootstrapAttempt = (
+    threadId: string,
+    attempt: PendingContextBootstrapAttempt,
+    event: ProviderQueueDrainEvent,
+  ) => {
+    if (event.type !== "turn.completed" || event.payload.state !== "completed") {
+      return;
+    }
+    if (attempt.clearSidechat) {
+      sidechatContextBootstrapThreadIds.delete(threadId);
+    }
+    if (attempt.clearPriorTranscript) {
+      freshSessionContextBootstrapThreadIds.delete(threadId);
+      rollbackContextBootstrapThreadIds.delete(threadId);
+      sidechatContextBootstrapThreadIds.delete(threadId);
+    }
+  };
+
+  const observePendingContextBootstrapTerminalEvent = (event: ProviderQueueDrainEvent) => {
+    const attempt = pendingContextBootstrapAttempts.get(event.threadId);
+    if (!attempt) {
+      return;
+    }
+    if (attempt.turnId === undefined) {
+      attempt.terminalEvent = event;
+      return;
+    }
+    if (attempt.turnId !== event.turnId) {
+      return;
+    }
+    pendingContextBootstrapAttempts.delete(event.threadId);
+    completePendingContextBootstrapAttempt(event.threadId, attempt, event);
   };
 
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
@@ -1216,6 +1258,7 @@ const make = Effect.gen(function* () {
     const cancelPendingStudioBaseline = studioOutputReactor.cancelPendingTurnBaseline(
       input.threadId,
     );
+    let pendingContextBootstrapAttempt: PendingContextBootstrapAttempt | undefined;
 
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
@@ -1237,7 +1280,18 @@ const make = Effect.gen(function* () {
       });
     } else {
       yield* capturePreTurnBaselines;
-      yield* sendQueuedProviderTurn(normalizedInput).pipe(
+      pendingContextBootstrapAttempt =
+        activeSession?.provider === "droid" &&
+        (sidechatBootstrapText !== null || priorTranscriptBootstrapText !== null)
+          ? {
+              clearSidechat: sidechatBootstrapText !== null,
+              clearPriorTranscript: priorTranscriptBootstrapText !== null,
+            }
+          : undefined;
+      if (pendingContextBootstrapAttempt) {
+        pendingContextBootstrapAttempts.set(input.threadId, pendingContextBootstrapAttempt);
+      }
+      const sentTurn = yield* sendQueuedProviderTurn(normalizedInput).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
             if (selectedProvider !== "claudeAgent" || !isStaleClaudeResumeError(error)) {
@@ -1298,8 +1352,33 @@ const make = Effect.gen(function* () {
             return yield* sendQueuedProviderTurn(retryNormalizedInput);
           }),
         ),
-        Effect.onError(() => cancelPendingStudioBaseline),
+        Effect.onError(() =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => {
+              if (
+                pendingContextBootstrapAttempt &&
+                pendingContextBootstrapAttempts.get(input.threadId) ===
+                  pendingContextBootstrapAttempt
+              ) {
+                pendingContextBootstrapAttempts.delete(input.threadId);
+              }
+            });
+            yield* cancelPendingStudioBaseline;
+          }),
+        ),
       );
+      if (pendingContextBootstrapAttempt) {
+        pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
+        const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
+        if (terminalEvent?.turnId === sentTurn.turnId) {
+          pendingContextBootstrapAttempts.delete(input.threadId);
+          completePendingContextBootstrapAttempt(
+            input.threadId,
+            pendingContextBootstrapAttempt,
+            terminalEvent,
+          );
+        }
+      }
     }
     if (handoffBootstrapText && thread.handoff !== null && input.reviewTarget === undefined) {
       yield* orchestrationEngine.dispatch({
@@ -1315,6 +1394,7 @@ const make = Effect.gen(function* () {
     if (
       shouldBootstrapSidechatContext &&
       input.reviewTarget === undefined &&
+      pendingContextBootstrapAttempt === undefined &&
       (sidechatBootstrapText !== null || !hasSidechatBootstrapContent)
     ) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
@@ -1322,6 +1402,7 @@ const make = Effect.gen(function* () {
     if (
       shouldBootstrapPriorTranscriptContext &&
       input.reviewTarget === undefined &&
+      pendingContextBootstrapAttempt === undefined &&
       (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent)
     ) {
       freshSessionContextBootstrapThreadIds.delete(input.threadId);
@@ -1793,6 +1874,7 @@ const make = Effect.gen(function* () {
   });
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
+    observePendingContextBootstrapTerminalEvent(event);
     yield* drainQueuedTurnsForThread(event.threadId);
   });
 
