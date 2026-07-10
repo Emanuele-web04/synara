@@ -250,5 +250,13 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
 }
 
 export function prewarmStudioProject(paths: ServerWorkspacePaths): void {
-  void ensureStudioProject(paths);
+  // Prewarming is best-effort. The interactive creation path reports failures;
+  // background startup must not leak a rejected promise into the app or test runner.
+  void ensureStudioProject(paths).catch(() => undefined);
+}
+
+export async function resetStudioProjectPrewarmStateForTests(): Promise<void> {
+  const pendingCreations = [...pendingStudioCreationByWorkspaceRoot.values()];
+  pendingStudioCreationByWorkspaceRoot.clear();
+  await Promise.allSettled(pendingCreations);
 }

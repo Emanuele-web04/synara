@@ -1225,6 +1225,29 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isTemporary).toBeUndefined();
   });
 
+  it("registers a mapping-less temporary terminal draft for staged navigation", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.registerDraftThread(threadId, {
+      projectId,
+      entryPoint: "terminal",
+      isTemporary: true,
+      envMode: "local",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toMatchObject({
+      projectId,
+      entryPoint: "terminal",
+      isTemporary: true,
+      envMode: "local",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId, "terminal")).toBe(
+      null,
+    );
+  });
+
   it("tracks chat and terminal draft threads independently for the same project", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId, { entryPoint: "chat" });

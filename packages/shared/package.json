@@ -24,6 +24,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./staticSnapshot": {
+      "types": "./src/staticSnapshot.ts",
+      "import": "./src/staticSnapshot.ts"
+    },
     "./windowsProcess": {
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"

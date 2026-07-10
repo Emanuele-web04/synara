@@ -21,9 +21,28 @@ export interface AgentActivityTimelineState {
 
 const REASONING_GROUP_PREFIX = "agent-reasoning";
 
-export function isReasoningUpdateWorkEntry(entry: WorkLogEntry): boolean {
+export function isReasoningUpdateWorkEntry(
+  entry: Pick<WorkLogEntry, "label" | "toolTitle">,
+): boolean {
   const heading = normalizeWorkText(entry.toolTitle ?? entry.label);
-  return heading === "reasoning" || heading === "reasoning update";
+  return (
+    heading === "reasoning" ||
+    heading === "reasoning update" ||
+    heading === "reasoning trace" ||
+    heading === "reasoning summary"
+  );
+}
+
+export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
+  if (isReasoningUpdateWorkEntry(entry)) {
+    return true;
+  }
+  const isStatusOnlyCommand =
+    entry.itemType === "command_execution" && !entry.command && !entry.rawCommand;
+  return (
+    isStatusOnlyCommand ||
+    normalizeWorkText(entry.toolTitle ?? entry.label) === "command execution"
+  );
 }
 
 export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
@@ -102,9 +121,9 @@ export function deriveAgentActivityTimelineState(
     const displayEntry: WorkLogEntry = {
       ...latest,
       id: groupId,
-      label: "Reasoning",
-      toolTitle: "Reasoning",
-      tone: "thinking",
+      label: "Reasoning trace",
+      toolTitle: "Reasoning trace",
+      tone: "tool",
       ...(displayPreview ? { preview: displayPreview, detail: displayPreview } : {}),
     };
 
@@ -113,15 +132,35 @@ export function deriveAgentActivityTimelineState(
   };
 
   for (const entry of entries) {
-    if (isReasoningUpdateWorkEntry(entry)) {
+    // Legacy providers emit free-standing reasoning updates with no item id;
+    // keep compacting those. Canonical Codex reasoning carries toolCallId, so
+    // each completed provider item remains its own visible row.
+    if (isReasoningUpdateWorkEntry(entry) && !entry.toolCallId) {
       pendingReasoningEntries.push(entry);
       continue;
     }
 
     flushReasoningEntries();
-    timelineWorkEntries.push(entry);
+    const reasoningPreview = isReasoningUpdateWorkEntry(entry)
+      ? formatAgentActivityEntryPreview(entry)
+      : null;
+    // Old Synara builds persisted a literal placeholder for every empty Codex
+    // reasoning lifecycle. Match Codex history semantics and hide those rows.
+    if (isReasoningUpdateWorkEntry(entry) && !reasoningPreview) {
+      continue;
+    }
+    const displayEntry = reasoningPreview
+      ? {
+          ...entry,
+          label: "Reasoning trace",
+          toolTitle: "Reasoning trace",
+          preview: reasoningPreview,
+          tone: "tool" as const,
+        }
+      : entry;
+    timelineWorkEntries.push(displayEntry);
     if (isAgentActivityWorkEntry(entry)) {
-      detailById.set(entry.id, buildAgentActivityDetail(entry.id, entry, [entry]));
+      detailById.set(entry.id, buildAgentActivityDetail(entry.id, displayEntry, [entry]));
     }
   }
 
@@ -165,14 +204,31 @@ function findLatestSummary(entries: ReadonlyArray<WorkLogEntry>): string | null 
 }
 
 function cleanReasoningProgressText(value: string | undefined): string | null {
-  const trimmed = normalizeOptionalText(value);
-  if (!trimmed) {
+  if (!value) {
     return null;
   }
 
+  // Codex summaries are Markdown blocks such as
+  // `**Planning the implementation**\n\n<!-- -->`. Its compact UI label is the
+  // last readable line, with comments and lightweight Markdown removed.
+  const readableLines = value
+    .replace(/<!--[\s\S]*?-->/gu, "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("<!--"));
+  const latestLine = readableLines.at(-1);
+  if (!latestLine) {
+    return null;
+  }
+  const trimmed = latestLine
+    .replace(/^#{1,6}\s+/u, "")
+    .replace(/^\*\*(.+)\*\*$/u, "$1")
+    .replace(/^__(.+)__$/u, "$1")
+    .replace(/^`(.+)`$/u, "$1")
+    .trim();
+
   const withoutReasoningPrefix = trimmed
-    .replace(/^reasoning\s+update\b[\s:.-]*/i, "")
-    .replace(/^reasoning\b[\s:.-]*/i, "")
+    .replace(/^reasoning(?:\s+(?:update|trace|summary))?\b[\s:.-]*/i, "")
     .trim();
   const withoutRunningPrefix = withoutReasoningPrefix.replace(/^running\b[\s:.-]*/i, "").trim();
   return withoutRunningPrefix || withoutReasoningPrefix || null;

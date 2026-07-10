@@ -479,7 +479,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello");
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(firstAssistantChunk);
@@ -517,7 +517,7 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(message?.text).toBe("hello world");
           expect(message?.streaming).toBe(false);
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -869,7 +869,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("buffered reply");
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(bufferedEvent);

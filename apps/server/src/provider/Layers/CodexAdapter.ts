@@ -294,10 +294,20 @@ function itemDetail(
   payload: Record<string, unknown>,
 ): string | undefined {
   const nestedResult = asObject(item.result);
+  const joinedText = (value: unknown): string | undefined => {
+    if (!Array.isArray(value)) return undefined;
+    const parts = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return parts.length > 0 ? parts.join("\n\n") : undefined;
+  };
   const candidates = [
     asString(item.command),
     asString(item.title),
     asString(item.summary),
+    joinedText(item.summary),
+    joinedText(item.content),
     asString(item.review),
     asString(item.text),
     asString(item.saved_path),
@@ -317,6 +327,19 @@ function itemDetail(
     return trimmed;
   }
   return undefined;
+}
+
+function itemStatus(
+  lifecycle: "item.started" | "item.updated" | "item.completed",
+  rawStatus: unknown,
+): "inProgress" | "completed" | "failed" | "declined" | undefined {
+  if (lifecycle === "item.started") {
+    return "inProgress";
+  }
+  if (lifecycle === "item.updated") {
+    return undefined;
+  }
+  return rawStatus === "failed" || rawStatus === "declined" ? rawStatus : "completed";
 }
 
 function toRequestTypeFromMethod(method: string): CanonicalRequestType {
@@ -752,12 +775,7 @@ function mapItemLifecycle(
     lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
 
   const detail = itemDetail(source, payload ?? {});
-  const status =
-    lifecycle === "item.started"
-      ? "inProgress"
-      : lifecycle === "item.completed"
-        ? "completed"
-        : undefined;
+  const status = itemStatus(lifecycle, source.status);
 
   return {
     ...(generatedImageReference

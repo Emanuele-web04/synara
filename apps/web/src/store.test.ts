@@ -2526,6 +2526,60 @@ describe("store read model sync", () => {
     expect(Object.keys(next.activityByThreadId?.[threadId] ?? {})).toEqual(["activity-command"]);
   });
 
+  it("replaces a live reasoning start with completion under its stable activity id", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const activityId = "provider-reasoning:thread-1:reasoning-1";
+    const started = makeActivity({
+      id: activityId,
+      createdAt: "2026-02-27T00:00:01.000Z",
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      tone: "tool",
+      payload: {
+        status: "inProgress",
+        data: { toolCallId: "reasoning-1" },
+      },
+      turnId: "turn-1",
+    });
+    const completed = makeActivity({
+      id: activityId,
+      createdAt: "2026-02-27T00:00:02.000Z",
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      tone: "tool",
+      payload: {
+        status: "completed",
+        detail: "Inspecting apps/web/src/store.ts",
+        data: { toolCallId: "reasoning-1" },
+      },
+      turnId: "turn-1",
+    });
+
+    const next = applyOrchestrationEventsHotPath(makeState(makeThread()), [
+      makeDomainEvent(
+        "thread.activity-appended",
+        { threadId, activity: started },
+        { sequence: 1 },
+      ),
+      makeDomainEvent(
+        "thread.activity-appended",
+        { threadId, activity: completed },
+        { sequence: 2 },
+      ),
+    ]);
+
+    expect(next.threads[0]?.activities).toHaveLength(1);
+    expect(next.threads[0]?.activities[0]).toMatchObject({
+      id: activityId,
+      payload: {
+        status: "completed",
+        detail: "Inspecting apps/web/src/store.ts",
+        data: { toolCallId: "reasoning-1" },
+      },
+    });
+    expect(next.activityIdsByThreadId?.[threadId]).toEqual([activityId]);
+  });
+
   it("batch-reduces consecutive activity events without changing the resulting state", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const events = [0, 1, 2].map((index) =>
