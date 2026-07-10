@@ -149,27 +149,51 @@ export function repairBrowserProfileFromBridgeManifest(
     for (const entryGroup of BROWSER_PARTITION_SEED_ENTRY_GROUPS) {
       const baseEntryName = entryGroup[0];
       if (!FS.existsSync(Path.join(sourcePartitionPath, baseEntryName))) continue;
-      if (
-        entryGroup.some((entryName) => FS.existsSync(Path.join(targetPartitionPath, entryName)))
-      ) {
-        continue;
-      }
+      if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
 
       const sourceEntryNames = entryGroup.filter((entryName) =>
         FS.existsSync(Path.join(sourcePartitionPath, entryName)),
       );
       FS.mkdirSync(targetPartitionPath, { recursive: true });
-      for (const entryName of sourceEntryNames) {
-        FS.cpSync(
-          Path.join(sourcePartitionPath, entryName),
-          Path.join(targetPartitionPath, entryName),
-          {
+      const stagedGroupPath = FS.mkdtempSync(Path.join(targetPartitionPath, ".synara-bridge-"));
+      try {
+        // Stage the whole source generation before removing orphaned target
+        // sidecars, so a failed source copy leaves the target untouched.
+        for (const entryName of sourceEntryNames) {
+          FS.cpSync(
+            Path.join(sourcePartitionPath, entryName),
+            Path.join(stagedGroupPath, entryName),
+            {
+              recursive: true,
+              errorOnExist: true,
+              force: false,
+            },
+          );
+        }
+
+        // Another startup may have completed the repair while this group was
+        // staged. Preserve its database and leave its sidecars untouched.
+        if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
+
+        for (const sidecarEntryName of entryGroup.slice(1)) {
+          FS.rmSync(Path.join(targetPartitionPath, sidecarEntryName), {
             recursive: true,
-            errorOnExist: false,
-            force: false,
-          },
-        );
-        copiedEntries.push(entryName);
+            force: true,
+          });
+        }
+        const installOrder = [
+          ...sourceEntryNames.filter((entryName) => entryName !== baseEntryName),
+          baseEntryName,
+        ];
+        for (const entryName of installOrder) {
+          FS.renameSync(
+            Path.join(stagedGroupPath, entryName),
+            Path.join(targetPartitionPath, entryName),
+          );
+        }
+        copiedEntries.push(...sourceEntryNames);
+      } finally {
+        FS.rmSync(stagedGroupPath, { recursive: true, force: true });
       }
     }
 

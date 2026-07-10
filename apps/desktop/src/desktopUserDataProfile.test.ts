@@ -124,6 +124,39 @@ describe("desktopUserDataProfile", () => {
     expect(FS.existsSync(Path.join(targetPartitionPath, "Cookies-journal"))).toBe(false);
   });
 
+  it("replaces an orphaned target sidecar with one from the repaired database generation", () => {
+    const appDataBase = makeTempDir();
+    const targetPath = Path.join(appDataBase, "synara");
+    const sourcePath = Path.join(appDataBase, "previous-profile");
+    const sourcePartitionPath = Path.join(sourcePath, "Partitions", "previous-browser");
+    const targetPartitionPath = Path.join(targetPath, "Partitions", "synara-browser");
+    FS.mkdirSync(sourcePartitionPath, { recursive: true });
+    FS.mkdirSync(targetPartitionPath, { recursive: true });
+    FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies"), "bridge-cookie");
+    FS.writeFileSync(Path.join(sourcePartitionPath, "Cookies-journal"), "bridge-journal");
+    FS.writeFileSync(Path.join(targetPartitionPath, "Cookies-journal"), "orphaned-journal");
+    FS.writeFileSync(
+      Path.join(targetPath, "synara-profile-seed.json"),
+      JSON.stringify({ sourcePath }),
+    );
+
+    expect(repairBrowserProfileFromBridgeManifest(targetPath)).toMatchObject({
+      status: "repaired",
+      copiedEntries: ["Cookies", "Cookies-journal"],
+    });
+    expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies"), "utf8")).toBe(
+      "bridge-cookie",
+    );
+    expect(FS.readFileSync(Path.join(targetPartitionPath, "Cookies-journal"), "utf8")).toBe(
+      "bridge-journal",
+    );
+    expect(
+      FS.readdirSync(targetPartitionPath).some((entryName) =>
+        entryName.startsWith(".synara-bridge-"),
+      ),
+    ).toBe(false);
+  });
+
   it("copies from only the newest browser partition recorded under the bridge profile", () => {
     const appDataBase = makeTempDir();
     const targetPath = Path.join(appDataBase, "synara");
