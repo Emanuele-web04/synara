@@ -1,4 +1,4 @@
-import type { GitStatusResult, GitStatusStreamEvent } from "@t3tools/contracts";
+import type { GitStatusResult, GitStatusStreamEvent } from "@synara/contracts";
 import { Deferred, Effect, Layer, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

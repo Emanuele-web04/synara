@@ -1,4 +1,4 @@
-import { type ModelSelection } from "@t3tools/contracts";
+import { type ModelSelection } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveAvailableHandoffTargetProviders,

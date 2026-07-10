@@ -11,4 +11,4 @@ export {
   deriveTerminalTitleFromCommand as deriveTerminalThreadTitleFromCommand,
   isGenericTerminalThreadTitle,
   resolveTerminalVisualIdentity,
-} from "@t3tools/shared/terminalThreads";
+} from "@synara/shared/terminalThreads";

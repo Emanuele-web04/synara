@@ -14,7 +14,7 @@ import type {
   ModelSelection,
   ProviderStartOptions,
   ServerGenerateAutomationIntentResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { TextGenerationError } from "../Errors.ts";
 
@@ -261,7 +261,7 @@ export interface TextGenerationShape {
 export class CodexTextGeneration extends ServiceMap.Service<
   CodexTextGeneration,
   TextGenerationShape
->()("t3/git/Services/TextGeneration/CodexTextGeneration") {}
+>()("synara/git/Services/TextGeneration/CodexTextGeneration") {}
 
 /**
  * OpenCodeTextGeneration - Provider-specific OpenCode implementation for git text generation.
@@ -269,7 +269,7 @@ export class CodexTextGeneration extends ServiceMap.Service<
 export class OpenCodeTextGeneration extends ServiceMap.Service<
   OpenCodeTextGeneration,
   TextGenerationShape
->()("t3/git/Services/TextGeneration/OpenCodeTextGeneration") {}
+>()("synara/git/Services/TextGeneration/OpenCodeTextGeneration") {}
 
 /**
  * KiloTextGeneration - Provider-specific Kilo implementation for git text generation.
@@ -277,7 +277,7 @@ export class OpenCodeTextGeneration extends ServiceMap.Service<
 export class KiloTextGeneration extends ServiceMap.Service<
   KiloTextGeneration,
   TextGenerationShape
->()("t3/git/Services/TextGeneration/KiloTextGeneration") {}
+>()("synara/git/Services/TextGeneration/KiloTextGeneration") {}
 
 /**
  * CursorTextGeneration - Provider-specific Cursor implementation for git text generation.
@@ -285,11 +285,11 @@ export class KiloTextGeneration extends ServiceMap.Service<
 export class CursorTextGeneration extends ServiceMap.Service<
   CursorTextGeneration,
   TextGenerationShape
->()("t3/git/Services/TextGeneration/CursorTextGeneration") {}
+>()("synara/git/Services/TextGeneration/CursorTextGeneration") {}
 
 /**
  * TextGeneration - Service tag for commit and PR text generation.
  */
 export class TextGeneration extends ServiceMap.Service<TextGeneration, TextGenerationShape>()(
-  "t3/git/Services/TextGeneration",
+  "synara/git/Services/TextGeneration",
 ) {}

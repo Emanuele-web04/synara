@@ -1,4 +1,4 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@synara/contracts";
 
 const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
   "approval.requested",

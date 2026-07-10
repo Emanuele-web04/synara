@@ -2,7 +2,7 @@
 // Purpose: Pure routing decisions for opening threads as single chats or split panes.
 // Exports: split-aware activation resolvers shared by sidebar click, keyboard, and search flows.
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import {
   resolveSplitViewPaneIdForThread,
   type PaneId,

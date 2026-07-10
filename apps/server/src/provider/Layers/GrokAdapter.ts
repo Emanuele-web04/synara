@@ -21,8 +21,8 @@ import {
   type RuntimeMode,
   type ThreadId,
   TurnId,
-} from "@t3tools/contracts";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -96,7 +96,7 @@ const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
 const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
-const DPCODE_GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
+const SYNARA_GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
 const GROK_RESUME_REPLAY_QUIET_MS = 200;
 // Longest that startSession blocks waiting for the resume replay to settle.
@@ -188,7 +188,7 @@ function summarizeGrokAcpRequestPayload(method: string, payload: unknown): unkno
 function isGrokAcpDebugEnabled(): boolean {
   return (
     process.env[GROK_ACP_DEBUG_ENV] === "1" ||
-    process.env[DPCODE_GROK_ACP_DEBUG_ENV] === "1" ||
+    process.env[SYNARA_GROK_ACP_DEBUG_ENV] === "1" ||
     process.env[LEGACY_GROK_ACP_DEBUG_ENV] === "1"
   );
 }

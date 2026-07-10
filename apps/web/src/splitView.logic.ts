@@ -3,7 +3,7 @@
 // Layer: UI state helpers
 // Exports: tree traversal/mutation utilities and migration helpers consumed by the store and route surfaces
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import type {
   LeafPane,
   Pane,

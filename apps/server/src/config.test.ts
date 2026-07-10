@@ -16,9 +16,11 @@ import {
   resolveCanonicalWorkspaceRoots,
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultStudioWorkspaceRoot,
+  resolveStaticDir,
 } from "./config";
 
 const tempDirs = new Set<string>();
+const originalSynaraStaticDir = process.env.SYNARA_STATIC_DIR;
 
 function makeTempDir(prefix = "synara-config-test-"): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -31,6 +33,25 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
   tempDirs.clear();
+  if (originalSynaraStaticDir === undefined) {
+    delete process.env.SYNARA_STATIC_DIR;
+  } else {
+    process.env.SYNARA_STATIC_DIR = originalSynaraStaticDir;
+  }
+});
+
+describe("resolveStaticDir", () => {
+  it("uses the desktop static snapshot exposed through the Synara environment", async () => {
+    const snapshotDir = makeTempDir("synara-static-snapshot-test-");
+    fs.writeFileSync(path.join(snapshotDir, "index.html"), "<main>Synara</main>");
+    process.env.SYNARA_STATIC_DIR = snapshotDir;
+
+    const resolved = await Effect.runPromise(
+      resolveStaticDir().pipe(Effect.provide(NodeServices.layer)),
+    );
+
+    expect(resolved).toBe(path.resolve(snapshotDir));
+  });
 });
 
 const runResolveCanonicalWorkspaceRoots = (input: {

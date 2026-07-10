@@ -16,9 +16,11 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing.
-  - The compatibility release is marked as GitHub Latest permanently; later clean releases never replace it.
-- Publishes default-channel compatibility metadata plus same-version `synara` placeholders, then advances the dedicated channel after migration.
+  - The compatibility release remains GitHub Latest permanently; later clean Synara releases never replace it.
+- Publishes default-channel compatibility metadata plus byte-identical, same-version `synara*.yml` placeholders, then advances the dedicated channel after migration.
+- Mirrors stable versioned desktop payloads and dedicated `synara*.yml` metadata onto the pinned compatibility release.
+- Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
+- Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
 
 ## Desktop auto-update notes
@@ -32,7 +34,7 @@ This document covers build-only native validation and publishing desktop release
 - Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
 - Runtime channel: `synara`. The default `latest` channel is reserved for the permanent compatibility hop.
 - Repository slug source:
-  - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
+  - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
@@ -64,7 +66,7 @@ the package version to the release tag version.
 
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm the npm account controls the `@synara` scope and can publish `@synara/cli`.
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -82,8 +84,8 @@ Checklist:
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
-  - `DPCODE_PUBLISH_CLI=1`
-  - `DPCODE_FINALIZE_RELEASE=1`
+  - `SYNARA_PUBLISH_CLI=1`
+  - `SYNARA_FINALIZE_RELEASE=1`
 
 ## 1) Build-only native CI validation
 

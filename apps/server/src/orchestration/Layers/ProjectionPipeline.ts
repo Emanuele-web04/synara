@@ -4,19 +4,19 @@ import {
   EventId,
   type OrchestrationEvent,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 import {
   addThreadMarker,
   removeThreadMarker,
   setThreadMarkerDone,
   setThreadMarkerLabel,
-} from "@t3tools/shared/threadMarkers";
+} from "@synara/shared/threadMarkers";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -79,7 +79,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
-import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
+import { deriveThreadSummaryState } from "@synara/shared/threadSummary";
 import {
   shouldApplyThreadsProjection,
   shouldRefreshThreadShellSummary,

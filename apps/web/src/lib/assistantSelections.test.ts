@@ -1,4 +1,4 @@
-import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS } from "@t3tools/contracts";
+import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

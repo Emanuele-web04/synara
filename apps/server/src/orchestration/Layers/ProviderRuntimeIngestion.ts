@@ -17,15 +17,15 @@ import {
   type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   extractSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import {
   generatedImageMarkdown,
@@ -86,7 +86,7 @@ const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
-const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
+const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.SYNARA_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type RuntimeIngestionDomainEvent = Extract<
   OrchestrationEvent,

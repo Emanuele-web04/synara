@@ -3,7 +3,7 @@
 // Layer: Kanban UI component
 // Exports: KanbanTaskExtrasMenu
 
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode } from "@synara/contracts";
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";

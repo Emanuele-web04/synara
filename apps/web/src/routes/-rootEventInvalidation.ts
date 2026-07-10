@@ -7,8 +7,8 @@ import {
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationEvent,
   type ThreadId,
-} from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 import type { AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";

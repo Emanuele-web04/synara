@@ -13,7 +13,7 @@ import type {
   ProviderComposerCapabilities,
   ProviderKind,
   ProviderListSkillsResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

@@ -8,11 +8,11 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
-} from "@t3tools/contracts";
-import { normalizeModelSlug } from "@t3tools/shared/model";
-import { buildSynaraBranchName } from "@t3tools/shared/git";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
+} from "@synara/contracts";
+import { normalizeModelSlug } from "@synara/shared/model";
+import { buildSynaraBranchName } from "@synara/shared/git";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
   type ChatAssistantSelectionAttachment,
   type ChatMessage,

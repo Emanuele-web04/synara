@@ -3,8 +3,8 @@
 // Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
 // Note: the "Create branch" footer row uses raw <button> because it is a
 // menu-item-style affordance inside a ComboboxPopup, not a generic action.
-import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@t3tools/contracts";
-import { pluralize } from "@t3tools/shared/text";
+import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";

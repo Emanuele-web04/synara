@@ -4,7 +4,7 @@
 
 import "../../../index.css";
 
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { useState, type ComponentProps } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +39,13 @@ describe("EnvironmentNotesSection", () => {
 
   it("keeps a rejected save dirty so a later flush retries it", async () => {
     type NotesChange = ComponentProps<typeof EnvironmentNotesSection>["onChange"];
+    let rejectFirstSave!: (reason?: unknown) => void;
+    const firstSave = new Promise<void>((_resolve, reject) => {
+      rejectFirstSave = reject;
+    });
     const onChange = vi
       .fn<NotesChange>()
-      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementationOnce(() => firstSave)
       .mockResolvedValue(undefined);
     const screen = await render(
       <EnvironmentNotesSection
@@ -54,6 +58,8 @@ describe("EnvironmentNotesSection", () => {
     await page.getByPlaceholder("Type here").fill("unsaved draft");
     document.querySelector<HTMLTextAreaElement>("textarea")?.blur();
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    rejectFirstSave(new Error("offline"));
+    await firstSave.catch(() => undefined);
     await Promise.resolve();
 
     await screen.unmount();

@@ -10,15 +10,15 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   decodeSubagentAgentStates,
   extractSubagentIdentityHints,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
-} from "@t3tools/shared/subagents";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/shared/subagents";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
+import { pluralize } from "@synara/shared/text";
 import {
   deriveReadableToolTitle,
   isGenericToolTitle,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,

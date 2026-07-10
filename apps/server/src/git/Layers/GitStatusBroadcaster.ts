@@ -6,8 +6,8 @@ import type {
   GitStatusRemoteResult,
   GitStatusResult,
   GitStatusStreamEvent,
-} from "@t3tools/contracts";
-import { mergeGitStatusParts } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { mergeGitStatusParts } from "@synara/shared/git";
 
 import { GitCore } from "../Services/GitCore";
 import { GitManager } from "../Services/GitManager";

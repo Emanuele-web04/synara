@@ -3,12 +3,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { CliConfig, t3Cli } from "./main";
+import { CliConfig, synaraCli } from "./main";
 import { OpenLive } from "./open";
 import { Command } from "effect/unstable/cli";
 import { version } from "../package.json" with { type: "json" };
 import { ServerLive } from "./effectServer";
-import { NetService } from "@t3tools/shared/Net";
+import { NetService } from "@synara/shared/Net";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const RuntimeLayer = Layer.empty.pipe(
@@ -20,6 +20,6 @@ const RuntimeLayer = Layer.empty.pipe(
   Layer.provideMerge(FetchHttpClient.layer),
 );
 
-Command.run(t3Cli, { version })
+Command.run(synaraCli, { version })
   .pipe(Effect.provide(RuntimeLayer))
   .pipe((program) => NodeRuntime.runMain(program as Effect.Effect<void, unknown, never>));

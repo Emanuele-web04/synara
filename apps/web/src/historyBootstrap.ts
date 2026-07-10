@@ -1,6 +1,6 @@
 import type { ChatMessage } from "./types";
 import { stripEmbeddedAssistantSelections } from "./lib/assistantSelections";
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 
 export interface BootstrapInputResult {
   text: string;

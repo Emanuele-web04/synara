@@ -1,5 +1,5 @@
-import type { PinnedMessage } from "@t3tools/contracts";
-import { MessageId } from "@t3tools/contracts";
+import type { PinnedMessage } from "@synara/contracts";
+import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

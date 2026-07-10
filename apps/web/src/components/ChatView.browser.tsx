@@ -16,7 +16,7 @@ import {
   type WsWelcomePayload,
   WS_METHODS,
   OrchestrationSessionStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
@@ -36,6 +36,8 @@ import {
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
+import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
+import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -48,6 +50,7 @@ import {
 } from "../test/effectRpcWebSocketMock";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
@@ -142,7 +145,7 @@ function createBaseServerConfig(): ServerConfig {
   return {
     cwd: "/repo/project",
     worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.t3code-keybindings.json",
+    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
     keybindings: [],
     issues: [],
     providers: [
@@ -938,7 +941,10 @@ function recordProjectCreateCommand(command: unknown): boolean {
         ...fixture.snapshot.projects.filter((project) => project.id !== projectId),
         {
           id: projectId,
-          kind: "kind" in command && command.kind === "chat" ? "chat" : "project",
+          kind:
+            "kind" in command && (command.kind === "chat" || command.kind === "studio")
+              ? command.kind
+              : "project",
           title: String(command.title),
           workspaceRoot: String(command.workspaceRoot),
           defaultModelSelection:
@@ -1055,6 +1061,74 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     return null;
   }
   return {};
+}
+
+function installDeterministicSendNativeApi(): () => void {
+  const previousNativeApi = window.nativeApi;
+  const wsNativeApi = readNativeApi();
+  if (!wsNativeApi) {
+    throw new Error("Expected browser native API fixture.");
+  }
+
+  Object.defineProperty(window, "nativeApi", {
+    configurable: true,
+    value: {
+      ...wsNativeApi,
+      git: {
+        ...wsNativeApi.git,
+        createWorktree: async (input: Parameters<typeof wsNativeApi.git.createWorktree>[0]) => {
+          const request: WsRequestEnvelope["body"] = {
+            _tag: WS_METHODS.gitCreateWorktree,
+            ...input,
+          };
+          wsRequests.push(request);
+          return resolveWsRpc(request) as Awaited<
+            ReturnType<typeof wsNativeApi.git.createWorktree>
+          >;
+        },
+      },
+      terminal: {
+        ...wsNativeApi.terminal,
+        open: async (input: Parameters<typeof wsNativeApi.terminal.open>[0]) => {
+          const request: WsRequestEnvelope["body"] = {
+            _tag: WS_METHODS.terminalOpen,
+            ...input,
+          };
+          wsRequests.push(request);
+          return resolveWsRpc(request) as Awaited<ReturnType<typeof wsNativeApi.terminal.open>>;
+        },
+        write: async (input: Parameters<typeof wsNativeApi.terminal.write>[0]) => {
+          wsRequests.push({
+            _tag: WS_METHODS.terminalWrite,
+            ...input,
+          });
+        },
+      },
+      orchestration: {
+        ...wsNativeApi.orchestration,
+        dispatchCommand: async (
+          command: Parameters<typeof wsNativeApi.orchestration.dispatchCommand>[0],
+        ) => {
+          wsRequests.push({
+            _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+            command,
+          });
+          return { sequence: fixture.snapshot.snapshotSequence + 1 };
+        },
+      },
+    },
+  });
+
+  return () => {
+    if (previousNativeApi) {
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: previousNativeApi,
+      });
+    } else {
+      Reflect.deleteProperty(window, "nativeApi");
+    }
+  };
 }
 
 function toRecordedWsRequestBody(request: {
@@ -1576,6 +1650,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   beforeEach(async () => {
     resetWsNativeApiForTest();
+    resetRetainedThreadDetailSubscriptionsForTests();
+    await resetHomeChatProjectPrewarmStateForTests();
+    await resetStudioProjectPrewarmStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     localStorage.clear();
@@ -1606,7 +1683,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetHomeChatProjectPrewarmStateForTests();
+    await resetStudioProjectPrewarmStateForTests();
+    resetRetainedThreadDetailSubscriptionsForTests();
     resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
@@ -2423,7 +2503,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/project",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
+              SYNARA_PROJECT_ROOT: "/repo/project",
             },
           });
         },
@@ -2502,8 +2582,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/worktrees/feature-draft",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
-              T3CODE_WORKTREE_PATH: "/repo/worktrees/feature-draft",
+              SYNARA_PROJECT_ROOT: "/repo/project",
+              SYNARA_WORKTREE_PATH: "/repo/worktrees/feature-draft",
             },
           });
         },
@@ -2934,7 +3014,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
         OTHER_THREAD_ID,
       ),
     });
-
     try {
       const composerForm = await waitForElement(
         () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
@@ -3569,7 +3648,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: withHomeChatProject(createDraftOnlySnapshot()),
+      snapshot: withStudioProject(withHomeChatProject(createDraftOnlySnapshot())),
       configureFixture: (nextFixture) => {
         nextFixture.welcome = {
           ...nextFixture.welcome,
@@ -3635,7 +3714,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const composerBlockAfterRect = composerBlockAfter!.getBoundingClientRect();
       // Guard against the empty-pane entry animation restarting with a vertical translate
       // when Home selection turns into a project draft.
-      expect(Math.round(Math.abs(afterRect.height - beforeRect.height))).toBeLessThanOrEqual(1);
+      expect(
+        Math.round(Math.abs(afterRect.height - beforeRect.height)),
+        `Composer controls changed height ${beforeRect.height}px -> ${afterRect.height}px`,
+      ).toBeLessThanOrEqual(1);
       expect(Math.round(Math.abs(afterRect.top - beforeRect.top))).toBeLessThanOrEqual(1);
       expect(
         Math.round(Math.abs(composerBlockAfterRect.top - composerBlockBeforeRect.top)),
@@ -3825,6 +3907,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+          ).toBe(newThreadId);
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          expect(mounted.router.state.status).toBe("idle");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
 
@@ -3846,6 +3938,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("creates a temporary branch-backed worktree on first send in New worktree mode", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -3866,6 +3959,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+          ).toBe(newThreadId);
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          expect(mounted.router.state.status).toBe("idle");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
 
@@ -3874,6 +3977,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await newWorktreeOption.click();
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            envMode: "worktree",
+            branch: "main",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
       const composerEditor = await waitForComposerEditor();
       await vi.waitFor(
         () => {
@@ -3924,17 +4036,23 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
   it("runs the setup action from the newly-created worktree before starting the turn", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: withProjectScripts(
-        createSnapshotForTargetUser({
-          targetMessageId: "msg-user-new-worktree-setup-action-test" as MessageId,
-          targetText: "new worktree setup action test",
-        }),
+        withStudioProject(
+          withHomeChatProject(
+            createSnapshotForTargetUser({
+              targetMessageId: "msg-user-new-worktree-setup-action-test" as MessageId,
+              targetText: "new worktree setup action test",
+            }),
+          ),
+        ),
         [
           {
             id: "setup",
@@ -3959,6 +4077,16 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
+      await vi.waitFor(
+        () => {
+          expect(
+            useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+          ).toBe(newThreadId);
+          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          expect(mounted.router.state.status).toBe("idle");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
 
@@ -3967,6 +4095,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await newWorktreeOption.click();
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it with setup");
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            envMode: "worktree",
+            branch: "main",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
       const composerEditor = await waitForComposerEditor();
       await vi.waitFor(
         () => {
@@ -3977,66 +4114,110 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
-      await sendButton.click();
+      const composerForm = document.querySelector<HTMLFormElement>(
+        'form[data-chat-composer-form="true"]',
+      );
+      expect(composerForm).not.toBeNull();
+      composerForm!.requestSubmit();
 
-      await vi.waitFor(
+      const createWorktreeRequest = await vi.waitFor(
         () => {
-          const createWorktreeIndex = wsRequests.findIndex((request) => {
-            return (
-              request._tag === WS_METHODS.gitCreateWorktree &&
-              request.cwd === "/repo/project" &&
-              request.branch === "main" &&
-              typeof request.newBranch === "string"
-            );
-          });
-          expect(createWorktreeIndex).toBeGreaterThanOrEqual(0);
-          const createWorktreeRequest = wsRequests[createWorktreeIndex];
-          if (
-            !createWorktreeRequest ||
-            createWorktreeRequest._tag !== WS_METHODS.gitCreateWorktree
-          ) {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === WS_METHODS.gitCreateWorktree &&
+              candidate.cwd === "/repo/project" &&
+              candidate.branch === "main" &&
+              typeof candidate.newBranch === "string",
+          );
+          expect(
+            request,
+            `Expected create worktree request; draft=${JSON.stringify(
+              useComposerDraftStore.getState().getDraftThread(newThreadId),
+            )}; path=${mounted.router.state.location.pathname}; forms=${
+              document.querySelectorAll('form[data-chat-composer-form="true"]').length
+            }; ui=${(document.body.textContent ?? "").slice(-300)}; saw ${wsRequests
+              .map((candidate) => {
+                const command = readDispatchedCommand(candidate);
+                return command ? `${candidate._tag}:${command.type}` : candidate._tag;
+              })
+              .slice(-40)
+              .join(", ")}`,
+          ).toBeTruthy();
+          if (!request || request._tag !== WS_METHODS.gitCreateWorktree) {
             throw new Error("Expected create worktree request.");
           }
-          const worktreePath = `/repo/.codex/worktrees/project/${String(
-            createWorktreeRequest.newBranch,
-          ).replaceAll("/", "-")}`;
-
-          const terminalOpenIndex = wsRequests.findIndex((request) => {
-            return (
-              request._tag === WS_METHODS.terminalOpen &&
-              request.threadId === newThreadId &&
-              request.cwd === worktreePath
-            );
-          });
-          expect(terminalOpenIndex).toBeGreaterThan(createWorktreeIndex);
-          expect(wsRequests[terminalOpenIndex]).toMatchObject({
-            _tag: WS_METHODS.terminalOpen,
-            cwd: worktreePath,
-            env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
-              T3CODE_WORKTREE_PATH: worktreePath,
-            },
-          });
-
-          const terminalWriteIndex = wsRequests.findIndex((request) => {
-            return (
-              request._tag === WS_METHODS.terminalWrite &&
-              request.threadId === newThreadId &&
-              request.data === "printf setup\r"
-            );
-          });
-          expect(terminalWriteIndex).toBeGreaterThan(terminalOpenIndex);
-
-          const turnStartIndex = wsRequests.findIndex((request) => {
-            const command = readDispatchedCommand(request);
-            return command?.type === "thread.turn.start" && command.threadId === newThreadId;
-          });
-          expect(turnStartIndex).toBeGreaterThan(terminalWriteIndex);
+          return request;
         },
         { timeout: 10_000, interval: 16 },
       );
+      const createWorktreeIndex = wsRequests.indexOf(createWorktreeRequest);
+      const worktreePath = `/repo/.codex/worktrees/project/${String(
+        createWorktreeRequest.newBranch,
+      ).replaceAll("/", "-")}`;
+
+      const terminalOpenRequest = await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === WS_METHODS.terminalOpen &&
+              candidate.threadId === newThreadId &&
+              candidate.cwd === worktreePath,
+          );
+          expect(
+            request,
+            `Expected setup terminal open; saw ${wsRequests
+              .map((candidate) => {
+                const command = readDispatchedCommand(candidate);
+                return command ? `${candidate._tag}:${command.type}` : candidate._tag;
+              })
+              .join(", ")}`,
+          ).toBeTruthy();
+          return request;
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+      const terminalOpenIndex = wsRequests.indexOf(terminalOpenRequest!);
+      expect(terminalOpenIndex).toBeGreaterThan(createWorktreeIndex);
+      expect(terminalOpenRequest).toMatchObject({
+        _tag: WS_METHODS.terminalOpen,
+        cwd: worktreePath,
+        env: {
+          SYNARA_PROJECT_ROOT: "/repo/project",
+          SYNARA_WORKTREE_PATH: worktreePath,
+        },
+      });
+
+      const terminalWriteRequest = await vi.waitFor(
+        () => {
+          const request = wsRequests.find(
+            (candidate) =>
+              candidate._tag === WS_METHODS.terminalWrite &&
+              candidate.threadId === newThreadId &&
+              candidate.data === "printf setup\r",
+          );
+          expect(request).toBeTruthy();
+          return request;
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+      const terminalWriteIndex = wsRequests.indexOf(terminalWriteRequest!);
+      expect(terminalWriteIndex).toBeGreaterThan(terminalOpenIndex);
+
+      const turnStartRequest = await vi.waitFor(
+        () => {
+          const request = wsRequests.find((candidate) => {
+            const command = readDispatchedCommand(candidate);
+            return command?.type === "thread.turn.start" && command.threadId === newThreadId;
+          });
+          expect(request).toBeTruthy();
+          return request;
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+      expect(wsRequests.indexOf(turnStartRequest!)).toBeGreaterThan(terminalWriteIndex);
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
@@ -4661,12 +4842,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the queued-follow-up rail: full composer-input width,
-      // centered, with the composer retaining its own rounded top corners. Full width keeps
-      // the overlapped transcript from peeking past the panel in side gutters.
+      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
+      // eleven twelfths of the composer width while the input keeps its rounded top corners.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - (composerRect.width * 11) / 12)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);

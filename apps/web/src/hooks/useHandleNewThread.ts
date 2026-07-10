@@ -1,5 +1,5 @@
-import { type ProjectId, ThreadId } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import { type ProjectId, ThreadId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { useAppSettings } from "../appSettings";

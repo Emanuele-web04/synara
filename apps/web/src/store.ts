@@ -14,22 +14,22 @@ import {
   type OrchestrationShellStreamEvent,
   type OrchestrationSessionStatus,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 import {
   addThreadMarker,
   removeThreadMarker,
   setThreadMarkerDone,
   setThreadMarkerLabel,
-} from "@t3tools/shared/threadMarkers";
-import { normalizeModelSlug } from "@t3tools/shared/model";
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadMarkers";
+import { normalizeModelSlug } from "@synara/shared/model";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { create } from "zustand";
 import {
   type ChatAttachment,
@@ -44,7 +44,7 @@ import {
 } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 import { hasLiveTurnTailWork, isSessionRunningTurn } from "./session-logic";
-import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
+import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
@@ -96,19 +96,6 @@ type ApplyOrchestrationEventOptions = {
 };
 
 const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
-const LEGACY_PERSISTED_STATE_KEYS = [
-  "dpcode:renderer-state:v8",
-  "t3code:renderer-state:v8",
-  "t3code:renderer-state:v7",
-  "t3code:renderer-state:v6",
-  "t3code:renderer-state:v5",
-  "t3code:renderer-state:v4",
-  "t3code:renderer-state:v3",
-  "codething:renderer-state:v4",
-  "codething:renderer-state:v3",
-  "codething:renderer-state:v2",
-  "codething:renderer-state:v1",
-] as const;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
 // Stable empty reference for `threadIds` fallbacks. Consumers must read through
@@ -244,8 +231,6 @@ function readPersistedState(): AppState {
   }
 }
 
-let legacyKeysCleanedUp = false;
-
 function persistState(state: AppState): void {
   if (typeof window === "undefined") return;
   try {
@@ -261,12 +246,6 @@ function persistState(state: AppState): void {
         projectNamesByCwd: Object.fromEntries(persistedProjectNamesByCwd),
       }),
     );
-    if (!legacyKeysCleanedUp) {
-      legacyKeysCleanedUp = true;
-      for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
-        window.localStorage.removeItem(legacyKey);
-      }
-    }
   } catch {
     // Ignore quota/storage errors to avoid breaking chat UX.
   }
@@ -4067,8 +4046,7 @@ export function syncServerShellSnapshot(
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
     (thread) =>
-      deletedProjectIdsById[thread.projectId] !== true &&
-      deletedThreadIdsById[thread.id] !== true,
+      deletedProjectIdsById[thread.projectId] !== true && deletedThreadIdsById[thread.id] !== true,
   );
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] !== true,

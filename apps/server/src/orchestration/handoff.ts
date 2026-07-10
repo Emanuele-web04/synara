@@ -2,7 +2,7 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type OrchestrationMessage,
   type OrchestrationThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 const RECENT_MESSAGE_COUNT = 6;
 const EARLIER_MESSAGE_CHAR_LIMIT = 320;

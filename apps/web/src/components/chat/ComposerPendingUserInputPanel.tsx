@@ -3,7 +3,7 @@
 // the nav arrows stay raw <button> since they are compact icon controls. The card
 // is rendered detached, floating just above the composer (not fused into the
 // composer surface), so it reuses the composer surface chrome to stay in-tint.
-import { type ApprovalRequestId } from "@t3tools/contracts";
+import { type ApprovalRequestId } from "@synara/contracts";
 import { memo, useEffect, useEffectEvent, useRef } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {

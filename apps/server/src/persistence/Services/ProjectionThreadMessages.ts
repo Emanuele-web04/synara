@@ -18,7 +18,7 @@ import {
   ThreadId,
   TurnId,
   IsoDateTime,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema, ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 
@@ -105,4 +105,4 @@ export interface ProjectionThreadMessageRepositoryShape {
 export class ProjectionThreadMessageRepository extends ServiceMap.Service<
   ProjectionThreadMessageRepository,
   ProjectionThreadMessageRepositoryShape
->()("t3/persistence/Services/ProjectionThreadMessages/ProjectionThreadMessageRepository") {}
+>()("synara/persistence/Services/ProjectionThreadMessages/ProjectionThreadMessageRepository") {}

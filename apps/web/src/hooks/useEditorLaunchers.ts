@@ -6,7 +6,7 @@
 //          these surfaces are mounted. Rendering is left entirely to the call sites.
 // Layer: Chat editor action hook
 
-import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useCallback, useMemo } from "react";
 
 import {

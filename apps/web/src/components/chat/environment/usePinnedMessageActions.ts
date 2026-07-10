@@ -8,7 +8,7 @@ import {
   type MessageId,
   type PinnedMessage,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useCallback, useEffect, useRef } from "react";
 
 import { toastManager } from "~/components/ui/toast";

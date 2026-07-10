@@ -1,4 +1,4 @@
-import type { AutomationSchedule } from "@t3tools/contracts";
+import type { AutomationSchedule } from "@synara/contracts";
 
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * MINUTE_MS;

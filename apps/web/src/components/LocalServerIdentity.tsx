@@ -3,12 +3,12 @@
 // Layer: Web UI primitive (shared between the Environment menu and the in-app browser home).
 // Depends on: shared local-server presentation helpers.
 
-import type { ServerLocalServerProcess } from "@t3tools/contracts";
+import type { ServerLocalServerProcess } from "@synara/contracts";
 import {
   localServerAddressLabel,
   localServerFolderLabel,
   localServerPrimaryLabel,
-} from "@t3tools/shared/localServers";
+} from "@synara/shared/localServers";
 
 import { cn } from "~/lib/utils";
 

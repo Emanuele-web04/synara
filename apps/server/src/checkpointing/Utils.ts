@@ -6,8 +6,8 @@ import {
   type ProjectKind,
   type ThreadId,
   TurnId,
-} from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
 

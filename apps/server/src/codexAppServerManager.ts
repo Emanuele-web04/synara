@@ -37,9 +37,9 @@ import {
   ProviderInteractionMode,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
-import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {

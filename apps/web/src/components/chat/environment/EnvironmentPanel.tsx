@@ -19,7 +19,7 @@ import type {
   ThreadId,
   ThreadMarker,
   ThreadMarkerId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useAppSettings } from "~/appSettings";

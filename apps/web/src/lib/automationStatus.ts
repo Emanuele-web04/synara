@@ -1,4 +1,4 @@
-import type { AutomationDefinition, AutomationSchedule } from "@t3tools/contracts";
+import type { AutomationDefinition, AutomationSchedule } from "@synara/contracts";
 
 /**
  * Lifecycle state of an automation, independent of any in-flight or unreviewed run. Single

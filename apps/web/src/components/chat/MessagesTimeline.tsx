@@ -9,9 +9,9 @@ import {
   ThreadId,
   type ThreadMarker,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/contracts";
+import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,

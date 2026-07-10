@@ -3,7 +3,7 @@
 // Layer: Web lib test
 // Depends on: parseChatAutomationIntent and cadence formatting.
 
-import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@t3tools/contracts";
+import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

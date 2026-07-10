@@ -15,7 +15,7 @@ import {
   ProviderItemId,
   ProviderRuntimeEvent,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
 

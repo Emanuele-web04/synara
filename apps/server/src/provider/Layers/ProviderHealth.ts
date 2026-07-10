@@ -16,11 +16,11 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
   ServerProviderUpdateState,
-} from "@t3tools/contracts";
-import { ServerProviderUpdateError } from "@t3tools/contracts";
-import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { ServerProviderUpdateError } from "@synara/contracts";
+import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,

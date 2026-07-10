@@ -6,7 +6,7 @@
 // pile on more 429s. Mirrors OpenUsage's ClaudeProvider (PR #849). Any fetcher can opt in via
 // createRateLimitResilience; keeping the state here avoids duplicating the bookkeeping per provider.
 
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 
 import { errorSnapshot } from "./parse";
 

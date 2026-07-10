@@ -1,6 +1,6 @@
 {
-  "name": "t3",
-  "version": "0.4.2",
+  "name": "@synara/cli",
+  "version": "0.5.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
     "directory": "apps/server"
   },
   "bin": {
-    "t3": "./dist/index.mjs"
+    "synara": "./dist/index.mjs"
   },
   "files": [
     "dist"
@@ -42,9 +42,9 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/web": "workspace:*",
+    "@synara/contracts": "workspace:*",
+    "@synara/shared": "workspace:*",
+    "@synara/web": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",

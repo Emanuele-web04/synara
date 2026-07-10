@@ -8,7 +8,7 @@ import {
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { IconType } from "react-icons";

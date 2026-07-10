@@ -34,6 +34,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
+      mirror_to_stable_channel: ${{ steps.release_meta.outputs.mirror_to_stable_channel }}
       publish_release: ${{ steps.release_mode.outputs.publish_release }}
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
@@ -118,6 +119,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Verify Synara identity
+        run: bun run brand:check
 
       - name: Lint
         run: bun run lint
@@ -301,7 +305,7 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_PUBLISH_CLI == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -331,7 +335,7 @@ jobs:
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build CLI package
-        run: bun run build --filter=@t3tools/web --filter=t3
+        run: bun run build --filter=@synara/web --filter=@synara/cli
 
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
@@ -465,7 +469,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed
-        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        if: ${{ needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -518,7 +522,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_FINALIZE_RELEASE == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

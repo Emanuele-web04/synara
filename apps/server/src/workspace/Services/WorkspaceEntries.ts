@@ -11,7 +11,7 @@ import type {
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export interface WorkspaceEntriesShape {
   readonly browse: (
@@ -39,7 +39,7 @@ export interface WorkspaceEntriesShape {
 }
 
 export class WorkspaceEntries extends ServiceMap.Service<WorkspaceEntries, WorkspaceEntriesShape>()(
-  "t3/workspace/Services/WorkspaceEntries",
+  "synara/workspace/Services/WorkspaceEntries",
 ) {}
 
 export class WorkspaceEntriesError extends Data.TaggedError("WorkspaceEntriesError")<{

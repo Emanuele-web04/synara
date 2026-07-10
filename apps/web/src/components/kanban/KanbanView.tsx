@@ -4,7 +4,7 @@
 // Layer: Kanban route surface
 // Exports: KanbanView (default)
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 

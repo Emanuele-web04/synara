@@ -6,7 +6,7 @@
 import { Duration, Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
-import type { ChatAttachment } from "@t3tools/contracts";
+import type { ChatAttachment } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

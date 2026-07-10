@@ -50,7 +50,7 @@ describe("local image URL helpers", () => {
   it("forwards the desktop bridge legacy token so <img> requests stay authenticated", () => {
     (globalThis as unknown as { window: object }).window = {
       desktopBridge: { getWsUrl: () => "ws://127.0.0.1:51204/?token=secret-token-123" },
-      location: { origin: "app://t3code/" },
+      location: { origin: "app://synara/" },
     };
     const url = buildLocalImageUrl({
       src: "/Users/me/.codex/generated_images/thread/call.png",

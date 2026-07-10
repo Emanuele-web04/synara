@@ -6,7 +6,7 @@
  *
  * @module OrchestrationProjectionPipeline
  */
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -64,4 +64,4 @@ export interface OrchestrationProjectionPipelineShape {
 export class OrchestrationProjectionPipeline extends ServiceMap.Service<
   OrchestrationProjectionPipeline,
   OrchestrationProjectionPipelineShape
->()("t3/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline") {}
+>()("synara/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline") {}

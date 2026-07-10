@@ -8,8 +8,8 @@
 // Layer: Environment panel section
 // Depends on: studio.listThreadOutputs WS method + shell.showInFolder.
 
-import type { StudioOutputEntry, ThreadId } from "@t3tools/contracts";
-import { isSupportedLocalImagePath } from "@t3tools/shared/localPreviewFiles";
+import type { StudioOutputEntry, ThreadId } from "@synara/contracts";
+import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 

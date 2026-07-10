@@ -1,5 +1,5 @@
-import { EventId, MessageId, ThreadId } from "@t3tools/contracts";
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import { EventId, MessageId, ThreadId } from "@synara/contracts";
+import type { OrchestrationEvent } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

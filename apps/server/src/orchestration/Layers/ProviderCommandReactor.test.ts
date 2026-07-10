@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -12,7 +12,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -112,7 +112,7 @@ describe("ProviderCommandReactor", () => {
     readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
   }) {
     const now = new Date().toISOString();
-    const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
+    const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
     createdBaseDirs.add(baseDir);
     const { stateDir } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
@@ -1646,11 +1646,11 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         envMode: "worktree",
-        branch: "dpcode/cb661f0d",
+        branch: "synara/cb661f0d",
         worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
         associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "dpcode/cb661f0d",
-        associatedWorktreeRef: "dpcode/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
       }),
     );
 
@@ -1708,11 +1708,11 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap-gemini"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         envMode: "worktree",
-        branch: "dpcode/cb661f0d",
+        branch: "synara/cb661f0d",
         worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
         associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "dpcode/cb661f0d",
-        associatedWorktreeRef: "dpcode/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
       }),
     );
 
@@ -1740,7 +1740,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
     expect(harness.generateBranchName).not.toHaveBeenCalled();
     expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
-      oldBranch: "dpcode/cb661f0d",
+      oldBranch: "synara/cb661f0d",
       newBranch: "synara/fix-provider-startup-timeouts",
     });
 

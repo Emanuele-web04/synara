@@ -6,7 +6,7 @@
 // Layer: Routing
 // Depends on: sidebar UI persistence plus caller-supplied restore/fresh-chat policy.
 
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 

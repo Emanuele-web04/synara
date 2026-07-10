@@ -5,7 +5,7 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderModelOptions,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {

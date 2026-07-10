@@ -9,7 +9,7 @@ import { Buffer } from "node:buffer";
 import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;

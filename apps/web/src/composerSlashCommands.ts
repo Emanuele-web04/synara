@@ -1,10 +1,10 @@
-import type { GitBranch, ProviderKind } from "@t3tools/contracts";
+import type { GitBranch, ProviderKind } from "@synara/contracts";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
   normalizeComposerSlashCommandName,
   type BuiltInComposerSlashCommand,
-} from "@t3tools/shared/composerSlashCommands";
+} from "@synara/shared/composerSlashCommands";
 import { rankProviderDiscoveryItems } from "./lib/providerDiscovery";
 
 export { BUILT_IN_COMPOSER_SLASH_COMMANDS };

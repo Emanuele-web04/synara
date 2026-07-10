@@ -19,26 +19,25 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
+import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
   type ShellEnvironmentReader,
-} from "@t3tools/shared/shell";
+} from "@synara/shared/shell";
 
-import {
-  resolveBaseCodexHomePath,
-  resolveDpCodeCodexHomeOverlayPath,
-  shouldDisableDpCodeBrowserPlugin,
-} from "./codexHomePaths.ts";
+import { resolveBaseCodexHomePath, resolveSynaraCodexHomeOverlayPath } from "./codexHomePaths.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
+// Retired local browser integrations used a stable six-character namespace.
+// Match the structural conflict without retaining any previous product name.
+const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
+  /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
 interface CodexOverlayEntryLinker {
   readonly symlink: typeof symlinkSync;
@@ -52,10 +51,7 @@ export function resolveCodexBrowserUsePipePath(
   } = {},
 ): string {
   const env = input.env ?? process.env;
-  const configured =
-    env.SYNARA_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+  const configured = env.SYNARA_BROWSER_USE_PIPE_PATH?.trim();
   if (configured) {
     return configured;
   }
@@ -83,6 +79,17 @@ export function readSynaraConfigSuppressions(markerPath: string): readonly strin
   } catch {
     return [];
   }
+}
+
+function findConflictingLocalBrowserPluginSections(config: string): readonly string[] {
+  return [
+    ...new Set(
+      config
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN.test(line)),
+    ),
+  ];
 }
 
 export function disableCodexConfigSections(
@@ -136,10 +143,6 @@ export function disableCodexConfigSections(
   }
 
   return output.join("\n");
-}
-
-export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
-  return disableCodexConfigSections(config, [DPCODE_BROWSER_PLUGIN_CONFIG_HEADER], true);
 }
 
 function writeSynaraConfigSuppressions(
@@ -231,12 +234,12 @@ function ensureCodexOverlaySymlink(input: {
   linkOrCopyCodexOverlayEntry(input);
 }
 
-function prepareDpCodeCodexHomeOverlay(input: {
+function prepareSynaraCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -269,9 +272,11 @@ function prepareDpCodeCodexHomeOverlay(input: {
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
   const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
   const suppressedSections = [
-    ...readSynaraConfigSuppressions(suppressionMarkerPath),
-    DPCODE_BROWSER_PLUGIN_CONFIG_HEADER,
-  ];
+    ...new Set([
+      ...findConflictingLocalBrowserPluginSections(sourceConfig),
+      ...readSynaraConfigSuppressions(suppressionMarkerPath),
+    ]),
+  ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   writeFileSync(
     path.join(overlayHomePath, "config.toml"),
     disableCodexConfigSections(sourceConfig, suppressedSections, true),
@@ -291,12 +296,10 @@ export function buildCodexProcessEnv(
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
-    ? prepareDpCodeCodexHomeOverlay({
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-      })
-    : undefined;
+  const overlayHomePath = prepareSynaraCodexHomeOverlay({
+    env: baseEnv,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+  });
   const effectiveEnv =
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }

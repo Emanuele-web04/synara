@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/shared",
+  "name": "@synara/shared",
   "version": "0.0.0-alpha.1",
   "private": true,
   "type": "module",
@@ -39,6 +39,10 @@
     "./desktopChrome": {
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
+    },
+    "./desktopIdentity": {
+      "types": "./src/desktopIdentity.ts",
+      "import": "./src/desktopIdentity.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
@@ -159,7 +163,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
+    "@synara/contracts": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

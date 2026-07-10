@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 - 2026-07-09
+
+### Changed
+
+- Completed the Synara identity cutover across desktop packaging, the renderer origin, workspace packages, the public CLI, runtime variables, storage, Git metadata, assets, documentation, and release automation.
+- Set the production bundle ID and Windows AUMID to `com.emanueledipietro.synara`, with `.dev` used only for development.
+- Published the CLI identity as `@synara/cli` with the `synara` executable and moved all first-party workspaces to `@synara/*`.
+- Kept persisted renderer state available through the 0.4.2 origin bridge and retained brand-neutral structural access to existing checkpoint refs and migration lineage.
+
+### Upgrade note
+
+- Launch Synara 0.4.2 once before upgrading so renderer-local UI state is exported before 0.5.0 adopts the canonical `synara://app` origin.
+
 ## 0.4.2 - 2026-07-09
 
 ### Added
@@ -98,9 +111,9 @@
 - `bun run typecheck` passed across all 8 packages in 18.277s with the existing TS44 informational JSON/schema-preference messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
 - `bun run build` passed: 6 tasks successful in 16.479s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, Rolldown/Babel plugin timing, and large Vite chunk warnings.
-- Full `bun run test` passed: 10 tasks successful in 6m35.477s. `@t3tools/web` passed 194 files / 2352 tests, and `t3` passed 145 files with 1 skipped file, 1593 passed tests, and 6 skipped tests.
+- Full `bun run test` passed: 10 tasks successful in 6m35.477s. `@synara/web` passed 194 files / 2352 tests, and `synara` passed 145 files with 1 skipped file, 1593 passed tests, and 6 skipped tests.
 - `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.4.0`, and `npm run lint` passed.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.4.0`, and `npm run lint` passed.
 
 ## 0.3.9 - 2026-07-05
 
@@ -137,9 +150,9 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
 - `bun run build` passed: 6 tasks successful in 18.768s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, Rolldown/Babel plugin timing, and large Vite chunk warnings.
-- Full `bun run test` passed: 10 tasks successful in 6m35.955s. `@t3tools/web` passed 193 files / 2316 tests, and `t3` passed 144 files with 1 skipped file, 1575 passed tests, and 6 skipped tests.
+- Full `bun run test` passed: 10 tasks successful in 6m35.955s. `@synara/web` passed 193 files / 2316 tests, and `synara` passed 144 files with 1 skipped file, 1575 passed tests, and 6 skipped tests.
 - `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.9`, and `npm run lint` passed.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.9`, and `npm run lint` passed.
 
 ## 0.3.8 - 2026-07-03
 
@@ -173,13 +186,13 @@
 
 - `bun run fmt:check` passed across 1518 files.
 - `bun run lint` passed with 162 warnings, 0 errors.
-- Initial `bun run typecheck` failed in `@t3tools/web` on `apps/web/src/components/ChatView.tsx` because `beginLocalDispatch` passed an explicit `options: undefined` into an exact-optional helper; after the targeted fix, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
+- Initial `bun run typecheck` failed in `@synara/web` on `apps/web/src/components/ChatView.tsx` because `beginLocalDispatch` passed an explicit `options: undefined` into an exact-optional helper; after the targeted fix, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
 - `bun run build` passed: 6 tasks successful in 23.921s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, Rolldown/Babel plugin timing, and large Vite chunk warnings.
-- Initial full `bun run test` failed in `@t3tools/web` with one timeout: `apps/web/src/components/ChatMarkdown.test.tsx > ChatMarkdown > uses the theme foreground token for markdown text`. No stale duplicate test processes were present; the targeted rerun `bun run test src/components/ChatMarkdown.test.tsx -t "uses the theme foreground token for markdown text"` from `apps/web` passed in 1.01s.
-- Final full `bun run test` passed: 10 tasks successful in 9m28.476s. `@t3tools/web` passed 193 files / 2308 tests, `t3` passed 140 files with 1 skipped file, 1547 passed tests, and 6 skipped tests.
+- Initial full `bun run test` failed in `@synara/web` with one timeout: `apps/web/src/components/ChatMarkdown.test.tsx > ChatMarkdown > uses the theme foreground token for markdown text`. No stale duplicate test processes were present; the targeted rerun `bun run test src/components/ChatMarkdown.test.tsx -t "uses the theme foreground token for markdown text"` from `apps/web` passed in 1.01s.
+- Final full `bun run test` passed: 10 tasks successful in 9m28.476s. `@synara/web` passed 193 files / 2308 tests, `synara` passed 140 files with 1 skipped file, 1547 passed tests, and 6 skipped tests.
 - `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.8`, and `npm run lint` passed.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.8`, and `npm run lint` passed.
 
 ## 0.3.7 - 2026-07-02
 
@@ -216,9 +229,9 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
 - `bun run build` passed: 6 tasks successful in 14.425s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, Rolldown/Babel plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 5m23.405s. `@t3tools/web` passed 191 files / 2274 tests. `effect-acp` passed 3 files / 24 tests. `t3` passed 140 files with 1 skipped file, 1532 passed tests, and 6 skipped tests.
+- `bun run test` passed: 10 tasks successful in 5m23.405s. `@synara/web` passed 191 files / 2274 tests. `effect-acp` passed 3 files / 24 tests. `synara` passed 140 files with 1 skipped file, 1532 passed tests, and 6 skipped tests.
 - `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.7`, and `npm run lint` passed.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.7`, and `npm run lint` passed.
 
 ## 0.3.6 - 2026-06-30
 
@@ -253,8 +266,8 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 5m38.929s. `@t3tools/web` passed 191 files / 2273 tests. `t3` passed 138 files with 1 skipped file, 1517 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 5m38.929s. `@synara/web` passed 191 files / 2273 tests. `synara` passed 138 files with 1 skipped file, 1517 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` and `npm run lint` passed.
 
 ## 0.3.5 - 2026-06-30
 
@@ -288,8 +301,8 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state. It reported a slow filesystem warning for the Bun install cache during the final pass.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 6m9.469s. `@t3tools/web` passed 190 files / 2229 tests. `t3` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.5`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 6m9.469s. `@synara/web` passed 190 files / 2229 tests. `synara` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.5`, and `npm run lint` passed.
 
 ## 0.3.4 - 2026-06-29
 
@@ -321,12 +334,12 @@
 
 - `bun run fmt:check` passed.
 - `bun run lint` passed with 155 warnings, 0 errors.
-- Initial `bun run typecheck` failed in `@t3tools/web` on `apps/web/src/components/ChatView.browser.tsx` because a browser `scrollTo` test helper produced explicit `undefined` optional fields; after that fix it failed in `t3` on `apps/server/src/provider/Layers/ProviderHealth.ts` and `ProviderHealth.test.ts` for the same exact-optional pattern and an unsupported Effect platform error tag; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- Initial `bun run typecheck` failed in `@synara/web` on `apps/web/src/components/ChatView.browser.tsx` because a browser `scrollTo` test helper produced explicit `undefined` optional fields; after that fix it failed in `synara` on `apps/server/src/provider/Layers/ProviderHealth.ts` and `ProviderHealth.test.ts` for the same exact-optional pattern and an unsupported Effect platform error tag; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- Initial `bun run test` failed in `@t3tools/web` on `apps/web/src/appSettings.test.ts` because the persisted-settings decode-default fixture still expected `enableAssistantStreaming: false`; after updating the fixture to the new default, the targeted app settings test passed.
-- Final `bun run test` passed: 10 tasks successful in 6m5.217s. `t3` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.4`, and `npm run lint` passed.
+- Initial `bun run test` failed in `@synara/web` on `apps/web/src/appSettings.test.ts` because the persisted-settings decode-default fixture still expected `enableAssistantStreaming: false`; after updating the fixture to the new default, the targeted app settings test passed.
+- Final `bun run test` passed: 10 tasks successful in 6m5.217s. `synara` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.4`, and `npm run lint` passed.
 
 ## 0.3.3 - 2026-06-28
 
@@ -359,11 +372,11 @@
 
 - Initial `bun run fmt:check` failed on `apps/server/src/editorAppDiscovery.ts`, `apps/server/src/open.test.ts`, and `scripts/build-desktop-artifact.ts`; after targeted `bunx oxfmt` on those files, `bun run fmt:check` passed.
 - `bun run lint` passed with 155 warnings, 0 errors.
-- Initial `bun run typecheck` failed in `@t3tools/web` because `wsNativeApi.test.ts` missed the new `enableProviderUpdateChecks` setting; after that fix it failed in `t3` because `apps/server/src/open.ts` used unavailable `Effect.catchAll`; after both fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- Initial `bun run typecheck` failed in `@synara/web` because `wsNativeApi.test.ts` missed the new `enableProviderUpdateChecks` setting; after that fix it failed in `synara` because `apps/server/src/open.ts` used unavailable `Effect.catchAll`; after both fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 5m8.962s. `@t3tools/web` passed 188 files / 2212 tests. `t3` passed 136 files with 1 skipped file, 1475 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.3`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 5m8.962s. `@synara/web` passed 188 files / 2212 tests. `synara` passed 136 files with 1 skipped file, 1475 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.3`, and `npm run lint` passed.
 
 ## 0.3.2 - 2026-06-27
 
@@ -395,11 +408,11 @@
 
 - Initial `bun run fmt:check` failed on `apps/web/src/components/RouteInsetSurface.tsx`; after targeted `bunx oxfmt` on that file, `bun run fmt:check` passed.
 - `bun run lint` passed with 154 warnings, 0 errors.
-- Initial `bun run typecheck` failed in `@t3tools/web` on exact optional property handling in `Sidebar.tsx`, `composerDraftStore.ts`, and `chatProjects.ts`; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- Initial `bun run typecheck` failed in `@synara/web` on exact optional property handling in `Sidebar.tsx`, `composerDraftStore.ts`, and `chatProjects.ts`; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed. It refreshed install/lockfile state during `bun install`, with no remaining `bun.lock` diff.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 5m44.64s. `@t3tools/web` passed 187 files / 2205 tests. `t3` passed 136 files with 1 skipped file, 1464 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.2`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 5m44.64s. `@synara/web` passed 187 files / 2205 tests. `synara` passed 136 files with 1 skipped file, 1464 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.2`, and `npm run lint` passed.
 
 ## 0.3.1 - 2026-06-26
 
@@ -439,8 +452,8 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and left `bun.lock` unchanged.
 - `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
-- `bun run test` passed: 10 tasks successful in 5m6s. `@t3tools/web` passed 182 files / 2164 tests. `t3` passed 135 files with 1 skipped file, 1456 passed tests, and 6 skipped tests.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.1`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 5m6s. `@synara/web` passed 182 files / 2164 tests. `synara` passed 135 files with 1 skipped file, 1456 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.1`, and `npm run lint` passed.
 
 ## 0.3.0 - 2026-06-24
 
@@ -502,8 +515,8 @@
 - `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state.
 - `bun run build` passed. The build still reports existing large web chunk/plugin timing warnings, the Astro `transformWithEsbuild` deprecation warning, and the desktop `tsdown.config.ts` typeless-module warning.
-- `bun run test` passed: 10 tasks successful in 8m53s. `@t3tools/web` passed 180 files / 2102 tests. `t3` passed 135 files with 1 skipped file, 1418 passed tests, and 6 skipped tests. The server suite was long-running but completed cleanly without a teardown stall.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.0`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 8m53s. `@synara/web` passed 180 files / 2102 tests. `synara` passed 135 files with 1 skipped file, 1418 passed tests, and 6 skipped tests. The server suite was long-running but completed cleanly without a teardown stall.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/synara-website`: `npm run build` prerendered `/changelog/v0.3.0`, and `npm run lint` passed.
 
 ## 0.2.41 - 2026-06-17
 
@@ -530,12 +543,12 @@
 - `bun run typecheck` passed with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and left the worktree unchanged.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
-- Root `bun run test` did not complete cleanly in two attempts: both runs reached a green `@t3tools/web` suite (169 files / 1954 tests), then stalled in the `apps/server` Vitest tail. The stale duplicate root/Vitest processes were stopped before continuing verification.
+- Root `bun run test` did not complete cleanly in two attempts: both runs reached a green `@synara/web` suite (169 files / 1954 tests), then stalled in the `apps/server` Vitest tail. The stale duplicate root/Vitest processes were stopped before continuing verification.
 - Direct `bun run test` from `apps/server` also stalled before reporting test-file progress, only printing Node SQLite experimental warnings, so it is not counted as passed.
 - Direct package tests passed for the release-relevant and non-server packages: `apps/web` 169 files / 1954 tests, `packages/contracts` 9 files / 90 tests, `packages/shared` 24 files / 228 tests, `packages/effect-acp` 3 files / 24 tests, `apps/desktop` 19 files / 149 tests, and `scripts` 5 files / 36 tests.
 - `apps/marketing` has no `test` script.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.41`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.41`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.2.4 - 2026-06-17
 
@@ -563,9 +576,9 @@
 - `bun run typecheck` passed with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed release install/lockfile state.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
-- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 169 files / 1954 tests and `t3` 129 files passed / 1 skipped with 1255 passed / 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.4`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `bun run test` passed: 10 tasks successful, including `@synara/web` 169 files / 1954 tests and `synara` 129 files passed / 1 skipped with 1255 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.4`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.2.3 - 2026-06-16
 
@@ -594,9 +607,9 @@
 - `bun run typecheck` passed with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed release install/lockfile state.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
-- `bun run test` passed: 10 tasks successful, including `@t3tools/web` 168 files / 1949 tests and `t3` 129 files passed / 1 skipped with 1246 passed / 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.3`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `bun run test` passed: 10 tasks successful, including `@synara/web` 168 files / 1949 tests and `synara` 129 files passed / 1 skipped with 1246 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.3`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.2.2 - 2026-06-14
 
@@ -627,9 +640,9 @@
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
 - Initial full `bun run test` failed in `packages/effect-acp` on 5000ms child-process fixture timeouts, then repeated with timeouts in `packages/effect-acp/src/client.test.ts` and `packages/effect-acp/src/protocol.test.ts`. Targeted reruns passed after adding explicit fixture timeouts.
 - A subsequent root `bun run test` reached green server test output but did not return because the server Vitest process kept worker forks alive during Turbo teardown. Direct server testing showed the suite exits cleanly with `--maxWorkers=1 --no-file-parallelism`, so the server test script was updated accordingly.
-- Final `bun run test` passed: 10 tasks successful, including `@t3tools/web` 167 files / 1935 tests, `effect-acp` 3 files / 24 tests, and `t3` 129 files passed / 1 skipped with 1241 passed / 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.2`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- Final `bun run test` passed: 10 tasks successful, including `@synara/web` 167 files / 1935 tests, `effect-acp` 3 files / 24 tests, and `synara` 129 files passed / 1 skipped with 1241 passed / 6 skipped.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.2`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.2.1 - 2026-06-14
 
@@ -665,8 +678,8 @@
 - Final `bun run test` from `apps/web` passed: 165 files passed, 1909 tests passed.
 - Final `bun run test` from `packages/effect-acp` passed: 3 files passed, 24 tests passed.
 - Final direct server rerun `bun run test -- --maxWorkers=1` from `apps/server` passed: 128 files passed, 1 skipped; 1238 tests passed, 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.1`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.1`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.2.0 - 2026-06-13
 
@@ -711,14 +724,14 @@
 - First full `bun run test` before release-note edits did not pass: `apps/server/integration/orchestrationEngine.integration.test.ts` failed `runs a single turn end-to-end and persists checkpoint state in sqlite + git`, and `apps/server/src/orchestration/Layers/CheckpointReactor.test.ts` failed `captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed`. The run then hung during teardown and was stopped after identifying and killing the stale `bun`/`turbo`/Vitest worker processes.
 - Targeted rerun `bun run test src/orchestration/Layers/CheckpointReactor.test.ts -t "captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed"` from `apps/server` passed: 1 test passed, 15 skipped.
 - Targeted rerun `bun run test integration/orchestrationEngine.integration.test.ts -t "runs a single turn end-to-end and persists checkpoint state in sqlite + git"` from `apps/server` could not reproduce the live integration test because the file uses `it.live`; the standard targeted Vitest command skipped all 12 tests.
-- Final full `bun run test` after version and release-note edits did not pass: `packages/effect-acp/src/client.test.ts` timed out in `returns formatted invalid params when a typed extension request payload is wrong`, and `packages/effect-acp/src/protocol.test.ts` timed out in `does not emit a second process-exit error after a decode failure`. Turbo reported 7 successful tasks, canceled `t3:test` and `@t3tools/web:test` with code 130, and exited with `effect-acp#test` failed.
+- Final full `bun run test` after version and release-note edits did not pass: `packages/effect-acp/src/client.test.ts` timed out in `returns formatted invalid params when a typed extension request payload is wrong`, and `packages/effect-acp/src/protocol.test.ts` timed out in `does not emit a second process-exit error after a decode failure`. Turbo reported 7 successful tasks, canceled `synara:test` and `@synara/web:test` with code 130, and exited with `effect-acp#test` failed.
 - Targeted rerun `bun run test src/client.test.ts -t "returns formatted invalid params when a typed extension request payload is wrong"` from `packages/effect-acp` passed: 1 test passed, 4 skipped.
 - Targeted rerun `bun run test src/protocol.test.ts -t "does not emit a second process-exit error after a decode failure"` from `packages/effect-acp` passed: 1 test passed, 16 skipped.
 - Full `packages/effect-acp` rerun passed: 3 files passed, 24 tests passed.
 - Full `apps/web` rerun passed: 164 files passed, 1894 tests passed.
 - Direct server rerun `bun run test -- --maxWorkers=1` from `apps/server` passed: 126 files passed, 1 skipped; 1214 tests passed, 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.2.0`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.2.0`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.1.9 - 2026-06-12
 
@@ -754,13 +767,13 @@
 - `bun run release:smoke` passed.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
 - First `bun run test` attempt visibly completed the long web/server/integration suites without an assertion failure, then hung during final server Vitest teardown with two workers still alive; it was interrupted and is not counted as a full pass.
-- Final full `bun run test` after release-note and version edits failed in `packages/effect-acp/src/client.test.ts` on two 5000ms timeouts: `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`. Turbo canceled `t3:test` with code 130 after the `effect-acp` failure, so the full run is not counted as passed.
+- Final full `bun run test` after release-note and version edits failed in `packages/effect-acp/src/client.test.ts` on two 5000ms timeouts: `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`. Turbo canceled `synara:test` with code 130 after the `effect-acp` failure, so the full run is not counted as passed.
 - Targeted rerun `bun run test src/client.test.ts -t "returns formatted invalid params when a typed extension request payload is wrong|replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` passed: 2 tests passed, 3 skipped.
 - Full `packages/effect-acp` rerun passed: 3 files passed, 24 tests passed.
 - Full `apps/web` rerun passed: 160 files passed, 1838 tests passed.
 - Direct server rerun `bun run test -- --maxWorkers=1` from `apps/server` passed: 125 files passed, 1 skipped; 1197 tests passed, 6 skipped.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.9`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.1.9`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.1.8 - 2026-06-11
 
@@ -797,11 +810,11 @@
 - `bun run typecheck` passed with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings; desktop build still reports the existing typeless `tsdown.config.ts` module warning.
-- First `bun run test` attempt was interrupted by SIGTERM after partial success; no assertion failure was reported before termination, and `@t3tools/web:test` had already passed 152 files / 1740 tests.
+- First `bun run test` attempt was interrupted by SIGTERM after partial success; no assertion failure was reported before termination, and `@synara/web:test` had already passed 152 files / 1740 tests.
 - Final rerun `bun run test` after version and release-note edits passed: 10 tasks successful; scripts 5 files / 36 tests, desktop 19 files / 149 tests, contracts 9 files / 90 tests, shared 22 files / 188 tests, effect-acp 3 files / 24 tests, web 152 files / 1740 tests, server 123 files passed / 1 skipped with 1187 passed / 6 skipped.
 - The rerun still logged expected test-harness WARN/ERROR lines from failure-path coverage and native binding/provider-binary mocks.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.8`.
-- `npm run lint` in `/Users/emanueledipietro/Developer/dpcode-website` passed.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.1.8`.
+- `npm run lint` in `/Users/emanueledipietro/Developer/synara-website` passed.
 
 ## 0.1.7 - 2026-06-10
 
@@ -839,14 +852,14 @@
 - `bun run typecheck` initially failed in `apps/web/src/components/chat/TraitsPicker.browser.tsx`, `apps/web/src/store.ts`, `apps/server/src/provider/Layers/CursorAdapter.ts`, and `apps/server/src/wsRpc.ts`; after targeted fixes, `bun run typecheck` passed with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed.
 - `bun run build` passed. Vite still warns about large web chunks and plugin timings.
-- `bun run test` failed in `packages/effect-acp/src/client.test.ts` on `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`, both with 5000ms timeouts; Turbo then canceled `t3:test` and `@t3tools/web:test` with code 130.
+- `bun run test` failed in `packages/effect-acp/src/client.test.ts` on `returns formatted invalid params when a typed extension request payload is wrong` and `replays buffered notifications to handlers registered after they arrive`, both with 5000ms timeouts; Turbo then canceled `synara:test` and `@synara/web:test` with code 130.
 - `bun run test src/client.test.ts -t "returns formatted invalid params when a typed extension request payload is wrong|replays buffered notifications to handlers registered after they arrive"` from `packages/effect-acp` passed (2 tests passed, 3 skipped).
 - `bun run test` from `packages/effect-acp` passed (3 files passed; 24 tests passed).
 - `bun run test` from `apps/server` passed (118 files passed, 1 skipped; 1136 tests passed, 6 skipped).
 - `bun run test` from `apps/web` passed (147 files passed; 1690 tests passed).
 - Final `bun run fmt:check` passed.
 - Final `bun run lint` passed with 148 warnings, 0 errors.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.7`.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.1.7`.
 
 ## 0.1.6 - 2026-06-09
 
@@ -890,7 +903,7 @@
 - `bun run test` from `apps/desktop` passed (18 files passed; 141 tests passed).
 - `bun run test` from `scripts` passed (5 files passed; 36 tests passed).
 - `apps/marketing` has no `test` script.
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website` passed and generated `/changelog/v0.1.6`.
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website` passed and generated `/changelog/v0.1.6`.
 
 ## 0.1.5 - 2026-06-08
 
@@ -926,7 +939,7 @@
 - `bun run test src/whatsNew/logic.test.ts` from `apps/web`
 - `bun run test src/components/ChatMarkdown.test.tsx` from `apps/web`
 - `bun run test` from `apps/web` (132 test files passed; 1588 tests passed)
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website`
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website`
 
 ## 0.1.4 - 2026-06-07
 
@@ -966,7 +979,7 @@
 - `bun run test` (109 test files passed, 1 skipped; 1068 tests passed, 6 skipped; 6m13s)
 - `bun install` after version bump to update `bun.lock`
 - `bun run test src/whatsNew/logic.test.ts` from `apps/web` after release-note edits (12 tests passed)
-- `npm run build` in `/Users/emanueledipietro/Developer/dpcode-website`
+- `npm run build` in `/Users/emanueledipietro/Developer/synara-website`
 
 ## 0.1.3 - 2026-06-05
 

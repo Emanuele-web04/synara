@@ -38,7 +38,7 @@ import type {
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { Effect } from "effect";
 import type { Stream } from "effect";
 

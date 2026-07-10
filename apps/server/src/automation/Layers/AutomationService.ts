@@ -20,7 +20,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   type ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";

@@ -80,12 +80,12 @@ import {
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
-} from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
-import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { getDefaultModel } from "@synara/shared/model";
+import { pluralize } from "@synara/shared/text";
+import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
@@ -103,7 +103,6 @@ import {
 } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
-import { flushSynaraStorageSnapshot } from "../storageKeyMigration";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -477,8 +476,6 @@ function findTrackedProjectRunServer(
 type DebugFeatureFlagsWindow = Window & {
   synaraShowFeatureFlags?: () => void;
   synaraHideFeatureFlags?: () => void;
-  dpcodeShowFeatureFlags?: () => void;
-  dpcodeHideFeatureFlags?: () => void;
 };
 
 function readDebugFeatureFlagsMenuVisibility(): boolean {
@@ -1518,8 +1515,6 @@ export default function Sidebar() {
 
     debugWindow.synaraShowFeatureFlags = showFeatureFlags;
     debugWindow.synaraHideFeatureFlags = hideFeatureFlags;
-    debugWindow.dpcodeShowFeatureFlags = showFeatureFlags;
-    debugWindow.dpcodeHideFeatureFlags = hideFeatureFlags;
     window.addEventListener("storage", updateVisibility);
     updateVisibility();
 
@@ -1530,12 +1525,6 @@ export default function Sidebar() {
       }
       if (debugWindow.synaraHideFeatureFlags === hideFeatureFlags) {
         delete debugWindow.synaraHideFeatureFlags;
-      }
-      if (debugWindow.dpcodeShowFeatureFlags === showFeatureFlags) {
-        delete debugWindow.dpcodeShowFeatureFlags;
-      }
-      if (debugWindow.dpcodeHideFeatureFlags === hideFeatureFlags) {
-        delete debugWindow.dpcodeHideFeatureFlags;
       }
     };
   }, []);
@@ -6527,8 +6516,8 @@ export default function Sidebar() {
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
-      void flushSynaraStorageSnapshot()
-        .then(() => bridge.installUpdate())
+      void bridge
+        .installUpdate()
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);

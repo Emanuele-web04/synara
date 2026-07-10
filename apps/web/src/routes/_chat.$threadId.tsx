@@ -9,9 +9,9 @@ import {
   ThreadId,
   type ThreadId as ThreadIdType,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { isWorkspaceRelativePathSafe } from "@t3tools/shared/path";
+import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {

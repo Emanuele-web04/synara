@@ -2,8 +2,8 @@
 // Purpose: "Markers" section of the Environment panel for highlighted transcript text.
 // Layer: Environment panel section
 
-import type { MessageId, ThreadMarker, ThreadMarkerId } from "@t3tools/contracts";
-import { isThreadMarkerAvailable } from "@t3tools/shared/threadMarkers";
+import type { MessageId, ThreadMarker, ThreadMarkerId } from "@synara/contracts";
+import { isThreadMarkerAvailable } from "@synara/shared/threadMarkers";
 import {
   memo,
   useCallback,
