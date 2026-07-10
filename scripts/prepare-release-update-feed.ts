@@ -1,5 +1,5 @@
 // FILE: prepare-release-update-feed.ts
-// Purpose: Renames clean-release updater metadata onto the dedicated Synara channel.
+// Purpose: Prepares default and dedicated-channel metadata for bridge and clean releases.
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
