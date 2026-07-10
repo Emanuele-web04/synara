@@ -9,6 +9,7 @@ import {
   type ServerProviderStatus,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT,
 } from "@t3tools/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -83,6 +84,7 @@ import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
 import { DebouncedSettingTextInput } from "../components/settings/DebouncedSettingTextInput";
+import { DebouncedSettingTextarea } from "../components/settings/DebouncedSettingTextarea";
 import {
   SettingsCard,
   SettingsListRow,
@@ -3302,6 +3304,50 @@ function SettingsRouteView() {
     </div>
   );
 
+  const renderPromptEnhancerPanel = () => {
+    const currentPrompt =
+      settings.promptEnhancerSystemPrompt?.trim() || DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT;
+    const defaultPrompt =
+      defaults.promptEnhancerSystemPrompt?.trim() || DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT;
+    const isDirty = currentPrompt !== defaultPrompt;
+
+    return (
+      <div className="space-y-6">
+        <SettingsSection title="Composer rewrite">
+          <SettingsRow
+            title="Enhancer system prompt"
+            description="Instructions used when rewriting the composer draft. The enhancer prefers the current composer model when that provider supports one-off text generation."
+            resetAction={
+              isDirty ? (
+                <SettingResetButton
+                  label="enhancer system prompt"
+                  onClick={() =>
+                    updateSettings({
+                      promptEnhancerSystemPrompt: DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT,
+                    })
+                  }
+                />
+              ) : null
+            }
+          >
+            <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
+              <DebouncedSettingTextarea
+                value={currentPrompt}
+                onCommit={(value) => {
+                  const next = value.trim() || DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT;
+                  updateSettings({ promptEnhancerSystemPrompt: next });
+                }}
+                aria-label="Prompt enhancer system prompt"
+                className="min-h-40 w-full font-mono text-[12px]"
+                rows={10}
+              />
+            </div>
+          </SettingsRow>
+        </SettingsSection>
+      </div>
+    );
+  };
+
   const renderActivePanel = () => {
     switch (activeSection) {
       case "general":
@@ -3320,6 +3366,8 @@ function SettingsRouteView() {
         return renderArchivedPanel();
       case "models":
         return renderModelsPanel();
+      case "prompt-enhancer":
+        return renderPromptEnhancerPanel();
       case "providers":
         return renderProvidersPanel();
       case "profile":

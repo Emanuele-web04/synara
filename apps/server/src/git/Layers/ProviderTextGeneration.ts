@@ -45,6 +45,8 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       resolveImplementation(input).generateAutomationIntent(input),
     evaluateAutomationCompletion: (input) =>
       resolveImplementation(input).evaluateAutomationCompletion(input),
+    generatePromptEnhancement: (input) =>
+      resolveImplementation(input).generatePromptEnhancement(input),
   } satisfies TextGenerationShape;
 });
 

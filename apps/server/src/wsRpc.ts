@@ -1120,6 +1120,26 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to generate automation intent",
           ),
+        [WS_METHODS.serverEnhancePrompt]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              const systemPrompt =
+                input.systemPrompt?.trim() || settings.promptEnhancerSystemPrompt;
+              return yield* textGeneration.generatePromptEnhancement({
+                cwd: input.cwd,
+                prompt: input.prompt,
+                systemPrompt,
+                ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+                model: input.textGenerationModel ?? modelSelection.model,
+                modelSelection,
+                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+              });
+            }),
+            "Failed to enhance prompt",
+          ),
         [WS_METHODS.serverUpsertKeybinding]: (input) =>
           rpcEffect(
             keybindings

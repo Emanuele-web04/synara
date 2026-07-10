@@ -3,7 +3,12 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@t3tools/contracts";
+import {
+  DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,6 +55,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    promptEnhancerSystemPrompt: DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT,
     providers: {
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },

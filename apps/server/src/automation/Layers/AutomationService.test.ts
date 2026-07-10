@@ -441,6 +441,7 @@ const textGeneration = {
         })
       : Effect.succeed(completionEvaluation);
   },
+  generatePromptEnhancement: () => Effect.die("unused"),
 } as unknown as TextGenerationShape;
 
 const gitCore = {

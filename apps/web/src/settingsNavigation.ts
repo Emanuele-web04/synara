@@ -13,6 +13,7 @@ export const SETTINGS_SECTION_IDS = [
   "worktrees",
   "archived",
   "models",
+  "prompt-enhancer",
   "providers",
   "skills",
   "usage",
@@ -126,6 +127,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Git writing defaults and custom model slugs.",
     icon: "brain",
     eyebrow: "AI configuration",
+  },
+  {
+    id: "prompt-enhancer",
+    group: "synara",
+    label: "Prompt enhancer",
+    description: "System prompt used when rewriting composer drafts.",
+    icon: "sparkles-two",
+    eyebrow: "Composer rewrite",
   },
   {
     id: "providers",

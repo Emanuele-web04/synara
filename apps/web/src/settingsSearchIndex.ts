@@ -269,6 +269,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Add custom model slugs for supported providers. custom model",
   },
 
+  // ── Prompt enhancer ───────────────────────────────────────────────────────────
+  {
+    id: "prompt-enhancer:system-prompt",
+    section: "prompt-enhancer",
+    title: "Enhancer system prompt",
+    keywords:
+      "Rewrite composer drafts enhance prompt system instructions coding agent clarity constraints",
+  },
+
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
     id: "providers:automatic-cli-update-checks",

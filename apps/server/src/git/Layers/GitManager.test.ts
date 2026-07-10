@@ -89,6 +89,14 @@ interface FakeGitTextGeneration {
   evaluateAutomationCompletion: (
     input: AutomationCompletionEvaluationInput,
   ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
+  generatePromptEnhancement: (input: {
+    cwd: string;
+    prompt: string;
+    systemPrompt: string;
+    providerOptions?: ProviderStartOptions;
+    model?: string;
+    modelSelection?: ModelSelection;
+  }) => Effect.Effect<{ enhancedPrompt: string }, TextGenerationError>;
 }
 
 function makeTempDir(
@@ -199,6 +207,10 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
         confidence: 0.2,
         reason: "Stop condition was not met.",
       }),
+    generatePromptEnhancement: () =>
+      Effect.succeed({
+        enhancedPrompt: "Enhanced prompt",
+      }),
     ...overrides,
   };
 
@@ -286,6 +298,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "evaluateAutomationCompletion",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generatePromptEnhancement: (input) =>
+      implementation.generatePromptEnhancement(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generatePromptEnhancement",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

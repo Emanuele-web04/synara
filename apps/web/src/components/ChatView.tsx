@@ -2,6 +2,7 @@ import {
   type AutomationDefinition,
   type AutomationSchedule,
   type ApprovalRequestId,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
@@ -143,6 +144,7 @@ import {
   buildComposerAutomationDraft,
   resolveComposerAutomationRequest,
 } from "../lib/composerAutomation";
+import { enhanceComposerPrompt } from "../lib/composerPromptEnhance";
 import {
   acknowledgedRiskIdsForDraft,
   buildAutomationDraftWarnings,
@@ -267,6 +269,7 @@ import {
   ChevronRightIcon,
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
+  SparklesIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
   XIcon,
@@ -1065,6 +1068,7 @@ export default function ChatView({
     cancelRecording: cancelVoiceRecording,
   } = useVoiceRecorder();
   const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false);
+  const [isEnhancingPrompt, setIsEnhancingPrompt] = useState(false);
   const composerSendState = useMemo(
     () =>
       deriveComposerSendState({
@@ -3849,6 +3853,70 @@ export default function ChatView({
     },
     [scheduleComposerFocus, setPrompt],
   );
+  const enhanceComposerDraftPrompt = useCallback(async () => {
+    const api = readNativeApi();
+    const livePrompt =
+      composerEditorRef.current?.readSnapshot().value.trim() || promptRef.current.trim();
+    if (!api || !livePrompt || isEnhancingPrompt) {
+      return;
+    }
+
+    const cwd = activeProject?.cwd?.trim() || serverConfigQuery.data?.cwd?.trim() || null;
+    if (!cwd) {
+      toastManager.add({
+        type: "error",
+        title: "Open a project before enhancing the prompt.",
+      });
+      return;
+    }
+
+    setIsEnhancingPrompt(true);
+    try {
+      const fallbackModelSelection: ModelSelection = {
+        provider: settings.textGenerationProvider ?? "codex",
+        model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+      };
+      const enhancedPrompt = await enhanceComposerPrompt({
+        cwd,
+        prompt: livePrompt,
+        enhancePrompt: api.server.enhancePrompt,
+        composerModelSelection: selectedModelSelection,
+        fallbackModelSelection,
+        providerOptions: providerOptionsForDispatch,
+      });
+      if (!enhancedPrompt) {
+        toastManager.add({
+          type: "error",
+          title: "Prompt enhancer returned an empty result.",
+        });
+        return;
+      }
+
+      promptRef.current = enhancedPrompt;
+      setPrompt(enhancedPrompt);
+      setComposerCursor(collapseExpandedComposerCursor(enhancedPrompt, enhancedPrompt.length));
+      setComposerTrigger(detectComposerTrigger(enhancedPrompt, enhancedPrompt.length));
+      scheduleComposerFocus();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to enhance prompt.",
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsEnhancingPrompt(false);
+    }
+  }, [
+    activeProject?.cwd,
+    isEnhancingPrompt,
+    providerOptionsForDispatch,
+    scheduleComposerFocus,
+    selectedModelSelection,
+    serverConfigQuery.data?.cwd,
+    setPrompt,
+    settings.textGenerationModel,
+    settings.textGenerationProvider,
+  ]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThread) {
@@ -10562,9 +10630,53 @@ export default function ChatView({
                           )
                         ) : (
                           <>
+                            <Button
+                              type="button"
+                              size="icon-xs"
+                              variant="chrome"
+                              className="size-7 shrink-0 rounded-full sm:size-7"
+                              disabled={
+                                isComposerApprovalState ||
+                                isConnecting ||
+                                isSendBusy ||
+                                isVoiceTranscribing ||
+                                isEnhancingPrompt ||
+                                !prompt.trim()
+                              }
+                              aria-label={isEnhancingPrompt ? "Enhancing prompt" : "Enhance prompt"}
+                              onClick={() => void enhanceComposerDraftPrompt()}
+                            >
+                              {isEnhancingPrompt ? (
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 14 14"
+                                  fill="none"
+                                  className="animate-spin"
+                                  aria-hidden="true"
+                                >
+                                  <circle
+                                    cx="7"
+                                    cy="7"
+                                    r="5.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.5"
+                                    strokeLinecap="round"
+                                    strokeDasharray="20 12"
+                                  />
+                                </svg>
+                              ) : (
+                                <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                              )}
+                            </Button>
                             {showVoiceNotesControl ? (
                               <ComposerVoiceButton
-                                disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                                disabled={
+                                  isComposerApprovalState ||
+                                  isConnecting ||
+                                  isSendBusy ||
+                                  isEnhancingPrompt
+                                }
                                 isRecording={isVoiceRecording}
                                 isTranscribing={isVoiceTranscribing}
                                 durationLabel={voiceRecordingDurationLabel}
@@ -10580,6 +10692,7 @@ export default function ChatView({
                                 isSendBusy ||
                                 isConnecting ||
                                 isVoiceTranscribing ||
+                                isEnhancingPrompt ||
                                 !composerSendState.hasSendableContent
                               }
                               aria-label={

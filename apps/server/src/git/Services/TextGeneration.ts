@@ -167,6 +167,23 @@ export interface AutomationCompletionEvaluationResult {
   reason: string;
 }
 
+export interface PromptEnhancementGenerationInput {
+  cwd: string;
+  prompt: string;
+  systemPrompt: string;
+  codexHomePath?: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface PromptEnhancementGenerationResult {
+  enhancedPrompt: string;
+}
+
 export type TextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -175,7 +192,8 @@ export type TextGenerationOperation =
   | "generateThreadTitle"
   | "generateThreadRecap"
   | "generateAutomationIntent"
-  | "evaluateAutomationCompletion";
+  | "evaluateAutomationCompletion"
+  | "generatePromptEnhancement";
 
 export interface TextGenerationService {
   generateCommitMessage(
@@ -192,6 +210,9 @@ export interface TextGenerationService {
   evaluateAutomationCompletion(
     input: AutomationCompletionEvaluationInput,
   ): Promise<AutomationCompletionEvaluationResult>;
+  generatePromptEnhancement(
+    input: PromptEnhancementGenerationInput,
+  ): Promise<PromptEnhancementGenerationResult>;
 }
 
 /**
@@ -253,6 +274,13 @@ export interface TextGenerationShape {
   readonly evaluateAutomationCompletion: (
     input: AutomationCompletionEvaluationInput,
   ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
+
+  /**
+   * Rewrite a composer draft prompt using the configured enhancer system prompt.
+   */
+  readonly generatePromptEnhancement: (
+    input: PromptEnhancementGenerationInput,
+  ) => Effect.Effect<PromptEnhancementGenerationResult, TextGenerationError>;
 }
 
 /**

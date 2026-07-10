@@ -96,6 +96,8 @@ import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerEnhancePromptInput,
+  ServerEnhancePromptResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -540,6 +542,7 @@ export interface NativeApi {
     generateAutomationIntent: (
       input: ServerGenerateAutomationIntentInput,
     ) => Promise<ServerGenerateAutomationIntentResult>;
+    enhancePrompt: (input: ServerEnhancePromptInput) => Promise<ServerEnhancePromptResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;

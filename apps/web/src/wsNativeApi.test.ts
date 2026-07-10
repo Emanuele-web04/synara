@@ -291,6 +291,8 @@ describe("wsNativeApi", () => {
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+        promptEnhancerSystemPrompt:
+          "You rewrite user prompts for coding agents. Improve clarity, structure, and actionability while preserving the user's intent, language, and technical meaning. Make the goal explicit, call out constraints and acceptance criteria when useful, and remove fluff. Do not invent requirements the user did not imply. Return only the enhanced prompt text.",
         providers: {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
