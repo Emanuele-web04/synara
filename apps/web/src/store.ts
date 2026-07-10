@@ -4046,8 +4046,7 @@ export function syncServerShellSnapshot(
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
     (thread) =>
-      deletedProjectIdsById[thread.projectId] !== true &&
-      deletedThreadIdsById[thread.id] !== true,
+      deletedProjectIdsById[thread.projectId] !== true && deletedThreadIdsById[thread.id] !== true,
   );
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] !== true,
