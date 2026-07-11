@@ -388,18 +388,108 @@ const disabledRouting = makeProviderServiceLayer(undefined, {
 });
 
 routing.layer("ProviderServiceLive native forks", (it) => {
-  it.effect("skips native fork when requested instance differs from the source binding", () =>
+  it.effect("forks across Codex account instances sharing continuation storage", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
-      const sourceThreadId = asThreadId("thread-fork-source-default");
+      const serverSettings = yield* ServerSettingsService;
+      const sourceThreadId = asThreadId("thread-fork-source-personal");
       const targetThreadId = asThreadId("thread-fork-target-work");
+      const sharedHomePath = "/tmp/codex-fork-shared-home";
 
-      yield* provider.startSession(sourceThreadId, {
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_personal: {
+            driver: "codex",
+            config: {
+              homePath: sharedHomePath,
+              shadowHomePath: "/tmp/codex-fork-personal-auth",
+              accountId: "personal",
+            },
+          },
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: sharedHomePath,
+              shadowHomePath: "/tmp/codex-fork-work-auth",
+              accountId: "work",
+            },
+          },
+        },
+      });
+
+      const source = yield* provider.startSession(sourceThreadId, {
         provider: "codex",
-        providerInstanceId: "codex",
+        providerInstanceId: "codex_personal",
         threadId: sourceThreadId,
         runtimeMode: "full-access",
       });
+      routing.codex.forkThread.mockClear();
+
+      assert.equal(typeof provider.forkThread, "function");
+      if (!provider.forkThread) {
+        return;
+      }
+
+      const result = yield* provider.forkThread({
+        sourceThreadId,
+        threadId: targetThreadId,
+        modelSelection: {
+          instanceId: "codex_work",
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.notEqual(result, null);
+      assert.equal(routing.codex.forkThread.mock.calls.length, 1);
+      const forkInput = routing.codex.forkThread.mock.calls[0]?.[0];
+      assert.deepEqual(forkInput?.sourceResumeCursor, source.resumeCursor);
+      assert.equal(forkInput?.modelSelection?.instanceId, "codex_work");
+      assert.deepEqual(forkInput?.providerOptions, {
+        codex: {
+          homePath: sharedHomePath,
+          shadowHomePath: "/tmp/codex-fork-work-auth",
+          accountId: "work",
+        },
+      });
+    }),
+  );
+
+  it.effect("falls back without invoking native fork across incompatible Codex homes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const sourceThreadId = asThreadId("thread-fork-source-home-a");
+      const targetThreadId = asThreadId("thread-fork-target-home-b");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_personal: {
+            driver: "codex",
+            config: {
+              homePath: "/tmp/codex-fork-home-a",
+              shadowHomePath: "/tmp/codex-fork-home-a-auth",
+              accountId: "personal",
+            },
+          },
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: "/tmp/codex-fork-home-b",
+              shadowHomePath: "/tmp/codex-fork-home-b-auth",
+              accountId: "work",
+            },
+          },
+        },
+      });
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        providerInstanceId: "codex_personal",
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.forkThread.mockClear();
 
       assert.equal(typeof provider.forkThread, "function");
       if (!provider.forkThread) {
