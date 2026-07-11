@@ -80,6 +80,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible. sidebar section",
   },
   {
+    id: "general:environment-default-open",
+    section: "general",
+    title: "Open by default",
+    keywords:
+      "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
+  },
+  {
     id: "general:environment-usage",
     section: "general",
     title: "Usage",

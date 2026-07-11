@@ -1021,7 +1021,7 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -4219,12 +4219,21 @@ export default function ChatView({
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
+    settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
   // Every close (header toggle or panel action click) stores the cross-chat preference,
   // so a dismissed panel stays closed when switching threads until it is toggled back on.
+  // The same toggle also persists to settings so the preference survives reloads.
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
+  const setEnvironmentPanelOpenPreference = useCallback(
+    (open: boolean) => {
+      setEnvironmentPanelPreferenceOpen(open);
+      updateSettings({ environmentPanelDefaultOpen: open });
+    },
+    [updateSettings],
+  );
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
     userPreferenceOpen: environmentPanelPreferenceOpen,
@@ -10143,7 +10152,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelPreferenceOpen(false),
+    onClose: () => setEnvironmentPanelOpenPreference(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10153,7 +10162,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelPreferenceOpen,
+        onOpenChange: setEnvironmentPanelOpenPreference,
       }
     : null;
 

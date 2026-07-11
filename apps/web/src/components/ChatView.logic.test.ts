@@ -602,7 +602,7 @@ describe("voice helpers", () => {
 });
 
 describe("environment panel visibility", () => {
-  it("opens normal chat threads by default", () => {
+  it("keeps normal chat threads closed by default unless the setting opts in", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
@@ -610,16 +610,35 @@ describe("environment panel visibility", () => {
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
       }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
+      }),
     ).toBe(true);
   });
 
-  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed even when setting is open", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -628,6 +647,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -636,6 +656,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: true,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
   });

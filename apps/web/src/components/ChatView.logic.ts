@@ -300,14 +300,19 @@ export function resolvePromptHistoryNavigation(input: {
 }
 
 // Default-open policy for the Environment panel; render-time visibility is resolved separately.
+// `settingsDefaultOpen` is the user preference (Settings → Environment panel). Landing,
+// terminal-primary, and constrained layouts always start closed regardless of that setting.
 export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;
   isCenteredEmptyLanding: boolean;
   isTerminalPrimarySurface: boolean;
   isConstrainedChatLayout: boolean;
+  settingsDefaultOpen?: boolean;
 }): boolean {
+  const settingsDefaultOpen = input.settingsDefaultOpen ?? false;
   return (
     input.environmentEnabled &&
+    settingsDefaultOpen &&
     !input.isCenteredEmptyLanding &&
     !input.isTerminalPrimarySurface &&
     !input.isConstrainedChatLayout
