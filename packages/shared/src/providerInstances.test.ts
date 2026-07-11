@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  type ProviderInstanceConfig,
   type ProviderInstanceId as ProviderInstanceIdType,
+  type ServerSettings,
 } from "@synara/contracts";
 import { Schema } from "effect";
 
@@ -21,6 +23,29 @@ import {
 
 function providerInstanceId(value: string): ProviderInstanceIdType {
   return value as ProviderInstanceIdType;
+}
+
+function settingsWithLegacyCodexWorkInstance(explicit: ProviderInstanceConfig): ServerSettings {
+  return {
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      codex: {
+        ...DEFAULT_SERVER_SETTINGS.providers.codex,
+        accounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "/legacy/codex-work",
+            shadowHomePath: "/legacy/codex-work-shadow",
+          },
+        ],
+      },
+    },
+    providerInstances: {
+      codex_work: explicit,
+    },
+  };
 }
 
 describe("provider instance resolution", () => {
@@ -87,6 +112,79 @@ describe("provider instance resolution", () => {
       deriveProviderInstances(settings).some((instance) => instance.instanceId === unresolvedId),
     ).toBe(false);
     expect(resolveProviderInstance(settings, { instanceId: normalId })?.instanceId).toBe(normalId);
+  });
+
+  it("fails closed when an explicit Codex instance retargets a derived account id", () => {
+    const settings = settingsWithLegacyCodexWorkInstance({
+      driver: "codex",
+      enabled: true,
+      config: { accountId: "personal" },
+    });
+
+    expect(
+      resolveProviderInstance(settings, { instanceId: providerInstanceId("codex_work") }),
+    ).toBeNull();
+    expect(
+      deriveProviderInstances(settings).some((instance) => instance.instanceId === "codex_work"),
+    ).toBe(false);
+  });
+
+  it("fails closed when an explicit instance changes a derived Codex account's driver", () => {
+    const settings = settingsWithLegacyCodexWorkInstance({
+      driver: "claudeAgent",
+      enabled: true,
+      config: { homePath: "/legacy/codex-work" },
+    });
+
+    expect(
+      resolveProviderInstance(settings, { instanceId: providerInstanceId("codex_work") }),
+    ).toBeNull();
+    expect(
+      deriveProviderInstances(settings).some((instance) => instance.instanceId === "codex_work"),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["home path", { config: { homePath: "/different/codex-work" } }],
+    ["shadow home path", { config: { shadowHomePath: "/different/codex-work-shadow" } }],
+    ["environment", { environment: [{ name: "CODEX_HOME", value: "/different/codex-work" }] }],
+  ] satisfies ReadonlyArray<readonly [string, Partial<ProviderInstanceConfig>]>)(
+    "fails closed when an explicit instance changes a derived Codex account's %s",
+    (_label, override) => {
+      const settings = settingsWithLegacyCodexWorkInstance({
+        driver: "codex",
+        enabled: true,
+        ...override,
+      });
+
+      expect(
+        resolveProviderInstance(settings, { instanceId: providerInstanceId("codex_work") }),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps safe non-identity overrides for a matching derived Codex account", () => {
+    const settings = settingsWithLegacyCodexWorkInstance({
+      driver: "codex",
+      displayName: "Codex Work Override",
+      enabled: true,
+      environment: [],
+      config: {
+        accountId: "work",
+        homePath: "/legacy/codex-work",
+        shadowHomePath: "/legacy/codex-work-shadow",
+        binaryPath: "/opt/codex",
+        customModels: ["custom/work"],
+      },
+    });
+
+    const resolved = resolveProviderInstance(settings, {
+      instanceId: providerInstanceId("codex_work"),
+    });
+    expect(resolved?.driver).toBe("codex");
+    expect(resolved?.config.accountId).toBe("work");
+    expect(resolved?.config.binaryPath).toBe("/opt/codex");
+    expect(resolved?.config.customModels).toEqual(["custom/work"]);
   });
 
   it("keeps derived Codex account instance ids within the schema limit", () => {

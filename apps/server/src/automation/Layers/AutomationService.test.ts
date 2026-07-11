@@ -1809,6 +1809,54 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("fails dispatch when a configured instance retargets a legacy Codex account id", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const collidingInstanceId = "codex_migration_collision" as ProviderInstanceId;
+      yield* serverSettings.updateSettings({
+        providers: {
+          codex: {
+            accounts: [
+              {
+                id: "migration_collision",
+                label: "Migration collision",
+                homePath: "/legacy/codex-work",
+                shadowHomePath: "/legacy/codex-work-shadow",
+              },
+            ],
+          },
+        },
+        providerInstances: {
+          [collidingInstanceId]: {
+            driver: "codex",
+            enabled: true,
+            config: { accountId: "personal" },
+          },
+        },
+      });
+      const created = yield* service.create({
+        ...createInput("local"),
+        modelSelection: {
+          instanceId: collidingInstanceId,
+          model: "gpt-5-codex",
+        },
+      });
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(
+        error.message,
+        /provider instance 'codex_migration_collision' is no longer configured/,
+      );
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const listed = yield* service.list({ projectId });
+      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(failedRun?.status, "failed");
+    }),
+  );
+
   it.effect("fails a heartbeat run when the selected provider instance is gone", () =>
     Effect.gen(function* () {
       resetHarness();

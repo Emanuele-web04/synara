@@ -307,6 +307,41 @@ function instanceConfigRecord(config: ProviderInstanceConfig["config"]): Record<
     : {};
 }
 
+const LEGACY_CODEX_ACCOUNT_IDENTITY_KEYS = ["accountId", "homePath", "shadowHomePath"] as const;
+
+function conflictsWithDerivedCodexAccountIdentity(
+  derived: ProviderInstanceConfig,
+  explicit: ProviderInstanceConfig,
+): boolean {
+  const derivedConfig = instanceConfigRecord(derived.config);
+  const derivedAccountId = trimString(derivedConfig.accountId);
+  if (derived.driver !== "codex" || !derivedAccountId) {
+    return false;
+  }
+  if (explicit.driver !== "codex") {
+    return true;
+  }
+
+  const explicitConfig = instanceConfigRecord(explicit.config);
+  for (const key of LEGACY_CODEX_ACCOUNT_IDENTITY_KEYS) {
+    if (!Object.hasOwn(explicitConfig, key)) {
+      continue;
+    }
+    const explicitValue = explicitConfig[key];
+    if (
+      typeof explicitValue !== "string" ||
+      explicitValue.trim() !== trimString(derivedConfig[key])
+    ) {
+      return true;
+    }
+  }
+
+  // Legacy Codex account rows do not carry an instance-specific environment.
+  // Adding one at the same deterministic id could replace credential or home
+  // routing while leaving the migrated model selection apparently unchanged.
+  return (explicit.environment?.length ?? 0) > 0;
+}
+
 // Explicit entries for derived ids (built-in defaults, legacy Codex accounts)
 // override key-by-key instead of replacing the derived entry wholesale, so an
 // entry that only stores customModels keeps following the live legacy launch
@@ -337,6 +372,13 @@ export function deriveProviderInstanceConfigMap(
   Object.assign(merged, deriveLegacyCodexAccountInstances(settings));
   for (const [instanceId, explicit] of Object.entries(settings.providerInstances)) {
     const derived = merged[instanceId];
+    if (derived && conflictsWithDerivedCodexAccountIdentity(derived, explicit)) {
+      // A deterministic legacy-account id must never be retargeted. Removing the
+      // ambiguous route makes every resolver fail closed until settings use a
+      // distinct explicit id or restore the matching legacy account identity.
+      delete merged[instanceId];
+      continue;
+    }
     merged[instanceId] =
       derived && derived.driver === explicit.driver
         ? mergeDerivedProviderInstanceConfig(derived, explicit)
