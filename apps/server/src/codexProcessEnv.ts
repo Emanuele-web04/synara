@@ -195,6 +195,30 @@ export interface CodexOverlayEntryLinker {
   readonly copyFile: typeof fs.copyFile;
 }
 
+export interface CodexOverlayConfigPublicationHooks {
+  /** Deterministic test seam. Production callers must omit this hook. */
+  readonly beforeRename?: (temporaryPath: string, targetPath: string) => void | Promise<void>;
+}
+
+export async function writeCodexOverlayConfigAtomically(
+  targetPath: string,
+  contents: string,
+  hooks: CodexOverlayConfigPublicationHooks = {},
+): Promise<void> {
+  const temporaryPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, contents, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await hooks.beforeRename?.(temporaryPath, targetPath);
+    await fs.rename(temporaryPath, targetPath);
+  } finally {
+    await fs.rm(temporaryPath, { force: true });
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -2495,7 +2519,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
     }
   }
-  await fs.writeFile(overlayConfigPath, overlayConfig, "utf8");
+  await writeCodexOverlayConfigAtomically(overlayConfigPath, overlayConfig);
   await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   assertSharedCodexContinuationGenerationPrepared(

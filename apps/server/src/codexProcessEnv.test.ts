@@ -26,6 +26,7 @@ import {
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
   readCodexSharedContinuationGeneration,
+  writeCodexOverlayConfigAtomically,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
@@ -61,6 +62,41 @@ describe("hydrateCodexProviderCredentialEnvironment", () => {
     });
     expect(hydrated.AZURE_OPENAI_API_KEY).toBe("inherited-key");
     expect(readEnvironment).not.toHaveBeenCalled();
+  });
+});
+
+describe("writeCodexOverlayConfigAtomically", () => {
+  it("keeps the old complete config when publication is interrupted", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-publish-"));
+    const targetPath = path.join(root, "config.toml");
+    writeFileSync(targetPath, 'model = "old"\n', "utf8");
+    let temporaryPath: string | undefined;
+
+    try {
+      await expect(
+        writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n', {
+          beforeRename: (candidatePath) => {
+            temporaryPath = candidatePath;
+            expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
+            expect(readFileSync(candidatePath, "utf8")).toBe('model = "new"\n');
+            throw new Error("simulated publication interruption");
+          },
+        }),
+      ).rejects.toThrow("simulated publication interruption");
+
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
+      if (!temporaryPath) {
+        throw new Error("Expected atomic publication to create a temporary config path.");
+      }
+      expect(existsSync(temporaryPath)).toBe(false);
+
+      await writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n');
+
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "new"\n');
+      expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
