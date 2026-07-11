@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
@@ -35,6 +35,7 @@ import { ServerConfig } from "../../config.ts";
 import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
+const CLAUDE_SAFE_MODE_ENV_KEY = "CLAUDE_CODE_SAFE_MODE";
 
 const ClaudeOutputEnvelope = Schema.Struct({
   structured_output: Schema.Unknown,
@@ -104,6 +105,7 @@ function resolveClaudeEffort(
 
 const makeClaudeTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig;
 
   const readStreamAsString = <E>(
@@ -128,7 +130,6 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
 
   const runClaudeJson = <S extends Schema.Top>({
     operation,
-    cwd,
     prompt,
     outputSchemaJson,
     modelSelection,
@@ -146,10 +147,38 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     Effect.gen(function* () {
       const binaryPath = resolveClaudeBinaryPath({ providerOptions });
       const env = resolveClaudeEnvironment({ providerOptions, homeDir: serverConfig.homeDir });
+      // Environment activation is accepted by older Claude versions that do not
+      // recognize the equivalent --safe-mode flag. It disables CLAUDE.md, hooks,
+      // plugins, skills, MCP, and other user/project customizations without
+      // disabling the selected account's OAuth or explicit API credentials.
+      env[CLAUDE_SAFE_MODE_ENV_KEY] = "1";
+      const isolatedCwd = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "synara-claude-text-" })
+        .pipe(
+          Effect.tap((directory) =>
+            process.platform === "win32" ? Effect.void : fileSystem.chmod(directory, 0o700),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "Failed to create the isolated Claude CLI workspace.",
+                cause,
+              }),
+          ),
+        );
+      env.PWD = isolatedCwd;
       const jsonSchema = JSON.stringify(toJsonSchemaObject(outputSchemaJson));
       const effort = resolveClaudeEffort(modelSelection);
       const args = [
         "-p",
+        // Do not load user, project, or local settings. Safe mode also blocks
+        // customization surfaces outside those settings sources, while strict
+        // MCP config ensures no inherited MCP server can be started.
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--no-session-persistence",
         "--output-format",
         "json",
         "--json-schema",
@@ -161,11 +190,10 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
         // or thread content cannot prompt-inject workspace reads or edits.
         "--tools",
         "",
-        "--dangerously-skip-permissions",
       ];
-      const prepared = prepareWindowsSafeProcess(binaryPath, args, { cwd, env });
+      const prepared = prepareWindowsSafeProcess(binaryPath, args, { cwd: isolatedCwd, env });
       const command = ChildProcess.make(prepared.command, prepared.args, {
-        cwd,
+        cwd: isolatedCwd,
         env,
         shell: prepared.shell,
         stdin: { stream: Stream.make(new TextEncoder().encode(prompt)) },

@@ -8,16 +8,17 @@ import nodePath from "node:path";
 
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
 
-const CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS = [
+export const CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ] as const;
 
-const CLAUDE_EXTERNAL_AUTH_ENV_KEYS = [
+export const CLAUDE_EXTERNAL_AUTH_ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_ANTHROPIC_AWS",
 ] as const;
 
