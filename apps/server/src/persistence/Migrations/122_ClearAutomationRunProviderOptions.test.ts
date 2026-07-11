@@ -22,7 +22,7 @@ layer("122_ClearAutomationRunProviderOptions", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 107 });
+      yield* runMigrations({ toMigrationInclusive: 121 });
       yield* sql`
         INSERT INTO automation_definitions (
           automation_id,

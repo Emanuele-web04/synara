@@ -3479,8 +3479,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       binaryPath,
                       cliSpec: adapterConfig.cliSpec,
                       cwd: directory,
+                      ...(input.providerInstanceId !== undefined
+                        ? { instanceId: input.providerInstanceId }
+                        : {}),
                       ...(serverUrl ? { serverUrl } : {}),
-                      ...(environment ? { environment } : {}),
+                      ...(environment !== undefined ? { environment } : {}),
                       ...(experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                       ...(poolIsolationKey ? { poolIsolationKey } : {}),
                     });
@@ -4299,6 +4302,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const forkThread: NonNullable<OpenCodeAdapterShape["forkThread"]> = (input) =>
         Effect.gen(function* () {
           const sourceContext = sessions.get(input.sourceThreadId);
+          const providerInstanceId =
+            sourceContext?.session.providerInstanceId ?? input.modelSelection?.instanceId;
           // Forking mid-turn would branch from incomplete in-flight state, so
           // let the retained-transcript fallback handle busy sources.
           if (sourceContext?.activeTurnId !== undefined) {
@@ -4352,8 +4357,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
                     cwd: sourceDirectory,
+                    ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                     ...(serverUrl ? { serverUrl } : {}),
-                    ...(environment ? { environment } : {}),
+                    ...(environment !== undefined ? { environment } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 const clientServerPassword = serverPasswordForOpenCodeClient(
@@ -4459,8 +4465,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   cwd: input.cwd?.trim() || serverConfig.cwd,
+                  ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
                   ...(serverUrl ? { serverUrl } : {}),
-                  ...(input.environment ? { environment: input.environment } : {}),
+                  ...(input.environment !== undefined ? { environment: input.environment } : {}),
                   ...(input.experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                 })
                 .pipe(Effect.mapError(toAdapterRequestError));
@@ -4528,8 +4535,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             .listOpenCodeCliModels({
               binaryPath,
               cliSpec: adapterConfig.cliSpec,
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               ...(input.cwd ? { cwd: input.cwd } : {}),
-              ...(input.environment ? { environment: input.environment } : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
             })
             .pipe(
               Effect.catch((error) =>
@@ -4541,7 +4549,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             );
           const inventoryEffect = withDiscoveryInventory(
             {
-              ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               binaryPath,
               ...(input.cwd ? { cwd: input.cwd } : {}),
               ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
@@ -4549,7 +4557,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(input.experimentalWebSockets !== undefined
                 ? { experimentalWebSockets: input.experimentalWebSockets }
                 : {}),
-              ...(input.environment ? { environment: input.environment } : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
             },
             ({ inventory, credentialProviderIDs }) =>
               Effect.succeed({
@@ -4637,7 +4645,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return withDiscoveryInventory(
           {
-            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
             binaryPath,
             ...(input.cwd ? { cwd: input.cwd } : {}),
             ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
@@ -4645,7 +4653,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ...(input.experimentalWebSockets !== undefined
               ? { experimentalWebSockets: input.experimentalWebSockets }
               : {}),
-            ...(input.environment ? { environment: input.environment } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
           },
           ({ inventory }) =>
             Effect.succeed({

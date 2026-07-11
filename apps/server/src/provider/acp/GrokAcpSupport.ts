@@ -10,6 +10,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -22,6 +23,7 @@ export interface GrokAcpRuntimeSettings {
   readonly model?: string;
   readonly reasoningEffort?: GrokModelOptions["reasoningEffort"];
   readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
 }
 
 export interface GrokAcpRuntimeInput extends Omit<
@@ -126,10 +128,11 @@ export function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
-    env: buildProviderChildEnvironment({
-      provider: "grok",
-      ...(grokSettings?.environment ? { overrides: grokSettings.environment } : {}),
-    }),
+    providerEnvironment: {
+      driver: "grok",
+      ...(grokSettings?.instanceId !== undefined ? { instanceId: grokSettings.instanceId } : {}),
+      ...(grokSettings?.environment !== undefined ? { environment: grokSettings.environment } : {}),
+    },
   };
 }
 
@@ -146,14 +149,18 @@ function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
 }
 
 export const resolveGrokAcpAuthMethodIdForEnv =
-  (environment?: Readonly<Record<string, string>> | undefined) =>
+  (environment?: Readonly<Record<string, string>> | undefined, instanceId?: string | undefined) =>
   (initializeResult: Acp.InitializeResponse): Effect.Effect<string, AcpErrors.AcpError> =>
     Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
     const hasApiKey = hasGrokApiKeyEnv(
       buildProviderChildEnvironment({
         provider: "grok",
-        ...(environment ? { overrides: environment } : {}),
+        baseEnv: buildProviderProcessEnv({
+          driver: "grok",
+          ...(environment !== undefined ? { environment } : {}),
+          ...(instanceId !== undefined ? { instanceId } : {}),
+        }),
       }),
     );
     if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
@@ -209,7 +216,10 @@ export const makeGrokAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(input.grokSettings?.environment),
+        resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(
+          input.grokSettings?.environment,
+          input.grokSettings?.instanceId,
+        ),
         authenticateMeta: { headless: true },
         freshSessionRetry: {
           shouldRetry: isGrokSessionStoragePathNotFoundError,

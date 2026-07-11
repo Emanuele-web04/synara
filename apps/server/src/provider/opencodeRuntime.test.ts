@@ -275,6 +275,28 @@ describe("buildOpenCodeServerProcessEnv", () => {
     expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
   });
 
+
+  it("scrubs ambient account config before applying a selected instance environment", () => {
+    const env = buildOpenCodeServerProcessEnv({
+      instanceId: "opencode_work",
+      baseEnv: {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.example",
+        OPENAI_API_KEY: "ambient-account-a",
+        OPENCODE_CONFIG_CONTENT: '{"provider":{"openai":{"account":"a"}}}',
+      },
+      environment: {
+        ANTHROPIC_API_KEY: "selected-account-b",
+      },
+    });
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("selected-account-b");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example");
+  });
+
   it("appends install directories containing the CLI to PATH", () => {
     const home = mkdtempSync(join(tmpdir(), "synara-opencode-env-"));
     try {
