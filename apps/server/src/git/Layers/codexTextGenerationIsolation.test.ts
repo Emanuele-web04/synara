@@ -529,6 +529,51 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
     });
   });
 
+  it.effect("fails when a common home ancestor retargets between source and auth binds", () => {
+    if (process.platform === "win32") return Effect.void;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "account-binding-race-",
+      });
+      const selectedRoot = join(parent, "selected");
+      const replacementRoot = join(parent, "replacement");
+      const aliasRoot = join(parent, "current");
+      for (const root of [selectedRoot, replacementRoot]) {
+        mkdirSync(join(root, "source"), { recursive: true });
+        mkdirSync(join(root, "auth"), { recursive: true });
+      }
+      writeFileSync(join(selectedRoot, "source", "config.toml"), 'model = "selected"');
+      writeFileSync(
+        join(selectedRoot, "auth", "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"selected-key"}',
+      );
+      writeFileSync(join(replacementRoot, "source", "config.toml"), 'model = "replacement"');
+      writeFileSync(
+        join(replacementRoot, "auth", "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"replacement-key"}',
+      );
+      symlinkSync(selectedRoot, aliasRoot, "dir");
+
+      expect(() =>
+        prepareCodexAuthTracking(
+          {
+            env: { ...process.env, CODEX_HOME: join(aliasRoot, "source") },
+            homePath: join(aliasRoot, "source"),
+            shadowHomePath: join(aliasRoot, "auth"),
+            accountId: "work",
+          },
+          {
+            afterSourceHomeBound: () => {
+              unlinkSync(aliasRoot);
+              symlinkSync(replacementRoot, aliasRoot, "dir");
+            },
+          },
+        ),
+      ).toThrowError(/Codex source home.*changed while account identities/i);
+    });
+  });
+
   it.effect("rejects symlinked source config before auxiliary generation", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

@@ -224,6 +224,11 @@ export interface PreparedCodexAuthTracking extends CodexAuthTracking {
   readonly authSource: CodexPreparedAuthSource;
 }
 
+export interface CodexAuthTrackingPreparationHooks {
+  /** Deterministic race-test seam. Production callers must omit this hook. */
+  readonly afterSourceHomeBound?: () => void;
+}
+
 export interface CodexProcessLaunchContext {
   readonly env: NodeJS.ProcessEnv;
   readonly authTracking: CodexAuthTracking;
@@ -1100,6 +1105,15 @@ function uniqueResolvedPaths(paths: readonly string[]): string[] {
   return result;
 }
 
+function resolveCodexAuthoritativeAuthHomePath(resolution: CodexOverlayResolution): string {
+  return (
+    resolution.shadowHomePath ??
+    (resolution.accountSegment && !resolution.hasDedicatedAccountHome
+      ? resolution.overlayHomePath
+      : resolution.sourceHomePath)
+  );
+}
+
 function resolveCodexAuthTrackingFromResolution(
   resolution: CodexOverlayResolution,
   accountId?: string,
@@ -1114,11 +1128,7 @@ function resolveCodexAuthTrackingFromResolution(
     ...(accountId ? { accountId } : {}),
   });
 
-  const authoritativeAuthHomePath =
-    resolution.shadowHomePath ??
-    (resolution.accountSegment && !resolution.hasDedicatedAccountHome
-      ? resolution.overlayHomePath
-      : resolution.sourceHomePath);
+  const authoritativeAuthHomePath = resolveCodexAuthoritativeAuthHomePath(resolution);
   const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
   const [, effectiveAuthFilePath] = uniqueResolvedPaths([
     authoritativeAuthFilePath,
@@ -1687,6 +1697,78 @@ function assertPreparedHomeIdentity(
   }
 }
 
+function assertLogicalHomeMatchesPreparedSource(input: {
+  readonly logicalHomePath: string;
+  readonly source: CodexPreparedHomeSource;
+  readonly label: string;
+}): void {
+  if (input.source.kind === "missing") {
+    try {
+      lstatSync(input.logicalHomePath, { bigint: true });
+    } catch (cause) {
+      if (filesystemErrorCode(cause) === "ENOENT") return;
+      throw new Error(
+        `${input.label} at ${input.logicalHomePath} could not be revalidated safely.`,
+        {
+          cause,
+        },
+      );
+    }
+    throw new Error(
+      `${input.label} at ${input.logicalHomePath} appeared while account identities were being prepared; retry the request.`,
+    );
+  }
+
+  assertPreparedHomeIdentity(input.source, path.basename(input.logicalHomePath));
+  let logicalTarget: BigIntStats;
+  try {
+    logicalTarget = statSync(input.logicalHomePath, { bigint: true });
+  } catch (cause) {
+    throw new Error(`${input.label} at ${input.logicalHomePath} could not be revalidated safely.`, {
+      cause,
+    });
+  }
+  if (
+    !logicalTarget.isDirectory() ||
+    logicalTarget.dev !== input.source.device ||
+    logicalTarget.ino !== input.source.inode
+  ) {
+    throw new Error(
+      `${input.label} at ${input.logicalHomePath} changed while account identities were being prepared; retry the request.`,
+    );
+  }
+}
+
+function assertPreparedAuthAndSourceBindingsCurrent(input: {
+  readonly sourceHomePath: string;
+  readonly sourceHomeSource: CodexPreparedHomeSource;
+  readonly authoritativeAuthHomePath: string;
+  readonly authSource: CodexPreparedAuthSource;
+}): void {
+  assertLogicalHomeMatchesPreparedSource({
+    logicalHomePath: input.sourceHomePath,
+    source: input.sourceHomeSource,
+    label: "Codex source home",
+  });
+  assertLogicalHomeMatchesPreparedSource({
+    logicalHomePath: input.authoritativeAuthHomePath,
+    source: input.authSource,
+    label: "Codex account auth home",
+  });
+}
+
+function preparedHomesShareIdentity(
+  left: CodexPreparedHomeSource,
+  right: CodexPreparedHomeSource,
+): boolean {
+  return (
+    left.kind === "bound" &&
+    right.kind === "bound" &&
+    left.device === right.device &&
+    left.inode === right.inode
+  );
+}
+
 /**
  * Reads one regular file from an already-bound Codex home without following a
  * mutable logical home path. Directory and file identities are checked before
@@ -2008,6 +2090,7 @@ function dropStaleAccountPrivateStateSymlinks(accountHomePath: string): void {
  */
 export function prepareCodexAuthTracking(
   input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  hooks: CodexAuthTrackingPreparationHooks = {},
 ): PreparedCodexAuthTracking {
   const env = { ...(input.env ?? process.env) };
   const resolution = resolveCodexOverlayResolution({
@@ -2016,15 +2099,15 @@ export function prepareCodexAuthTracking(
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
   });
-  const sourceHomeSource = bindCodexPreparedHomeSource(resolution.sourceHomePath, {
-    label: "Codex source home",
-    requireRealDirectory: false,
-  });
-  const sourceConfigSnapshot =
-    readCodexPreparedHomeFileSnapshot(sourceHomeSource, "config.toml")?.toString("utf8") ?? "";
+  const authoritativeAuthHomePath = resolveCodexAuthoritativeAuthHomePath(resolution);
+  const requiresRealPrivateHome = Boolean(
+    resolution.shadowHomePath || (resolution.accountSegment && !resolution.hasDedicatedAccountHome),
+  );
+  const sourceHomeAlsoOwnsAuth =
+    path.resolve(authoritativeAuthHomePath) === path.resolve(resolution.sourceHomePath);
+
   if (resolution.shadowHomePath) {
     validateCodexShadowHomePath(resolution.sourceHomePath, resolution.shadowHomePath);
-    lstatShadowPrivateState(resolution.shadowHomePath, "auth.json");
   }
   if (
     resolution.accountSegment &&
@@ -2036,28 +2119,48 @@ export function prepareCodexAuthTracking(
       resolution.overlayHomePath,
       "overlay home",
     );
-    lstatShadowPrivateState(resolution.overlayHomePath, "auth.json");
   }
+
+  // Treat source config and account auth selection as one binding transaction.
+  // No file is read until both canonical home identities are captured and both
+  // logical paths are proven to still resolve to those captures.
+  const sourceHomeSource = bindCodexPreparedHomeSource(resolution.sourceHomePath, {
+    label: "Codex source home",
+    requireRealDirectory: false,
+  });
+  hooks.afterSourceHomeBound?.();
+  const authSource = sourceHomeAlsoOwnsAuth
+    ? sourceHomeSource
+    : bindCodexPreparedHomeSource(authoritativeAuthHomePath, {
+        label: "Codex account auth home",
+        requireRealDirectory: requiresRealPrivateHome,
+      });
+  if (!sourceHomeAlsoOwnsAuth && preparedHomesShareIdentity(sourceHomeSource, authSource)) {
+    throw new Error("Codex account auth home must be different from CODEX_HOME.");
+  }
+  const bindingTransaction = {
+    sourceHomePath: resolution.sourceHomePath,
+    sourceHomeSource,
+    authoritativeAuthHomePath,
+    authSource,
+  };
+  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
+  if (requiresRealPrivateHome && authSource.kind === "bound") {
+    lstatShadowPrivateState(authSource.canonicalHomePath, "auth.json");
+  }
+
+  const sourceConfigSnapshot =
+    readCodexPreparedHomeFileSnapshot(sourceHomeSource, "config.toml")?.toString("utf8") ?? "";
   const tracking = resolveCodexAuthTrackingFromResolution(
     resolution,
     input.accountId,
     sourceConfigSnapshot,
   );
-  const requiresRealPrivateHome = Boolean(
-    resolution.shadowHomePath || (resolution.accountSegment && !resolution.hasDedicatedAccountHome),
-  );
-  const authoritativeAuthHomePath = path.dirname(tracking.authoritativeAuthFilePath);
-  const sourceHomeAlsoOwnsAuth =
-    path.resolve(authoritativeAuthHomePath) === path.resolve(resolution.sourceHomePath);
+  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
   return {
     ...tracking,
     sourceConfigSnapshot,
-    authSource: sourceHomeAlsoOwnsAuth
-      ? sourceHomeSource
-      : bindCodexPreparedHomeSource(authoritativeAuthHomePath, {
-          label: "Codex account auth home",
-          requireRealDirectory: requiresRealPrivateHome,
-        }),
+    authSource,
   };
 }
 
