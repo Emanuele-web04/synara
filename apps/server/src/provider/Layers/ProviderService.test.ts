@@ -7120,6 +7120,152 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
   );
 });
 
+const instanceEventFanout = makeProviderServiceLayer(undefined, {
+  providerInstances: {
+    codex_a: { driver: "codex", enabled: true },
+    codex_b: { driver: "codex", enabled: true },
+  },
+});
+
+instanceEventFanout.layer("ProviderServiceLive runtime event instance correlation", (it) => {
+  it.effect("preserves B identity on startup events emitted before binding persistence", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-instance-startup-b");
+      const providerInstanceId = asProviderInstanceId("codex_b");
+      const startupEventId = asEventId("evt-instance-startup-b");
+      const receivedRef = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const consumer = yield* Stream.take(
+        Stream.filter(provider.streamEvents, (event) => event.eventId === startupEventId),
+        1,
+      ).pipe(
+        Stream.runForEach((event) => Ref.update(receivedRef, (current) => [...current, event])),
+        Effect.forkChild,
+      );
+      yield* sleep(20);
+
+      instanceEventFanout.codex.startSession.mockImplementationOnce(
+        (input: ProviderSessionStartInput) =>
+          Effect.gen(function* () {
+            const now = new Date().toISOString();
+            instanceEventFanout.codex.emit({
+              type: "session.started",
+              eventId: startupEventId,
+              provider: "codex",
+              providerInstanceId: input.providerInstanceId,
+              createdAt: now,
+              threadId: input.threadId,
+              payload: {},
+            });
+            yield* waitUntilEffect(
+              () =>
+                Ref.get(receivedRef).pipe(
+                  Effect.map((events) => events.some((event) => event.eventId === startupEventId)),
+                ),
+              500,
+              20,
+              "startup event delivery before binding persistence",
+            );
+            const bindingBeforePersistence = yield* directory
+              .getBinding(input.threadId)
+              .pipe(Effect.orElseSucceed(() => Option.none()));
+            assert.equal(Option.isNone(bindingBeforePersistence), true);
+            return {
+              provider: "codex",
+              ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+              status: "ready",
+              runtimeMode: input.runtimeMode,
+              threadId: input.threadId,
+              cwd: input.cwd ?? process.cwd(),
+              createdAt: now,
+              updatedAt: now,
+            } satisfies ProviderSession;
+          }),
+      );
+
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        providerInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* Fiber.join(consumer);
+
+      const received = yield* Ref.get(receivedRef);
+      assert.equal(received.length, 1);
+      assert.equal(received[0]?.providerInstanceId, providerInstanceId);
+      assert.equal(session.providerInstanceId, providerInstanceId);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.providerInstanceId, providerInstanceId);
+    }),
+  );
+
+  it.effect("drops delayed A events after the binding switches to B", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-instance-delayed-a");
+      const instanceA = asProviderInstanceId("codex_a");
+      const instanceB = asProviderInstanceId("codex_b");
+      const staleEventId = asEventId("evt-instance-delayed-a");
+      const currentEventId = asEventId("evt-instance-current-b");
+
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        providerInstanceId: instanceA,
+        runtimeMode: "full-access",
+        status: "running",
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        providerInstanceId: instanceB,
+        runtimeMode: "full-access",
+        status: "running",
+      });
+
+      const receivedRef = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const eventIds = new Set<string>([staleEventId, currentEventId]);
+      const consumer = yield* Stream.take(
+        Stream.filter(provider.streamEvents, (event) => eventIds.has(event.eventId)),
+        1,
+      ).pipe(
+        Stream.runForEach((event) => Ref.update(receivedRef, (current) => [...current, event])),
+        Effect.forkChild,
+      );
+      yield* sleep(20);
+
+      instanceEventFanout.codex.emit({
+        type: "session.state.changed",
+        eventId: staleEventId,
+        provider: "codex",
+        providerInstanceId: instanceA,
+        createdAt: "2026-07-11T10:00:00.000Z",
+        threadId,
+        payload: { state: "ready" },
+      });
+      instanceEventFanout.codex.emit({
+        type: "session.state.changed",
+        eventId: currentEventId,
+        provider: "codex",
+        providerInstanceId: instanceB,
+        createdAt: "2026-07-11T10:00:01.000Z",
+        threadId,
+        payload: { state: "ready" },
+      });
+
+      yield* Fiber.join(consumer);
+      const received = yield* Ref.get(receivedRef);
+      assert.deepEqual(
+        received.map((event) => [event.eventId, event.providerInstanceId]),
+        [[currentEventId, instanceB]],
+      );
+    }),
+  );
+});
+
 const validation = makeProviderServiceLayer();
 validation.layer("ProviderServiceLive validation", (it) => {
   it.effect("returns ProviderValidationError for invalid input payloads", () =>

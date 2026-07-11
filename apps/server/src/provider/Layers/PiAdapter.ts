@@ -391,7 +391,7 @@ interface PiSessionContext {
 export function makePiRuntimeEventBase(
   context: {
     readonly lifecycleGeneration?: string;
-    readonly session: Pick<ProviderSession, "threadId">;
+    readonly session: Pick<ProviderSession, "threadId" | "providerInstanceId">;
     readonly activeTurnId: TurnId | undefined;
   },
   options?: { readonly includeTurnId?: boolean },
@@ -399,6 +399,9 @@ export function makePiRuntimeEventBase(
   return {
     eventId: EventId.makeUnsafe(crypto.randomUUID()),
     provider: PROVIDER,
+    ...(context.session.providerInstanceId
+      ? { providerInstanceId: context.session.providerInstanceId }
+      : {}),
     threadId: context.session.threadId,
     createdAt: new Date().toISOString(),
     ...(context.lifecycleGeneration !== undefined
@@ -789,6 +792,9 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
+    ...(context.session.providerInstanceId
+      ? { providerInstanceId: context.session.providerInstanceId }
+      : {}),
     status: context.stopped ? "closed" : context.activeTurnId ? "running" : "ready",
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
@@ -2688,13 +2694,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ),
         );
         const now = new Date().toISOString();
+        const providerInstanceId = input.providerInstanceId ?? input.modelSelection?.instanceId;
         const model = runtime.session.model
           ? `${runtime.session.model.provider}/${runtime.session.model.id}`
           : modelId;
         const resumeCursor = getSessionFile(runtime.session);
         const session: ProviderSession = {
           provider: PROVIDER,
-          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+          ...(providerInstanceId ? { providerInstanceId } : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd,
