@@ -23,6 +23,7 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
@@ -683,6 +684,57 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveCycledModelSlug", () => {
+  const options = [{ slug: "a" }, { slug: "b" }, { slug: "c" }, { slug: "d" }];
+
+  it("returns null when fewer than two models are available", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options: [{ slug: "a" }],
+        direction: "next",
+      }),
+    ).toBeNull();
+  });
+
+  it("cycles next/previous through the full list", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "next",
+      }),
+    ).toBe("b");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "previous",
+      }),
+    ).toBe("d");
+  });
+
+  it("puts favorites first and cycles within that ordered list", () => {
+    // Ordered: d, b, a, c — from c next wraps to d; from d next is b
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "c",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "d",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("b");
   });
 });
 

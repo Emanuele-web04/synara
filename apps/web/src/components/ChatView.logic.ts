@@ -314,6 +314,41 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   );
 }
 
+// Build the ordered model list used by model.next / model.previous: favorites first
+// (stable user order), then remaining discovered options. Returns null when cycling is
+// a no-op (fewer than two selectable models).
+export function resolveCycledModelSlug(input: {
+  currentModel: string;
+  options: ReadonlyArray<{ slug: string }>;
+  favoriteSlugs?: ReadonlyArray<string>;
+  direction: "next" | "previous";
+}): string | null {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const push = (slug: string) => {
+    const trimmed = slug.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  };
+  for (const favorite of input.favoriteSlugs ?? []) {
+    if (input.options.some((option) => option.slug === favorite)) {
+      push(favorite);
+    }
+  }
+  for (const option of input.options) {
+    push(option.slug);
+  }
+  if (ordered.length < 2) {
+    return null;
+  }
+  const currentIndex = ordered.indexOf(input.currentModel);
+  const fromIndex = currentIndex >= 0 ? currentIndex : 0;
+  const delta = input.direction === "next" ? 1 : -1;
+  const nextIndex = (fromIndex + delta + ordered.length) % ordered.length;
+  return ordered[nextIndex] ?? null;
+}
+
 export function resolveEnvironmentPanelOpen(input: {
   defaultOpen: boolean;
   userPreferenceOpen: boolean | null;

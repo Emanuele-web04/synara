@@ -121,6 +121,18 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Open the composer provider and model picker.",
   },
   {
+    command: "model.next",
+    label: "Next model",
+    description:
+      "Cycle to the next model for the active provider (favorites first, then remaining models).",
+  },
+  {
+    command: "model.previous",
+    label: "Previous model",
+    description:
+      "Cycle to the previous model for the active provider (favorites first, then remaining models).",
+  },
+  {
     command: "traitsPicker.toggle",
     label: "Reasoning picker",
     description: "Open the composer reasoning and trait controls.",

@@ -164,6 +164,7 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
@@ -299,6 +300,7 @@ import {
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -5763,6 +5765,35 @@ export default function ChatView({
         return;
       }
 
+      if (command === "model.next" || command === "model.previous") {
+        if (!composerPickerShortcutActive || !activeThread) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = command === "model.next" ? "next" : "previous";
+        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const nextSlug = resolveCycledModelSlug({
+          currentModel: selectedModel,
+          options: providerOptions,
+          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          direction,
+        });
+        if (!nextSlug) return;
+        const resolvedModel = resolveCommittedProviderModel({
+          selectedModel: nextSlug as ModelSlug,
+          availableOptions: providerOptions,
+          fallback: () =>
+            resolveAppModelSelection(selectedProvider, customModelsByProvider, nextSlug),
+        });
+        const nextModelSelection: ModelSelection = {
+          provider: selectedProvider,
+          model: resolvedModel,
+        };
+        setComposerDraftModelSelection(activeThread.id, nextModelSelection);
+        setStickyComposerModelSelection(nextModelSelection);
+        scheduleComposerFocus();
+        return;
+      }
+
       if (command === "traitsPicker.toggle") {
         if (!composerPickerShortcutActive) return;
         event.preventDefault();
@@ -5934,6 +5965,13 @@ export default function ChatView({
     scheduleComposerFocus,
     toggleComposerFocus,
     toggleTerminalVisibility,
+    activeThread,
+    selectedProvider,
+    selectedModel,
+    modelOptionsByProvider,
+    customModelsByProvider,
+    setComposerDraftModelSelection,
+    setStickyComposerModelSelection,
   ]);
 
   const startComposerVoiceRecording = useCallback(async () => {
