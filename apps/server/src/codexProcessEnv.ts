@@ -128,6 +128,10 @@ export interface PreparedCodexAuthTracking {
   readonly authSource: CodexPreparedAuthSource;
 }
 
+export interface CodexAuthTrackingPreparationHooks {
+  readonly afterSourceHomeBound?: () => void;
+}
+
 export interface CodexProcessEnvInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
@@ -402,6 +406,75 @@ function assertPreparedHomeIdentity(
   }
 }
 
+function assertLogicalHomeMatchesPreparedSource(input: {
+  readonly logicalHomePath: string;
+  readonly source: CodexPreparedHomeSource;
+  readonly label: string;
+}): void {
+  if (input.source.kind === "missing") {
+    try {
+      lstatSync(input.logicalHomePath, { bigint: true });
+    } catch (cause) {
+      if (filesystemErrorCode(cause) === "ENOENT") return;
+      throw new Error(`${input.label} at ${input.logicalHomePath} could not be revalidated safely.`, {
+        cause,
+      });
+    }
+    throw new Error(
+      `${input.label} at ${input.logicalHomePath} appeared while account identities were being prepared; retry the request.`,
+    );
+  }
+
+  assertPreparedHomeIdentity(input.source, path.basename(input.logicalHomePath));
+  let logicalTarget: BigIntStats;
+  try {
+    logicalTarget = statSync(input.logicalHomePath, { bigint: true });
+  } catch (cause) {
+    throw new Error(`${input.label} at ${input.logicalHomePath} could not be revalidated safely.`, {
+      cause,
+    });
+  }
+  if (
+    !logicalTarget.isDirectory() ||
+    logicalTarget.dev !== input.source.device ||
+    logicalTarget.ino !== input.source.inode
+  ) {
+    throw new Error(
+      `${input.label} at ${input.logicalHomePath} changed while account identities were being prepared; retry the request.`,
+    );
+  }
+}
+
+function assertPreparedAuthAndSourceBindingsCurrent(input: {
+  readonly sourceHomePath: string;
+  readonly sourceHomeSource: CodexPreparedHomeSource;
+  readonly authoritativeAuthHomePath: string;
+  readonly authSource: CodexPreparedAuthSource;
+}): void {
+  assertLogicalHomeMatchesPreparedSource({
+    logicalHomePath: input.sourceHomePath,
+    source: input.sourceHomeSource,
+    label: "Codex source home",
+  });
+  assertLogicalHomeMatchesPreparedSource({
+    logicalHomePath: input.authoritativeAuthHomePath,
+    source: input.authSource,
+    label: "Codex account auth home",
+  });
+}
+
+function preparedHomesShareIdentity(
+  left: CodexPreparedHomeSource,
+  right: CodexPreparedHomeSource,
+): boolean {
+  return (
+    left.kind === "bound" &&
+    right.kind === "bound" &&
+    left.device === right.device &&
+    left.inode === right.inode
+  );
+}
+
 export function readCodexPreparedHomeFileSnapshot(
   source: CodexPreparedHomeSource,
   fileName: string,
@@ -483,6 +556,7 @@ export function readCodexPreparedHomeFileSnapshot(
 
 export function prepareCodexAuthTracking(
   input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  hooks: CodexAuthTrackingPreparationHooks = {},
 ): PreparedCodexAuthTracking {
   const env = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
@@ -499,44 +573,60 @@ export function prepareCodexAuthTracking(
     ...(shadowHomePath ? { shadowHomePath } : {}),
   });
   const overlayHomePath = resolveSynaraCodexHomeOverlayPath(env, sourceHomePath, accountSegment);
-  const sourceHomeSource = bindCodexPreparedHomeSource(sourceHomePath, {
-    label: "Codex source home",
-    requireRealDirectory: false,
-  });
-  const sourceConfigSnapshot =
-    readCodexPreparedHomeFileSnapshot(sourceHomeSource, "config.toml")?.toString("utf8") ?? "";
-  if (shadowHomePath) {
-    validateCodexPrivateHomePath(sourceHomePath, shadowHomePath, "shadow home");
-    assertCodexPrivateAuthIsNotSymlink(shadowHomePath);
-  }
-  if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
-    validateCodexPrivateHomePath(sourceHomePath, overlayHomePath, "overlay home");
-    assertCodexPrivateAuthIsNotSymlink(overlayHomePath);
-  }
-  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  assertManagedCodexHomeUsesObservableAuth({
-    sourceConfig: sourceConfigSnapshot,
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-  });
   const authoritativeAuthHomePath =
     shadowHomePath ??
     (accountSegment && !hasDedicatedAccountHome ? overlayHomePath : sourceHomePath);
-  const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
   const requiresRealPrivateHome = Boolean(
     shadowHomePath || (accountSegment && !hasDedicatedAccountHome),
   );
   const sourceHomeAlsoOwnsAuth =
     path.resolve(authoritativeAuthHomePath) === path.resolve(sourceHomePath);
+  if (shadowHomePath) {
+    validateCodexPrivateHomePath(sourceHomePath, shadowHomePath, "shadow home");
+  }
+  if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
+    validateCodexPrivateHomePath(sourceHomePath, overlayHomePath, "overlay home");
+  }
+
+  const sourceHomeSource = bindCodexPreparedHomeSource(sourceHomePath, {
+    label: "Codex source home",
+    requireRealDirectory: false,
+  });
+  hooks.afterSourceHomeBound?.();
+  const authSource = sourceHomeAlsoOwnsAuth
+    ? sourceHomeSource
+    : bindCodexPreparedHomeSource(authoritativeAuthHomePath, {
+        label: "Codex account auth home",
+        requireRealDirectory: requiresRealPrivateHome,
+      });
+  if (!sourceHomeAlsoOwnsAuth && preparedHomesShareIdentity(sourceHomeSource, authSource)) {
+    throw new Error("Codex account auth home must be different from CODEX_HOME.");
+  }
+  const bindingTransaction = {
+    sourceHomePath,
+    sourceHomeSource,
+    authoritativeAuthHomePath,
+    authSource,
+  };
+  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
+  if (requiresRealPrivateHome && authSource.kind === "bound") {
+    assertCodexPrivateAuthIsNotSymlink(authSource.canonicalHomePath);
+  }
+
+  const sourceConfigSnapshot =
+    readCodexPreparedHomeFileSnapshot(sourceHomeSource, "config.toml")?.toString("utf8") ?? "";
+  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+  assertManagedCodexHomeUsesObservableAuth({
+    sourceConfig: sourceConfigSnapshot,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
+  const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
+  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
   return {
     sourceConfigPath,
     authoritativeAuthFilePath,
     sourceConfigSnapshot,
-    authSource: sourceHomeAlsoOwnsAuth
-      ? sourceHomeSource
-      : bindCodexPreparedHomeSource(authoritativeAuthHomePath, {
-          label: "Codex account auth home",
-          requireRealDirectory: requiresRealPrivateHome,
-        }),
+    authSource,
   };
 }
 
