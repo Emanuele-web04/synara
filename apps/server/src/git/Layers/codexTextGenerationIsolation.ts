@@ -3,23 +3,17 @@
 // Layer: Server text-generation isolation helpers.
 
 import { execFileSync } from "node:child_process";
-import {
-  closeSync,
-  chmodSync,
-  constants,
-  existsSync,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { Effect, FileSystem } from "effect";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
-import type { CodexPreparedAuthSource } from "../../codexProcessEnv.ts";
+import {
+  CodexPreparedHomeFileSnapshotError,
+  readCodexPreparedHomeFileSnapshot,
+  type CodexPreparedAuthSource,
+} from "../../codexProcessEnv.ts";
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -624,98 +618,50 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function stableAuthStat(left: ReturnType<typeof fstatSync>, right: ReturnType<typeof fstatSync>) {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
-  );
-}
-
-function filesystemErrorCode(cause: unknown): string | undefined {
-  return typeof cause === "object" && cause !== null && "code" in cause
-    ? String((cause as { readonly code?: unknown }).code ?? "")
-    : undefined;
-}
-
-function assertBoundAuthHome(source: Extract<CodexPreparedAuthSource, { kind: "bound" }>): void {
-  try {
-    const current = lstatSync(source.canonicalHomePath, { bigint: true });
-    if (
-      !current.isDirectory() ||
-      current.isSymbolicLink() ||
-      current.dev !== source.device ||
-      current.ino !== source.inode
-    ) {
-      throw new CodexTextGenerationAuthError(
-        "The Codex account auth home changed after account selection; retry the request.",
-      );
-    }
-  } catch (cause) {
-    if (cause instanceof CodexTextGenerationAuthError) throw cause;
-    throw new CodexTextGenerationAuthError(
-      "The selected Codex account auth home can no longer be verified safely; retry the request.",
-      { cause },
-    );
-  }
-}
-
 function readStableBoundAuthFile(
   source: Extract<CodexPreparedAuthSource, { kind: "bound" }>,
 ): Buffer | undefined {
-  assertBoundAuthHome(source);
-  const authFilePath = join(source.canonicalHomePath, "auth.json");
   try {
-    lstatSync(authFilePath);
+    return readCodexPreparedHomeFileSnapshot(source, "auth.json");
   } catch (cause) {
-    assertBoundAuthHome(source);
-    if (filesystemErrorCode(cause) === "ENOENT") return undefined;
-    throw new CodexTextGenerationAuthError("Codex auth.json could not be checked safely.", {
-      cause,
-    });
-  }
-  const content = readStableRegularFile(authFilePath);
-  // A path-based open cannot pin parent components. Verify the canonical
-  // directory inode again before any captured credentials are published.
-  assertBoundAuthHome(source);
-  return content;
-}
-
-function readStableRegularFile(filePath: string): Buffer {
-  const initial = lstatSync(filePath);
-  if (initial.isSymbolicLink()) {
-    throw new CodexTextGenerationAuthError("Codex auth.json must not be a symbolic link.");
-  }
-  if (!initial.isFile()) {
-    throw new CodexTextGenerationAuthError("Codex auth.json must be a regular file.");
-  }
-  let descriptor: number | undefined;
-  try {
-    descriptor = openSync(
-      filePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    const before = fstatSync(descriptor);
-    if (!before.isFile() || !stableAuthStat(initial, before)) {
-      throw new CodexTextGenerationAuthError("Codex auth.json must be a regular file.");
+    if (!(cause instanceof CodexPreparedHomeFileSnapshotError)) {
+      throw new CodexTextGenerationAuthError("Codex auth.json could not be snapshotted safely.", {
+        cause,
+      });
     }
-    const content = readFileSync(descriptor);
-    const after = fstatSync(descriptor);
-    if (!stableAuthStat(before, after) || content.byteLength !== after.size) {
-      throw new CodexTextGenerationAuthError(
-        "Codex auth.json changed while its isolated snapshot was being read; retry the request.",
-      );
+    switch (cause.failure) {
+      case "home-changed":
+        throw new CodexTextGenerationAuthError(
+          "The Codex account auth home changed after account selection; retry the request.",
+          { cause },
+        );
+      case "home-unavailable":
+        throw new CodexTextGenerationAuthError(
+          "The selected Codex account auth home can no longer be verified safely; retry the request.",
+          { cause },
+        );
+      case "file-check-failed":
+        throw new CodexTextGenerationAuthError("Codex auth.json could not be checked safely.", {
+          cause,
+        });
+      case "symbolic-link":
+        throw new CodexTextGenerationAuthError("Codex auth.json must not be a symbolic link.", {
+          cause,
+        });
+      case "not-regular-file":
+        throw new CodexTextGenerationAuthError("Codex auth.json must be a regular file.", {
+          cause,
+        });
+      case "file-changed":
+        throw new CodexTextGenerationAuthError(
+          "Codex auth.json changed while its isolated snapshot was being read; retry the request.",
+          { cause },
+        );
+      case "file-read-failed":
+        throw new CodexTextGenerationAuthError("Codex auth.json could not be snapshotted safely.", {
+          cause,
+        });
     }
-    return content;
-  } catch (cause) {
-    if (cause instanceof CodexTextGenerationAuthError) throw cause;
-    throw new CodexTextGenerationAuthError("Codex auth.json could not be snapshotted safely.", {
-      cause,
-    });
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
