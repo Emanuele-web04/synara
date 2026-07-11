@@ -32,7 +32,7 @@ import { TextGeneration, type TextGenerationShape } from "../../git/Services/Tex
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
+import { hasBoundProviderSession, ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import {
@@ -57,6 +57,21 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
+
+describe("hasBoundProviderSession", () => {
+  it.each([
+    [null, false],
+    ["stopped", false],
+    ["error", false],
+    ["starting", true],
+    ["running", true],
+    ["idle", true],
+    ["ready", true],
+    ["interrupted", true],
+  ] as const)("treats %s status as bound=%s", (status, expected) => {
+    expect(hasBoundProviderSession(status === null ? null : { status })).toBe(expected);
+  });
+});
 
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,

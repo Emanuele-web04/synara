@@ -201,6 +201,12 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
+export function hasBoundProviderSession(
+  session: Pick<OrchestrationSession, "status"> | null,
+): boolean {
+  return session !== null && session.status !== "stopped" && session.status !== "error";
+}
+
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
 
@@ -881,12 +887,9 @@ const make = Effect.gen(function* () {
     const requestedProviderInstanceChanged =
       requestedModelSelection !== undefined &&
       desiredProviderInstanceId !== currentProviderInstanceId;
-    const hasBoundProviderSession =
-      thread.session !== null &&
-      thread.session.status !== "stopped" &&
-      thread.session.status !== "error";
+    const isBoundProviderSession = hasBoundProviderSession(thread.session);
     if (
-      hasBoundProviderSession &&
+      isBoundProviderSession &&
       requestedModelSelection !== undefined &&
       desiredProvider !== threadProvider
     ) {
@@ -896,7 +899,7 @@ const make = Effect.gen(function* () {
         detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${desiredProvider}'.`,
       });
     }
-    if (hasBoundProviderSession && requestedProviderInstanceChanged) {
+    if (isBoundProviderSession && requestedProviderInstanceChanged) {
       return yield* new ProviderAdapterRequestError({
         provider: threadProvider,
         method: "thread.turn.start",
