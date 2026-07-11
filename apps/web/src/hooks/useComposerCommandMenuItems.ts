@@ -1,6 +1,7 @@
 import type {
   ProjectEntry,
   ProviderNativeCommandDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderPluginDescriptor,
@@ -37,6 +38,7 @@ type ComposerPluginSuggestion = {
 
 type SearchableModelOption = {
   provider: ProviderKind;
+  instanceId: ProviderInstanceId;
   providerLabel: string;
   slug: string;
   name: string;
@@ -247,10 +249,11 @@ export function useComposerCommandMenuItems(input: {
       { value: option.providerLabel, weight: 200 },
       { value: option.searchProvider, weight: 200 },
       { value: option.searchUpstreamProvider, weight: 200 },
-    ]).map(({ provider, providerLabel, slug, name }) => ({
-      id: `model:${provider}:${slug}`,
+    ]).map(({ provider, instanceId, providerLabel, slug, name }) => ({
+      id: `model:${instanceId}:${slug}`,
       type: "model" as const,
       provider,
+      instanceId,
       model: slug,
       label: name,
       description: `${providerLabel} · ${slug}`,

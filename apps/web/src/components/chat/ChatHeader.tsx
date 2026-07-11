@@ -13,6 +13,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
@@ -63,6 +64,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -94,7 +96,7 @@ interface ChatHeaderProps {
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
-  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
+  handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -137,7 +139,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
-  onCreateHandoff: (targetProvider: ProviderKind) => void;
+  onCreateHandoff: (target: ThreadHandoffTarget) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -195,7 +197,10 @@ function EditorChatHistoryMenu(props: {
               }}
             >
               <ProviderIcon
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
+                provider={
+                  thread.session?.provider ??
+                  inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+                }
                 tone="header"
                 className="size-3.5 shrink-0"
               />
@@ -313,7 +318,9 @@ function EditorRailTabs(props: {
         {
           id: thread.id,
           title: thread.title,
-          provider: thread.session?.provider ?? thread.modelSelection.provider,
+          provider:
+            thread.session?.provider ??
+            inferLegacyProviderKindFromModelSelection(thread.modelSelection),
         },
       ]),
     );
@@ -353,7 +360,9 @@ function EditorRailTabs(props: {
       const nextTab = {
         id: sidebarThread.id,
         title: sidebarThread.title,
-        provider: sidebarThread.session?.provider ?? sidebarThread.modelSelection.provider,
+        provider:
+          sidebarThread.session?.provider ??
+          inferLegacyProviderKindFromModelSelection(sidebarThread.modelSelection),
       };
       setAndStoreOpenChatTabs((current) =>
         current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],
@@ -495,7 +504,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
-  handoffActionTargetProviders,
+  handoffActionTargets,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -757,7 +766,7 @@ export const ChatHeader = memo(function ChatHeader({
                         tone="outline"
                         className={compact ? "gap-1" : "gap-1.5"}
                         aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        disabled={handoffDisabled || handoffActionTargets.length === 0}
                       />
                     }
                   >
@@ -769,10 +778,10 @@ export const ChatHeader = memo(function ChatHeader({
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+              {handoffActionTargets.map((target) => (
+                <MenuItem key={target.instanceId} onClick={() => onCreateHandoff(target)}>
+                  {renderProviderIcon(target.provider, "size-3.5 shrink-0")}
+                  <span>Handoff to {target.label}</span>
                 </MenuItem>
               ))}
             </ComposerPickerMenuPopup>

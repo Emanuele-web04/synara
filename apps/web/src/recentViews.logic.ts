@@ -4,6 +4,7 @@
 // Exports: recent view types plus MRU update, pruning, and display derivation helpers
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import type {
   ResolvedTerminalVisualIdentity,
   TerminalIconKey,
@@ -272,7 +273,9 @@ export function buildRecentViewDisplayEntries(input: {
         const summary = input.threadsById[view.threadId];
         const thread = summary ?? input.draftThreadsById?.[view.threadId];
         const projectName = thread ? projectNameById.get(thread.projectId) : null;
-        const provider = summary?.modelSelection.provider;
+        const provider = summary
+          ? inferLegacyProviderKindFromModelSelection(summary.modelSelection)
+          : undefined;
         const title = normalizeOptionalId(thread?.title) ?? "New chat";
         const subtitleParts = [
           projectName ?? "Chat",

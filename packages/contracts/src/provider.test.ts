@@ -29,13 +29,12 @@ describe("ProviderSessionStartInput", () => {
       },
     });
     expect(parsed.runtimeMode).toBe("full-access");
-    expect(parsed.modelSelection?.provider).toBe("codex");
+    expect(parsed.modelSelection?.instanceId).toBe("codex");
     expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
-    if (parsed.modelSelection?.provider !== "codex") {
-      throw new Error("Expected codex modelSelection");
-    }
-    expect(parsed.modelSelection.options?.reasoningEffort).toBe("high");
-    expect(parsed.modelSelection.options?.fastMode).toBe(true);
+    expect(parsed.modelSelection?.options).toEqual([
+      { id: "reasoningEffort", value: "high" },
+      { id: "fastMode", value: true },
+    ]);
     expect(parsed.providerOptions?.codex?.binaryPath).toBe("/usr/local/bin/codex");
     expect(parsed.providerOptions?.codex?.homePath).toBe("/tmp/.codex");
   });
@@ -73,14 +72,13 @@ describe("ProviderSessionStartInput", () => {
       runtimeMode: "full-access",
     });
     expect(parsed.provider).toBe("claudeAgent");
-    expect(parsed.modelSelection?.provider).toBe("claudeAgent");
+    expect(parsed.modelSelection?.instanceId).toBe("claudeAgent");
     expect(parsed.modelSelection?.model).toBe("claude-sonnet-4-6");
-    if (parsed.modelSelection?.provider !== "claudeAgent") {
-      throw new Error("Expected claude modelSelection");
-    }
-    expect(parsed.modelSelection.options?.thinking).toBe(true);
-    expect(parsed.modelSelection.options?.effort).toBe("max");
-    expect(parsed.modelSelection.options?.fastMode).toBe(true);
+    expect(parsed.modelSelection?.options).toEqual([
+      { id: "thinking", value: true },
+      { id: "effort", value: "max" },
+      { id: "fastMode", value: true },
+    ]);
     expect(parsed.providerOptions?.claudeAgent?.binaryPath).toBe("/usr/local/bin/claude");
     expect(parsed.providerOptions?.claudeAgent?.permissionMode).toBe("plan");
     expect(parsed.providerOptions?.claudeAgent?.maxThinkingTokens).toBe(12_000);
@@ -102,13 +100,12 @@ describe("ProviderSendTurnInput", () => {
       },
     });
 
-    expect(parsed.modelSelection?.provider).toBe("codex");
+    expect(parsed.modelSelection?.instanceId).toBe("codex");
     expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
-    if (parsed.modelSelection?.provider !== "codex") {
-      throw new Error("Expected codex modelSelection");
-    }
-    expect(parsed.modelSelection.options?.reasoningEffort).toBe("xhigh");
-    expect(parsed.modelSelection.options?.fastMode).toBe(true);
+    expect(parsed.modelSelection?.options).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+      { id: "fastMode", value: true },
+    ]);
   });
 
   it("accepts claude modelSelection including ultrathink", () => {
@@ -124,12 +121,11 @@ describe("ProviderSendTurnInput", () => {
       },
     });
 
-    expect(parsed.modelSelection?.provider).toBe("claudeAgent");
-    if (parsed.modelSelection?.provider !== "claudeAgent") {
-      throw new Error("Expected claude modelSelection");
-    }
-    expect(parsed.modelSelection.options?.effort).toBe("ultrathink");
-    expect(parsed.modelSelection.options?.fastMode).toBe(true);
+    expect(parsed.modelSelection?.instanceId).toBe("claudeAgent");
+    expect(parsed.modelSelection?.options).toEqual([
+      { id: "effort", value: "ultrathink" },
+      { id: "fastMode", value: true },
+    ]);
   });
 
   it("accepts claude modelSelection including xhigh for Opus 4.7", () => {
@@ -144,10 +140,7 @@ describe("ProviderSendTurnInput", () => {
       },
     });
 
-    expect(parsed.modelSelection?.provider).toBe("claudeAgent");
-    if (parsed.modelSelection?.provider !== "claudeAgent") {
-      throw new Error("Expected claude modelSelection");
-    }
-    expect(parsed.modelSelection.options?.effort).toBe("xhigh");
+    expect(parsed.modelSelection?.instanceId).toBe("claudeAgent");
+    expect(parsed.modelSelection?.options).toEqual([{ id: "effort", value: "xhigh" }]);
   });
 });

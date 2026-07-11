@@ -20,6 +20,7 @@ import {
   ProjectId,
   ProviderMentionReference,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderModelOptions,
   ProviderSkillReference,
@@ -36,6 +37,11 @@ import {
   resolveSelectableModel,
   resolveModelSlugForProvider,
 } from "@synara/shared/model";
+import {
+  inferLegacyProviderKindFromInstanceId,
+  inferLegacyProviderKindFromModel,
+  inferLegacyProviderKindFromModelSelection,
+} from "@synara/shared/providerInstances";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
@@ -65,7 +71,7 @@ import {
 } from "./lib/composerPastedText";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { cloneComposerImageAttachment } from "./lib/composerSend";
-import { buildModelSelection } from "./providerModelOptions";
+import { buildModelSelection, buildProviderOptionPatch } from "./providerModelOptions";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
@@ -333,9 +339,9 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
 });
@@ -381,6 +387,8 @@ type LegacyPersistedComposerDraftStoreState = PersistedComposerDraftStoreState &
   LegacyStickyModelFields &
   LegacyV2StoreFields;
 
+type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
+
 const PersistedDraftThreadState = Schema.Struct({
   projectId: ProjectId,
   createdAt: Schema.String,
@@ -401,9 +409,9 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   draftThreadsByThreadId: Schema.Record(ThreadId, PersistedDraftThreadState),
   projectDraftThreadIdByProjectId: Schema.Record(ProjectId, ThreadId),
   stickyModelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
 type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
 
@@ -431,8 +439,8 @@ export interface ComposerThreadDraftState {
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
-  modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  activeProvider: ProviderKind | null;
+  modelSelectionByProvider: ModelSelectionByProviderInstance;
+  activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
 }
@@ -473,8 +481,8 @@ export interface ComposerDraftStoreState {
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
-  stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  stickyActiveProvider: ProviderKind | null;
+  stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,
@@ -553,6 +561,7 @@ export interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      instanceId?: ProviderInstanceId | null;
       model?: string | null;
       persistSticky?: boolean;
     },
@@ -619,13 +628,43 @@ function mergeProviderModelOptionsFromSelections(
   const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
   for (const selection of selections) {
     if (!selection) continue;
-    if (selection.options) {
-      result[selection.provider] = selection.options;
+    const provider = inferLegacyProviderKindFromModelSelection(selection);
+    const options = providerModelOptionsFromSelection(selection, provider);
+    if (options) {
+      result[provider] = options;
     } else {
-      delete result[selection.provider];
+      delete result[provider];
     }
   }
   return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
+}
+
+function modelSelectionMatchesProviderInstance(
+  selection: ModelSelection | null | undefined,
+  provider: ProviderKind,
+  instanceId: ProviderInstanceId | null | undefined,
+): selection is ModelSelection {
+  if (!selection) {
+    return false;
+  }
+  const targetInstanceId = instanceId ?? provider;
+  const selectionInstanceId =
+    selection.instanceId ?? inferLegacyProviderKindFromModelSelection(selection);
+  return selectionInstanceId === targetInstanceId;
+}
+
+function providerModelOptionsFromSelection(
+  selection: ModelSelection,
+  provider: ProviderKind,
+): ProviderModelOptions[ProviderKind] | undefined {
+  if (!selection.options || selection.options.length === 0) {
+    return undefined;
+  }
+  const optionPatch = selection.options.reduce<Record<string, unknown>>((acc, option) => {
+    Object.assign(acc, buildProviderOptionPatch(provider, option.id, option.value));
+    return acc;
+  }, {});
+  return normalizeProviderModelOptions({ [provider]: optionPatch }, provider)?.[provider];
 }
 
 function deriveEffectiveComposerModelOptions(input: {
@@ -633,12 +672,34 @@ function deriveEffectiveComposerModelOptions(input: {
     | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
     | null
     | undefined;
+  selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
 }): ProviderModelOptions | null {
+  const selectionForOptions = (
+    selection: ModelSelection | null | undefined,
+  ): ModelSelection | null | undefined => {
+    if (!selection) {
+      return selection;
+    }
+    if (
+      modelSelectionMatchesProviderInstance(
+        selection,
+        input.selectedProvider,
+        input.selectedProviderInstanceId,
+      )
+    ) {
+      return selection;
+    }
+    if (inferLegacyProviderKindFromModelSelection(selection) === input.selectedProvider) {
+      return null;
+    }
+    return selection;
+  };
   const baseOptions = mergeProviderModelOptionsFromSelections(
-    input.projectModelSelection,
-    input.threadModelSelection,
+    selectionForOptions(input.projectModelSelection),
+    selectionForOptions(input.threadModelSelection),
   );
   const draftSelections = input.draft?.modelSelectionByProvider;
   if (!draftSelections) {
@@ -648,12 +709,29 @@ function deriveEffectiveComposerModelOptions(input: {
   const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = baseOptions
     ? { ...baseOptions }
     : {};
-  for (const [provider, selection] of Object.entries(draftSelections) as Array<
-    [ProviderKind, ModelSelection | undefined]
-  >) {
+  for (const selection of Object.values(draftSelections)) {
     if (!selection) continue;
-    if (selection.options) {
-      result[provider] = selection.options;
+    const provider = modelSelectionMatchesProviderInstance(
+      selection,
+      input.selectedProvider,
+      input.selectedProviderInstanceId,
+    )
+      ? input.selectedProvider
+      : inferLegacyProviderKindFromModelSelection(selection);
+    if (
+      provider === input.selectedProvider &&
+      !modelSelectionMatchesProviderInstance(
+        selection,
+        input.selectedProvider,
+        input.selectedProviderInstanceId,
+      )
+    ) {
+      delete result[provider];
+      continue;
+    }
+    const options = providerModelOptionsFromSelection(selection, provider);
+    if (options) {
+      result[provider] = options;
     } else {
       delete result[provider];
     }
@@ -847,8 +925,7 @@ Object.freeze(EMPTY_PASTED_TEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
-const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
-  Object.freeze({});
+const EMPTY_MODEL_SELECTION_BY_PROVIDER: ModelSelectionByProviderInstance = Object.freeze({});
 
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
@@ -1191,6 +1268,48 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | undefined {
+  const trimmed = trimStringOrUndefined(value);
+  return trimmed === undefined ? undefined : (trimmed as ProviderInstanceId);
+}
+
+function normalizeActiveProviderInstanceId(value: unknown): ProviderInstanceId | null {
+  return normalizeProviderInstanceId(value) ?? null;
+}
+
+export function providerInstanceModelSelectionKey(
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+): ProviderInstanceId {
+  return (normalizeProviderInstanceId(instanceId) ?? provider) as ProviderInstanceId;
+}
+
+function modelSelectionStorageKey(selection: ModelSelection): ProviderInstanceId {
+  return (normalizeProviderInstanceId(selection.instanceId) ??
+    inferLegacyProviderKindFromModelSelection(selection)) as ProviderInstanceId;
+}
+
+function readModelSelectionForProviderInstance(
+  selections: ModelSelectionByProviderInstance | null | undefined,
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+): ModelSelection | undefined {
+  return selections?.[providerInstanceModelSelectionKey(provider, instanceId)];
+}
+
+function normalizeModelSelectionMapByInstance(
+  selections: ModelSelectionByProviderInstance,
+): ModelSelectionByProviderInstance {
+  const result: ModelSelectionByProviderInstance = {};
+  for (const selection of Object.values(selections)) {
+    if (!selection) {
+      continue;
+    }
+    result[modelSelectionStorageKey(selection)] = selection;
+  }
+  return result;
+}
+
 function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
   return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
@@ -1199,75 +1318,31 @@ function makeModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderModelOptions[ProviderKind],
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ModelSelection {
-  switch (provider) {
-    case "codex":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "codex" }>["options"] }
-          : {}),
-      };
-    case "claudeAgent":
-      return {
-        provider,
-        model,
-        ...(options
-          ? {
-              options: options as Extract<ModelSelection, { provider: "claudeAgent" }>["options"],
-            }
-          : {}),
-      };
-    case "cursor":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
-          : {}),
-      };
-    case "gemini":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
-          : {}),
-      };
-    case "grok":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
-          : {}),
-      };
-    case "kilo":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "kilo" }>["options"] }
-          : {}),
-      };
-    case "opencode":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
-          : {}),
-      };
-    case "pi":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "pi" }>["options"] }
-          : {}),
-      };
+  return buildModelSelection(provider, model, options, { instanceId });
+}
+
+function mutableModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
+  return {
+    instanceId: selection.instanceId,
+    model: selection.model,
+    ...(selection.options
+      ? { options: selection.options.map((option) => ({ id: option.id, value: option.value })) }
+      : {}),
+  };
+}
+
+function mutableModelSelectionMap(
+  selections: ModelSelectionByProviderInstance,
+): DeepMutable<ModelSelectionByProviderInstance> {
+  const next: DeepMutable<ModelSelectionByProviderInstance> = {};
+  for (const [key, selection] of Object.entries(selections)) {
+    if (selection) {
+      next[key] = mutableModelSelection(selection);
+    }
   }
+  return next;
 }
 
 function normalizeProviderModelOptions(
@@ -1490,14 +1565,15 @@ function normalizeModelSelection(
   },
 ): ModelSelection | null {
   const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-  const provider = normalizeProviderKind(candidate?.provider ?? legacy?.provider);
-  if (provider === null) {
-    return null;
-  }
   const rawModel = candidate?.model ?? legacy?.model;
   if (typeof rawModel !== "string") {
     return null;
   }
+  const instanceId = normalizeProviderInstanceId(candidate?.instanceId);
+  const provider =
+    normalizeProviderKind(candidate?.provider ?? legacy?.provider) ??
+    inferLegacyProviderKindFromInstanceId(instanceId) ??
+    inferLegacyProviderKindFromModel(rawModel);
   const inferredClaudeContextWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(rawModel, provider);
@@ -1505,7 +1581,20 @@ function normalizeModelSelection(
     return null;
   }
   const modelOptions = normalizeProviderModelOptions(
-    candidate?.options ? { [provider]: candidate.options } : legacy?.modelOptions,
+    Array.isArray(candidate?.options)
+      ? {
+          [provider]: providerModelOptionsFromSelection(
+            {
+              instanceId: instanceId ?? provider,
+              model: rawModel,
+              options: candidate.options as ModelSelection["options"],
+            },
+            provider,
+          ),
+        }
+      : candidate?.options
+        ? { [provider]: candidate.options }
+        : legacy?.modelOptions,
     provider,
     provider === "codex" ? legacy?.legacyCodex : undefined,
   );
@@ -1533,7 +1622,7 @@ function normalizeModelSelection(
                   : provider === "pi"
                     ? modelOptions?.pi
                     : undefined;
-  return makeModelSelection(provider, model, options);
+  return makeModelSelection(provider, model, options, instanceId);
 }
 
 // ── Sticky selection sanitization ─────────────────────────────────────
@@ -1542,25 +1631,38 @@ function normalizeModelSelection(
 // beyond the normal 200k compaction point and consume usage limits much faster, so a
 // one-off pick must never silently become every future thread's sticky default.
 function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
-  if (selection.provider !== "claudeAgent" || !selection.options?.contextWindow) {
+  if (inferLegacyProviderKindFromModelSelection(selection) !== "claudeAgent") {
     return selection;
   }
-  const { contextWindow: _contextWindow, ...rest } = selection.options;
-  return makeModelSelection(
-    selection.provider,
-    selection.model,
-    Object.keys(rest).length > 0 ? rest : undefined,
-  );
+  const options = selection.options;
+  if (!options) {
+    return selection;
+  }
+  const stickyOptions = options.filter((option) => option.id !== "contextWindow");
+  if (stickyOptions.length === options.length) {
+    return selection;
+  }
+  return stickyOptions.length > 0
+    ? { ...selection, options: stickyOptions }
+    : { instanceId: selection.instanceId, model: selection.model };
 }
 
-function sanitizeStickyModelSelectionMap(
-  map: Partial<Record<ProviderKind, ModelSelection>>,
-): Partial<Record<ProviderKind, ModelSelection>> {
-  const claude = map.claudeAgent;
-  if (claude?.provider !== "claudeAgent" || !claude.options?.contextWindow) {
-    return map;
+function sanitizeStickyModelSelectionMap(map: ModelSelectionByProviderInstance) {
+  let sanitized = map;
+  for (const [instanceId, selection] of Object.entries(map)) {
+    if (!selection) {
+      continue;
+    }
+    const stickySelection = stripNonStickyModelOptions(selection);
+    if (stickySelection === selection) {
+      continue;
+    }
+    if (sanitized === map) {
+      sanitized = { ...map };
+    }
+    sanitized[instanceId as ProviderInstanceId] = stickySelection;
   }
-  return { ...map, claudeAgent: stripNonStickyModelOptions(claude) };
+  return sanitized;
 }
 
 // ── Legacy sync helpers (used only during migration from v2 storage) ──
@@ -1572,8 +1674,9 @@ function legacySyncModelSelectionOptions(
   if (modelSelection === null) {
     return null;
   }
-  const options = modelOptions?.[modelSelection.provider];
-  return makeModelSelection(modelSelection.provider, modelSelection.model, options);
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
+  const options = modelOptions?.[provider];
+  return makeModelSelection(provider, modelSelection.model, options, modelSelection.instanceId);
 }
 
 function legacyMergeModelSelectionIntoProviderModelOptions(
@@ -1583,10 +1686,11 @@ function legacyMergeModelSelectionIntoProviderModelOptions(
   if (modelSelection?.options === undefined) {
     return normalizeProviderModelOptions(currentModelOptions);
   }
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
   return legacyReplaceProviderModelOptions(
     normalizeProviderModelOptions(currentModelOptions),
-    modelSelection.provider,
-    modelSelection.options,
+    provider,
+    providerModelOptionsFromSelection(modelSelection, provider),
   );
 }
 
@@ -1613,24 +1717,30 @@ function legacyReplaceProviderModelOptions(
 function legacyToModelSelectionByProvider(
   modelSelection: ModelSelection | null,
   modelOptions: ProviderModelOptions | null | undefined,
-): Partial<Record<ProviderKind, ModelSelection>> {
-  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+): ModelSelectionByProviderInstance {
+  const result: ModelSelectionByProviderInstance = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
     for (const provider of COMPOSER_PROVIDER_KINDS) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         const model =
-          modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
+          modelSelection && inferLegacyProviderKindFromModelSelection(modelSelection) === provider
+            ? modelSelection.model
+            : getDefaultModel(provider);
         if (model) {
-          result[provider] = makeModelSelection(provider, model, options);
+          result[providerInstanceModelSelectionKey(provider)] = makeModelSelection(
+            provider,
+            model,
+            options,
+          );
         }
       }
     }
   }
   // Add/overwrite the active selection (it's authoritative for its provider)
   if (modelSelection) {
-    result[modelSelection.provider] = modelSelection;
+    result[modelSelectionStorageKey(modelSelection)] = modelSelection;
   }
   return result;
 }
@@ -1641,6 +1751,7 @@ export function deriveEffectiveComposerModelState(input: {
     | null
     | undefined;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
@@ -1648,6 +1759,14 @@ export function deriveEffectiveComposerModelState(input: {
     Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>
   >;
 }): EffectiveComposerModelState {
+  const selectionMatchesSelectedInstance = (
+    selection: ModelSelection | null | undefined,
+  ): selection is ModelSelection =>
+    modelSelectionMatchesProviderInstance(
+      selection,
+      input.selectedProvider,
+      input.selectedProviderInstanceId,
+    );
   const resolveAvailableModel = (candidate: string | null | undefined): ModelSlug | null => {
     const availableOptions = input.availableModelOptionsByProvider?.[input.selectedProvider];
     if (!availableOptions || availableOptions.length === 0) {
@@ -1657,25 +1776,30 @@ export function deriveEffectiveComposerModelState(input: {
   };
   const baseModel = resolveModelSlugForProvider(
     input.selectedProvider,
-    (input.threadModelSelection?.provider === input.selectedProvider
+    (selectionMatchesSelectedInstance(input.threadModelSelection)
       ? input.threadModelSelection.model
       : null) ??
-      (input.projectModelSelection?.provider === input.selectedProvider
+      (selectionMatchesSelectedInstance(input.projectModelSelection)
         ? input.projectModelSelection.model
         : null) ??
       getDefaultModel(input.selectedProvider),
   );
-  const persistedThreadModel =
-    input.threadModelSelection?.provider === input.selectedProvider
-      ? (normalizeModelSlug(input.threadModelSelection.model, input.selectedProvider) ??
-        input.threadModelSelection.model)
-      : null;
-  const persistedProjectModel =
-    input.projectModelSelection?.provider === input.selectedProvider
-      ? (normalizeModelSlug(input.projectModelSelection.model, input.selectedProvider) ??
-        input.projectModelSelection.model)
-      : null;
-  const activeSelection = input.draft?.modelSelectionByProvider?.[input.selectedProvider];
+  const persistedThreadModel = selectionMatchesSelectedInstance(input.threadModelSelection)
+    ? (normalizeModelSlug(input.threadModelSelection.model, input.selectedProvider) ??
+      input.threadModelSelection.model)
+    : null;
+  const persistedProjectModel = selectionMatchesSelectedInstance(input.projectModelSelection)
+    ? (normalizeModelSlug(input.projectModelSelection.model, input.selectedProvider) ??
+      input.projectModelSelection.model)
+    : null;
+  const draftSelection = readModelSelectionForProviderInstance(
+    input.draft?.modelSelectionByProvider,
+    input.selectedProvider,
+    input.selectedProviderInstanceId,
+  );
+  const activeSelection = selectionMatchesSelectedInstance(draftSelection)
+    ? draftSelection
+    : undefined;
   const selectedDraftModel = activeSelection?.model
     ? resolveAppModelSelection(
         input.selectedProvider,
@@ -1687,12 +1811,12 @@ export function deriveEffectiveComposerModelState(input: {
   const selectedModel =
     resolveAvailableModel(activeSelection?.model) ??
     resolveAvailableModel(
-      input.threadModelSelection?.provider === input.selectedProvider
+      selectionMatchesSelectedInstance(input.threadModelSelection)
         ? input.threadModelSelection.model
         : null,
     ) ??
     resolveAvailableModel(
-      input.projectModelSelection?.provider === input.selectedProvider
+      selectionMatchesSelectedInstance(input.projectModelSelection)
         ? input.projectModelSelection.model
         : null,
     ) ??
@@ -1722,28 +1846,59 @@ export function resolvePreferredComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
+  resolveProviderForInstanceId?: (
+    instanceId: ProviderInstanceId,
+  ) => ProviderKind | null | undefined;
 }): ModelSelection {
-  const draftProviderWithSelection =
-    COMPOSER_PROVIDER_KINDS.find(
-      (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
-    ) ?? null;
+  const activeInstanceId = input.draft?.activeProvider ?? null;
+  const resolveSelectionProvider = (
+    selection: Pick<ModelSelection, "instanceId" | "model"> | null | undefined,
+  ): ProviderKind | null =>
+    selection
+      ? (input.resolveProviderForInstanceId?.(selection.instanceId) ??
+        inferLegacyProviderKindFromModelSelection(selection))
+      : null;
+  const activeInstanceProvider = activeInstanceId
+    ? (input.resolveProviderForInstanceId?.(activeInstanceId) ??
+      inferLegacyProviderKindFromInstanceId(activeInstanceId) ??
+      null)
+    : null;
+  const activeDraftSelection = activeInstanceId
+    ? input.draft?.modelSelectionByProvider[activeInstanceId]
+    : undefined;
+  const draftProviderWithSelection = activeDraftSelection
+    ? resolveSelectionProvider(activeDraftSelection)
+    : null;
   const preferredProvider =
-    input.draft?.activeProvider ??
     draftProviderWithSelection ??
-    input.threadModelSelection?.provider ??
-    input.projectModelSelection?.provider ??
+    activeInstanceProvider ??
+    resolveSelectionProvider(input.threadModelSelection) ??
+    resolveSelectionProvider(input.projectModelSelection) ??
     input.defaultProvider ??
     "codex";
+  const fallbackInstanceId: ProviderInstanceId = (
+    activeInstanceId && activeInstanceProvider === preferredProvider
+      ? activeInstanceId
+      : preferredProvider === "pi"
+        ? "codex"
+        : preferredProvider
+  ) as ProviderInstanceId;
 
   return (
-    input.draft?.modelSelectionByProvider?.[preferredProvider] ??
-    (input.threadModelSelection?.provider === preferredProvider
+    readModelSelectionForProviderInstance(
+      input.draft?.modelSelectionByProvider,
+      preferredProvider,
+      activeDraftSelection?.instanceId ?? activeInstanceId,
+    ) ??
+    (input.threadModelSelection &&
+    resolveSelectionProvider(input.threadModelSelection) === preferredProvider
       ? input.threadModelSelection
       : null) ??
-    (input.projectModelSelection?.provider === preferredProvider
+    (input.projectModelSelection &&
+    resolveSelectionProvider(input.projectModelSelection) === preferredProvider
       ? input.projectModelSelection
       : null) ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
+      instanceId: fallbackInstanceId,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }
   );
@@ -2169,7 +2324,7 @@ function normalizePersistedQueuedTurns(
         selectedProvider,
         selectedModel,
         selectedPromptEffort,
-        modelSelection,
+        modelSelection: mutableModelSelection(modelSelection),
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
@@ -2198,7 +2353,7 @@ function normalizePersistedQueuedTurns(
         selectedProvider,
         selectedModel,
         selectedPromptEffort,
-        modelSelection,
+        modelSelection: mutableModelSelection(modelSelection),
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
         runtimeMode,
       });
@@ -2414,18 +2569,18 @@ function normalizePersistedDraftsByThreadId(
     );
     // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
-    let modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-    let activeProvider: ProviderKind | null = null;
+    let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
+    let activeProvider: ProviderInstanceId | null = null;
 
     if (
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
       // v3 format
-      modelSelectionByProvider = draftCandidate.modelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
-      activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
+      modelSelectionByProvider = normalizeModelSelectionMapByInstance(
+        draftCandidate.modelSelectionByProvider as ModelSelectionByProviderInstance,
+      );
+      activeProvider = normalizeActiveProviderInstanceId(draftCandidate.activeProvider);
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
@@ -2455,7 +2610,7 @@ function normalizePersistedDraftsByThreadId(
         modelSelection,
         mergedModelOptions,
       );
-      activeProvider = modelSelection?.provider ?? null;
+      activeProvider = modelSelection ? modelSelectionStorageKey(modelSelection) : null;
     }
 
     const normalizedQueuedTurns = queuedTurns ?? [];
@@ -2497,7 +2652,12 @@ function normalizePersistedDraftsByThreadId(
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
-      ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
+      ...(hasModelData
+        ? {
+            modelSelectionByProvider: mutableModelSelectionMap(modelSelectionByProvider),
+            activeProvider,
+          }
+        : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
     };
@@ -2585,7 +2745,7 @@ function partializeComposerDraftStoreState(
           selectedProvider: queuedTurn.selectedProvider,
           selectedModel: queuedTurn.selectedModel,
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
-          modelSelection: queuedTurn.modelSelection,
+          modelSelection: mutableModelSelection(queuedTurn.modelSelection),
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
             : {}),
@@ -2608,7 +2768,7 @@ function partializeComposerDraftStoreState(
         selectedProvider: queuedTurn.selectedProvider,
         selectedModel: queuedTurn.selectedModel,
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
-        modelSelection: queuedTurn.modelSelection,
+        modelSelection: mutableModelSelection(queuedTurn.modelSelection),
         ...(queuedTurn.providerOptionsForDispatch
           ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
           : {}),
@@ -2749,7 +2909,7 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(hasModelData
         ? {
-            modelSelectionByProvider: draft.modelSelectionByProvider,
+            modelSelectionByProvider: mutableModelSelectionMap(draft.modelSelectionByProvider),
             activeProvider: draft.activeProvider,
           }
         : {}),
@@ -2781,17 +2941,18 @@ function normalizeCurrentPersistedComposerDraftStoreState(
     );
 
   // Handle both v3 (modelSelectionByProvider) and v2/legacy formats
-  let stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-  let stickyActiveProvider: ProviderKind | null = null;
+  let stickyModelSelectionByProvider: ModelSelectionByProviderInstance = {};
+  let stickyActiveProvider: ProviderInstanceId | null = null;
   if (
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
   ) {
-    stickyModelSelectionByProvider =
-      normalizedPersistedState.stickyModelSelectionByProvider as Partial<
-        Record<ProviderKind, ModelSelection>
-      >;
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
+    stickyModelSelectionByProvider = normalizeModelSelectionMapByInstance(
+      normalizedPersistedState.stickyModelSelectionByProvider as ModelSelectionByProviderInstance,
+    );
+    stickyActiveProvider = normalizeActiveProviderInstanceId(
+      normalizedPersistedState.stickyActiveProvider,
+    );
   } else {
     // Legacy migration path
     const stickyModelOptions =
@@ -2816,7 +2977,9 @@ function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelection,
       nextStickyModelOptions,
     );
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyProvider);
+    stickyActiveProvider = normalizeActiveProviderInstanceId(
+      normalizedPersistedState.stickyProvider,
+    );
   }
 
   return {
@@ -3092,9 +3255,11 @@ function toHydratedThreadDraft(
   persistedDraft: PersistedComposerThreadDraftState,
 ): ComposerThreadDraftState {
   // The persisted draft is already in v3 shape (migration handles older formats)
-  const modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> =
-    persistedDraft.modelSelectionByProvider ?? {};
-  const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
+  const modelSelectionByProvider: ModelSelectionByProviderInstance =
+    normalizeModelSelectionMapByInstance(
+      (persistedDraft.modelSelectionByProvider ?? {}) as ModelSelectionByProviderInstance,
+    );
+  const activeProvider = normalizeActiveProviderInstanceId(persistedDraft.activeProvider);
 
   return {
     prompt: persistedDraft.prompt,
@@ -3493,18 +3658,19 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (!normalized) {
             return state;
           }
-          const nextMap: Partial<Record<ProviderKind, ModelSelection>> = {
+          const normalizedProvider = modelSelectionStorageKey(normalized);
+          const nextMap: ModelSelectionByProviderInstance = {
             ...state.stickyModelSelectionByProvider,
-            [normalized.provider]: normalized,
+            [modelSelectionStorageKey(normalized)]: normalized,
           };
           if (Equal.equals(state.stickyModelSelectionByProvider, nextMap)) {
-            return state.stickyActiveProvider === normalized.provider
+            return state.stickyActiveProvider === normalizedProvider
               ? state
-              : { stickyActiveProvider: normalized.provider };
+              : { stickyActiveProvider: normalizedProvider };
           }
           return {
             stickyModelSelectionByProvider: nextMap,
-            stickyActiveProvider: normalized.provider,
+            stickyActiveProvider: normalizedProvider,
           };
         });
       },
@@ -3521,10 +3687,11 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const existing = state.draftsByThreadId[threadId];
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
-          for (const [provider, selection] of Object.entries(stickyMap)) {
+          for (const selection of Object.values(stickyMap)) {
             if (selection) {
-              const current = nextMap[provider as ProviderKind];
-              nextMap[provider as ProviderKind] = {
+              const key = modelSelectionStorageKey(selection);
+              const current = nextMap[key];
+              nextMap[key] = {
                 ...selection,
                 model: current?.model ?? selection.model,
               };
@@ -3768,20 +3935,27 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
           if (normalized) {
-            const current = nextMap[normalized.provider];
+            const selectionKey = modelSelectionStorageKey(normalized);
+            const current = nextMap[selectionKey];
             if (normalized.options !== undefined) {
               // Explicit options provided → use them
-              nextMap[normalized.provider] = normalized;
+              nextMap[selectionKey] = normalized;
             } else {
               // No options in selection → preserve existing options, update provider+model
-              nextMap[normalized.provider] = makeModelSelection(
-                normalized.provider,
+              const normalizedProvider = inferLegacyProviderKindFromModelSelection(normalized);
+              nextMap[selectionKey] = makeModelSelection(
+                normalizedProvider,
                 normalized.model,
-                current?.options,
+                current
+                  ? providerModelOptionsFromSelection(current, normalizedProvider)
+                  : undefined,
+                normalized.instanceId,
               );
             }
           }
-          const nextActiveProvider = normalized?.provider ?? base.activeProvider;
+          const nextActiveProvider = normalized
+            ? modelSelectionStorageKey(normalized)
+            : base.activeProvider;
           if (
             Equal.equals(base.modelSelectionByProvider, nextMap) &&
             base.activeProvider === nextActiveProvider
@@ -3818,14 +3992,22 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];
-            const current = nextMap[provider];
+            const selectionKey = providerInstanceModelSelectionKey(provider);
+            const current = nextMap[selectionKey];
             if (opts) {
               const model = current?.model ?? getDefaultModel(provider);
               if (!model) continue;
-              nextMap[provider] = makeModelSelection(provider, model, opts);
+              nextMap[selectionKey] = makeModelSelection(
+                provider,
+                model,
+                opts,
+                current?.instanceId,
+              );
             } else if (current?.options) {
               // Remove options but keep the selection
-              nextMap[provider] = buildModelSelection(provider, current.model);
+              nextMap[selectionKey] = buildModelSelection(provider, current.model, null, {
+                instanceId: current.instanceId,
+              });
             }
           }
           if (Equal.equals(base.modelSelectionByProvider, nextMap)) {
@@ -3868,21 +4050,28 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
 
           // Update the map entry for this provider
           const nextMap = { ...base.modelSelectionByProvider };
-          const currentForProvider = nextMap[normalizedProvider];
+          const selectionKey = providerInstanceModelSelectionKey(
+            normalizedProvider,
+            options?.instanceId,
+          );
+          const currentForProvider = nextMap[selectionKey];
           if (providerOpts) {
             const nextModel = currentForProvider?.model ?? fallbackModel;
             if (!nextModel) {
               return state;
             }
-            nextMap[normalizedProvider] = makeModelSelection(
+            nextMap[selectionKey] = makeModelSelection(
               normalizedProvider,
               nextModel,
               providerOpts,
+              currentForProvider?.instanceId ?? options?.instanceId,
             );
           } else if (currentForProvider?.options) {
-            nextMap[normalizedProvider] = buildModelSelection(
+            nextMap[selectionKey] = buildModelSelection(
               normalizedProvider,
               currentForProvider.model,
+              null,
+              { instanceId: currentForProvider.instanceId },
             );
           }
 
@@ -3892,23 +4081,37 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (options?.persistSticky === true) {
             nextStickyMap = { ...state.stickyModelSelectionByProvider };
             const stickyBase =
-              nextStickyMap[normalizedProvider] ??
-              base.modelSelectionByProvider[normalizedProvider] ??
-              (fallbackModel ? makeModelSelection(normalizedProvider, fallbackModel) : null);
+              nextStickyMap[selectionKey] ??
+              base.modelSelectionByProvider[selectionKey] ??
+              (fallbackModel
+                ? makeModelSelection(
+                    normalizedProvider,
+                    fallbackModel,
+                    undefined,
+                    options?.instanceId,
+                  )
+                : null);
             if (!stickyBase) {
               return state;
             }
             if (providerOpts) {
-              nextStickyMap[normalizedProvider] = stripNonStickyModelOptions(
-                makeModelSelection(normalizedProvider, stickyBase.model, providerOpts),
+              nextStickyMap[selectionKey] = stripNonStickyModelOptions(
+                makeModelSelection(
+                  normalizedProvider,
+                  stickyBase.model,
+                  providerOpts,
+                  stickyBase.instanceId ?? options?.instanceId,
+                ),
               );
             } else if (stickyBase.options) {
-              nextStickyMap[normalizedProvider] = buildModelSelection(
+              nextStickyMap[selectionKey] = buildModelSelection(
                 normalizedProvider,
                 stickyBase.model,
+                null,
+                { instanceId: stickyBase.instanceId },
               );
             }
-            nextStickyActiveProvider = base.activeProvider ?? normalizedProvider;
+            nextStickyActiveProvider = base.activeProvider ?? selectionKey;
           }
 
           if (
@@ -4713,6 +4916,7 @@ export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftS
 export function useEffectiveComposerModelState(input: {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
@@ -4727,6 +4931,7 @@ export function useEffectiveComposerModelState(input: {
       deriveEffectiveComposerModelState({
         draft,
         selectedProvider: input.selectedProvider,
+        selectedProviderInstanceId: input.selectedProviderInstanceId,
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
         customModelsByProvider: input.customModelsByProvider,
@@ -4739,6 +4944,7 @@ export function useEffectiveComposerModelState(input: {
       draft,
       input.customModelsByProvider,
       input.projectModelSelection,
+      input.selectedProviderInstanceId,
       input.selectedProvider,
       input.threadModelSelection,
     ],

@@ -7,6 +7,7 @@
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -42,6 +43,9 @@ import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./co
 import {
   getProviderIconClassName,
   ProviderModelMenuItems,
+  type ProviderModelOptionsByProviderInstance,
+  type ProviderModelFavorite,
+  type ProviderModelPickerInstance,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
 import { TraitsMenuContent } from "./TraitsPicker";
@@ -53,16 +57,26 @@ type ComposerModelEffortPickerProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
+  favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
+  onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   compact?: boolean;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   disabled?: boolean;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
@@ -110,7 +124,10 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
     lockedProvider: props.lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
+  const triggerModelLabel = modelLabel;
 
   const traitSelection = getComposerTraitSelection(
     props.provider,
@@ -159,6 +176,9 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
           fastMode: nextFastMode,
         }),
         {
+          ...(props.selectedProviderInstanceId
+            ? { instanceId: props.selectedProviderInstanceId }
+            : {}),
           ...(props.model !== undefined ? { model: props.model } : {}),
           persistSticky: true,
         },
@@ -180,7 +200,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
   }, [props, setMenuOpen]);
 
   const hiddenTriggerTitle = [
-    props.hideModelLabel ? modelLabel : null,
+    props.hideModelLabel ? triggerModelLabel : null,
     props.hideStatusLabel ? triggerStatusLabel : null,
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
@@ -210,9 +230,11 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         )}
       />
       {props.hideModelLabel ? (
-        <span className="sr-only">{modelLabel}</span>
+        <span className="sr-only">{triggerModelLabel}</span>
       ) : (
-        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
+        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+          {triggerModelLabel}
+        </span>
       )}
       {showsFastBadge ? (
         <FastModeIcon
@@ -277,6 +299,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
             includeFastMode={false}
+            selectedProviderInstanceId={props.selectedProviderInstanceId}
             onSelectionComplete={handleAfterTraitsSelection}
           />
         ) : null}
@@ -289,7 +312,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
               aria-hidden="true"
               className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
             />
-            <span className="truncate">{modelLabel}</span>
+            <span className="truncate">{triggerModelLabel}</span>
           </MenuSubTrigger>
           <ComposerPickerMenuSubPopup
             fixedWidth
@@ -301,11 +324,25 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
               lockedProvider={props.lockedProvider}
               {...(props.providers ? { providers: props.providers } : {})}
               modelOptionsByProvider={props.modelOptionsByProvider}
+              {...(props.modelOptionsByProviderInstance
+                ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+                : {})}
               {...(props.loadingModelProviders
                 ? { loadingModelProviders: props.loadingModelProviders }
                 : {})}
               {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
               {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+              {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+              {...(props.selectedProviderInstanceId
+                ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+                : {})}
+              {...(props.showProviderInstanceChoices !== undefined
+                ? { showProviderInstanceChoices: props.showProviderInstanceChoices }
+                : {})}
+              {...(props.favoriteModels ? { favoriteModels: props.favoriteModels } : {})}
+              {...(props.onFavoriteModelsChange
+                ? { onFavoriteModelsChange: props.onFavoriteModelsChange }
+                : {})}
               {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
               onProviderModelChange={props.onProviderModelChange}
               onAfterSelection={handleAfterModelSelection}

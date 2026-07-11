@@ -146,7 +146,7 @@ describe("recent view MRU logic", () => {
       id: terminalThreadId,
       projectId: project.id,
       title: "Dev server",
-      modelSelection: { provider: "codex", model: "gpt-5" },
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
     } as SidebarThreadSummary;
 
     const entries = buildRecentViewDisplayEntries({

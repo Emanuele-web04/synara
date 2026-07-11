@@ -15,6 +15,7 @@ import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
 } from "@synara/shared/threadWorkspace";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
   collectTailTurnIds,
@@ -546,7 +547,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           forkSourceThreadId: null,
           handoff: {
             sourceThreadId: command.sourceThreadId,
-            sourceProvider: sourceThread.modelSelection.provider,
+            sourceProvider: inferLegacyProviderKindFromModelSelection(sourceThread.modelSelection),
             importedAt: command.createdAt,
             bootstrapStatus: "pending",
           },
@@ -1179,7 +1180,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         createdAt: command.createdAt,
       } as const;
       const activeProvider =
-        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
+        targetThread.session?.providerName ??
+        inferLegacyProviderKindFromModelSelection(targetThread.modelSelection);
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
       const shouldQueue =

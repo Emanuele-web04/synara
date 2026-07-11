@@ -65,7 +65,7 @@ function sampleThread(): OrchestrationThread {
   return {
     id: "thread-abc",
     title: "Export Demo",
-    modelSelection: { provider: "claudeAgent" } as OrchestrationThread["modelSelection"],
+    modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet-4-20250514" },
     runtimeMode: "default" as OrchestrationThread["runtimeMode"],
     messages: [
       {

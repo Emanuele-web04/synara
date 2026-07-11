@@ -1,6 +1,10 @@
 const CODEX_VERSION_PATTERN = /\bv?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\b/;
 
-export const MINIMUM_CODEX_CLI_VERSION = "0.37.0";
+// 0.105.0 is the first stable Codex release that honors CODEX_SQLITE_HOME.
+// Account overlays rely on that routing to keep versioned continuation DBs
+// shared at the source CODEX_HOME instead of creating account-local databases.
+export const MINIMUM_CODEX_CLI_VERSION = "0.105.0";
+export const CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE = `Codex CLI version check succeeded but returned an unrecognized version. Synara requires a verifiable v${MINIMUM_CODEX_CLI_VERSION} or newer installation; upgrade or reinstall Codex and restart Synara.`;
 
 interface ParsedSemver {
   readonly major: number;

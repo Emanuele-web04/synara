@@ -42,7 +42,11 @@ import {
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
-import { getProviderStartOptions, useAppSettings } from "~/appSettings";
+import {
+  getProviderStartOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
@@ -316,13 +320,30 @@ export default function GitActionsControl({
 }: GitActionsControlProps) {
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
-  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
-  const gitTextGenerationModelSelection = useMemo(
-    (): ModelSelection => ({
-      provider: settings.textGenerationProvider ?? "codex",
+  const textGenerationProviderInstanceId = useMemo(
+    () =>
+      resolveSelectableProviderInstanceId(
+        settings,
+        settings.textGenerationProvider,
+        settings.textGenerationProviderInstanceId,
+      ),
+    [settings],
+  );
+  const textGenerationModelSelection = useMemo<ModelSelection>(
+    () => ({
+      provider: settings.textGenerationProvider,
+      instanceId: textGenerationProviderInstanceId,
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
     }),
-    [settings.textGenerationModel, settings.textGenerationProvider],
+    [
+      settings.textGenerationModel,
+      settings.textGenerationProvider,
+      textGenerationProviderInstanceId,
+    ],
+  );
+  const providerOptions = useMemo(
+    () => getProviderStartOptions(settings, textGenerationModelSelection.instanceId),
+    [settings, textGenerationModelSelection.instanceId],
   );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
@@ -393,8 +414,8 @@ export default function GitActionsControl({
       cwd: gitCwd,
       queryClient,
       codexHomePath: settings.codexHomePath || null,
-      model: settings.textGenerationModel ?? null,
-      modelSelection: gitTextGenerationModelSelection,
+      model: textGenerationModelSelection.model,
+      textGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );

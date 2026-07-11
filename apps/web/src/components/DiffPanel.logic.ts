@@ -60,7 +60,7 @@ export function resolveDiffPanelThread(input: {
     input.threadId,
     input.draftThread,
     input.fallbackModelSelection ?? {
-      provider: "codex",
+      instanceId: "codex",
       model: DEFAULT_MODEL_BY_PROVIDER.codex,
     },
     null,

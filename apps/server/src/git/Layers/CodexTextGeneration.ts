@@ -1,17 +1,32 @@
-import { randomUUID } from "node:crypto";
+// FILE: CodexTextGeneration.ts
+// Purpose: Runs schema-constrained Codex CLI text generation against account-owned auth.
+// Layer: Git and orchestration text-generation service.
 
-import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
+import {
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Ref,
+  Schema,
+  Scope,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
-import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
-import { ServerConfig } from "../../config.ts";
+import {
+  hydrateCodexProviderCredentialEnvironment,
+  prepareCodexAuthTracking,
+  type CodexPreparedAuthSource,
+} from "../../codexProcessEnv.ts";
+import { compareCodexCliVersions, parseCodexCliVersion } from "../../provider/codexCliVersion.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   CodexTextGeneration,
@@ -41,9 +56,115 @@ import {
   sanitizePrTitle,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+import {
+  acquireSecureTempDirectory,
+  acquireSecureTempFile,
+  assertNoExternalCodexConfigLayers,
+  buildCodexTextGenerationChildEnv,
+  buildCodexTextGenerationCliConfigArgs,
+  buildCodexTextGenerationConfig,
+  buildCodexTextGenerationModelCatalog,
+  buildCodexTextGenerationRuntimeConfig,
+  CodexTextGenerationAuthError,
+  type CodexTextGenerationConfig,
+  CodexTextGenerationConfigError,
+  prepareCodexTextGenerationAuthSnapshot,
+  writePrivateFileString,
+} from "./codexTextGenerationIsolation.ts";
 
 const CODEX_REASONING_EFFORT = "low";
-const CODEX_TIMEOUT_MS = 180_000;
+const CODEX_VERSION_PROBE_TIMEOUT_MS = 5_000;
+const CODEX_CHATGPT_REFRESH_WINDOW_MS = 300_000;
+const CODEX_AUTH_EXPIRY_CLOCK_SAFETY_MS = 30_000;
+const MINIMUM_CODEX_TEXT_GENERATION_CLI_VERSION = "0.105.0";
+
+export type CodexTextGenerationTiming = {
+  readonly requestTimeoutMs: number;
+  readonly killGraceMs: number;
+  readonly outputDrainMs: number;
+  readonly finalOutputDrainMs: number;
+};
+
+const DEFAULT_CODEX_TEXT_GENERATION_TIMING: CodexTextGenerationTiming = {
+  requestTimeoutMs: 180_000,
+  killGraceMs: 1_500,
+  outputDrainMs: 750,
+  finalOutputDrainMs: 1_000,
+};
+
+function minimumCodexAuthValidityMs(timing: CodexTextGenerationTiming): number {
+  const boundedPostExitMs = timing.outputDrainMs + timing.killGraceMs + timing.finalOutputDrainMs;
+  return (
+    CODEX_VERSION_PROBE_TIMEOUT_MS +
+    timing.requestTimeoutMs +
+    boundedPostExitMs * 2 +
+    CODEX_CHATGPT_REFRESH_WINDOW_MS +
+    CODEX_AUTH_EXPIRY_CLOCK_SAFETY_MS
+  );
+}
+
+class CodexTextGenerationTimingConfig extends ServiceMap.Service<
+  CodexTextGenerationTimingConfig,
+  CodexTextGenerationTiming
+>()("synara/git/CodexTextGenerationTimingConfig") {}
+
+export function codexTextGenerationPlatformError(
+  platform: NodeJS.Platform,
+  operation: TextGenerationOperation,
+): TextGenerationError | undefined {
+  if (platform !== "win32") return undefined;
+  return new TextGenerationError({
+    operation,
+    detail:
+      "Auxiliary Codex text generation is unavailable on Windows because descendant process containment cannot be guaranteed; use the configured text-generation fallback.",
+  });
+}
+
+function signalCodexProcessGroup(
+  child: ChildProcessSpawner.ChildProcessHandle,
+  signal: NodeJS.Signals | 0,
+): boolean {
+  try {
+    process.kill(-Number(child.pid), signal);
+    return true;
+  } catch (cause) {
+    const code =
+      typeof cause === "object" && cause !== null && "code" in cause
+        ? String((cause as { readonly code?: unknown }).code ?? "")
+        : "";
+    if (code === "ESRCH") return false;
+    throw cause;
+  }
+}
+
+function terminateCodexChild(
+  child: ChildProcessSpawner.ChildProcessHandle,
+  killGraceMs: number,
+  operation: TextGenerationOperation,
+) {
+  const signalGroup = (signal: NodeJS.Signals | 0) =>
+    Effect.try({
+      try: () => signalCodexProcessGroup(child, signal),
+      catch: (cause) =>
+        new TextGenerationError({
+          operation,
+          detail: `Failed to signal the isolated Codex process group with ${String(signal)}.`,
+          cause,
+        }),
+    });
+
+  // Signal the detached POSIX group directly. ChildProcessHandle.kill waits for
+  // the root exit, which would deadlock the TERM grace path when the root traps
+  // TERM. ESRCH means the group is already gone and is a successful cleanup.
+  return Effect.gen(function* () {
+    const termSent = yield* signalGroup("SIGTERM");
+    if (!termSent) return;
+    const groupIsAlive = yield* signalGroup(0);
+    if (!groupIsAlive) return;
+    yield* Effect.sleep(killGraceMs);
+    yield* signalGroup("SIGKILL");
+  });
+}
 
 function normalizeCodexError(
   binaryPath: string,
@@ -82,48 +203,12 @@ function normalizeCodexError(
   });
 }
 
-function sanitizeCodexConfigForTextGeneration(content: string): string {
-  const lines = content.split(/\r?\n/g);
-  const sanitized: string[] = [];
-  let skippingSkillsConfig = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("[[")) {
-      if (trimmed === "[[skills.config]]") {
-        skippingSkillsConfig = true;
-        continue;
-      }
-
-      skippingSkillsConfig = false;
-      sanitized.push(line);
-      continue;
-    }
-
-    if (trimmed.startsWith("[")) {
-      skippingSkillsConfig = false;
-      sanitized.push(line);
-      continue;
-    }
-
-    if (!skippingSkillsConfig) {
-      sanitized.push(line);
-    }
-  }
-
-  return sanitized.join("\n").trimEnd();
-}
-
 const makeCodexTextGeneration = Effect.gen(function* () {
+  const timingOption = yield* Effect.serviceOption(CodexTextGenerationTimingConfig);
+  const timing = Option.getOrElse(timingOption, () => DEFAULT_CODEX_TEXT_GENERATION_TIMING);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const serverConfig = yield* Effect.service(ServerConfig);
-
-  type MaterializedImageAttachments = {
-    readonly imagePaths: ReadonlyArray<string>;
-  };
 
   const readStreamAsString = <E>(
     operation: string,
@@ -143,137 +228,273 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       return text;
     });
 
-  const tempDir = process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
+  const collectCodexChildResult = (input: {
+    readonly binaryPath: string;
+    readonly child: ChildProcessSpawner.ChildProcessHandle;
+    readonly operation: TextGenerationOperation;
+    readonly timeoutMs: number;
+    readonly timeoutDetail: string;
+  }) =>
+    Effect.gen(function* () {
+      const cleanupHandled = yield* Ref.make(false);
+      yield* Effect.addFinalizer(() =>
+        Ref.get(cleanupHandled).pipe(
+          Effect.flatMap((handled) =>
+            handled
+              ? Effect.void
+              : terminateCodexChild(input.child, timing.killGraceMs, input.operation),
+          ),
+          Effect.ignore,
+        ),
+      );
 
-  const writeTempFile = (
-    operation: string,
-    prefix: string,
-    content: string,
-  ): Effect.Effect<string, TextGenerationError> => {
-    const filePath = path.join(tempDir, `synara-${prefix}-${process.pid}-${randomUUID()}.tmp`);
-    return fileSystem.writeFileString(filePath, content).pipe(
-      Effect.mapError(
-        (cause) =>
-          new TextGenerationError({
-            operation,
-            detail: `Failed to write temp file at ${filePath}.`,
+      const stdoutFiber = yield* readStreamAsString(input.operation, input.child.stdout).pipe(
+        Effect.forkScoped,
+      );
+      const stderrFiber = yield* readStreamAsString(input.operation, input.child.stderr).pipe(
+        Effect.forkScoped,
+      );
+      const exitCode = yield* input.child.exitCode.pipe(
+        Effect.map((value) => Number(value)),
+        Effect.mapError((cause) =>
+          normalizeCodexError(
+            input.binaryPath,
+            input.operation,
             cause,
-          }),
-      ),
-      Effect.as(filePath),
-    );
-  };
+            "Failed to read Codex CLI exit code",
+          ),
+        ),
+        Effect.timeoutOrElse({
+          duration: input.timeoutMs,
+          onTimeout: () =>
+            terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+              Effect.andThen(Ref.set(cleanupHandled, true)),
+              Effect.andThen(
+                Effect.fail(
+                  new TextGenerationError({
+                    operation: input.operation,
+                    detail: input.timeoutDetail,
+                  }),
+                ),
+              ),
+            ),
+        }),
+      );
 
-  const safeUnlink = (filePath: string): Effect.Effect<void, never> =>
-    fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
+      const collectOutput = Effect.all(
+        [Fiber.join(stdoutFiber).pipe(Effect.exit), Fiber.join(stderrFiber).pipe(Effect.exit)],
+        { concurrency: "unbounded" },
+      );
+      const [stdoutExit, stderrExit] = yield* collectOutput.pipe(
+        Effect.timeoutOrElse({
+          duration: timing.outputDrainMs,
+          onTimeout: () =>
+            terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+              Effect.andThen(Ref.set(cleanupHandled, true)),
+              Effect.andThen(
+                collectOutput.pipe(
+                  Effect.timeoutOrElse({
+                    duration: timing.finalOutputDrainMs,
+                    onTimeout: () =>
+                      Effect.fail(
+                        new TextGenerationError({
+                          operation: input.operation,
+                          detail:
+                            "Codex CLI descendants kept output pipes open after process-group termination.",
+                        }),
+                      ),
+                  }),
+                ),
+              ),
+            ),
+        }),
+      );
+      const alreadyTerminated = yield* Ref.get(cleanupHandled);
+      if (!alreadyTerminated) {
+        yield* terminateCodexChild(input.child, timing.killGraceMs, input.operation);
+      }
+      yield* Ref.set(cleanupHandled, true);
 
-  const safeRemoveDirectory = (directoryPath: string): Effect.Effect<void, never> =>
-    fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
+      if (stdoutExit._tag === "Failure") return yield* Effect.failCause(stdoutExit.cause);
+      if (stderrExit._tag === "Failure") return yield* Effect.failCause(stderrExit.cause);
+      return { exitCode, stdout: stdoutExit.value, stderr: stderrExit.value };
+    });
+
+  const tempDir = () => process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
+
+  const verifyCodexTextGenerationVersion = (
+    operation: TextGenerationOperation,
+    binaryPath: string,
+    cwd: string,
+    env: Record<string, string>,
+  ) =>
+    Effect.gen(function* () {
+      const command = ChildProcess.make(binaryPath, ["--version"], {
+        cwd,
+        detached: true,
+        env,
+        killSignal: "SIGKILL",
+        stdin: "ignore",
+      });
+      const child = yield* commandSpawner
+        .spawn(command)
+        .pipe(
+          Effect.mapError((cause) =>
+            normalizeCodexError(binaryPath, operation, cause, "Failed to probe Codex CLI version"),
+          ),
+        );
+      const result = yield* collectCodexChildResult({
+        binaryPath,
+        child,
+        operation,
+        timeoutMs: CODEX_VERSION_PROBE_TIMEOUT_MS,
+        timeoutDetail: "Codex CLI version probe timed out.",
+      });
+      const version = parseCodexCliVersion(`${result.stdout}\n${result.stderr}`);
+      if (
+        result.exitCode !== 0 ||
+        version === null ||
+        compareCodexCliVersions(version, MINIMUM_CODEX_TEXT_GENERATION_CLI_VERSION) < 0
+      ) {
+        const versionLabel = version ? `v${version}` : "an unrecognized version";
+        return yield* new TextGenerationError({
+          operation,
+          detail: `Auxiliary Codex text generation requires Codex CLI v${MINIMUM_CODEX_TEXT_GENERATION_CLI_VERSION} or newer; found ${versionLabel}.`,
+        });
+      }
+    });
+
+  const parsePreparedCodexConfig = (
+    operation: TextGenerationOperation,
+    sourceConfigSnapshot: string,
+  ): Effect.Effect<CodexTextGenerationConfig, TextGenerationError> =>
+    Effect.try({
+      try: () => buildCodexTextGenerationConfig(sourceConfigSnapshot),
+      catch: (cause) =>
+        new TextGenerationError({
+          operation,
+          detail:
+            cause instanceof CodexTextGenerationConfigError
+              ? cause.message
+              : "The prepared Codex config.toml snapshot could not be parsed safely.",
+          cause,
+        }),
+    });
 
   const prepareIsolatedCodexHome = (
     operation: TextGenerationOperation,
-    sourceHomePath?: string,
-  ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
-    Effect.gen(function* () {
-      const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
-      const isolatedHomePath = path.join(
-        tempDir,
-        `synara-codex-home-${process.pid}-${randomUUID()}`,
-      );
-
-      yield* fileSystem.makeDirectory(isolatedHomePath, { recursive: true }).pipe(
+    config: CodexTextGenerationConfig,
+    authSource: CodexPreparedAuthSource,
+    selectedModel: string,
+  ): Effect.Effect<
+    {
+      readonly homePath: string;
+      readonly workDirectoryPath: string;
+      readonly tempDirectoryPath: string;
+      readonly modelCatalogPath: string;
+    },
+    TextGenerationError,
+    FileSystem.FileSystem | Scope.Scope
+  > => {
+    return Effect.gen(function* () {
+      const homePath = yield* acquireSecureTempDirectory({
+        directory: tempDir(),
+        prefix: "synara-codex-text-home-",
+      }).pipe(
         Effect.mapError(
           (cause) =>
             new TextGenerationError({
               operation,
-              detail: `Failed to create isolated Codex home at ${isolatedHomePath}.`,
+              detail: "Failed to create a private isolated Codex home.",
               cause,
             }),
         ),
       );
 
-      const sourceConfig = yield* fileSystem
-        .readFileString(path.join(sourceCodexHome, "config.toml"))
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (sourceConfig !== null) {
-        yield* fileSystem
-          .writeFileString(
-            path.join(isolatedHomePath, "config.toml"),
-            sanitizeCodexConfigForTextGeneration(sourceConfig),
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new TextGenerationError({
-                  operation,
-                  detail: "Failed to copy Codex config for isolated text generation.",
-                  cause,
-                }),
-            ),
-          );
-      }
+      const modelCatalogPath = path.join(homePath, "models.json");
+      yield* writePrivateFileString(
+        modelCatalogPath,
+        buildCodexTextGenerationModelCatalog(selectedModel),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to write the private text-only Codex model catalog.",
+              cause,
+            }),
+        ),
+      );
 
-      const sourceAuth = yield* fileSystem
-        .readFileString(path.join(sourceCodexHome, "auth.json"))
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (sourceAuth !== null) {
-        yield* fileSystem
-          .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new TextGenerationError({
-                  operation,
-                  detail: "Failed to copy Codex auth for isolated text generation.",
-                  cause,
-                }),
-            ),
-          );
-      }
+      yield* writePrivateFileString(
+        path.join(homePath, "config.toml"),
+        buildCodexTextGenerationRuntimeConfig(config.content, modelCatalogPath),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to write private isolated Codex provider routing.",
+              cause,
+            }),
+        ),
+      );
 
-      return { homePath: isolatedHomePath };
+      yield* Effect.try({
+        try: () =>
+          prepareCodexTextGenerationAuthSnapshot(authSource, homePath, {
+            minimumValidityMs: minimumCodexAuthValidityMs(timing),
+          }),
+        catch: (cause) =>
+          new TextGenerationError({
+            operation,
+            detail:
+              cause instanceof CodexTextGenerationAuthError
+                ? cause.message
+                : "Failed to prepare a private Codex auth snapshot for text generation.",
+            cause,
+          }),
+      });
+      const workDirectoryPath = yield* acquireSecureTempDirectory({
+        directory: homePath,
+        prefix: "work-",
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to create an empty isolated Codex working directory.",
+              cause,
+            }),
+        ),
+      );
+      const tempDirectoryPath = yield* acquireSecureTempDirectory({
+        directory: homePath,
+        prefix: "tmp-",
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to create an isolated Codex temporary directory.",
+              cause,
+            }),
+        ),
+      );
+      return {
+        homePath,
+        workDirectoryPath,
+        tempDirectoryPath,
+        modelCatalogPath,
+      };
     });
-
-  const materializeImageAttachments = (
-    _operation: TextGenerationOperation,
-    attachments: BranchNameGenerationInput["attachments"],
-  ): Effect.Effect<MaterializedImageAttachments, TextGenerationError> =>
-    Effect.gen(function* () {
-      if (!attachments || attachments.length === 0) {
-        return { imagePaths: [] };
-      }
-
-      const imagePaths: string[] = [];
-      for (const attachment of attachments) {
-        if (attachment.type !== "image") {
-          continue;
-        }
-
-        const resolvedPath = resolveAttachmentPath({
-          attachmentsDir: serverConfig.attachmentsDir,
-          attachment,
-        });
-        if (!resolvedPath || !path.isAbsolute(resolvedPath)) {
-          continue;
-        }
-        const fileInfo = yield* fileSystem
-          .stat(resolvedPath)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!fileInfo || fileInfo.type !== "File") {
-          continue;
-        }
-        imagePaths.push(resolvedPath);
-      }
-      return { imagePaths };
-    });
+  };
 
   const runCodexJson = <S extends Schema.Top>({
     operation,
-    cwd,
+    cwd: _requestedCwd,
     prompt,
     outputSchemaJson,
-    imagePaths = [],
-    cleanupPaths = [],
     codexHomePath,
     model,
     modelSelection,
@@ -283,150 +504,220 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
-    imagePaths?: ReadonlyArray<string>;
-    cleanupPaths?: ReadonlyArray<string>;
     codexHomePath?: string;
     model?: string;
     modelSelection?: BranchNameGenerationInput["modelSelection"];
     providerOptions?: BranchNameGenerationInput["providerOptions"];
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
-    Effect.gen(function* () {
-      const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
-      const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
-      const schemaPath = yield* writeTempFile(
-        operation,
-        "codex-schema",
-        JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
-      );
-      const outputPath = yield* writeTempFile(operation, "codex-output", "");
-      const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
-
-      const runCodexCommand = Effect.gen(function* () {
-        const env = buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath });
-        const args = [
-          "exec",
-          "--ephemeral",
-          "--skip-git-repo-check",
-          "--config",
-          'approval_policy="never"',
-          "-s",
-          "read-only",
-          "--model",
-          resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-          "--config",
-          `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
-          "--output-schema",
-          schemaPath,
-          "--output-last-message",
-          outputPath,
-          ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
-          "-",
-        ];
-        const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
-        const command = ChildProcess.make(prepared.command, prepared.args, {
-          cwd,
-          env,
-          shell: prepared.shell,
-          stdin: {
-            stream: Stream.make(new TextEncoder().encode(prompt)),
-          },
+    Effect.scoped(
+      Effect.gen(function* () {
+        const platformError = codexTextGenerationPlatformError(process.platform, operation);
+        if (platformError) return yield* platformError;
+        yield* Effect.try({
+          try: assertNoExternalCodexConfigLayers,
+          catch: (cause) =>
+            new TextGenerationError({
+              operation,
+              detail:
+                cause instanceof CodexTextGenerationConfigError
+                  ? cause.message
+                  : "External Codex configuration layers could not be checked safely.",
+              cause,
+            }),
         });
-
-        const child = yield* commandSpawner
-          .spawn(command)
-          .pipe(
-            Effect.mapError((cause) =>
-              normalizeCodexError(
-                codexBinaryPath,
+        const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
+        const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
+        const resolvedCodexAuthHomePath = resolveCodexAuthHomePath(providerOptions);
+        const resolvedCodexAccountId = resolveCodexAccountId(providerOptions);
+        const trustedProcessEnv = { ...process.env };
+        const instanceLaunchEnv = {
+          ...trustedProcessEnv,
+          ...providerOptions?.codex?.environment,
+        };
+        const authTracking = yield* Effect.try({
+          try: () =>
+            prepareCodexAuthTracking({
+              env: instanceLaunchEnv,
+              ...(resolvedCodexHomePath ? { homePath: resolvedCodexHomePath } : {}),
+              ...(resolvedCodexAuthHomePath ? { shadowHomePath: resolvedCodexAuthHomePath } : {}),
+              ...(resolvedCodexAccountId ? { accountId: resolvedCodexAccountId } : {}),
+            }),
+          catch: (cause) =>
+            new TextGenerationError({
+              operation,
+              detail:
+                cause instanceof Error
+                  ? cause.message
+                  : "Codex authentication storage cannot be resolved safely.",
+              cause,
+            }),
+        });
+        const isolatedConfig = yield* parsePreparedCodexConfig(
+          operation,
+          authTracking.sourceConfigSnapshot,
+        );
+        const hydratedLaunchEnv = hydrateCodexProviderCredentialEnvironment({
+          env: instanceLaunchEnv,
+          credentialEnvNames: isolatedConfig.providerEnvKeys,
+          trustedEnv: trustedProcessEnv,
+        });
+        const schemaPath = yield* acquireSecureTempFile({
+          directory: tempDir(),
+          prefix: "synara-codex-schema-",
+          content: JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
                 operation,
+                detail: "Failed to create a private Codex output-schema file.",
                 cause,
-                "Failed to spawn Codex CLI process",
-              ),
-            ),
-          );
+              }),
+          ),
+        );
+        const outputPath = yield* acquireSecureTempFile({
+          directory: tempDir(),
+          prefix: "synara-codex-output-",
+          content: "",
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "Failed to create a private Codex output file.",
+                cause,
+              }),
+          ),
+        );
+        const selectedModel =
+          resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+        const isolatedCodexHome = yield* prepareIsolatedCodexHome(
+          operation,
+          isolatedConfig,
+          authTracking.authSource,
+          selectedModel,
+        );
 
-        const [stdout, stderr, exitCode] = yield* Effect.all(
-          [
-            readStreamAsString(operation, child.stdout),
-            readStreamAsString(operation, child.stderr),
-            child.exitCode.pipe(
-              Effect.map((value) => Number(value)),
+        const runCodexCommand = Effect.gen(function* () {
+          // The CLI starts in an empty directory with only parsed provider/auth
+          // routing in CODEX_HOME, so user and repository execution surfaces are
+          // absent even on older CLIs without `--ignore-user-config`.
+          const env = yield* Effect.try({
+            try: () =>
+              buildCodexTextGenerationChildEnv({
+                sourceEnv: hydratedLaunchEnv,
+                trustedPlatformEnv: trustedProcessEnv,
+                isolatedHomePath: isolatedCodexHome.homePath,
+                isolatedTempPath: isolatedCodexHome.tempDirectoryPath,
+                providerEnvKeys: isolatedConfig.providerEnvKeys,
+                usesAwsCredentials: isolatedConfig.usesAwsCredentials,
+                ...(isolatedConfig.awsRegion ? { awsRegion: isolatedConfig.awsRegion } : {}),
+              }),
+            catch: (cause) =>
+              new TextGenerationError({
+                operation,
+                detail:
+                  cause instanceof CodexTextGenerationConfigError
+                    ? cause.message
+                    : "Failed to build the isolated Codex child environment.",
+                cause,
+              }),
+          });
+          yield* verifyCodexTextGenerationVersion(
+            operation,
+            codexBinaryPath,
+            isolatedCodexHome.workDirectoryPath,
+            env,
+          );
+          const args = [
+            "exec",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-s",
+            "read-only",
+            "--model",
+            selectedModel,
+            ...buildCodexTextGenerationCliConfigArgs(isolatedCodexHome.modelCatalogPath),
+            "--config",
+            `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
+            "--output-schema",
+            schemaPath,
+            "--output-last-message",
+            outputPath,
+            "-",
+          ];
+          const command = ChildProcess.make(codexBinaryPath, args, {
+            cwd: isolatedCodexHome.workDirectoryPath,
+            detached: true,
+            env,
+            killSignal: "SIGKILL",
+            stdin: {
+              stream: Stream.make(new TextEncoder().encode(prompt)),
+            },
+          });
+
+          const child = yield* commandSpawner
+            .spawn(command)
+            .pipe(
               Effect.mapError((cause) =>
                 normalizeCodexError(
                   codexBinaryPath,
                   operation,
                   cause,
-                  "Failed to read Codex CLI exit code",
+                  "Failed to spawn Codex CLI process",
                 ),
               ),
-            ),
-          ],
-          { concurrency: "unbounded" },
-        );
-
-        if (exitCode !== 0) {
-          const stderrDetail = stderr.trim();
-          const stdoutDetail = stdout.trim();
-          const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
-          return yield* new TextGenerationError({
+            );
+          const { exitCode, stdout, stderr } = yield* collectCodexChildResult({
+            binaryPath: codexBinaryPath,
+            child,
             operation,
-            detail:
-              detail.length > 0
-                ? `Codex CLI command failed: ${detail}`
-                : `Codex CLI command failed with code ${exitCode}.`,
+            timeoutMs: timing.requestTimeoutMs,
+            timeoutDetail: "Codex CLI request timed out.",
           });
-        }
-      });
 
-      const cleanup = Effect.all(
-        [
-          safeUnlink(schemaPath),
-          safeUnlink(outputPath),
-          safeRemoveDirectory(isolatedCodexHome.homePath),
-          ...cleanupPaths.map((filePath) => safeUnlink(filePath)),
-        ],
-        {
-          concurrency: "unbounded",
-        },
-      ).pipe(Effect.asVoid);
+          if (exitCode !== 0) {
+            const stderrDetail = stderr.trim();
+            const stdoutDetail = stdout.trim();
+            const detail = stderrDetail.length > 0 ? stderrDetail : stdoutDetail;
+            return yield* new TextGenerationError({
+              operation,
+              detail:
+                detail.length > 0
+                  ? `Codex CLI command failed: ${detail}`
+                  : `Codex CLI command failed with code ${exitCode}.`,
+            });
+          }
+        });
 
-      return yield* Effect.gen(function* () {
-        yield* runCodexCommand.pipe(
-          Effect.scoped,
-          Effect.timeoutOption(CODEX_TIMEOUT_MS),
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                Effect.fail(
-                  new TextGenerationError({ operation, detail: "Codex CLI request timed out." }),
-                ),
-              onSome: () => Effect.void,
-            }),
-          ),
-        );
+        const request = Effect.gen(function* () {
+          yield* runCodexCommand.pipe(Effect.scoped);
 
-        return yield* fileSystem.readFileString(outputPath).pipe(
-          Effect.mapError(
-            (cause) =>
-              new TextGenerationError({
-                operation,
-                detail: "Failed to read Codex output file.",
-                cause,
-              }),
-          ),
-          Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))),
-          Effect.catchTag("SchemaError", (cause) =>
-            Effect.fail(
-              new TextGenerationError({
-                operation,
-                detail: "Codex returned invalid structured output.",
-                cause,
-              }),
+          return yield* fileSystem.readFileString(outputPath).pipe(
+            Effect.mapError(
+              (cause) =>
+                new TextGenerationError({
+                  operation,
+                  detail: "Failed to read Codex output file.",
+                  cause,
+                }),
             ),
-          ),
-        );
-      }).pipe(Effect.ensuring(cleanup));
-    });
+            Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))),
+            Effect.catchTag("SchemaError", (cause) =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: "Codex returned invalid structured output.",
+                  cause,
+                }),
+              ),
+            ),
+          );
+        });
+
+        return yield* request;
+      }),
+    );
 
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = (input) => {
     const wantsBranch = input.includeBranch === true;
@@ -515,10 +806,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
-      const { imagePaths } = yield* materializeImageAttachments(
-        "generateBranchName",
-        input.attachments,
-      );
       const { prompt, outputSchemaJson } = buildBranchNamePrompt({
         message: input.message,
         ...(input.attachments ? { attachments: input.attachments } : {}),
@@ -529,7 +816,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
-        imagePaths,
         ...(input.model ? { model: input.model } : {}),
         ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
@@ -543,10 +829,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
   const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = (input) => {
     return Effect.gen(function* () {
-      const { imagePaths } = yield* materializeImageAttachments(
-        "generateThreadTitle",
-        input.attachments,
-      );
       const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
         message: input.message,
         ...(input.attachments ? { attachments: input.attachments } : {}),
@@ -557,7 +839,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
-        imagePaths,
         ...(input.model ? { model: input.model } : {}),
         ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
@@ -653,7 +934,23 @@ function resolveCodexHomePath(
   codexHomePath: string | undefined,
   providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
 ): string | undefined {
-  const resolved = codexHomePath?.trim() || providerOptions?.codex?.homePath?.trim();
+  // The routed instance home wins: the legacy top-level codexHomePath is the
+  // global default and must not override a selected account's own home.
+  const resolved = providerOptions?.codex?.homePath?.trim() || codexHomePath?.trim();
+  return resolved && resolved.length > 0 ? resolved : undefined;
+}
+
+function resolveCodexAuthHomePath(
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string | undefined {
+  const resolved = providerOptions?.codex?.shadowHomePath?.trim();
+  return resolved && resolved.length > 0 ? resolved : undefined;
+}
+
+function resolveCodexAccountId(
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string | undefined {
+  const resolved = providerOptions?.codex?.accountId?.trim();
   return resolved && resolved.length > 0 ? resolved : undefined;
 }
 
@@ -661,10 +958,7 @@ function resolveCodexModel(
   model: string | undefined,
   modelSelection: BranchNameGenerationInput["modelSelection"] | undefined,
 ): string | undefined {
-  if (modelSelection?.provider === "codex") {
-    return modelSelection.model;
-  }
-  return model;
+  return modelSelection?.model ?? model;
 }
 
 export const CodexTextGenerationServiceLive = Layer.effect(
@@ -673,3 +967,10 @@ export const CodexTextGenerationServiceLive = Layer.effect(
 );
 
 export const CodexTextGenerationLive = Layer.effect(TextGeneration, makeCodexTextGeneration);
+
+export function makeCodexTextGenerationLive(timing: CodexTextGenerationTiming) {
+  return Layer.effect(
+    TextGeneration,
+    makeCodexTextGeneration.pipe(Effect.provideService(CodexTextGenerationTimingConfig, timing)),
+  );
+}

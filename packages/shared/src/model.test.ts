@@ -9,6 +9,7 @@ import {
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  type ProviderInstanceId,
 } from "@synara/contracts";
 
 import {
@@ -38,6 +39,10 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
+
+function providerInstanceId(value: string): ProviderInstanceId {
+  return value as ProviderInstanceId;
+}
 
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
@@ -594,16 +599,16 @@ describe("resolveApiModelId", () => {
   it("adds the 1m suffix for Claude models when selected", () => {
     expect(
       resolveApiModelId({
-        provider: "claudeAgent",
+        instanceId: providerInstanceId("claudeAgent"),
         model: "claude-opus-4-6",
-        options: { contextWindow: "1m" },
+        options: [{ id: "contextWindow", value: "1m" }],
       }),
     ).toBe("claude-opus-4-6[1m]");
     expect(
       resolveApiModelId({
-        provider: "claudeAgent",
+        instanceId: providerInstanceId("claudeAgent"),
         model: "claude-sonnet-5",
-        options: { contextWindow: "1m" },
+        options: [{ id: "contextWindow", value: "1m" }],
       }),
     ).toBe("claude-sonnet-5[1m]");
   });
@@ -611,9 +616,9 @@ describe("resolveApiModelId", () => {
   it("leaves Claude models unchanged for the default context window", () => {
     expect(
       resolveApiModelId({
-        provider: "claudeAgent",
+        instanceId: providerInstanceId("claudeAgent"),
         model: "claude-opus-4-6",
-        options: { contextWindow: "200k" },
+        options: [{ id: "contextWindow", value: "200k" }],
       }),
     ).toBe("claude-opus-4-6");
   });
@@ -625,16 +630,20 @@ describe("claudeSelectionRequiresRestart", () => {
     options?: { effort?: string; contextWindow?: string; fastMode?: boolean; thinking?: boolean },
   ) =>
     ({
-      provider: "claudeAgent",
+      instanceId: "claudeAgent",
       model,
-      ...(options ? { options } : {}),
+      ...(options
+        ? {
+            options: Object.entries(options).map(([id, value]) => ({ id, value })),
+          }
+        : {}),
     }) as Parameters<typeof claudeSelectionRequiresRestart>[1];
 
   it("never restarts for non-Claude selections", () => {
     expect(
       claudeSelectionRequiresRestart(
-        { provider: "codex", model: "gpt-5.5" },
-        { provider: "codex", model: "gpt-5.4" },
+        { instanceId: "codex", model: "gpt-5.5" },
+        { instanceId: "codex", model: "gpt-5.4" },
       ),
     ).toBe(false);
   });
@@ -697,6 +706,15 @@ describe("claudeSelectionRequiresRestart", () => {
         selection("claude-opus-4-8", { effort: "max" }),
       ),
     ).toBe(true);
+  });
+
+  it("treats an unknown effort as a no-op", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "future-effort" }),
+      ),
+    ).toBe(false);
   });
 
   it("treats ultrathink as prompt-injected, not a spawn change", () => {

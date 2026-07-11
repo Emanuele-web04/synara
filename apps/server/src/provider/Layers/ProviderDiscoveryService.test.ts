@@ -12,7 +12,10 @@ import * as path from "node:path";
 import type {
   ProviderComposerCapabilities,
   ProviderKind,
+  ProviderListModelsResult,
+  ProviderListPluginsResult,
   ProviderListSkillsResult,
+  ServerSettings,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
@@ -99,6 +102,20 @@ const runListSkills = (input: {
   );
 };
 
+const runDiscovery = <A>(input: {
+  adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
+  settings?: Partial<ServerSettings>;
+  effect: Effect.Effect<A, unknown, ProviderDiscoveryService>;
+}) => {
+  const baseLayer = Layer.mergeAll(
+    makeConfigLayer(),
+    ServerSettingsService.layerTest(input.settings),
+    makeRegistryLayer(input.adapter),
+  ).pipe(Layer.provideMerge(NodeServices.layer));
+  const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+  return Effect.runPromise(input.effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, never>);
+};
+
 beforeEach(async () => {
   clearSkillsCatalogCacheForTests();
   root = mkdtempSync(path.join(os.tmpdir(), "discovery-service-"));
@@ -175,6 +192,157 @@ describe("ProviderDiscoveryService.listSkills", () => {
     });
 
     expect(result.skills.map((skill) => skill.name)).toEqual(["portable"]);
+  });
+});
+
+describe("ProviderDiscoveryService provider instances", () => {
+  it("clears stale Codex account fields when resolving the explicit default instance", async () => {
+    let captured: Record<string, unknown> | undefined;
+
+    const result = await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            captured = input as unknown as Record<string, unknown>;
+            return {
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: "/work-codex",
+              shadowHomePath: "/work-auth",
+              accountId: "work",
+            },
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({
+          provider: "codex",
+          instanceId: "codex",
+          homePath: "/stale-home",
+          shadowHomePath: "/stale-shadow",
+          accountId: "stale",
+        });
+      }),
+    });
+
+    expect(result.source).toBe("stub");
+    expect(captured).toMatchObject({ provider: "codex", instanceId: "codex" });
+    expect(captured).not.toHaveProperty("homePath");
+    expect(captured).not.toHaveProperty("shadowHomePath");
+    expect(captured).not.toHaveProperty("accountId");
+  });
+
+  it("passes resolved Codex instance options into plugin discovery", async () => {
+    let captured: Record<string, unknown> | undefined;
+
+    await runDiscovery({
+      adapter: {
+        listPlugins: (input) =>
+          Effect.sync(() => {
+            captured = input as unknown as Record<string, unknown>;
+            return {
+              marketplaces: [],
+              marketplaceLoadErrors: [],
+              remoteSyncError: null,
+              featuredPluginIds: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListPluginsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: "/work-codex",
+              shadowHomePath: "/work-auth",
+              accountId: "work",
+            },
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listPlugins({
+          provider: "codex",
+          instanceId: "codex_work",
+        });
+      }),
+    });
+
+    expect(captured).toMatchObject({
+      provider: "codex",
+      instanceId: "codex_work",
+      homePath: "/work-codex",
+      shadowHomePath: "/work-auth",
+      accountId: "work",
+    });
+  });
+
+  it("rejects explicit unknown provider instance ids", async () => {
+    await expect(
+      runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.succeed({
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult),
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          return yield* discovery.listModels({
+            provider: "codex",
+            instanceId: "codex_removed",
+          });
+        }),
+      }),
+    ).rejects.toThrow("Unknown provider instance 'codex_removed'");
+  });
+
+  it("rejects disabled provider instance ids", async () => {
+    await expect(
+      runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.succeed({
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult),
+        },
+        settings: {
+          providerInstances: {
+            codex_disabled: {
+              driver: "codex",
+              enabled: false,
+              config: {
+                homePath: "/disabled-codex",
+              },
+            },
+          },
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          return yield* discovery.listModels({
+            provider: "codex",
+            instanceId: "codex_disabled",
+          });
+        }),
+      }),
+    ).rejects.toThrow("Provider instance 'codex_disabled' is disabled");
   });
 });
 

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
-  ApprovalRequestId,
   EventId,
+  ApprovalRequestId,
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderInstanceId,
+  type ProviderListModelsResult,
+  type ProviderListPluginsResult,
+  type ProviderListSkillsResult,
+  type ProviderReadPluginResult,
   type ProviderSession,
+  type ProviderStartOptions,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -22,6 +29,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -33,6 +41,12 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
 
 class FakeCodexManager extends CodexAppServerManager {
+  public sessionSnapshots: ProviderSession[] = [];
+  public codexOptionsByThreadId = new Map<
+    ThreadId,
+    NonNullable<ProviderStartOptions["codex"]> | undefined
+  >();
+
   public startSessionImpl = vi.fn(
     async (input: CodexAppServerStartSessionInput): Promise<ProviderSession> => {
       const now = new Date().toISOString();
@@ -95,6 +109,64 @@ class FakeCodexManager extends CodexAppServerManager {
 
   public stopAllImpl = vi.fn(() => undefined);
 
+  public listSkillsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listSkills"]>[0],
+    ): Promise<ProviderListSkillsResult> => ({
+      skills: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listPluginsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listPlugins"]>[0],
+    ): Promise<ProviderListPluginsResult> => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError: null,
+      featuredPluginIds: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public readPluginImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["readPlugin"]>[0],
+    ): Promise<ProviderReadPluginResult> => ({
+      plugin: {
+        marketplaceName: "local",
+        marketplacePath: "/marketplace",
+        summary: {
+          id: "plugin",
+          name: "plugin",
+          source: { type: "local", path: "/marketplace/plugin" },
+          installed: true,
+          enabled: true,
+          installPolicy: "INSTALLED_BY_DEFAULT",
+          authPolicy: "ON_USE",
+        },
+        skills: [],
+        apps: [],
+        mcpServers: [],
+      },
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listModelsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listModels"]>[0],
+    ): Promise<ProviderListModelsResult> => ({
+      models: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
   override startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
     return this.startSessionImpl(input);
   }
@@ -142,7 +214,23 @@ class FakeCodexManager extends CodexAppServerManager {
   override stopSession(_threadId: ThreadId): void {}
 
   override listSessions(): ProviderSession[] {
-    return [];
+    return this.sessionSnapshots;
+  }
+
+  override inspectSessions(): ReturnType<CodexAppServerManager["inspectSessions"]> {
+    return this.sessionSnapshots.map((session) => {
+      const codexOptions = this.codexOptionsByThreadId.get(session.threadId);
+      return {
+        session,
+        ...(codexOptions ? { codexOptions } : {}),
+      };
+    });
+  }
+
+  override getSessionCodexOptions(
+    threadId: ThreadId,
+  ): NonNullable<ProviderStartOptions["codex"]> | undefined {
+    return this.codexOptionsByThreadId.get(threadId);
   }
 
   override hasSession(_threadId: ThreadId): boolean {
@@ -151,6 +239,22 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override stopAll(): void {
     this.stopAllImpl();
+  }
+
+  override listSkills(input: Parameters<CodexAppServerManager["listSkills"]>[0]) {
+    return this.listSkillsImpl(input);
+  }
+
+  override listPlugins(input: Parameters<CodexAppServerManager["listPlugins"]>[0]) {
+    return this.listPluginsImpl(input);
+  }
+
+  override readPlugin(input: Parameters<CodexAppServerManager["readPlugin"]>[0]) {
+    return this.readPluginImpl(input);
+  }
+
+  override listModels(input: Parameters<CodexAppServerManager["listModels"]>[0]) {
+    return this.listModelsImpl(input);
   }
 }
 
@@ -197,6 +301,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);
     }),
   );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();
@@ -205,13 +310,14 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
-          options: {
-            reasoningEffort: "high",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
         },
         runtimeMode: "full-access",
       });
@@ -222,8 +328,156 @@ validationLayer("CodexAdapterLive validation", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
         runtimeMode: "full-access",
       });
+    }),
+  );
+
+  it.effect("forwards Codex discovery environment options to the manager", () =>
+    Effect.gen(function* () {
+      validationManager.listSkillsImpl.mockClear();
+      validationManager.listPluginsImpl.mockClear();
+      validationManager.readPluginImpl.mockClear();
+      validationManager.listModelsImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const environment = { CODEX_PROFILE: "work" };
+
+      const listSkills = adapter.listSkills;
+      const listPlugins = adapter.listPlugins;
+      const readPlugin = adapter.readPlugin;
+      const listModels = adapter.listModels;
+      if (!listSkills || !listPlugins || !readPlugin || !listModels) {
+        throw new Error("Expected Codex adapter to expose discovery APIs.");
+      }
+
+      yield* listSkills({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* listPlugins({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* readPlugin({
+        provider: "codex",
+        marketplacePath: "/marketplace",
+        pluginName: "plugin",
+        environment,
+      });
+      yield* listModels({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+
+      assert.deepStrictEqual(
+        validationManager.listSkillsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.listPluginsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.readPluginImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        (validationManager.listModelsImpl.mock.calls[0]?.[0] as { codexOptions?: unknown })
+          ?.codexOptions,
+        { environment },
+      );
+    }),
+  );
+
+  it.effect("lists only explicit generated-image homes from live session Codex options", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      const originalSynaraHome = process.env.SYNARA_HOME;
+      process.env.SYNARA_HOME = "/tmp/synara-live-generated-images";
+      validationManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work" as ProviderInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-work"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          providerInstanceId: "codex_disabled" as ProviderInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-disabled"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-without-context"),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      validationManager.codexOptionsByThreadId.clear();
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-work"), {
+        homePath: "/tmp/codex-live-work",
+        accountId: "work",
+      });
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-disabled"), {
+        homePath: "/tmp/codex-live-disabled",
+        accountId: "disabled",
+      });
+      const adapter = yield* CodexAdapter;
+      const listGeneratedImageHomePaths = adapter.listGeneratedImageHomePaths;
+      if (!listGeneratedImageHomePaths) {
+        throw new Error("Expected Codex adapter to expose generated-image home paths.");
+      }
+      const lifecycleListSpy = vi.spyOn(validationManager, "listSessions");
+      const lifecycleOptionsSpy = vi.spyOn(validationManager, "getSessionCodexOptions");
+
+      try {
+        const homes = yield* listGeneratedImageHomePaths({
+          enabledProviderInstanceIds: new Set(["codex_work" as ProviderInstanceId]),
+        });
+
+        assert.deepStrictEqual(homes, [
+          {
+            homePath: "/tmp/codex-live-work",
+            accountId: "work",
+          },
+        ]);
+        const roots = homes.flatMap((home) => resolveCodexGeneratedImagesRoots(home));
+        assert.ok(roots.includes(path.join("/tmp/codex-live-work", "generated_images")));
+        assert.ok(roots.some((root) => root.includes(path.join("codex-home-overlay", "accounts"))));
+        assert.equal(
+          lifecycleListSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not invoke lifecycle session pruning",
+        );
+        assert.equal(
+          lifecycleOptionsSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not trigger per-session auth validation",
+        );
+      } finally {
+        lifecycleOptionsSpy.mockRestore();
+        lifecycleListSpy.mockRestore();
+        if (originalSynaraHome === undefined) {
+          delete process.env.SYNARA_HOME;
+        } else {
+          process.env.SYNARA_HOME = originalSynaraHome;
+        }
+        validationManager.sessionSnapshots = [];
+        validationManager.codexOptionsByThreadId.clear();
+      }
     }),
   );
 });
@@ -277,12 +531,12 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           threadId: asThreadId("sess-missing"),
           input: "hello",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "high" },
+              { id: "fastMode", value: true },
+            ],
           },
           attachments: [],
         }),
@@ -307,6 +561,67 @@ const lifecycleLayer = it.layer(
     Layer.provideMerge(NodeServices.layer),
   ),
 );
+
+const realStopManager = new CodexAppServerManager();
+const realStopLayer = it.layer(
+  makeCodexAdapterLive({ manager: realStopManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+realStopLayer("CodexAdapterLive real manager lifecycle", (it) => {
+  it.effect("keeps a non-default provider instance on session/closed after map removal", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-real-stop-work");
+      const providerInstanceId = "codex_work" as ProviderInstanceId;
+      const kill = vi.fn();
+      const close = vi.fn();
+      (
+        realStopManager as unknown as {
+          sessions: Map<ThreadId, unknown>;
+        }
+      ).sessions.set(threadId, {
+        session: {
+          provider: "codex",
+          providerInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        account: { type: "unknown", planType: null, sparkEnabled: true },
+        child: { killed: false, kill },
+        output: { close },
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        collabReceiverTurns: new Map(),
+        collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
+        nextRequestId: 1,
+        stopping: false,
+      });
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* adapter.stopSession(threadId);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, providerInstanceId);
+      assert.deepEqual(realStopManager.listSessions(), []);
+      assert.equal(kill.mock.calls.length, 1);
+      assert.equal(close.mock.calls.length, 1);
+    }),
+  );
+});
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("maps Codex 0.144 reasoning summaries from canonical item arrays", () =>
@@ -713,6 +1028,43 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.threadId, "thread-1");
       assert.equal(firstEvent.value.payload.reason, "Session stopped");
+    }),
+  );
+
+  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-closed-work"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/closed",
+        message: "Work session stopped",
+      } satisfies ProviderEvent);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      lifecycleManager.sessionSnapshots = [];
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
   );
 

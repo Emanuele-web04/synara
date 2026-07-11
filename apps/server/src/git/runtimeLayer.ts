@@ -4,6 +4,7 @@ import { GitCoreLive } from "./Layers/GitCore";
 import { GitHubCliLive } from "./Layers/GitHubCli";
 import { GitManagerLive } from "./Layers/GitManager";
 import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
+import { ClaudeTextGenerationServiceLive } from "./Layers/ClaudeTextGeneration";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
 import { CursorTextGenerationServiceLive } from "./Layers/CursorTextGeneration";
 import {
@@ -14,6 +15,7 @@ import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
 
 export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
+  Layer.provide(ClaudeTextGenerationServiceLive),
   Layer.provide(CodexTextGenerationServiceLive),
   Layer.provide(CursorTextGenerationServiceLive),
   Layer.provide(KiloTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),

@@ -6,6 +6,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderNativeCommandDescriptor,
@@ -35,7 +36,10 @@ import {
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isMacPlatform } from "~/lib/utils";
 import { compareProvidersByOrder } from "~/providerOrdering";
-import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
+import type {
+  ProviderModelOptionsByProviderInstance,
+  ProviderModelPickerInstance,
+} from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 type ComposerPluginSuggestion = {
@@ -45,6 +49,7 @@ type ComposerPluginSuggestion = {
 
 type SearchableModelOption = {
   provider: ProviderKind;
+  instanceId: ProviderInstanceId;
   providerLabel: string;
   slug: string;
   name: string;
@@ -64,10 +69,13 @@ const KANBAN_SUPPORTED_APP_SLASH_COMMANDS = new Set(["clear", "default", "plan"]
 interface UseKanbanTaskComposerDiscoveryInput {
   readonly composerTrigger: ComposerTrigger | null;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  readonly modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
+  readonly providerInstances: ReadonlyArray<ProviderModelPickerInstance>;
   readonly selectedRuntimeAgents: readonly ProviderAgentDescriptor[];
   readonly selectedProjectCwd: string | null;
   readonly serverCwd: string | null;
@@ -89,7 +97,10 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const {
     composerTrigger,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,
@@ -125,11 +136,12 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   });
 
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       binaryPath:
@@ -166,6 +178,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       agentDir: selectedProvider === "pi" ? piAgentDir : null,
@@ -178,6 +191,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       enabled:
@@ -217,31 +231,42 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   );
   const searchableModelOptions = useMemo<SearchableModelOption[]>(
     () =>
-      AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-        compareProvidersByOrder(providerOrder, left.value, right.value),
-      )
-        .filter(
-          (option) => option.value === selectedProvider || !hiddenProviderSet.has(option.value),
+      providerInstances
+        .toSorted((left, right) =>
+          compareProvidersByOrder(providerOrder, left.provider, right.provider),
         )
-        .flatMap((option) =>
-          modelOptionsByProvider[option.value].map(
-            ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-              provider: option.value,
-              providerLabel: option.label,
-              slug,
-              name,
-              searchSlug: slug.toLowerCase(),
-              searchName: name.toLowerCase(),
-              searchProvider: option.label.toLowerCase(),
-              searchUpstreamProvider: (
-                upstreamProviderName ??
-                upstreamProviderId ??
-                ""
-              ).toLowerCase(),
-            }),
-          ),
+        .filter(
+          (instance) =>
+            instance.provider === selectedProvider || !hiddenProviderSet.has(instance.provider),
+        )
+        .flatMap((instance) =>
+          (
+            modelOptionsByProviderInstance[instance.instanceId] ??
+            modelOptionsByProvider[instance.provider]
+          ).map(({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+            provider: instance.provider,
+            instanceId: instance.instanceId,
+            providerLabel: instance.label,
+            slug,
+            name,
+            searchSlug: slug.toLowerCase(),
+            searchName: name.toLowerCase(),
+            searchProvider: instance.label.toLowerCase(),
+            searchUpstreamProvider: (
+              upstreamProviderName ??
+              upstreamProviderId ??
+              ""
+            ).toLowerCase(),
+          })),
         ),
-    [hiddenProviderSet, modelOptionsByProvider, providerOrder, selectedProvider],
+    [
+      hiddenProviderSet,
+      modelOptionsByProvider,
+      modelOptionsByProviderInstance,
+      providerInstances,
+      providerOrder,
+      selectedProvider,
+    ],
   );
   const dynamicAgents = useMemo(
     () =>

@@ -11,6 +11,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import {
   addThreadMarker,
   removeThreadMarker,
@@ -84,6 +85,7 @@ import {
   shouldApplyThreadsProjection,
   shouldRefreshThreadShellSummary,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -927,22 +929,20 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          const [messages, session] = yield* Effect.all([
-            projectionThreadMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            }),
-            projectionThreadSessionRepository.getByThreadId({
-              threadId: event.payload.threadId,
-            }),
-          ]);
-          const canAdoptFirstTurnProvider =
-            existingRow.value.latestTurnId === null &&
-            Option.isNone(session) &&
-            messages.length <= 1;
+          // Mirror the in-memory projector's binding guard: terminal sessions
+          // can move to another instance, while live sessions only accept the
+          // instance they are already bound to.
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const requestedInstanceId =
+            event.payload.modelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(event.payload.modelSelection);
           const modelSelectionPatch =
             event.payload.modelSelection !== undefined &&
-            (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
+            requestedInstanceId !== null &&
+            canProjectTurnModelSelectionForSession(Option.getOrNull(session), requestedInstanceId)
               ? { modelSelection: event.payload.modelSelection }
               : {};
           yield* projectionThreadRepository.upsert({
@@ -1388,6 +1388,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         threadId: event.payload.threadId,
         status: event.payload.session.status,
         providerName: event.payload.session.providerName,
+        providerInstanceId: event.payload.session.providerInstanceId ?? null,
         runtimeMode: event.payload.session.runtimeMode,
         activeTurnId: event.payload.session.activeTurnId,
         lastError: event.payload.session.lastError,

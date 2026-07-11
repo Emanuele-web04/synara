@@ -9,6 +9,7 @@ import {
   ApprovalRequestId,
   type CursorModelOptions,
   EventId,
+  type ModelSelection,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -22,6 +23,10 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   DateTime,
@@ -102,10 +107,22 @@ import {
   formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 
 const PROVIDER = "cursor" as const;
+export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
+
+export function stampCursorTerminalEventInstance(
+  event: ProviderRuntimeEvent,
+  providerInstanceId: ProviderSession["providerInstanceId"],
+): ProviderRuntimeEvent {
+  return providerInstanceId && event.providerInstanceId !== providerInstanceId
+    ? { ...event, providerInstanceId }
+    : event;
+}
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 // Backstop for an alive-but-silent cursor-agent child: if a turn produces no
@@ -374,6 +391,22 @@ function resolveRequestedModeId(input: {
   );
 }
 
+function cursorModelOptionsFromSelection(
+  modelSelection: ModelSelection | null | undefined,
+): CursorModelOptions | undefined {
+  const reasoningEffort = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+  const contextWindow = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
+  const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+  const thinking = getModelSelectionBooleanOptionValue(modelSelection, "thinking");
+  const options: CursorModelOptions = {
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly runtimeMode: RuntimeMode;
@@ -462,8 +495,15 @@ export function makeCursorAdapter(
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
+    const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
+      const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
+      return providerInstanceId && event.providerInstanceId !== providerInstanceId
+        ? { ...event, providerInstanceId }
+        : event;
+    };
+
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+      PubSub.publish(runtimeEventPubSub, stampRuntimeEventForInstance(event)).pipe(Effect.asVoid);
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -643,13 +683,18 @@ export function makeCursorAdapter(
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
-        yield* offerRuntimeEvent({
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+        yield* offerRuntimeEvent(
+          stampCursorTerminalEventInstance(
+            {
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              payload: { exitKind: "graceful" },
+            },
+            ctx.session.providerInstanceId,
+          ),
+        );
       });
 
     const startSession: CursorAdapterShape["startSession"] = (input) =>
@@ -672,8 +717,8 @@ export function makeCursorAdapter(
             });
           }
 
-          const cursorModelSelection =
-            input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const cursorModelSelection = input.modelSelection;
+          const resolvedProviderInstanceId = resolveCursorStartInstanceId(input);
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -696,6 +741,11 @@ export function makeCursorAdapter(
           });
           const providerCursorOptions = input.providerOptions?.cursor;
           const effectiveCursorSettings: CursorAcpRuntimeCursorSettings = {
+            homeDir: serverConfig.homeDir,
+            isolationRootDir: serverConfig.stateDir,
+            ...(resolvedProviderInstanceId !== undefined
+              ? { instanceId: resolvedProviderInstanceId }
+              : {}),
             ...(cursorSettings.binaryPath !== undefined
               ? { binaryPath: cursorSettings.binaryPath }
               : {}),
@@ -707,6 +757,9 @@ export function makeCursorAdapter(
               : {}),
             ...(providerCursorOptions?.apiEndpoint !== undefined
               ? { apiEndpoint: providerCursorOptions.apiEndpoint }
+              : {}),
+            ...(providerCursorOptions?.environment !== undefined
+              ? { environment: providerCursorOptions.environment }
               : {}),
           };
 
@@ -921,7 +974,12 @@ export function makeCursorAdapter(
             runtime: acp,
             runtimeMode: input.runtimeMode,
             interactionMode: undefined,
-            modelSelection: cursorModelSelection,
+            modelSelection: cursorModelSelection
+              ? {
+                  model: cursorModelSelection.model,
+                  options: cursorModelOptionsFromSelection(cursorModelSelection),
+                }
+              : undefined,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -929,6 +987,9 @@ export function makeCursorAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(resolvedProviderInstanceId
+              ? { providerInstanceId: resolvedProviderInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -1117,8 +1178,7 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const turnModelSelection =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+        const turnModelSelection = input.modelSelection;
         const model = turnModelSelection?.model ?? ctx.session.model;
         const resolvedModel = resolveCursorAcpBaseModelId(model);
         yield* applyRequestedSessionConfiguration({
@@ -1130,7 +1190,7 @@ export function makeCursorAdapter(
               ? undefined
               : {
                   model,
-                  options: turnModelSelection?.options,
+                  options: cursorModelOptionsFromSelection(turnModelSelection),
                 },
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1455,15 +1515,23 @@ export function makeCursorAdapter(
 
     const listSkills: NonNullable<CursorAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
-        try: async () =>
-          ({
+        try: async () => {
+          const accountEnv = buildProviderProcessEnv({
+            driver: PROVIDER,
+            homeDir: serverConfig.homeDir,
+            isolationRootDir: serverConfig.stateDir,
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+          });
+          return {
             skills: await discoverCursorSkills({
               cwd: input.cwd,
-              homeDir: serverConfig.homeDir,
+              homeDir: accountEnv.HOME ?? accountEnv.USERPROFILE ?? serverConfig.homeDir,
             }),
             source: "cursor.filesystem",
             cached: false,
-          }) satisfies ProviderListSkillsResult,
+          } satisfies ProviderListSkillsResult;
+        },
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -1476,6 +1544,25 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
+      let childEnv: NodeJS.ProcessEnv;
+      try {
+        childEnv = buildProviderProcessEnv({
+          driver: PROVIDER,
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        });
+      } catch (cause) {
+        return Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: "Failed to prepare the private Cursor account home.",
+            cause,
+          }),
+        );
+      }
       const effectiveBinaryPath = resolveCursorAgentBinaryPath(
         binaryPath || cursorSettings.binaryPath,
       );
@@ -1485,7 +1572,7 @@ export function makeCursorAdapter(
           binaryPath: effectiveBinaryPath,
           ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
         });
-        const env = buildCursorAgentHeadlessEnv();
+        const env = buildCursorAgentHeadlessEnv(childEnv);
         const prepared = prepareWindowsSafeProcess(command.command, command.args, {
           env,
         });
@@ -1543,7 +1630,11 @@ export function makeCursorAdapter(
       // fast) — data the flat `cursor-agent models` CLI list cannot provide.
       const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
         binaryPath: effectiveBinaryPath,
+        homeDir: serverConfig.homeDir,
+        isolationRootDir: serverConfig.stateDir,
         ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
       };
       const runCursorAcpModelDiscovery = Effect.gen(function* () {
         const runtime = yield* makeCursorAcpRuntime({

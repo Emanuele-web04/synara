@@ -4,7 +4,7 @@
 // Depends on: ChatView, splitViewStore, splitView.logic, ChatPaneDropOverlay, and pane-scoped browser/diff panels
 
 import {
-  type ProviderKind,
+  type ModelSelection,
   type ProjectId,
   ThreadId,
   type ThreadId as ThreadIdType,
@@ -12,6 +12,7 @@ import {
 } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -426,7 +427,7 @@ function SplitPaneEmptyState(props: {
     id: ThreadIdType;
     title: string | null;
     projectId: ProjectId;
-    modelSelection: { provider: ProviderKind };
+    modelSelection: ModelSelection;
   }[];
   projects: readonly { id: ProjectId; name: string }[];
   excludedThreadIds: ReadonlySet<ThreadIdType>;
@@ -464,7 +465,7 @@ function SplitPaneEmptyState(props: {
                 }}
               >
                 <ProviderIcon
-                  provider={thread.modelSelection.provider}
+                  provider={inferLegacyProviderKindFromModelSelection(thread.modelSelection)}
                   className="size-4 shrink-0"
                 />
                 <div className="min-w-0 flex-1">
@@ -776,7 +777,7 @@ function SplitPaneSurface(props: {
     id: ThreadIdType;
     title: string | null;
     projectId: ProjectId;
-    modelSelection: { provider: ProviderKind };
+    modelSelection: ModelSelection;
   }[];
   projects: readonly { id: ProjectId; name: string }[];
   onFocus: () => void;
@@ -1373,7 +1374,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
                     onClick={() => chooseThreadForPane(thread.id)}
                   >
                     <ProviderIcon
-                      provider={thread.modelSelection.provider}
+                      provider={inferLegacyProviderKindFromModelSelection(thread.modelSelection)}
                       className="size-4 shrink-0"
                     />
                     <div className="min-w-0 flex-1">

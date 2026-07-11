@@ -1,5 +1,6 @@
 import type {
   ProviderComposerCapabilities,
+  ProviderInstanceId,
   ProviderKind,
   ProviderListAgentsResult,
   ProviderListCommandsResult,
@@ -45,44 +46,113 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
+function hashSensitiveQueryValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    hash ^= trimmed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${trimmed.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
-  composerCapabilities: (provider: ProviderKind) =>
-    ["provider-discovery", "composer-capabilities", provider] as const,
+  composerCapabilities: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
+    ["provider-discovery", "composer-capabilities", provider, instanceId] as const,
   commands: (
     provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
     cwd: string | null,
     agentDir: string | null,
     connectionKey: string | null,
-  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
+  ) =>
+    ["provider-discovery", "commands", provider, instanceId, cwd, agentDir, connectionKey] as const,
   // The skill list is query-independent (filtering is client-side), so the key
   // deliberately excludes the typed filter to avoid a refetch per keystroke.
-  skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
-    ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skills: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
+    cwd: string | null,
+    agentDir: string | null,
+  ) => ["provider-discovery", "skills", provider, instanceId, cwd, agentDir] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
-  plugins: (provider: ProviderKind, cwd: string | null) =>
-    ["provider-discovery", "plugins", provider, cwd] as const,
-  plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
-    ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
+  plugins: (provider: ProviderKind, instanceId: ProviderInstanceId | null, cwd: string | null) =>
+    ["provider-discovery", "plugins", provider, instanceId, cwd] as const,
+  plugin: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
+    marketplacePath: string,
+    pluginName: string,
+  ) => ["provider-discovery", "plugin", provider, instanceId, marketplacePath, pluginName] as const,
   models: (
     provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
     binaryPath: string | null,
+    homePath: string | null,
+    shadowHomePath: string | null,
+    accountId: string | null,
     apiEndpoint: string | null,
+    serverUrl: string | null,
+    serverPasswordHash: string | null,
+    experimentalWebSockets: boolean | null,
     agentDir: string | null,
     cwd: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
-  agentsForProvider: (provider: ProviderKind) =>
+  ) =>
+    [
+      "provider-discovery",
+      "models",
+      provider,
+      instanceId,
+      binaryPath,
+      homePath,
+      shadowHomePath,
+      accountId,
+      apiEndpoint,
+      serverUrl,
+      serverPasswordHash,
+      experimentalWebSockets,
+      agentDir,
+      cwd,
+    ] as const,
+  agentsForProvider: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
+    ["provider-discovery", "agents", provider, instanceId] as const,
+  agentsForProviderPrefix: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
-  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
-    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
+  agents: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
+    binaryPath: string | null,
+    serverUrl: string | null,
+    serverPasswordHash: string | null,
+    experimentalWebSockets: boolean | null,
+    cwd: string | null,
+  ) =>
+    [
+      ...providerDiscoveryQueryKeys.agentsForProvider(provider, instanceId),
+      binaryPath,
+      serverUrl,
+      serverPasswordHash,
+      experimentalWebSockets,
+      cwd,
+    ] as const,
 };
 
-export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
+export function providerComposerCapabilitiesQueryOptions(
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null,
+) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
+    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider, instanceId ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.getComposerCapabilities({ provider });
+      return api.provider.getComposerCapabilities({
+        provider,
+        ...(instanceId ? { instanceId } : {}),
+      });
     },
     staleTime: Infinity,
   });
@@ -90,13 +160,19 @@ export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind)
 
 export function providerSkillsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   agentDir?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
+    queryKey: providerDiscoveryQueryKeys.skills(
+      input.provider,
+      input.instanceId ?? null,
+      input.cwd,
+      input.agentDir ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -104,6 +180,7 @@ export function providerSkillsQueryOptions(input: {
       }
       return api.provider.listSkills({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
@@ -134,6 +211,7 @@ export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled
 
 export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   binaryPath?: string | null;
@@ -147,12 +225,13 @@ export function providerCommandsQueryOptions(input: {
   const connectionKey = JSON.stringify({
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
-    hasServerPassword: Boolean(input.serverPassword),
+    serverPasswordHash: hashSensitiveQueryValue(input.serverPassword),
     experimentalWebSockets: input.experimentalWebSockets ?? null,
   });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(
       input.provider,
+      input.instanceId ?? null,
       input.cwd,
       input.agentDir ?? null,
       connectionKey,
@@ -164,6 +243,7 @@ export function providerCommandsQueryOptions(input: {
       }
       return api.provider.listCommands({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
@@ -183,8 +263,15 @@ export function providerCommandsQueryOptions(input: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
+  homePath?: string | null;
+  shadowHomePath?: string | null;
+  accountId?: string | null;
   apiEndpoint?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean | undefined;
   agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
@@ -192,8 +279,15 @@ export function providerModelsQueryOptions(input: {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.models(
       input.provider,
+      input.instanceId ?? null,
       input.binaryPath ?? null,
+      input.homePath ?? null,
+      input.shadowHomePath ?? null,
+      input.accountId ?? null,
       input.apiEndpoint ?? null,
+      input.serverUrl ?? null,
+      hashSensitiveQueryValue(input.serverPassword),
+      input.experimentalWebSockets ?? null,
       input.agentDir ?? null,
       input.cwd ?? null,
     ),
@@ -201,8 +295,17 @@ export function providerModelsQueryOptions(input: {
       const api = ensureNativeApi();
       return api.provider.listModels({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.homePath ? { homePath: input.homePath } : {}),
+        ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
@@ -216,21 +319,35 @@ export function providerModelsQueryOptions(input: {
 
 export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean | undefined;
   cwd?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.agents(
       input.provider,
+      input.instanceId ?? null,
       input.binaryPath ?? null,
+      input.serverUrl ?? null,
+      hashSensitiveQueryValue(input.serverPassword),
+      input.experimentalWebSockets ?? null,
       input.cwd ?? null,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listAgents({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
@@ -242,16 +359,22 @@ export function providerAgentsQueryOptions(input: {
 
 export function providerPluginsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd),
+    queryKey: providerDiscoveryQueryKeys.plugins(
+      input.provider,
+      input.instanceId ?? null,
+      input.cwd,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listPlugins({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
       });
@@ -264,6 +387,7 @@ export function providerPluginsQueryOptions(input: {
 
 export function providerReadPluginQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   marketplacePath: string;
   pluginName: string;
   enabled?: boolean;
@@ -271,6 +395,7 @@ export function providerReadPluginQueryOptions(input: {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.plugin(
       input.provider,
+      input.instanceId ?? null,
       input.marketplacePath,
       input.pluginName,
     ),
@@ -278,6 +403,7 @@ export function providerReadPluginQueryOptions(input: {
       const api = ensureNativeApi();
       return api.provider.readPlugin({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         marketplacePath: input.marketplacePath,
         pluginName: input.pluginName,
       });

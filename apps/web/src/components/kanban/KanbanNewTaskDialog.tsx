@@ -18,6 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -28,7 +29,10 @@ import {
   type ComposerPromptEditorHandle,
 } from "~/components/ComposerPromptEditor";
 import { ComposerCommandMenu } from "~/components/chat/ComposerCommandMenu";
-import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
+import {
+  ProviderModelPicker,
+  type ProviderModelFavorite,
+} from "~/components/chat/ProviderModelPicker";
 import { TraitsPicker } from "~/components/chat/TraitsPicker";
 import {
   ComposerLocalDirectoryMenu,
@@ -60,7 +64,7 @@ import { useComposerDropzone } from "~/hooks/useComposerDropzone";
 import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, PaperclipIcon } from "~/lib/icons";
-import { findProviderStatus } from "~/lib/providerAvailability";
+import { resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -109,14 +113,19 @@ export function KanbanNewTaskDialog({
   initialProjectId,
   initialSendAsDraft = false,
 }: KanbanNewTaskDialogProps) {
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const projects = useStore((state) => state.projects);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const handleFavoriteModelsChange = useCallback(
+    (favorites: ProviderModelFavorite[]) => {
+      updateSettings({ favorites });
+    },
+    [updateSettings],
+  );
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -136,6 +145,7 @@ export function KanbanNewTaskDialog({
     composerMentions,
     nonPersistedComposerImageIdSet,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedProviderModelOptions,
     setPrompt,
@@ -145,8 +155,13 @@ export function KanbanNewTaskDialog({
     clearComposerAssistantSelections,
     clearComposerFileComments,
     removeComposerTerminalContext,
-  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
+  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider, settings });
   const promptRef = useRef(prompt);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
 
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [interactionMode, setInteractionMode] =
@@ -173,10 +188,17 @@ export function KanbanNewTaskDialog({
 
   // Voice transcription always rides on the Codex ChatGPT session, regardless of
   // which provider the task targets — gate the mic on the Codex status.
-  const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+  const voiceProviderTarget = useMemo(
+    () =>
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider,
+        selectedProviderInstanceId,
+      }),
+    [providerInstances, providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
+  const voiceProviderStatus = voiceProviderTarget?.status ?? null;
 
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [selectedProvider]: selectedModel }),
@@ -184,12 +206,14 @@ export function KanbanNewTaskDialog({
   );
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     runtimeModelsByProvider,
     selectedRuntimeModel,
     selectedRuntimeAgents,
   } = useProviderModelCatalog({
     selectedProvider,
+    selectedProviderInstanceId,
     // Keep discovery warm whenever either picker can open so cursor/codex effort
     // and fast-mode controls are populated, not just the model list.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
@@ -212,6 +236,7 @@ export function KanbanNewTaskDialog({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     taskPreview,
     trimmedPrompt,
@@ -223,6 +248,7 @@ export function KanbanNewTaskDialog({
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     onOpenChange,
   });
@@ -258,7 +284,10 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
@@ -266,7 +295,7 @@ export function KanbanNewTaskDialog({
     providerOptionsForDispatch,
     hiddenProviders: settings.hiddenProviders,
     providerOrder: settings.providerOrder,
-    piAgentDir: settings.piAgentDir || null,
+    piAgentDir: providerOptionsForDispatch?.pi?.agentDir ?? null,
     handleProviderModelChange,
     setInteractionMode,
     onCreate: handleCreateRequest,
@@ -278,16 +307,24 @@ export function KanbanNewTaskDialog({
     if (selectedModel !== null) {
       return;
     }
-    const firstOption = modelOptionsByProvider[selectedProvider][0];
+    const firstOption = (modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+      modelOptionsByProvider[selectedProvider])[0];
     if (firstOption) {
-      useComposerDraftStore
-        .getState()
-        .setModelSelection(
-          scratchThreadId,
-          buildModelSelection(selectedProvider, firstOption.slug),
-        );
+      useComposerDraftStore.getState().setModelSelection(
+        scratchThreadId,
+        buildModelSelection(selectedProvider, firstOption.slug, null, {
+          instanceId: selectedProviderInstanceId,
+        }),
+      );
     }
-  }, [modelOptionsByProvider, scratchThreadId, selectedModel, selectedProvider]);
+  }, [
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    scratchThreadId,
+    selectedModel,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
 
   const handleTranscriptReady = useCallback(
     (transcript: string) => {
@@ -301,6 +338,8 @@ export function KanbanNewTaskDialog({
     activeThreadId: null,
     threadId: scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: 0,
     onTranscriptReady: handleTranscriptReady,
@@ -517,9 +556,14 @@ export function KanbanNewTaskDialog({
                     lockedProvider={null}
                     providers={providerStatuses}
                     modelOptionsByProvider={modelOptionsByProvider}
+                    modelOptionsByProviderInstance={modelOptionsByProviderInstance}
                     loadingModelProviders={loadingModelProviders}
                     hiddenProviders={settings.hiddenProviders}
                     providerOrder={settings.providerOrder}
+                    providerInstances={providerInstances}
+                    selectedProviderInstanceId={selectedProviderInstanceId}
+                    favoriteModels={settings.favorites}
+                    onFavoriteModelsChange={handleFavoriteModelsChange}
                     onProviderModelChange={handleProviderModelChange}
                     open={isModelPickerOpen}
                     onOpenChange={setIsModelPickerOpen}
@@ -536,6 +580,7 @@ export function KanbanNewTaskDialog({
                     onPromptChange={setPrompt}
                     open={isTraitsPickerOpen}
                     onOpenChange={setIsTraitsPickerOpen}
+                    selectedProviderInstanceId={selectedProviderInstanceId}
                   />
                 </div>
               </div>

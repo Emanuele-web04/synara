@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  DEFAULT_SERVER_SETTINGS,
   type AutomationListResult,
   AutomationRunId,
   CommandId,
@@ -16,9 +17,11 @@ import {
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderInstanceId,
 } from "@synara/contracts";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   GitCore,
@@ -37,8 +40,12 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { unresolvedAutomationInstanceId } from "@synara/shared/providerInstances";
 import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
-import { AutomationServiceLive } from "./AutomationService.ts";
+import {
+  AutomationServiceLive,
+  resolveAutomationCompletionTextGenerationInputForSettings,
+} from "./AutomationService.ts";
 
 const now = "2026-06-16T10:00:00.000Z";
 const projectId = ProjectId.makeUnsafe("automation-project");
@@ -48,7 +55,7 @@ const project: OrchestrationProjectShell = {
   title: "Automation Project",
   workspaceRoot: "/tmp/automation-project",
   defaultModelSelection: {
-    provider: "codex",
+    instanceId: "codex",
     model: "gpt-5-codex",
   },
   scripts: [],
@@ -92,6 +99,34 @@ let failDispatchType: OrchestrationCommand["type"] | null = null;
 let dispatchHook:
   | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
   | null = null;
+
+it("drops stale completion fallback provider options when the fallback instance cannot resolve", () => {
+  const input = resolveAutomationCompletionTextGenerationInputForSettings(
+    {
+      modelSelection: {
+        instanceId: "gemini",
+        model: "gemini-2.5-pro",
+      },
+      providerOptions: {
+        codex: {
+          homePath: "/tmp/stale-codex-home",
+          environment: {
+            STALE_CODEX_ENV: "must-not-leak",
+          },
+        },
+      },
+    },
+    {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: "codex_fallback_removed" as ProviderInstanceId,
+        model: "gpt-5-codex",
+      },
+    },
+  );
+
+  assert.deepStrictEqual(input, {});
+});
 
 function resetHarness() {
   dispatchedCommands.length = 0;
@@ -334,7 +369,7 @@ const createInput = (
   prompt: "Check stale dependencies.",
   schedule: { type: "manual" },
   modelSelection: {
-    provider: "codex",
+    instanceId: "codex",
     model: "gpt-5-codex",
   },
   worktreeMode,
@@ -515,6 +550,53 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("blocks unresolved automation identities across enable, run-now, and dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const unresolvedId = unresolvedAutomationInstanceId("codex");
+      const created = yield* service.create({ ...createInput("local"), enabled: false });
+      const tombstone = yield* repository.saveDefinition({
+        ...created,
+        enabled: false,
+        nextRunAt: null,
+        modelSelection: {
+          instanceId: unresolvedId,
+          model: "legacy-automation-unresolved",
+        },
+      });
+
+      const edited = yield* service.update({ id: tombstone.id, name: "Needs account repair" });
+      assert.strictEqual(edited.enabled, false);
+
+      const enableError = yield* service
+        .update({ id: tombstone.id, enabled: true })
+        .pipe(Effect.flip);
+      assert.match(enableError.message, /unresolved legacy provider account/);
+
+      const runNowError = yield* service.runNow({ automationId: tombstone.id }).pipe(Effect.flip);
+      assert.match(runNowError.message, /unresolved legacy provider account/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+
+      yield* repository.saveDefinition({
+        ...tombstone,
+        enabled: true,
+        schedule: { type: "once", runAt: now },
+        nextRunAt: now,
+      });
+      const scheduled = yield* service.runDueOnce({
+        now,
+        limit: 10,
+        leaseOwnerId: "unresolved-identity-test",
+      });
+      assert.strictEqual(scheduled.length, 1);
+      assert.strictEqual(scheduled[0]?.run.status, "failed");
+      assert.match(scheduled[0]?.run.error ?? "", /unresolved legacy provider account/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+    }),
+  );
+
   it.effect("initializes future scheduled automations with their first real run time", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -562,6 +644,107 @@ layer("AutomationService", (it) => {
       assert.strictEqual(result.run.messageId, turnStart.message.messageId);
       assert.strictEqual(result.run.threadCreateCommandId, threadCreate.commandId);
       assert.strictEqual(result.run.turnStartCommandId, turnStart.commandId);
+    }),
+  );
+
+  it.effect("keeps selected instance secrets out of standalone turn events", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const codexWorkInstanceId = "codex_work_dispatch" as ProviderInstanceId;
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [codexWorkInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Work",
+            config: {
+              homePath: "/tmp/codex-dispatch-home",
+              accountId: "work",
+            },
+            environment: [{ name: "CODEX_SECRET", value: "super-secret", sensitive: true }],
+          },
+        },
+      });
+      const created = yield* service.create({
+        ...createInput("local"),
+        modelSelection: {
+          instanceId: codexWorkInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+          claudeAgent: {
+            homePath: "/tmp/stale-claude-home",
+          },
+        },
+      });
+      assert.strictEqual(created.providerOptions, undefined);
+      assert.ok(!JSON.stringify(created).includes("must-not-leak"));
+
+      const updated = yield* service.update({
+        id: created.id,
+        providerOptions: {
+          codex: {
+            environment: { UPDATED_STALE_SECRET: "must-not-persist" },
+          },
+        },
+      });
+      assert.strictEqual(updated.providerOptions, undefined);
+      assert.ok(!JSON.stringify(updated).includes("must-not-persist"));
+
+      // Simulate a historical row written before definition sanitization. Public
+      // reads and run-time publication must still keep it out of API payloads.
+      const repository = yield* AutomationRepository;
+      yield* repository.saveDefinition({
+        ...updated,
+        providerOptions: {
+          codex: {
+            environment: { HISTORICAL_STALE_SECRET: "must-not-be-published" },
+          },
+        },
+      });
+
+      const { run: createdRun } = yield* service.runNow({ automationId: created.id });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE automation_runs
+        SET permission_snapshot_json = ${JSON.stringify({
+          ...createdRun.permissionSnapshot,
+          providerOptions: {
+            codex: {
+              environment: { HISTORICAL_RUN_SECRET: "must-not-list-or-publish" },
+            },
+          },
+        })}
+        WHERE run_id = ${createdRun.id}
+      `;
+
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+      assert.strictEqual(turnStart?.type, "thread.turn.start");
+      if (turnStart?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.deepStrictEqual(turnStart.modelSelection, {
+        instanceId: codexWorkInstanceId,
+        model: "gpt-5-codex",
+      });
+      assert.strictEqual(turnStart.providerOptions, undefined);
+      assert.ok(!JSON.stringify(turnStart).includes("super-secret"));
+      const listed = yield* service.list({ projectId });
+      const listedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      assert.strictEqual(listedDefinition?.providerOptions, undefined);
+      assert.ok(!JSON.stringify(listedDefinition).includes("must-not-persist"));
+      assert.ok(!JSON.stringify(listedDefinition).includes("must-not-be-published"));
+      const run = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(run?.permissionSnapshot.providerOptions, undefined);
+      assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("super-secret"));
+      assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("must-not-list-or-publish"));
     }),
   );
 
@@ -1431,7 +1614,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -1496,7 +1679,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -1566,6 +1749,200 @@ layer("AutomationService", (it) => {
       assert.isUndefined(dispatchedCommands.find((entry) => entry.type === "thread.create"));
       assert.strictEqual(run.threadId, targetThreadId);
       assert.strictEqual(run.status, "running");
+    }),
+  );
+
+  it.effect("keeps selected instance secrets out of heartbeat turn events", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-refresh-options-target");
+      const codexWorkInstanceId = "codex_work_heartbeat_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [codexWorkInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Work",
+            config: {
+              homePath: "/tmp/codex-heartbeat-home",
+              accountId: "work",
+            },
+          },
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: codexWorkInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+          claudeAgent: {
+            homePath: "/tmp/stale-claude-home",
+          },
+        },
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      const command = dispatchedCommands[0];
+      assert.strictEqual(command?.type, "thread.turn.start");
+      if (command?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.deepStrictEqual(command.modelSelection, {
+        instanceId: codexWorkInstanceId,
+        model: "gpt-5-codex",
+      });
+      assert.strictEqual(command.providerOptions, undefined);
+    }),
+  );
+
+  it.effect("fails dispatch when a configured instance retargets a legacy Codex account id", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const collidingInstanceId = "codex_migration_collision" as ProviderInstanceId;
+      yield* serverSettings.updateSettings({
+        providers: {
+          codex: {
+            accounts: [
+              {
+                id: "migration_collision",
+                label: "Migration collision",
+                homePath: "/legacy/codex-work",
+                shadowHomePath: "/legacy/codex-work-shadow",
+              },
+            ],
+          },
+        },
+        providerInstances: {
+          [collidingInstanceId]: {
+            driver: "codex",
+            enabled: true,
+            config: { accountId: "personal" },
+          },
+        },
+      });
+      const created = yield* service.create({
+        ...createInput("local"),
+        modelSelection: {
+          instanceId: collidingInstanceId,
+          model: "gpt-5-codex",
+        },
+      });
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(
+        error.message,
+        /provider instance 'codex_migration_collision' is no longer configured/,
+      );
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const listed = yield* service.list({ projectId });
+      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(failedRun?.status, "failed");
+    }),
+  );
+
+  it.effect("fails a heartbeat run when the selected provider instance is gone", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stale-options-target");
+      const removedInstanceId = "codex_removed_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: removedInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+      });
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(
+        error.message,
+        /provider instance 'codex_removed_dispatch' is no longer configured/,
+      );
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const listed = yield* service.list({ projectId });
+      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(failedRun?.status, "failed");
+    }),
+  );
+
+  it.effect("fails a heartbeat run when the selected provider instance is disabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-disabled-options-target");
+      const disabledInstanceId = "codex_disabled_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [disabledInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Disabled",
+            enabled: false,
+            config: {
+              homePath: "/tmp/codex-disabled-home",
+              accountId: "disabled",
+            },
+          },
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: disabledInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+      });
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /provider instance 'codex_disabled_dispatch' is disabled/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const listed = yield* service.list({ projectId });
+      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(failedRun?.status, "failed");
     }),
   );
 
@@ -2194,7 +2571,7 @@ layer("AutomationService", (it) => {
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          provider: "cursor",
+          instanceId: "cursor",
           model: "composer-2",
         },
       });
@@ -2204,8 +2581,8 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-8",
+          instanceId: "gemini",
+          model: "gemini-2.5-pro",
         },
         completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
       });
@@ -2226,9 +2603,295 @@ layer("AutomationService", (it) => {
       });
 
       assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
-        provider: "cursor",
+        instanceId: "cursor",
         model: "composer-2",
       });
+    }),
+  );
+
+  it.effect(
+    "replaces stale heartbeat completion provider options with selected instance options",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const serverSettings = yield* ServerSettingsService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-stale-provider-options");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-stale-provider-options");
+        const codexWorkInstanceId = "codex_work" as ProviderInstanceId;
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [codexWorkInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Work",
+              config: {
+                homePath: "/tmp/codex-work-home",
+                accountId: "work",
+              },
+            },
+          },
+        });
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: codexWorkInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+            claudeAgent: {
+              homePath: "/tmp/stale-claude-home",
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "stale provider options stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.providerOptions, {
+          codex: {
+            homePath: "/tmp/codex-work-home",
+            accountId: "work",
+          },
+        });
+      }),
+  );
+
+  it.effect(
+    "drops stale heartbeat completion provider options when the selected instance is removed",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const serverSettings = yield* ServerSettingsService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-missing-provider-instance");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-missing-provider-instance");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            codex_removed: {
+              driver: "codex",
+              displayName: "Codex Removed",
+              config: {
+                homePath: "/tmp/codex-removed-home",
+                accountId: "removed",
+              },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: "codex_removed" as ProviderInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* serverSettings.updateSettings({
+          providerInstances: {},
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "missing instance stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+          instanceId: "cursor",
+          model: "composer-2",
+        });
+        assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
+      }),
+  );
+
+  it.effect(
+    "drops stale heartbeat completion provider options when the selected instance is disabled",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const serverSettings = yield* ServerSettingsService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-disabled-provider-instance");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-disabled-provider-instance");
+        const disabledInstanceId = "codex_disabled_completion" as ProviderInstanceId;
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [disabledInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Disabled Completion",
+              config: {
+                homePath: "/tmp/codex-disabled-completion-home",
+                accountId: "disabled-completion",
+              },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: disabledInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [disabledInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Disabled Completion",
+              enabled: false,
+              config: {
+                homePath: "/tmp/codex-disabled-completion-home",
+                accountId: "disabled-completion",
+              },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "disabled instance stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+          instanceId: "cursor",
+          model: "composer-2",
+        });
+        assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
+      }),
+  );
+
+  it.effect("drops stale heartbeat completion options from the fallback path", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-missing-fallback-instance");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-missing-fallback-instance");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        textGenerationModelSelection: {
+          instanceId: "codex_fallback_removed" as ProviderInstanceId,
+          model: "gpt-5-codex",
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: "gemini",
+          model: "gemini-2.5-pro",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForAutomationList({
+        service,
+        description: "missing fallback instance stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+          undefined,
+      });
+
+      assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
     }),
   );
 
@@ -3370,7 +4033,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -3427,7 +4090,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -3572,7 +4235,7 @@ layer("AutomationService", (it) => {
           scheduledFor,
           permissionSnapshot: {
             provider: "codex",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
             runtimeMode: "approval-required",
             interactionMode: "default",
             worktreeMode: "local",

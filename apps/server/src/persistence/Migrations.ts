@@ -68,6 +68,16 @@ import Migration0049 from "./Migrations/049_ProjectionThreadMessagesDispatchOrig
 import Migration0050 from "./Migrations/050_ProfileStatsArchive.ts";
 import Migration0051 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
 import Migration0052 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
+// These PR migrations were authored before upstream claimed loader IDs 51/52.
+// Keep their source filenames for review history, but shift their loader IDs
+// after the released upstream lineage so every migration remains ordered and unique.
+import Migration0053 from "./Migrations/051_ProjectionThreadSessionProviderInstance.ts";
+import Migration0054 from "./Migrations/052_ProviderSessionRuntimeInstanceId.ts";
+import Migration0055 from "./Migrations/054_ProfileStatsDeletedTurnsProviderInstance.ts";
+import Migration0056 from "./Migrations/055_ProfileStatsDeletedTokensProviderInstance.ts";
+import Migration0057 from "./Migrations/056_ClearAutomationDefinitionProviderOptions.ts";
+import Migration0058 from "./Migrations/057_ClearAutomationRunProviderOptions.ts";
+import Migration0059 from "./Migrations/059_ScrubOrchestrationEventProviderOptions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -132,6 +142,13 @@ export const migrationEntries = [
   [50, "ProfileStatsArchive", Migration0050],
   [51, "ProfileStatsDeletedTokensModel", Migration0051],
   [52, "ProjectionThreadUserMessageSummaryIndex", Migration0052],
+  [53, "ProjectionThreadSessionProviderInstance", Migration0053],
+  [54, "ProviderSessionRuntimeInstanceId", Migration0054],
+  [55, "ProfileStatsDeletedTurnsProviderInstance", Migration0055],
+  [56, "ProfileStatsDeletedTokensProviderInstance", Migration0056],
+  [57, "ClearAutomationDefinitionProviderOptions", Migration0057],
+  [58, "ClearAutomationRunProviderOptions", Migration0058],
+  [59, "ScrubOrchestrationEventProviderOptions", Migration0059],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

@@ -13,7 +13,7 @@ import {
   type ProviderModelOption,
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
@@ -23,31 +23,42 @@ import {
   COMPOSER_PICKER_RADIUS_CLASS_NAME,
 } from "./composerPickerStyles";
 
-type FavoriteModelProvider = "cursor" | "kilo" | "opencode" | "pi";
+type FavoriteModelProvider = ProviderKind;
 
 type ProviderModelOptionGroupListProps = {
   groupedOptions: ReadonlyArray<ProviderModelOptionGroup>;
   provider: ProviderKind;
   activeModel: string;
   isSearching: boolean;
+  instanceId: ProviderInstanceId;
   favoriteProvider: FavoriteModelProvider | null;
   favoriteModelSlugSet: ReadonlySet<string> | undefined;
-  onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+  onToggleFavorite: (
+    provider: FavoriteModelProvider,
+    instanceId: ProviderInstanceId,
+    slug: string,
+  ) => void;
   onAfterSelection?: () => void;
 };
 
 function ProviderModelRadioItem(
   props: Readonly<{
     provider: ProviderKind;
+    instanceId: ProviderInstanceId;
     modelOption: ProviderModelOption;
     favoriteProvider: FavoriteModelProvider | null;
     isFavorite: boolean;
-    onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+    onToggleFavorite: (
+      provider: FavoriteModelProvider,
+      instanceId: ProviderInstanceId,
+      slug: string,
+    ) => void;
     onAfterSelection?: () => void;
   }>,
 ) {
   const {
     provider,
+    instanceId,
     modelOption,
     favoriteProvider,
     isFavorite,
@@ -78,7 +89,7 @@ function ProviderModelRadioItem(
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              onToggleFavorite(favoriteProvider, modelOption.slug);
+              onToggleFavorite(favoriteProvider, instanceId, modelOption.slug);
             }}
             onPointerDown={(event) => {
               event.stopPropagation();
@@ -157,6 +168,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
           <ProviderModelRadioItem
             key={`${props.provider}:${modelOption.slug}`}
             provider={props.provider}
+            instanceId={props.instanceId}
             modelOption={modelOption}
             favoriteProvider={props.favoriteProvider}
             isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}

@@ -47,7 +47,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5-codex",
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -139,7 +139,7 @@ function makeProject(
     localName: null,
     cwd: "/tmp/project",
     defaultModelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5-codex",
     },
     expanded: true,
@@ -154,7 +154,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.3-codex",
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -189,7 +189,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
         title: "Project",
         workspaceRoot: "/tmp/project",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         createdAt: "2026-02-27T00:00:00.000Z",
@@ -212,7 +212,7 @@ function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][number]
         title: "Project",
         workspaceRoot: "/tmp/project",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         createdAt: "2026-02-27T00:00:00.000Z",
@@ -233,7 +233,7 @@ function makeReadModelProject(
     title: "Project",
     workspaceRoot: "/tmp/project",
     defaultModelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.3-codex",
     },
     createdAt: "2026-02-27T00:00:00.000Z",
@@ -546,7 +546,7 @@ describe("store pure functions", () => {
             title: "Live Project",
             workspaceRoot: "/tmp/live-project",
             defaultModelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5-codex",
             },
             scripts: [],
@@ -673,7 +673,7 @@ describe("store pure functions", () => {
         projectId,
         title: "Stale project thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -848,7 +848,7 @@ describe("store pure functions", () => {
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1386,7 +1386,7 @@ describe("store pure functions", () => {
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -2060,7 +2060,7 @@ describe("store read model sync", () => {
     const readModel = makeReadModel(
       makeReadModelThread({
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
         },
       }),
@@ -2076,7 +2076,7 @@ describe("store read model sync", () => {
     const readModel = makeReadModel(
       makeReadModelThread({
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "sonnet",
         },
         session: {
@@ -2101,7 +2101,7 @@ describe("store read model sync", () => {
     const readModel = makeReadModel(
       makeReadModelThread({
         modelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openrouter/gpt-oss-120b:free",
         },
         session: {
@@ -2118,7 +2118,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.provider).toBe("opencode");
+    expect(next.threads[0]?.modelSelection.instanceId).toBe("opencode");
     expect(next.threads[0]?.session?.provider).toBe("opencode");
   });
 
@@ -2127,7 +2127,7 @@ describe("store read model sync", () => {
     const readModel = makeReadModel(
       makeReadModelThread({
         modelSelection: {
-          provider: "pi",
+          instanceId: "pi",
           model: "anthropic/claude-sonnet-4-5",
         },
         session: {
@@ -2144,7 +2144,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.provider).toBe("pi");
+    expect(next.threads[0]?.modelSelection.instanceId).toBe("pi");
     expect(next.threads[0]?.session?.provider).toBe("pi");
   });
 
@@ -2153,7 +2153,7 @@ describe("store read model sync", () => {
     const readModel = makeReadModel(
       makeReadModelThread({
         modelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
       }),
@@ -2171,7 +2171,7 @@ describe("store read model sync", () => {
       projects: [
         makeReadModelProject({
           defaultModelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         }),
@@ -2205,7 +2205,7 @@ describe("store read model sync", () => {
       makeThread({
         id: threadId,
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-7",
         },
         session: {
@@ -2251,7 +2251,7 @@ describe("store read model sync", () => {
       makeReadModelThread({
         id: threadId,
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-7",
         },
         latestTurn: {
@@ -2307,7 +2307,7 @@ describe("store read model sync", () => {
       makeThread({
         id: threadId,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         session: {
@@ -2354,7 +2354,7 @@ describe("store read model sync", () => {
       makeReadModelThread({
         id: threadId,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         latestTurn: {
@@ -3101,7 +3101,7 @@ describe("store read model sync", () => {
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Stale archived thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -3162,7 +3162,7 @@ describe("store read model sync", () => {
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Stale resurrected thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -3211,7 +3211,7 @@ describe("store read model sync", () => {
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Rehydrated shell removed thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
         },
         runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -3630,7 +3630,7 @@ describe("store read model sync", () => {
       projects: [
         makeReadModelProject({
           defaultModelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           updatedAt: "2026-02-27T00:00:00.000Z",
@@ -3639,7 +3639,7 @@ describe("store read model sync", () => {
       threads: [
         makeReadModelThread({
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           createdAt: "2026-02-13T00:00:00.000Z",

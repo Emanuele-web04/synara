@@ -8,8 +8,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import {
   type AssistantDeliveryMode,
+  CodexAccountConfig,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_SERVER_SETTINGS,
+  type ProviderInstanceConfig,
+  ProviderInstanceConfigMap,
+  type ProviderDriverKind,
+  ProviderInstanceId,
   TrimmedNonEmptyString,
   ProviderKind,
   type ProviderStartOptions,
@@ -22,6 +28,10 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
 } from "@synara/shared/model";
+import {
+  codexAccountInstanceId,
+  inferLegacyProviderKindFromModelSelection,
+} from "@synara/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -38,9 +48,14 @@ import {
   UI_DENSITY_MODES,
   normalizeUiDensity as normalizeUiDensityValue,
 } from "./lib/appDensity";
+import { supportsTextGeneration } from "./lib/textGenerationCapabilities";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
+
+function hasCompletedServerSettingsMigration(): boolean {
+  return globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1";
+}
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
@@ -131,8 +146,15 @@ const withDefaults =
       Schema.withDecodingDefault(() => fallback()),
     );
 
+export const FavoriteModelSetting = Schema.Struct({
+  provider: ProviderInstanceId,
+  model: TrimmedNonEmptyString,
+});
+export type FavoriteModelSetting = typeof FavoriteModelSetting.Type;
+
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
@@ -142,6 +164,11 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  codexAccounts: Schema.Array(CodexAccountConfig).pipe(withDefaults(() => [])),
+  selectedCodexAccountId: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    withDefaults(() => DEFAULT_CODEX_ACCOUNT_ID),
+  ),
+  providerInstances: ProviderInstanceConfigMap.pipe(withDefaults(() => ({}))),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -201,7 +228,9 @@ export const AppSettingsSchema = Schema.Struct({
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  favorites: Schema.Array(FavoriteModelSetting).pipe(withDefaults(() => [])),
   textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -229,6 +258,13 @@ type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPat
 export interface AppModelOption extends ProviderModelOption {
   provider: ProviderKind;
   isCustom: boolean;
+}
+
+export interface GitTextGenerationModelPickerOption {
+  readonly key: string;
+  readonly value: string;
+  readonly instance: ProviderInstanceOption;
+  readonly option: AppModelOption;
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
@@ -404,11 +440,504 @@ function normalizeProviderBinaryPathOverride(
   return trimmed;
 }
 
+export type CodexAccountSettings = CodexAccountConfig;
+
+export interface ResolvedCodexAccount {
+  readonly id: string;
+  readonly label: string;
+  readonly homePath: string;
+  readonly shadowHomePath: string;
+  readonly isDefault: boolean;
+}
+
+function isValidCodexAccountId(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 64;
+}
+
+export function normalizeCodexAccounts(
+  accounts: ReadonlyArray<CodexAccountSettings>,
+): CodexAccountSettings[] {
+  const seen = new Set<string>([DEFAULT_CODEX_ACCOUNT_ID]);
+  const normalized: CodexAccountSettings[] = [];
+
+  for (const account of accounts) {
+    const id = account.id.trim();
+    if (!isValidCodexAccountId(id) || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    normalized.push({
+      id,
+      label: account.label.trim(),
+      homePath: account.homePath.trim(),
+      shadowHomePath: account.shadowHomePath.trim(),
+    });
+  }
+
+  return normalized;
+}
+
+export function getCodexAccountOptions(
+  settings: Pick<AppSettings, "codexHomePath" | "codexAccounts">,
+): ResolvedCodexAccount[] {
+  return [
+    {
+      id: DEFAULT_CODEX_ACCOUNT_ID,
+      label: "Default",
+      homePath: settings.codexHomePath.trim(),
+      shadowHomePath: "",
+      isDefault: true,
+    },
+    ...normalizeCodexAccounts(settings.codexAccounts).map((account) => ({
+      id: account.id,
+      label: account.label || account.id,
+      homePath: account.homePath.trim(),
+      shadowHomePath: account.shadowHomePath.trim(),
+      isDefault: false,
+    })),
+  ];
+}
+
+export function resolveSelectedCodexAccount(
+  settings: Pick<AppSettings, "codexHomePath" | "codexAccounts" | "selectedCodexAccountId">,
+): ResolvedCodexAccount {
+  const accounts = getCodexAccountOptions(settings);
+  return (
+    accounts.find((account) => account.id === settings.selectedCodexAccountId.trim()) ??
+    accounts[0]!
+  );
+}
+
+export interface ProviderInstanceOption {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderKind;
+  readonly driver: ProviderKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: boolean;
+  readonly supported: true;
+}
+
+export interface UnsupportedProviderInstanceOption {
+  readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: false;
+  readonly supported: false;
+}
+
+const PROVIDER_INSTANCE_PROVIDER_ORDER = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "grok",
+  "kilo",
+  "opencode",
+  "pi",
+] as const satisfies ReadonlyArray<ProviderKind>;
+
+function providerInstanceId(value: string): ProviderInstanceId {
+  return value as ProviderInstanceId;
+}
+
+function providerDriverKind(value: string): ProviderDriverKind {
+  return value as ProviderDriverKind;
+}
+
+function providerInstanceIdForCodexAccount(accountId: string): ProviderInstanceId {
+  return accountId === DEFAULT_CODEX_ACCOUNT_ID
+    ? providerInstanceId("codex")
+    : codexAccountInstanceId(accountId);
+}
+
+function defaultProviderInstanceLabel(provider: ProviderKind): string {
+  switch (provider) {
+    case "claudeAgent":
+      return "Claude";
+    case "opencode":
+      return "OpenCode";
+    default:
+      return provider.charAt(0).toUpperCase() + provider.slice(1);
+  }
+}
+
+function fallbackProviderInstanceLabel(instanceId: ProviderInstanceId): string {
+  return instanceId
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function mergeProviderInstanceConfigPatch(
+  existingConfig: unknown,
+  patchConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = {
+    ...(isRecord(existingConfig) ? existingConfig : {}),
+    ...patchConfig,
+  };
+  for (const key of Object.keys(patchConfig)) {
+    delete merged[`${key}Redacted`];
+  }
+  return merged;
+}
+
+export function getProviderInstanceOptions(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+): ProviderInstanceOption[] {
+  const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
+
+  for (const provider of PROVIDER_INSTANCE_PROVIDER_ORDER) {
+    const instanceId = providerInstanceId(provider);
+    optionsById.set(instanceId, {
+      instanceId,
+      provider,
+      driver: provider,
+      label: defaultProviderInstanceLabel(provider),
+      enabled: true,
+      isDefault: true,
+      supported: true,
+    });
+  }
+
+  for (const account of getCodexAccountOptions(settings)) {
+    const instanceId = providerInstanceIdForCodexAccount(account.id);
+    optionsById.set(instanceId, {
+      instanceId,
+      provider: "codex",
+      driver: "codex",
+      label: account.label,
+      enabled: true,
+      isDefault: account.isDefault,
+      supported: true,
+    });
+  }
+
+  for (const [instanceId, raw] of Object.entries(settings.providerInstances)) {
+    if (!Schema.is(ProviderKind)(raw.driver)) {
+      continue;
+    }
+    const typedInstanceId = providerInstanceId(instanceId);
+    const config = isRecord(raw.config) ? raw.config : {};
+    const label = raw.displayName?.trim() || fallbackProviderInstanceLabel(typedInstanceId);
+    optionsById.set(typedInstanceId, {
+      instanceId: typedInstanceId,
+      provider: raw.driver,
+      driver: raw.driver,
+      label,
+      enabled: raw.enabled !== false && config.enabled !== false,
+      isDefault: String(typedInstanceId) === String(raw.driver),
+      supported: true,
+    });
+  }
+
+  return Array.from(optionsById.values()).toSorted((left, right) => {
+    const providerDelta =
+      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+    if (providerDelta !== 0) {
+      return providerDelta;
+    }
+    if (left.isDefault !== right.isDefault) {
+      return left.isDefault ? -1 : 1;
+    }
+    return left.label.localeCompare(right.label);
+  });
+}
+
+export function getUnsupportedProviderInstanceOptions(
+  settings: Pick<AppSettings, "providerInstances">,
+): UnsupportedProviderInstanceOption[] {
+  return Object.entries(settings.providerInstances)
+    .filter(([, raw]) => !Schema.is(ProviderKind)(raw.driver))
+    .map(([instanceId, raw]) => {
+      const typedInstanceId = providerInstanceId(instanceId);
+      const config = isRecord(raw.config) ? raw.config : {};
+      return {
+        instanceId: typedInstanceId,
+        driver: raw.driver,
+        label: raw.displayName?.trim() || fallbackProviderInstanceLabel(typedInstanceId),
+        enabled: raw.enabled !== false && config.enabled !== false,
+        isDefault: false,
+        supported: false,
+      } satisfies UnsupportedProviderInstanceOption;
+    })
+    .toSorted((left, right) => left.label.localeCompare(right.label));
+}
+
+export interface ManageableProviderInstance {
+  readonly instanceId: ProviderInstanceId;
+  readonly instance: ProviderInstanceConfig;
+  readonly legacyCodexAccountId: string | null;
+}
+
+// Legacy Codex accounts are derived into provider instances by the server. Surface
+// those derived rows alongside explicit instances so settings can edit or remove
+// them without first requiring a destructive identity migration.
+export function getManageableProviderInstances(
+  settings: Pick<
+    AppSettings,
+    | "codexAccounts"
+    | "codexBinaryPath"
+    | "codexHomePath"
+    | "providerInstances"
+    | "selectedCodexAccountId"
+  >,
+  provider: ProviderKind,
+): ManageableProviderInstance[] {
+  const legacyCodexAccountByInstanceId = new Map(
+    normalizeCodexAccounts(settings.codexAccounts).map((account) => [
+      providerInstanceIdForCodexAccount(account.id),
+      account,
+    ]),
+  );
+  const result: ManageableProviderInstance[] = [];
+
+  for (const option of getProviderInstanceOptions(settings)) {
+    if (option.provider !== provider || option.isDefault) {
+      continue;
+    }
+
+    const explicit = settings.providerInstances[option.instanceId];
+    const legacyCodexAccount =
+      provider === "codex" ? legacyCodexAccountByInstanceId.get(option.instanceId) : undefined;
+    if (!legacyCodexAccount) {
+      if (explicit) {
+        result.push({
+          instanceId: option.instanceId,
+          instance: explicit,
+          legacyCodexAccountId: null,
+        });
+      }
+      continue;
+    }
+
+    const legacyConfig = {
+      binaryPath: settings.codexBinaryPath.trim(),
+      homePath: legacyCodexAccount.homePath.trim(),
+      shadowHomePath: legacyCodexAccount.shadowHomePath.trim(),
+      accountId: legacyCodexAccount.id,
+    };
+    const explicitConfig = isRecord(explicit?.config) ? explicit.config : {};
+    result.push({
+      instanceId: option.instanceId,
+      instance: {
+        driver: "codex",
+        displayName: legacyCodexAccount.label.trim() || legacyCodexAccount.id,
+        enabled: true,
+        ...explicit,
+        config: {
+          ...legacyConfig,
+          ...explicitConfig,
+        },
+      },
+      legacyCodexAccountId: legacyCodexAccount.id,
+    });
+  }
+
+  return result;
+}
+
+// Removes every setting keyed by an explicit instance id so a later instance
+// that reuses the id cannot inherit the deleted account's model preferences.
+export function removeProviderInstancePreferences(
+  settings: Pick<AppSettings, "providerInstances" | "favorites">,
+  instanceId: string,
+): Pick<AppSettings, "providerInstances" | "favorites"> {
+  const providerInstances: Record<string, ProviderInstanceConfig> = {
+    ...settings.providerInstances,
+  };
+  delete providerInstances[instanceId];
+  return {
+    providerInstances: providerInstances as ProviderInstanceConfigMap,
+    favorites: settings.favorites.filter((favorite) => favorite.provider !== instanceId),
+  };
+}
+
+export function removeManageableProviderInstance(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "favorites" | "providerInstances" | "selectedCodexAccountId"
+  >,
+  instanceId: string,
+): Pick<
+  AppSettings,
+  "codexAccounts" | "favorites" | "providerInstances" | "selectedCodexAccountId"
+> {
+  const preferences = removeProviderInstancePreferences(settings, instanceId);
+  const legacyAccount = normalizeCodexAccounts(settings.codexAccounts).find(
+    (account) => providerInstanceIdForCodexAccount(account.id) === instanceId,
+  );
+  if (!legacyAccount) {
+    return {
+      ...preferences,
+      codexAccounts: settings.codexAccounts,
+      selectedCodexAccountId: settings.selectedCodexAccountId,
+    };
+  }
+
+  return {
+    ...preferences,
+    codexAccounts: settings.codexAccounts.filter((account) => account.id !== legacyAccount.id),
+    selectedCodexAccountId:
+      settings.selectedCodexAccountId === legacyAccount.id
+        ? DEFAULT_CODEX_ACCOUNT_ID
+        : settings.selectedCodexAccountId,
+  };
+}
+
+export function resolveDefaultProviderInstanceId(
+  settings: Pick<AppSettings, "codexAccounts" | "codexHomePath" | "selectedCodexAccountId">,
+  provider: ProviderKind,
+): ProviderInstanceId {
+  if (provider !== "codex") {
+    return providerInstanceId(provider);
+  }
+  return providerInstanceIdForCodexAccount(resolveSelectedCodexAccount(settings).id);
+}
+
+export function resolveSelectableProviderInstanceId(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+  provider: ProviderKind,
+  requestedInstanceId?: ProviderInstanceId | null,
+): ProviderInstanceId {
+  // Explicit account selections are identity-bearing. Preserve missing or disabled
+  // ids so the exact availability/server validation path can fail closed instead
+  // of silently rewriting a draft or automation to another account.
+  if (requestedInstanceId) {
+    return requestedInstanceId;
+  }
+
+  // With no explicit selection, use only the configured default identity. A
+  // disabled default remains selected and is blocked by availability checks;
+  // array order must never choose an arbitrary same-driver account.
+  return resolveDefaultProviderInstanceId(settings, provider);
+}
+
+type CodexAccountLaunchSettingsInput = Pick<
+  AppSettings,
+  "codexAccounts" | "codexBinaryPath" | "codexHomePath" | "selectedCodexAccountId"
+>;
+
+function resolveCodexAccountLaunchSettings(settings: CodexAccountLaunchSettingsInput): {
+  readonly binaryPath: string;
+  readonly homePath: string;
+  readonly shadowHomePath: string;
+  readonly accountId: string;
+  readonly hasAdditionalAccounts: boolean;
+} {
+  const selectedAccount = resolveSelectedCodexAccount(settings);
+  return {
+    binaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
+    homePath: selectedAccount.homePath || settings.codexHomePath,
+    shadowHomePath: selectedAccount.shadowHomePath,
+    accountId: selectedAccount.id !== DEFAULT_CODEX_ACCOUNT_ID ? selectedAccount.id : "",
+    hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
+  };
+}
+
+function resolveCodexLaunchSettingsForInstance(
+  settings: CodexAccountLaunchSettingsInput,
+  instanceId: ProviderInstanceId | null | undefined,
+): ReturnType<typeof resolveCodexAccountLaunchSettings> {
+  if (!instanceId) {
+    return resolveCodexAccountLaunchSettings(settings);
+  }
+  const binaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
+  if (instanceId === "codex") {
+    return {
+      binaryPath,
+      homePath: settings.codexHomePath,
+      shadowHomePath: "",
+      accountId: "",
+      hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
+    };
+  }
+  const account = getCodexAccountOptions(settings).find(
+    (entry) => providerInstanceIdForCodexAccount(entry.id) === instanceId,
+  );
+  if (!account) {
+    return resolveCodexAccountLaunchSettings(settings);
+  }
+  return {
+    binaryPath,
+    // A blank account home must stay blank: falling back to the shared default
+    // home would make downstream code treat it as the account's own dedicated
+    // home and mirror the default account's credentials into it.
+    homePath: account.homePath,
+    shadowHomePath: account.shadowHomePath,
+    accountId: account.id !== DEFAULT_CODEX_ACCOUNT_ID ? account.id : "",
+    hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
+  };
+}
+
+export function getCodexProviderDiscoveryOptions(settings: CodexAccountLaunchSettingsInput): {
+  readonly binaryPath: string | null;
+  readonly homePath: string | null;
+  readonly shadowHomePath: string | null;
+  readonly accountId: string | null;
+} {
+  const launch = resolveCodexAccountLaunchSettings(settings);
+  return {
+    binaryPath: launch.binaryPath || null,
+    homePath: launch.homePath || null,
+    shadowHomePath: launch.shadowHomePath || null,
+    accountId: launch.accountId || (launch.hasAdditionalAccounts ? DEFAULT_CODEX_ACCOUNT_ID : null),
+  };
+}
+
+function normalizeFavoriteModels(
+  favorites: ReadonlyArray<FavoriteModelSetting>,
+): FavoriteModelSetting[] {
+  const result: FavoriteModelSetting[] = [];
+  const seen = new Set<string>();
+  for (const favorite of favorites) {
+    const model = favorite.model.trim();
+    if (!model) {
+      continue;
+    }
+    const key = `${favorite.provider}\u0000${model}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push({
+      provider: favorite.provider,
+      model,
+    });
+  }
+  return result;
+}
+
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const codexAccounts = normalizeCodexAccounts(settings.codexAccounts);
+  const selectedCodexAccountId = new Set([
+    DEFAULT_CODEX_ACCOUNT_ID,
+    ...codexAccounts.map((account) => account.id),
+  ]).has(settings.selectedCodexAccountId.trim())
+    ? settings.selectedCodexAccountId.trim()
+    : DEFAULT_CODEX_ACCOUNT_ID;
+
   return {
     ...settings,
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
+    claudeHomePath: settings.claudeHomePath.trim(),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
+    codexAccounts,
+    selectedCodexAccountId,
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
@@ -430,17 +959,80 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
+    favorites: normalizeFavoriteModels(settings.favorites),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     hiddenModels: [],
   };
 }
 
-function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
+function providerInstancesWithLegacyDisabledDefaults(
+  settings: ServerSettings,
+): ProviderInstanceConfigMap {
+  const providerInstances: Record<string, ProviderInstanceConfig> = {
+    ...settings.providerInstances,
+  };
+  let didChange = false;
+  const setDisabledDerivedInstance = (
+    instanceId: ProviderInstanceId,
+    provider: ProviderKind,
+    displayName?: string,
+  ) => {
+    const existing = providerInstances[instanceId];
+    if (existing && existing.driver !== provider) {
+      return;
+    }
+    if (existing?.enabled === true || existing?.enabled === false) {
+      return;
+    }
+    providerInstances[instanceId] = {
+      ...(existing ?? {
+        driver: providerDriverKind(provider),
+        ...(displayName ? { displayName } : {}),
+      }),
+      enabled: false,
+      config: isRecord(existing?.config) ? existing.config : (existing?.config ?? {}),
+    };
+    didChange = true;
+  };
+
+  for (const provider of PROVIDER_INSTANCE_PROVIDER_ORDER) {
+    if (settings.providers[provider].enabled !== false) {
+      continue;
+    }
+    setDisabledDerivedInstance(providerInstanceId(provider), provider);
+    if (provider === "codex") {
+      for (const account of settings.providers.codex.accounts) {
+        const accountId = account.id.trim();
+        if (!accountId || accountId === DEFAULT_CODEX_ACCOUNT_ID) {
+          continue;
+        }
+        setDisabledDerivedInstance(
+          codexAccountInstanceId(accountId),
+          "codex",
+          account.label.trim() || accountId,
+        );
+      }
+    }
+  }
+
+  return didChange ? (providerInstances as ProviderInstanceConfigMap) : settings.providerInstances;
+}
+
+export function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
+  const textGenerationInstanceId = settings.textGenerationModelSelection.instanceId;
+  const configuredTextGenerationDriver =
+    settings.providerInstances[textGenerationInstanceId]?.driver;
+  const textGenerationProvider = Schema.is(ProviderKind)(configuredTextGenerationDriver)
+    ? configuredTextGenerationDriver
+    : inferLegacyProviderKindFromModelSelection(settings.textGenerationModelSelection);
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+    claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
+    codexAccounts: settings.providers.codex.accounts,
+    selectedCodexAccountId: settings.providers.codex.selectedAccountId,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
@@ -465,7 +1057,9 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
-    textGenerationProvider: settings.textGenerationModelSelection.provider,
+    providerInstances: providerInstancesWithLegacyDisabledDefaults(settings),
+    textGenerationProvider,
+    textGenerationProviderInstanceId: textGenerationInstanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }
@@ -487,6 +1081,12 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
+    hasOwn(patch, "codexBinaryPath") ||
+    hasOwn(patch, "codexHomePath") ||
+    hasOwn(patch, "codexAccounts") ||
+    hasOwn(patch, "selectedCodexAccountId") ||
+    hasOwn(patch, "providerInstances") ||
+    hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerPassword") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -511,15 +1111,23 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
-  if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
+  if (
+    hasOwn(patch, "textGenerationModel") ||
+    hasOwn(patch, "textGenerationProvider") ||
+    hasOwn(patch, "textGenerationProviderInstanceId")
+  ) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+    const provider = resolveTextGenerationProvider({
+      ...(patch.textGenerationProvider !== undefined
+        ? { provider: patch.textGenerationProvider }
+        : {}),
+      model,
+    });
+    const instanceId = providerInstanceId(
+      patch.textGenerationProviderInstanceId?.trim() || provider,
+    );
     serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
+      instanceId,
       model,
     };
   }
@@ -527,19 +1135,34 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (
     hasOwn(patch, "codexBinaryPath") ||
     hasOwn(patch, "codexHomePath") ||
+    hasOwn(patch, "codexAccounts") ||
+    hasOwn(patch, "selectedCodexAccountId") ||
     hasOwn(patch, "customCodexModels")
   ) {
+    const codexAccounts = patch.codexAccounts
+      ? normalizeCodexAccounts(patch.codexAccounts)
+      : undefined;
+    const selectedCodexAccountId = patch.selectedCodexAccountId?.trim();
     providers.codex = {
       ...(hasOwn(patch, "codexBinaryPath") ? { binaryPath: patch.codexBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "codexHomePath") ? { homePath: patch.codexHomePath ?? "" } : {}),
+      ...(codexAccounts !== undefined ? { accounts: codexAccounts } : {}),
+      ...(selectedCodexAccountId && isValidCodexAccountId(selectedCodexAccountId)
+        ? { selectedAccountId: selectedCodexAccountId }
+        : {}),
       ...(hasOwn(patch, "customCodexModels")
         ? { customModels: patch.customCodexModels ?? [] }
         : {}),
     };
   }
-  if (hasOwn(patch, "claudeBinaryPath") || hasOwn(patch, "customClaudeModels")) {
+  if (
+    hasOwn(patch, "claudeBinaryPath") ||
+    hasOwn(patch, "claudeHomePath") ||
+    hasOwn(patch, "customClaudeModels")
+  ) {
     providers.claudeAgent = {
       ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "claudeHomePath") ? { homePath: patch.claudeHomePath ?? "" } : {}),
       ...(hasOwn(patch, "customClaudeModels")
         ? { customModels: patch.customClaudeModels ?? [] }
         : {}),
@@ -625,6 +1248,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
+  if (hasOwn(patch, "providerInstances") && patch.providerInstances !== undefined) {
+    serverPatch.providerInstances = patch.providerInstances;
+  }
   return serverPatch;
 }
 
@@ -632,15 +1258,19 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
   return Object.keys(patch).length === 0;
 }
 
-function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
+export function buildInitialServerSettingsMigrationPatch(
+  settings: AppSettings,
+): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
   const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
 
   for (const key of [
     "claudeBinaryPath",
+    "claudeHomePath",
     "codexBinaryPath",
     "codexHomePath",
+    "selectedCodexAccountId",
     "cursorApiEndpoint",
     "cursorBinaryPath",
     "defaultThreadEnvMode",
@@ -659,6 +1289,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
+    "textGenerationProviderInstanceId",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;
@@ -666,6 +1297,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
   }
 
   for (const key of [
+    "codexAccounts",
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
@@ -680,11 +1312,72 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     }
   }
 
+  if (Object.keys(normalizedSettings.providerInstances).length > 0) {
+    patch.providerInstances = normalizedSettings.providerInstances;
+  }
+
   return appSettingsPatchToServerSettingsPatch(patch);
 }
 
+// Browser storage must never hold plaintext secrets: the server materializes
+// sensitive values from the update patch and returns them redacted, so the
+// locally persisted copy keeps only the redaction markers.
+export function redactProviderInstanceSecretsForClient(
+  providerInstances: ProviderInstanceConfigMap,
+): ProviderInstanceConfigMap {
+  let didChange = false;
+  const redacted: Record<string, ProviderInstanceConfig> = {};
+  for (const [instanceId, instance] of Object.entries(providerInstances)) {
+    let nextInstance = instance;
+    if (instance.environment?.some((entry) => entry.sensitive && entry.value)) {
+      nextInstance = {
+        ...nextInstance,
+        environment: instance.environment.map((entry) =>
+          entry.sensitive && entry.value
+            ? { name: entry.name, value: "", sensitive: true, valueRedacted: true }
+            : entry,
+        ),
+      };
+    }
+    const config = isRecord(nextInstance.config) ? nextInstance.config : undefined;
+    if (config && typeof config.serverPassword === "string" && config.serverPassword) {
+      nextInstance = {
+        ...nextInstance,
+        config: { ...config, serverPassword: "", serverPasswordRedacted: true },
+      };
+    }
+    if (nextInstance !== instance) {
+      didChange = true;
+    }
+    redacted[instanceId] = nextInstance;
+  }
+  return didChange ? (redacted as ProviderInstanceConfigMap) : providerInstances;
+}
+
+function redactAppSettingsSecretsForClient(settings: AppSettings): AppSettings {
+  const redactedInstances = redactProviderInstanceSecretsForClient(settings.providerInstances);
+  const hasLegacyServerPasswords =
+    settings.kiloServerPassword.length > 0 || settings.openCodeServerPassword.length > 0;
+  return redactedInstances === settings.providerInstances && !hasLegacyServerPasswords
+    ? settings
+    : {
+        ...settings,
+        providerInstances: redactedInstances,
+        kiloServerPassword: "",
+        openCodeServerPassword: "",
+      };
+}
+
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
-  return normalizeAppSettings(settings);
+  return redactAppSettingsSecretsForClient(normalizeAppSettings(settings));
+}
+
+export function normalizeInitialStoredAppSettingsForServerMigration(
+  settings: AppSettings,
+  migrationCompleted: boolean,
+): AppSettings {
+  const normalized = normalizeAppSettings(settings);
+  return migrationCompleted ? normalizeStoredAppSettings(normalized) : normalized;
 }
 
 export function getCustomModelsForProvider(
@@ -710,6 +1403,45 @@ export function patchCustomModels(
   };
 }
 
+export function patchCustomModelsForProviderInstance(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+  instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
+  models: string[],
+): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
+  const existing = settings.providerInstances[instance.instanceId];
+  const codexAccount =
+    instance.provider === "codex" && !instance.isDefault
+      ? getCodexAccountOptions(settings).find(
+          (account) => providerInstanceIdForCodexAccount(account.id) === instance.instanceId,
+        )
+      : undefined;
+
+  // Store only the custom models here. Launch settings for derived instances
+  // (built-in defaults, legacy Codex accounts) are merged in key-by-key at
+  // derivation time, so copying them would freeze a snapshot that stops
+  // following later edits to the normal provider settings.
+  return {
+    providerInstances: {
+      ...settings.providerInstances,
+      [instance.instanceId]: {
+        // No enabled flag here: forcing it on would re-enable a disabled
+        // derived provider/account through the key-by-key derivation merge.
+        ...(existing ?? {
+          driver: providerDriverKind(instance.provider),
+          ...(codexAccount?.label ? { displayName: codexAccount.label } : {}),
+        }),
+        config: {
+          ...(isRecord(existing?.config) ? existing.config : {}),
+          customModels: models,
+        },
+      },
+    },
+  };
+}
+
 export function getCustomModelsByProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
 ): Record<ProviderKind, readonly string[]> {
@@ -723,6 +1455,35 @@ export function getCustomModelsByProvider(
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
   };
+}
+
+export function getCustomModelsForProviderInstance(
+  settings: Pick<AppSettings, CustomModelSettingsKey | "providerInstances"> &
+    Partial<Pick<AppSettings, "codexAccounts" | "codexHomePath">>,
+  instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
+): readonly string[] {
+  const raw = settings.providerInstances[instance.instanceId];
+  const config = isRecord(raw?.config) ? raw.config : {};
+  const instanceCustomModels = config.customModels;
+  if (Array.isArray(instanceCustomModels)) {
+    return instanceCustomModels.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (instance.isDefault || instance.instanceId === instance.provider) {
+    return getCustomModelsForProvider(settings, instance.provider);
+  }
+  const isDerivedCodexAccount =
+    instance.provider === "codex" &&
+    getCodexAccountOptions({
+      codexAccounts: settings.codexAccounts ?? [],
+      codexHomePath: settings.codexHomePath ?? "",
+    }).some(
+      (account) =>
+        !account.isDefault && providerInstanceIdForCodexAccount(account.id) === instance.instanceId,
+    );
+  if (isDerivedCodexAccount) {
+    return getCustomModelsForProvider(settings, "codex");
+  }
+  return [];
 }
 
 export function getAppModelOptions(
@@ -775,6 +1536,12 @@ export function getAppModelOptions(
 
 type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode";
 
+function isGitTextGenerationDiscoveredProvider(
+  provider: ProviderKind,
+): provider is GitTextGenerationDiscoveredProvider {
+  return provider === "codex" || provider === "kilo" || provider === "opencode";
+}
+
 export function mapCatalogModelOptionsToAppModelOptions(
   provider: GitTextGenerationDiscoveredProvider,
   options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
@@ -790,6 +1557,7 @@ export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
     | "customCodexModels"
+    | "customClaudeModels"
     | "customKiloModels"
     | "customOpenCodeModels"
     | "textGenerationModel"
@@ -806,6 +1574,7 @@ export function getGitTextGenerationModelOptions(
     ...(discoveredOptionsByProvider?.codex
       ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
       : getAppModelOptions("codex", settings.customCodexModels)),
+    ...getAppModelOptions("claudeAgent", settings.customClaudeModels),
     ...(discoveredOptionsByProvider?.kilo
       ? mapCatalogModelOptionsToAppModelOptions("kilo", discoveredOptionsByProvider.kilo)
       : getAppModelOptions("kilo", settings.customKiloModels)),
@@ -841,6 +1610,87 @@ export function getGitTextGenerationModelOptions(
   return deduped;
 }
 
+export function getGitTextGenerationPickerOptions(
+  settings: Pick<
+    AppSettings,
+    | CustomModelSettingsKey
+    | "codexAccounts"
+    | "codexHomePath"
+    | "providerInstances"
+    | "selectedCodexAccountId"
+    | "textGenerationModel"
+    | "textGenerationProvider"
+    | "textGenerationProviderInstanceId"
+  >,
+  discoveredOptionsByProviderInstance?: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
+  >,
+): GitTextGenerationModelPickerOption[] {
+  const selectedModel = settings.textGenerationModel?.trim();
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  const selectedInstanceId = providerInstanceId(
+    settings.textGenerationProviderInstanceId?.trim() || selectedProvider,
+  );
+  const entries: GitTextGenerationModelPickerOption[] = [];
+  const seen = new Set<string>();
+
+  for (const instance of getProviderInstanceOptions(settings)) {
+    if (!instance.enabled || !supportsTextGeneration(instance.provider)) {
+      continue;
+    }
+    const selectedModelForInstance =
+      selectedModel &&
+      instance.provider === selectedProvider &&
+      instance.instanceId === selectedInstanceId
+        ? selectedModel
+        : undefined;
+    const selectedModelOption = selectedModelForInstance
+      ? getAppModelOptions(instance.provider, [], selectedModelForInstance).find(
+          (option) =>
+            option.slug === normalizeModelSlug(selectedModelForInstance, instance.provider),
+        )
+      : undefined;
+    const catalogOptions = isGitTextGenerationDiscoveredProvider(instance.provider)
+      ? (() => {
+          const discoveredOptions = discoveredOptionsByProviderInstance?.[instance.instanceId];
+          return discoveredOptions
+            ? mapCatalogModelOptionsToAppModelOptions(instance.provider, discoveredOptions)
+            : null;
+        })()
+      : null;
+    const options = catalogOptions
+      ? [
+          ...catalogOptions,
+          ...(selectedModelOption &&
+          !catalogOptions.some((option) => option.slug === selectedModelOption.slug)
+            ? [selectedModelOption]
+            : []),
+        ]
+      : getAppModelOptions(
+          instance.provider,
+          getCustomModelsForProviderInstance(settings, instance),
+          selectedModelForInstance,
+        );
+    for (const option of options) {
+      const key = `${instance.instanceId}:${option.provider}:${option.slug}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({
+        key,
+        value: key,
+        instance,
+        option,
+      });
+    }
+  }
+
+  return entries;
+}
+
 export function resolveAppModelSelection(
   provider: ProviderKind,
   customModels: Record<ProviderKind, readonly string[]>,
@@ -869,12 +1719,152 @@ export function getCustomModelOptionsByProvider(
   };
 }
 
+function readProviderInstanceConfigValue(
+  config: unknown,
+  key: string,
+): string | boolean | undefined {
+  if (!isRecord(config)) {
+    return undefined;
+  }
+  const value = config[key];
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function buildProviderStartOptionsFromInstanceConfig(
+  provider: ProviderKind,
+  config: unknown,
+): ProviderStartOptions | undefined {
+  const binaryPath = readProviderInstanceConfigValue(config, "binaryPath");
+  const homePath = readProviderInstanceConfigValue(config, "homePath");
+  switch (provider) {
+    case "codex": {
+      const shadowHomePath = readProviderInstanceConfigValue(config, "shadowHomePath");
+      const accountId = readProviderInstanceConfigValue(config, "accountId");
+      return binaryPath || homePath || shadowHomePath || accountId
+        ? {
+            codex: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof homePath === "string" ? { homePath } : {}),
+              ...(typeof shadowHomePath === "string" ? { shadowHomePath } : {}),
+              ...(typeof accountId === "string" ? { accountId } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "claudeAgent":
+      return binaryPath || homePath
+        ? {
+            claudeAgent: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof homePath === "string" ? { homePath } : {}),
+            },
+          }
+        : undefined;
+    case "cursor": {
+      const apiEndpoint = readProviderInstanceConfigValue(config, "apiEndpoint");
+      return binaryPath || apiEndpoint
+        ? {
+            cursor: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof apiEndpoint === "string" ? { apiEndpoint } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "gemini":
+      return typeof binaryPath === "string" ? { gemini: { binaryPath } } : undefined;
+    case "grok":
+      return typeof binaryPath === "string" ? { grok: { binaryPath } } : undefined;
+    case "kilo": {
+      const serverUrl = readProviderInstanceConfigValue(config, "serverUrl");
+      const serverPassword = readProviderInstanceConfigValue(config, "serverPassword");
+      return binaryPath || serverUrl || serverPassword
+        ? {
+            kilo: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof serverUrl === "string" ? { serverUrl } : {}),
+              ...(typeof serverPassword === "string" ? { serverPassword } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "opencode": {
+      const serverUrl = readProviderInstanceConfigValue(config, "serverUrl");
+      const serverPassword = readProviderInstanceConfigValue(config, "serverPassword");
+      const experimentalWebSockets = readProviderInstanceConfigValue(
+        config,
+        "experimentalWebSockets",
+      );
+      return binaryPath || serverUrl || serverPassword || experimentalWebSockets === true
+        ? {
+            opencode: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof serverUrl === "string" ? { serverUrl } : {}),
+              ...(typeof serverPassword === "string" ? { serverPassword } : {}),
+              ...(experimentalWebSockets === true ? { experimentalWebSockets: true } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "pi": {
+      const agentDir = readProviderInstanceConfigValue(config, "agentDir");
+      return binaryPath || agentDir
+        ? {
+            pi: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof agentDir === "string" ? { agentDir } : {}),
+            },
+          }
+        : undefined;
+    }
+  }
+}
+
+function mergeProviderStartOptionsForApp(
+  base: ProviderStartOptions | undefined,
+  overlay: ProviderStartOptions | undefined,
+): ProviderStartOptions | undefined {
+  if (!base) return overlay;
+  if (!overlay) return base;
+  return {
+    ...base,
+    ...overlay,
+    ...(base.codex || overlay.codex ? { codex: { ...base.codex, ...overlay.codex } } : {}),
+    ...(base.claudeAgent || overlay.claudeAgent
+      ? { claudeAgent: { ...base.claudeAgent, ...overlay.claudeAgent } }
+      : {}),
+    ...(base.cursor || overlay.cursor ? { cursor: { ...base.cursor, ...overlay.cursor } } : {}),
+    ...(base.gemini || overlay.gemini ? { gemini: { ...base.gemini, ...overlay.gemini } } : {}),
+    ...(base.grok || overlay.grok ? { grok: { ...base.grok, ...overlay.grok } } : {}),
+    ...(base.kilo || overlay.kilo ? { kilo: { ...base.kilo, ...overlay.kilo } } : {}),
+    ...(base.opencode || overlay.opencode
+      ? { opencode: { ...base.opencode, ...overlay.opencode } }
+      : {}),
+    ...(base.pi || overlay.pi ? { pi: { ...base.pi, ...overlay.pi } } : {}),
+  };
+}
+
+function omitProviderStartOptions(
+  providerOptions: ProviderStartOptions,
+  provider: ProviderKind,
+): ProviderStartOptions {
+  const { [provider]: _omittedProviderOptions, ...remainingProviderOptions } = providerOptions;
+  void _omittedProviderOptions;
+  return remainingProviderOptions as ProviderStartOptions;
+}
+
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,
     | "claudeBinaryPath"
+    | "codexAccounts"
     | "codexBinaryPath"
     | "codexHomePath"
+    | "selectedCodexAccountId"
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
@@ -888,13 +1878,14 @@ export function getProviderStartOptions(
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
-  >,
+  > &
+    Partial<Pick<AppSettings, "claudeHomePath" | "providerInstances">>,
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
     "claudeAgent",
     settings.claudeBinaryPath,
   );
-  const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
@@ -904,6 +1895,7 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
+  const codexLaunch = resolveCodexLaunchSettingsForInstance(settings, instanceId);
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets ||
@@ -911,18 +1903,25 @@ export function getProviderStartOptions(
     settings.openCodeServerPassword,
   );
   const providerOptions: ProviderStartOptions = {
-    ...(codexBinaryPath || settings.codexHomePath
+    ...(codexLaunch.binaryPath ||
+    codexLaunch.homePath ||
+    codexLaunch.shadowHomePath ||
+    codexLaunch.accountId ||
+    codexLaunch.hasAdditionalAccounts
       ? {
           codex: {
-            ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
-            ...(settings.codexHomePath ? { homePath: settings.codexHomePath } : {}),
+            ...(codexLaunch.binaryPath ? { binaryPath: codexLaunch.binaryPath } : {}),
+            ...(codexLaunch.homePath ? { homePath: codexLaunch.homePath } : {}),
+            ...(codexLaunch.shadowHomePath ? { shadowHomePath: codexLaunch.shadowHomePath } : {}),
+            ...(codexLaunch.accountId ? { accountId: codexLaunch.accountId } : {}),
           },
         }
       : {}),
-    ...(claudeBinaryPath
+    ...(claudeBinaryPath || settings.claudeHomePath
       ? {
           claudeAgent: {
-            binaryPath: claudeBinaryPath,
+            ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
+            ...(settings.claudeHomePath ? { homePath: settings.claudeHomePath } : {}),
           },
         }
       : {}),
@@ -979,7 +1978,25 @@ export function getProviderStartOptions(
       : {}),
   };
 
-  return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+  const providerInstance = instanceId ? settings.providerInstances?.[instanceId] : undefined;
+  const instanceOverlay =
+    providerInstance && Schema.is(ProviderKind)(providerInstance.driver)
+      ? buildProviderStartOptionsFromInstanceConfig(
+          providerInstance.driver,
+          providerInstance.config,
+        )
+      : undefined;
+  const providerOptionsBase =
+    providerInstance && Schema.is(ProviderKind)(providerInstance.driver)
+      ? omitProviderStartOptions(providerOptions, providerInstance.driver)
+      : providerOptions;
+  const mergedProviderOptions = mergeProviderStartOptionsForApp(
+    providerOptionsBase,
+    instanceOverlay,
+  );
+  return mergedProviderOptions && Object.keys(mergedProviderOptions).length > 0
+    ? mergedProviderOptions
+    : undefined;
 }
 
 /**
@@ -1026,6 +2043,39 @@ export function getCustomBinaryPathForProvider(
   }
 }
 
+function getProviderOptionsBinaryPath(
+  providerOptions: ProviderStartOptions | undefined,
+  provider: ProviderKind,
+): string {
+  const options = providerOptions?.[provider];
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return "";
+  }
+  const binaryPath = (options as Record<string, unknown>).binaryPath;
+  return normalizeProviderBinaryPathOverride(
+    provider,
+    typeof binaryPath === "string" ? binaryPath : undefined,
+  );
+}
+
+export function getCustomBinaryPathForProviderInstance(
+  settings: Parameters<typeof getProviderStartOptions>[0] &
+    Parameters<typeof getCustomBinaryPathForProvider>[0],
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+): string {
+  const instanceBinaryPath = getProviderOptionsBinaryPath(
+    getProviderStartOptions(settings, instanceId),
+    provider,
+  );
+  if (instanceBinaryPath) {
+    return instanceBinaryPath;
+  }
+  return instanceId && instanceId !== provider
+    ? ""
+    : getCustomBinaryPathForProvider(settings, provider);
+}
+
 export function useAppSettings() {
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -1035,6 +2085,7 @@ export function useAppSettings() {
     AppSettingsSchema,
   );
   const normalizedStoredSettingsRef = useRef(false);
+  const pendingServerSettingsMigrationPatchRef = useRef<ServerSettingsPatch | null>(null);
 
   const defaults = useMemo(
     () =>
@@ -1060,20 +2111,34 @@ export function useAppSettings() {
     }
     normalizedStoredSettingsRef.current = true;
 
-    setSettings((previous) => normalizeStoredAppSettings(previous));
+    setSettings((previous) => {
+      const normalized = normalizeAppSettings(previous);
+      const migrationCompleted = hasCompletedServerSettingsMigration();
+      if (!migrationCompleted) {
+        pendingServerSettingsMigrationPatchRef.current =
+          buildInitialServerSettingsMigrationPatch(normalized);
+      }
+      // Legacy localStorage may be the only durable plaintext source, so keep it
+      // until the server confirms migration; the success path redacts it below.
+      return normalizeInitialStoredAppSettingsForServerMigration(normalized, migrationCompleted);
+    });
   }, [setSettings]);
 
   useEffect(() => {
     if (!serverSettingsQuery.data || serverSettingsMigrationInFlight) {
       return;
     }
-    if (globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1") {
+    if (hasCompletedServerSettingsMigration()) {
       return;
     }
 
-    const migrationPatch = buildInitialServerSettingsMigrationPatch(localSettings);
+    const migrationPatch =
+      pendingServerSettingsMigrationPatchRef.current ??
+      buildInitialServerSettingsMigrationPatch(localSettings);
     if (isServerSettingsPatchEmpty(migrationPatch)) {
       globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+      pendingServerSettingsMigrationPatchRef.current = null;
+      setSettings((previous) => normalizeStoredAppSettings(previous));
       return;
     }
 
@@ -1083,6 +2148,9 @@ export function useAppSettings() {
       .then((nextSettings) => {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+        pendingServerSettingsMigrationPatchRef.current = null;
+        // The server now owns the migrated secrets; drop the local plaintext.
+        setSettings((previous) => normalizeStoredAppSettings(previous));
       })
       .catch(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
@@ -1090,11 +2158,20 @@ export function useAppSettings() {
       .finally(() => {
         serverSettingsMigrationInFlight = false;
       });
-  }, [localSettings, queryClient, serverSettingsQuery.data]);
+  }, [localSettings, queryClient, serverSettingsQuery.data, setSettings]);
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+      // The server patch below carries the live values; local state/storage
+      // always keep only the redacted representation of instance secrets.
+      let providerInstancesBeforePatch: AppSettings["providerInstances"] | undefined;
+      setSettings((prev) => {
+        if (patch.providerInstances !== undefined) {
+          providerInstancesBeforePatch = prev.providerInstances;
+        }
+        const next = normalizeAppSettings({ ...prev, ...patch });
+        return redactAppSettingsSecretsForClient(next);
+      });
       if (touchesProviderDiscoverySettings(patch)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
@@ -1110,6 +2187,19 @@ export function useAppSettings() {
           queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         })
         .catch(() => {
+          // The optimistic write already redacted any typed secret; if the
+          // server never stored it, roll the instances back so the user sees
+          // the previous state instead of a phantom "saved" secret.
+          if (providerInstancesBeforePatch !== undefined) {
+            const restoredProviderInstances = providerInstancesBeforePatch;
+            setSettings((prev) => {
+              const restored = normalizeAppSettings({
+                ...prev,
+                providerInstances: restoredProviderInstances,
+              });
+              return redactAppSettingsSecretsForClient(restored);
+            });
+          }
           void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
         });
     },

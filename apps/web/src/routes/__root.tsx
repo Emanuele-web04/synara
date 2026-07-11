@@ -90,6 +90,7 @@ import {
   PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
   PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
 } from "../providerUpdates";
+import { isProviderKind } from "../providerOrdering";
 import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
@@ -104,6 +105,15 @@ const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
+
+function providerStatusDisplayName(provider: ServerProviderStatus): string {
+  if (provider.displayName?.trim()) {
+    return provider.displayName;
+  }
+  return isProviderKind(provider.provider)
+    ? PROVIDER_DISPLAY_NAMES[provider.provider]
+    : provider.provider;
+}
 const seenProviderUpdateNotificationKeys = new Set<string>();
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
@@ -287,7 +297,7 @@ function ProviderUpdateNotifications() {
           title: "Updating providers...",
           description:
             providers.length === 1
-              ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+              ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
               : `Updating ${providers.length} providers.`,
           timeout: 0,
         });
@@ -305,7 +315,7 @@ function ProviderUpdateNotifications() {
         title: "Updating providers...",
         description:
           providers.length === 1
-            ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+            ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
             : `Updating ${providers.length} providers.`,
         actionProps: undefined,
         data: { onClose: dismissProgressToast },
@@ -318,9 +328,19 @@ function ProviderUpdateNotifications() {
         const api = ensureNativeApi();
         for (const provider of providers) {
           try {
-            const result = await api.server.updateProvider({ provider: provider.provider });
+            if (!isProviderKind(provider.provider)) {
+              failures.push({
+                provider,
+                reason: "This provider driver cannot be updated by this Synara build.",
+              });
+              continue;
+            }
+            const result = await api.server.updateProvider({
+              provider: provider.provider,
+              instanceId: provider.instanceId,
+            });
             const refreshed = result.providers.find(
-              (entry) => entry.provider === provider.provider,
+              (entry) => entry.instanceId === provider.instanceId,
             );
             const updateState = refreshed?.updateState;
             if (updateState?.status === "failed" || updateState?.status === "unchanged") {
@@ -380,7 +400,7 @@ function ProviderUpdateNotifications() {
           ),
         );
         const failureLines = failures
-          .map(({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`)
+          .map(({ provider, reason }) => `${providerStatusDisplayName(provider)}: ${reason}`)
           .join("\n");
         toastManager.update(toastId, {
           type: "error",
@@ -406,7 +426,7 @@ function ProviderUpdateNotifications() {
         type: "success",
         title:
           providers.length === 1
-            ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
+            ? `${providerStatusDisplayName(providers[0]!)} updated`
             : `${providers.length} providers updated`,
         description: "New sessions will use the refreshed provider tools.",
         data: { onClose: dismissProgressToast },
@@ -440,7 +460,7 @@ function ProviderUpdateNotifications() {
 
     const firstProvider = outdatedProviders[0]!;
     const additionalCount = outdatedProviders.length - 1;
-    const providerName = PROVIDER_DISPLAY_NAMES[firstProvider.provider];
+    const providerName = providerStatusDisplayName(firstProvider);
     const title =
       outdatedProviders.length === 1
         ? `${providerName} update available`
@@ -1365,22 +1385,10 @@ function EventRouter() {
         providers: payload.providers,
       });
       if (shouldInvalidateProviderDiscovery) {
-        // Model and agent discovery can depend on auth, availability, and installed versions,
+        // Discovery depends on provider-instance identity, auth, availability, and versions,
         // but not on every provider-status timestamp replay.
         void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "kilo"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "opencode"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "cursor"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo"),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
+          queryKey: providerDiscoveryQueryKeys.all,
         });
       }
     });

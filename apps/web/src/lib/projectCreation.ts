@@ -3,7 +3,12 @@
 // Layer: Web orchestration helper
 // Exports: createOrRecoverProjectFromPath
 
-import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
+import {
+  type ModelSelection,
+  type NativeApi,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+} from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 
 import {
@@ -31,6 +36,7 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   createIfMissing?: boolean;
+  defaultModelSelection?: ModelSelection;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
   delayMs?: number;
@@ -60,8 +66,8 @@ export async function createOrRecoverProjectFromPath(input: {
       title,
       workspaceRoot,
       createWorkspaceRootIfMissing: input.createIfMissing === true,
-      defaultModelSelection: {
-        provider: "codex",
+      defaultModelSelection: input.defaultModelSelection ?? {
+        instanceId: "codex",
         model: getDefaultModel("codex"),
       },
       createdAt,

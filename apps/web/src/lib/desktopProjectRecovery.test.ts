@@ -20,7 +20,7 @@ function makeProject(
     title: "Project",
     workspaceRoot: "/tmp/project",
     defaultModelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.3-codex",
     },
     scripts: [],
@@ -39,7 +39,7 @@ function makeThread(
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.3-codex",
     },
     runtimeMode: "approval-required",

@@ -15,7 +15,7 @@ import {
 const PROJECT_ID = "project-composer-automation" as ProjectId;
 const THREAD_ID = "thread-composer-automation" as ThreadId;
 const MODEL_SELECTION: ModelSelection = {
-  provider: "codex",
+  instanceId: "codex",
   model: "gpt-5",
 };
 const NOW_ISO = "2026-06-22T08:00:00.000Z";

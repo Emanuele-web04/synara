@@ -19,9 +19,19 @@ import {
   type AutomationUpdateInput,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderStartOptions,
+  type ServerSettings,
   type ThreadEnvironmentMode,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
+import {
+  inferLegacyProviderKindFromModelSelection,
+  isUnresolvedAutomationInstanceId,
+  providerStartOptionsFromInstance,
+  type ResolvedProviderInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -60,6 +70,114 @@ interface AutomationCompletionEvaluationJob {
   readonly definition: AutomationDefinition;
   readonly run: AutomationRun;
   readonly policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>;
+}
+
+type AutomationCompletionTextGenerationInput =
+  | NonNullable<ReturnType<typeof resolveTextGenerationInputForSelection>>
+  | Record<string, never>;
+
+function hasProviderStartOptions(options: ProviderStartOptions): boolean {
+  return Object.values(options).some((value) => value !== undefined);
+}
+
+function providerOptionsForSelectedInstance(
+  instance: ResolvedProviderInstance,
+): ProviderStartOptions | undefined {
+  const instanceOptions = providerStartOptionsFromInstance(instance);
+  return instanceOptions && hasProviderStartOptions(instanceOptions) ? instanceOptions : undefined;
+}
+
+function resolveEnabledProviderInstance(
+  settings: ServerSettings,
+  input: Parameters<typeof resolveProviderInstance>[1],
+): ResolvedProviderInstance | null {
+  const instance = resolveProviderInstance(settings, input);
+  return instance?.enabled ? instance : null;
+}
+
+export function resolveAutomationDefinitionProviderOptionsForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): ProviderStartOptions | undefined {
+  // Automations may outlive provider-instance edits, so turns use the selected live instance.
+  if (!definition.modelSelection) {
+    return definition.providerOptions;
+  }
+  const selectionInstance = resolveEnabledProviderInstance(settings, {
+    instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+  });
+  return selectionInstance ? providerOptionsForSelectedInstance(selectionInstance) : undefined;
+}
+
+function resolveAutomationTurnProviderOptionsForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): Effect.Effect<ProviderStartOptions | undefined, AutomationServiceError> {
+  if (!definition.modelSelection) {
+    return Effect.succeed(definition.providerOptions);
+  }
+  const selectionInstanceId = resolveModelSelectionInstanceId(definition.modelSelection);
+  const selectionInstance = resolveProviderInstance(settings, {
+    instanceId: selectionInstanceId,
+  });
+  if (!selectionInstance) {
+    return Effect.fail(
+      new AutomationServiceError({
+        message: `Automation provider instance '${selectionInstanceId}' is no longer configured.`,
+      }),
+    );
+  }
+  if (!selectionInstance.enabled) {
+    return Effect.fail(
+      new AutomationServiceError({
+        message: `Automation provider instance '${selectionInstanceId}' is disabled.`,
+      }),
+    );
+  }
+  // Instance-backed turns carry only the selected model instance id. The provider reactor
+  // resolves live launch options at dispatch time so secrets never enter orchestration events.
+  return Effect.succeed(undefined);
+}
+
+export function resolveAutomationCompletionTextGenerationInputForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): AutomationCompletionTextGenerationInput {
+  // Stored definitions can outlive provider-instance edits, so completion
+  // evaluation launch options come from the live settings snapshot.
+  const selectionInstance = definition.modelSelection
+    ? resolveEnabledProviderInstance(settings, {
+        instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+      })
+    : null;
+  const directProviderOptions = resolveAutomationDefinitionProviderOptionsForSettings(
+    definition,
+    settings,
+  );
+  const directInput = selectionInstance
+    ? resolveTextGenerationInputForSelection(
+        definition.modelSelection,
+        directProviderOptions,
+        selectionInstance.driver,
+      )
+    : null;
+  if (directInput) {
+    return directInput;
+  }
+
+  const fallbackInstance = resolveEnabledProviderInstance(settings, {
+    instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+  });
+  const fallbackProviderOptions = fallbackInstance
+    ? providerStartOptionsFromInstance(fallbackInstance)
+    : undefined;
+  return (
+    resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      fallbackProviderOptions,
+      fallbackInstance?.driver,
+    ) ?? {}
+  );
 }
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
@@ -249,6 +367,43 @@ function hasOwn<T extends object, K extends PropertyKey>(
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+// Instance-backed automations resolve launch options from current server settings.
+// Client-supplied snapshots can be stale or contain secrets, so they never belong
+// in the persisted definition or any definition event sent back to clients.
+function withoutAutomationProviderOptions<T extends { readonly providerOptions?: unknown }>(
+  value: T,
+): Omit<T, "providerOptions"> {
+  const { providerOptions: _providerOptions, ...withoutProviderOptions } = value;
+  return withoutProviderOptions;
+}
+
+function withoutAutomationRunProviderOptions(run: AutomationRun): AutomationRun {
+  const { providerOptions: _providerOptions, ...permissionSnapshot } = run.permissionSnapshot;
+  return { ...run, permissionSnapshot };
+}
+
+function sanitizeAutomationStreamEvent(event: AutomationStreamEvent): AutomationStreamEvent {
+  switch (event.type) {
+    case "snapshot":
+      return {
+        ...event,
+        definitions: event.definitions.map((definition) =>
+          withoutAutomationProviderOptions(definition),
+        ),
+        runs: event.runs.map(withoutAutomationRunProviderOptions),
+      };
+    case "definition-upserted":
+      return {
+        ...event,
+        definition: withoutAutomationProviderOptions(event.definition),
+      };
+    case "run-upserted":
+      return { ...event, run: withoutAutomationRunProviderOptions(event.run) };
+    case "definition-deleted":
+      return event;
+  }
+}
+
 function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAllowedCapability[] {
   const capabilities: AutomationAllowedCapability[] = ["send-turn"];
   if (definition.worktreeMode !== "local") {
@@ -262,9 +417,12 @@ function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAll
 
 function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
   return {
-    provider: definition.modelSelection.provider,
+    provider: inferLegacyProviderKindFromModelSelection(definition.modelSelection),
     modelSelection: definition.modelSelection,
-    ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+    // Instance-backed runs resolve provider options live; snapshots keep only legacy direct options.
+    ...(!definition.modelSelection && definition.providerOptions
+      ? { providerOptions: definition.providerOptions }
+      : {}),
     completionPolicyVersion: completionPolicyVersionForDefinition(definition),
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
@@ -401,7 +559,6 @@ function mergeDefinitionUpdate(
       : input.schedule
         ? safeComputeNextRunAt(schedule, now, current.nextRunAt)
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null));
-  const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
   const currentCompletionPolicy = completionPolicyForDefinition(current);
   const completionPolicy =
@@ -455,7 +612,7 @@ function mergeDefinitionUpdate(
     updatedAt: now,
   };
 
-  return providerOptions ? { ...nextDefinition, providerOptions } : nextDefinition;
+  return withoutAutomationProviderOptions(nextDefinition);
 }
 
 function makeAutomationBranchName(definition: AutomationDefinition, runId: AutomationRunId) {
@@ -513,7 +670,7 @@ export const AutomationServiceLive = Layer.effect(
     const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
-      PubSub.publish(events, event).pipe(Effect.asVoid);
+      PubSub.publish(events, sanitizeAutomationStreamEvent(event)).pipe(Effect.asVoid);
 
     const cleanupUnattachedWorktree = (input: {
       readonly definition: AutomationDefinition;
@@ -579,12 +736,14 @@ export const AutomationServiceLive = Layer.effect(
           Option.match(definitionOption, {
             onNone: () =>
               Effect.fail(new AutomationServiceError({ message: "Automation was not found." })),
-            onSome: (definition) =>
-              definition.archivedAt
+            onSome: (definition) => {
+              const sanitizedDefinition = withoutAutomationProviderOptions(definition);
+              return sanitizedDefinition.archivedAt
                 ? Effect.fail(
                     new AutomationServiceError({ message: "Automation has been deleted." }),
                   )
-                : Effect.succeed(definition),
+                : Effect.succeed(sanitizedDefinition);
+            },
           }),
         ),
       );
@@ -595,7 +754,11 @@ export const AutomationServiceLive = Layer.effect(
         Effect.flatMap((definitionOption) =>
           Option.match(definitionOption, {
             onNone: () => Effect.void,
-            onSome: (definition) => publish({ type: "definition-upserted", definition }),
+            onSome: (definition) =>
+              publish({
+                type: "definition-upserted",
+                definition: withoutAutomationProviderOptions(definition),
+              }),
           }),
         ),
       );
@@ -692,6 +855,18 @@ export const AutomationServiceLive = Layer.effect(
               message: "Automation retry policies are not supported yet.",
             }),
           );
+
+    const validateResolvedAutomationIdentity = (
+      modelSelection: AutomationDefinition["modelSelection"],
+    ) =>
+      isUnresolvedAutomationInstanceId(modelSelection.instanceId)
+        ? Effect.fail(
+            new AutomationServiceError({
+              message:
+                "Automation uses an unresolved legacy provider account. Select a configured provider account before enabling or running it.",
+            }),
+          )
+        : Effect.void;
 
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
@@ -864,6 +1039,8 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
+        yield* validateResolvedAutomationIdentity(definition.modelSelection);
+
         // Enforce the gate at dispatch, not just create/update, so an enabled automation that
         // reached a run unacknowledged (e.g. inserted via the API/DB without consent) cannot run
         // on schedule or via Run now. Reuses the same validators as create/update so the backstop
@@ -882,6 +1059,11 @@ export const AutomationServiceLive = Layer.effect(
           acknowledgedRisks: definition.acknowledgedRisks,
           now,
         });
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(toServiceError("Failed to load automation provider settings.")),
+        );
+        const automationTurnProviderOptions =
+          yield* resolveAutomationTurnProviderOptionsForSettings(definition, settings);
 
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
           latest.status === "running"
@@ -963,8 +1145,8 @@ export const AutomationServiceLive = Layer.effect(
                 attachments: [],
               },
               modelSelection: definition.modelSelection,
-              ...(definition.providerOptions
-                ? { providerOptions: definition.providerOptions }
+              ...(automationTurnProviderOptions
+                ? { providerOptions: automationTurnProviderOptions }
                 : {}),
               dispatchMode: "queue",
               dispatchOrigin: "automation",
@@ -1052,7 +1234,9 @@ export const AutomationServiceLive = Layer.effect(
               attachments: [],
             },
             modelSelection: definition.modelSelection,
-            ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+            ...(automationTurnProviderOptions
+              ? { providerOptions: automationTurnProviderOptions }
+              : {}),
             dispatchMode: "queue",
             dispatchOrigin: "automation",
             runtimeMode: definition.runtimeMode,
@@ -1258,23 +1442,10 @@ export const AutomationServiceLive = Layer.effect(
 
     const resolveAutomationCompletionTextGenerationInput = (definition: AutomationDefinition) =>
       Effect.gen(function* () {
-        const directInput = resolveTextGenerationInputForSelection(
-          definition.modelSelection,
-          definition.providerOptions,
-        );
-        if (directInput) {
-          return directInput;
-        }
-
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
-        return (
-          resolveTextGenerationInputForSelection(
-            settings.textGenerationModelSelection,
-            definition.providerOptions,
-          ) ?? {}
-        );
+        return resolveAutomationCompletionTextGenerationInputForSettings(definition, settings);
       });
 
     const shouldUseStopPolicyForDefinition = (
@@ -1878,13 +2049,19 @@ export const AutomationServiceLive = Layer.effect(
       );
 
     const list: AutomationServiceShape["list"] = (input = {}) =>
-      automationRepository
-        .list(input)
-        .pipe(Effect.mapError(toServiceError("Failed to list automations.")));
+      automationRepository.list(input).pipe(
+        Effect.map((result) => ({
+          ...result,
+          definitions: result.definitions.map(withoutAutomationProviderOptions),
+          runs: result.runs.map(withoutAutomationRunProviderOptions),
+        })),
+        Effect.mapError(toServiceError("Failed to list automations.")),
+      );
 
     const create: AutomationServiceShape["create"] = (input) =>
       Effect.gen(function* () {
         const now = isoNow();
+        yield* validateResolvedAutomationIdentity(input.modelSelection);
         yield* requireProject(input.projectId);
         yield* validateSchedulePolicy({
           schedule: input.schedule,
@@ -1909,8 +2086,14 @@ export const AutomationServiceLive = Layer.effect(
           targetThreadId: input.targetThreadId ?? null,
         });
         const initialNextRunAt = computeNextAutomationRunAt(input.schedule, now);
+        const persistenceInput = withoutAutomationProviderOptions(input);
         const definition = yield* automationRepository
-          .createDefinition({ id: makeAutomationId(), input, now, nextRunAt: initialNextRunAt })
+          .createDefinition({
+            id: makeAutomationId(),
+            input: persistenceInput,
+            now,
+            nextRunAt: initialNextRunAt,
+          })
           .pipe(Effect.mapError(toServiceError("Failed to create automation.")));
         const normalized = yield* normalizeCreatedDefinitionSchedule(definition, now).pipe(
           Effect.mapError(toServiceError("Failed to initialize automation schedule.")),
@@ -1924,6 +2107,9 @@ export const AutomationServiceLive = Layer.effect(
         const now = isoNow();
         const current = yield* requireDefinition(input.id);
         const updated = mergeDefinitionUpdate(current, input, now);
+        if (updated.enabled) {
+          yield* validateResolvedAutomationIdentity(updated.modelSelection);
+        }
         yield* requireProject(updated.projectId);
         yield* validateSchedulePolicy({
           schedule: updated.schedule,
@@ -2074,6 +2260,7 @@ export const AutomationServiceLive = Layer.effect(
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
+        yield* validateResolvedAutomationIdentity(definition.modelSelection);
         const now = isoNow();
         // Heartbeat automations continue a single shared thread, so a manual run must not
         // race a scheduled (or earlier manual) run that is still in flight. Standalone

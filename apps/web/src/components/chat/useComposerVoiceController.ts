@@ -3,7 +3,12 @@
 // Layer: Chat composer hook
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
-import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
+import {
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ThreadId,
+} from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project } from "../../types";
@@ -22,6 +27,8 @@ interface UseComposerVoiceControllerOptions {
   activeThreadId: ThreadId | null;
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
+  voiceProviderInstanceId: ProviderInstanceId;
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
@@ -48,6 +55,8 @@ export function useComposerVoiceController(
     activeThreadId,
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId,
     activeProviderStatus,
     pendingUserInputCount,
     onTranscriptReady,
@@ -65,8 +74,12 @@ export function useComposerVoiceController(
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const composerProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
+  const voiceProviderInstanceRef = useRef<ProviderInstanceId>(voiceProviderInstanceId);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
+  composerProviderInstanceRef.current = selectedProviderInstanceId;
+  voiceProviderInstanceRef.current = voiceProviderInstanceId;
 
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
@@ -75,13 +88,17 @@ export function useComposerVoiceController(
   const { canStartVoiceNotes, showVoiceNotesControl } = useMemo(
     () =>
       deriveComposerVoiceState({
+        enabled: activeProviderStatus?.enabled,
+        available: activeProviderStatus?.available === true,
         authStatus: activeProviderStatus?.authStatus,
         voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
         isRecording: isVoiceRecording,
         isTranscribing: isVoiceTranscribing,
       }),
     [
+      activeProviderStatus?.available,
       activeProviderStatus?.authStatus,
+      activeProviderStatus?.enabled,
       activeProviderStatus?.voiceTranscriptionAvailable,
       isVoiceRecording,
       isVoiceTranscribing,
@@ -166,10 +183,14 @@ export function useComposerVoiceController(
     voiceTranscriptionRequestIdRef.current = requestId;
     const requestThreadId = threadId;
     const requestProvider = selectedProvider;
+    const requestProviderInstanceId = selectedProviderInstanceId;
+    const requestVoiceProviderInstanceId = voiceProviderInstanceId;
     const isCurrentVoiceRequest = () =>
       voiceTranscriptionRequestIdRef.current === requestId &&
       voiceThreadIdRef.current === requestThreadId &&
-      voiceProviderRef.current === requestProvider;
+      voiceProviderRef.current === requestProvider &&
+      composerProviderInstanceRef.current === requestProviderInstanceId &&
+      voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
 
     try {
       const payload = await stopVoiceRecording();
@@ -185,6 +206,7 @@ export function useComposerVoiceController(
       }
       const result = await api.server.transcribeVoice({
         provider: "codex",
+        providerInstanceId: requestVoiceProviderInstanceId,
         cwd: activeProject.cwd,
         ...(activeThreadId ? { threadId: activeThreadId } : {}),
         ...payload,
@@ -234,8 +256,10 @@ export function useComposerVoiceController(
     onTranscriptReady,
     refreshVoiceStatus,
     selectedProvider,
+    selectedProviderInstanceId,
     stopVoiceRecording,
     threadId,
+    voiceProviderInstanceId,
   ]);
 
   const cancelComposerVoiceRecording = useCallback(() => {

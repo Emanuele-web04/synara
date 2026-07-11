@@ -3,6 +3,7 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,6 +42,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { NetService } from "@synara/shared/Net";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
+import { buildProviderProcessEnv } from "./providerProcessEnv.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -190,6 +192,10 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
@@ -200,12 +206,20 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly args: ReadonlyArray<string>;
     readonly cwd?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeCommandResult, OpenCodeRuntimeError>;
   readonly createOpenCodeSdkClient: (input: {
     readonly baseUrl: string;
@@ -220,6 +234,10 @@ export interface OpenCodeRuntimeShape {
     readonly binaryPath: string;
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly cwd?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<ReadonlyArray<OpenCodeCliModelDescriptor>, OpenCodeRuntimeError>;
   readonly loadOpenCodeCredentialProviderIDs: (
     client: OpencodeClient,
@@ -298,6 +316,10 @@ function pooledOpenCodeServerKey(input: {
   readonly port?: number;
   readonly hostname?: string;
   readonly experimentalWebSockets?: boolean;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }): string {
   const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return JSON.stringify({
@@ -306,6 +328,10 @@ function pooledOpenCodeServerKey(input: {
     hostname: input.hostname ?? DEFAULT_HOSTNAME,
     port: input.port ?? null,
     experimentalWebSockets: input.experimentalWebSockets === true,
+    instanceId: input.instanceId ?? null,
+    homeDir: input.homeDir ?? null,
+    isolationRootDir: input.isolationRootDir ?? null,
+    environment: environmentFingerprint(input.environment),
     cliSpec: {
       defaultBinaryPath: cliSpec.defaultBinaryPath,
       displayName: cliSpec.displayName,
@@ -315,6 +341,23 @@ function pooledOpenCodeServerKey(input: {
       serverAuthUsername: cliSpec.serverAuthUsername,
     },
   });
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | null {
+  if (environment === undefined) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
+}
+
+function hashCacheComponent(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 export function parseOpenCodeModelSlug(
@@ -764,9 +807,24 @@ export function buildOpenCodeServerProcessEnv(input: {
   readonly cliSpec?: OpenCodeCompatibleCliSpec;
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly isolationRootDir?: string;
+  readonly homeDir?: string;
 }): NodeJS.ProcessEnv {
+  const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   return {
-    ...(input.baseEnv ?? process.env),
+    ...buildProviderProcessEnv({
+      driver:
+        cliSpec.configContentEnvVar === KILO_CLI_SPEC.configContentEnvVar ? "kilo" : "opencode",
+      ...(input.baseEnv !== undefined ? { env: input.baseEnv } : {}),
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
+      ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+    }),
     ...(input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {}),
   };
 }
@@ -833,15 +891,37 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
   const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
     Effect.gen(function* () {
+      const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
+      const childEnv = yield* Effect.try({
+        try: () =>
+          buildProviderProcessEnv({
+            driver:
+              cliSpec.configContentEnvVar === KILO_CLI_SPEC.configContentEnvVar
+                ? "kilo"
+                : "opencode",
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+            ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+            ...(input.isolationRootDir !== undefined
+              ? { isolationRootDir: input.isolationRootDir }
+              : {}),
+          }),
+        catch: (cause) =>
+          new OpenCodeRuntimeError({
+            operation: "runOpenCodeCommand",
+            detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+            cause,
+          }),
+      });
       const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
         cwd: input.cwd,
-        env: process.env,
+        env: childEnv,
       });
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
           ...(input.cwd ? { cwd: input.cwd } : {}),
-          env: process.env,
+          env: childEnv,
         }),
       );
       const [stdout, stderr, code] = yield* Effect.all(
@@ -891,16 +971,32 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ));
       const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
       const args = ["serve", "--hostname", hostname, "--port", String(port)];
+      const childEnv = yield* Effect.try({
+        try: () =>
+          buildOpenCodeServerProcessEnv({
+            cliSpec,
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+            ...(input.isolationRootDir !== undefined
+              ? { isolationRootDir: input.isolationRootDir }
+              : {}),
+            ...(input.experimentalWebSockets !== undefined
+              ? { experimentalWebSockets: input.experimentalWebSockets }
+              : {}),
+          }),
+        catch: (cause) =>
+          new OpenCodeRuntimeError({
+            operation: "startOpenCodeServerProcess",
+            detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+            cause,
+          }),
+      });
 
       const child = yield* spawner
         .spawn(
           ChildProcess.make(input.binaryPath, args, {
-            env: buildOpenCodeServerProcessEnv({
-              cliSpec,
-              ...(input.experimentalWebSockets !== undefined
-                ? { experimentalWebSockets: input.experimentalWebSockets }
-                : {}),
-            }),
+            env: childEnv,
             ...(input.cwd ? { cwd: input.cwd } : {}),
             detached: false,
             killSignal: "SIGKILL",
@@ -1128,6 +1224,10 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) =>
     pooledServerMutex.withPermit(
       Effect.gen(function* () {
@@ -1216,6 +1316,12 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
         ...(input.experimentalWebSockets !== undefined
           ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+        ...(input.isolationRootDir !== undefined
+          ? { isolationRootDir: input.isolationRootDir }
           : {}),
       });
       yield* Scope.addFinalizer(callerScope, releasePooledServer(pooledServer));
@@ -1312,11 +1418,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly cwd?: string;
     readonly args: ReadonlyArray<string>;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) =>
     runOpenCodeCommand({
       binaryPath: input.binaryPath,
       ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
       ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
       args: input.args,
     }).pipe(
       Effect.flatMap((result) =>
@@ -1339,6 +1453,10 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       binaryPath: input.binaryPath,
       ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
       ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
       args: ["models", "--verbose"],
     }).pipe(
       Effect.catch((error) => {
@@ -1363,6 +1481,12 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           binaryPath: input.binaryPath,
           ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
           ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+          ...(input.isolationRootDir !== undefined
+            ? { isolationRootDir: input.isolationRootDir }
+            : {}),
           args: ["models"],
         });
       }),

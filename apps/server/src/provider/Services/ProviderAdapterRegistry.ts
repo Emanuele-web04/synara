@@ -7,7 +7,7 @@
  *
  * @module ProviderAdapterRegistry
  */
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -15,9 +15,19 @@ import type { ProviderAdapterError, ProviderUnsupportedError } from "../Errors.t
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
 
 /**
- * ProviderAdapterRegistryShape - Service API for adapter lookup by provider kind.
+ * ProviderAdapterRegistryShape - Service API for adapter lookup.
  */
 export interface ProviderAdapterRegistryShape {
+  /**
+   * Resolve an adapter facade for one configured provider instance.
+   * Disabled instances fail by default; stop/cleanup paths may opt in via
+   * `allowDisabled` to tear down sessions that outlived the instance toggle.
+   */
+  readonly getByInstance?: (
+    instanceId: ProviderInstanceId,
+    options?: { readonly allowDisabled?: boolean },
+  ) => Effect.Effect<ProviderAdapterShape<ProviderAdapterError>, ProviderUnsupportedError>;
+
   /**
    * Resolve the adapter for a provider kind.
    */
@@ -29,6 +39,11 @@ export interface ProviderAdapterRegistryShape {
    * List provider kinds currently registered.
    */
   readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderKind>>;
+
+  /**
+   * List configured provider instance ids when the registry is settings-aware.
+   */
+  readonly listInstances?: () => Effect.Effect<ReadonlyArray<ProviderInstanceId>>;
 }
 
 /**

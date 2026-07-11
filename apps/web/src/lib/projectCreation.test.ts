@@ -18,7 +18,7 @@ function makeProject(id: string, workspaceRoot = WORKSPACE_ROOT) {
     title: "synara",
     workspaceRoot,
     defaultModelSelection: {
-      provider: "codex" as const,
+      instanceId: "codex" as const,
       model: "gpt-5",
     },
     scripts: [],

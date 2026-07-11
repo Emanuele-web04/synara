@@ -34,6 +34,8 @@ interface PurgeThreadRow {
   readonly worktreePath: string | null;
   readonly projectKind: string | null;
   readonly workspaceRoot: string | null;
+  readonly sessionProvider: string | null;
+  readonly sessionProviderInstanceId: string | null;
 }
 
 interface TurnEventRow {
@@ -50,6 +52,7 @@ interface TokenActivityRow {
   // the activity has no attributable turn, in which case the thread's own
   // selection applies as the fallback.
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly createdAt: string | null;
 }
@@ -77,6 +80,7 @@ interface ThreadCheckpointCleanup {
 
 export interface ThreadTurnSnapshotRow {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
   readonly turnCount: number;
@@ -85,6 +89,7 @@ export interface ThreadTurnSnapshotRow {
 export interface ThreadTokenSnapshotRow {
   readonly createdAt: string;
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
 }
@@ -93,6 +98,7 @@ export interface ThreadTokenSnapshotRow {
 
 interface ModelSelectionLike {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
 }
@@ -105,16 +111,55 @@ function parseModelSelection(value: unknown): ModelSelectionLike | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  const record = value as { provider?: unknown; model?: unknown; options?: unknown };
-  const options =
-    record.options !== null && typeof record.options === "object"
-      ? (record.options as { reasoningEffort?: unknown; effort?: unknown })
+  const record = value as {
+    provider?: unknown;
+    instanceId?: unknown;
+    model?: unknown;
+    options?: unknown;
+  };
+  const options = record.options;
+  const optionRecord =
+    options !== null && typeof options === "object" && !Array.isArray(options)
+      ? (options as { reasoningEffort?: unknown; effort?: unknown })
       : null;
+  const optionEntries = Array.isArray(options) ? options : [];
+  const reasoningOption = optionEntries.find(
+    (entry) =>
+      entry !== null &&
+      typeof entry === "object" &&
+      (Reflect.get(entry, "id") === "reasoningEffort" || Reflect.get(entry, "id") === "effort"),
+  );
   return {
     provider: readString(record.provider),
+    instanceId: readString(record.instanceId),
     model: readString(record.model),
-    reasoning: readString(options?.reasoningEffort) ?? readString(options?.effort),
+    reasoning:
+      readString(optionRecord?.reasoningEffort) ??
+      readString(optionRecord?.effort) ??
+      (reasoningOption && typeof reasoningOption === "object"
+        ? readString(Reflect.get(reasoningOption, "value"))
+        : null),
   };
+}
+
+// A matching session maps an opaque current instance to its real driver; a
+// mismatched historical instance stays untouched for model-based inference.
+function resolveArchivedSelectionRoute(
+  selection: ModelSelectionLike | null,
+  session?: {
+    readonly provider: string | null;
+    readonly instanceId: string | null;
+  },
+): { readonly provider: string | null; readonly instanceId: string | null } {
+  const instanceId = selection?.instanceId ?? selection?.provider ?? session?.instanceId ?? null;
+  const provider =
+    selection?.provider ??
+    (selection?.instanceId && selection.instanceId === session?.instanceId
+      ? session.provider
+      : selection?.instanceId) ??
+    session?.provider ??
+    null;
+  return { provider, instanceId };
 }
 
 function parseModelSelectionJson(json: string | null): ModelSelectionLike | null {
@@ -132,7 +177,9 @@ function normalizeThreadEnvironmentMode(value: string | null): ThreadEnvironment
   return value === "local" || value === "worktree" ? value : undefined;
 }
 
-function threadWorkspaceCwdForCheckpointCleanup(thread: PurgeThreadRow): string | null {
+function threadWorkspaceCwdForCheckpointCleanup(
+  thread: Pick<PurgeThreadRow, "projectKind" | "workspaceRoot" | "worktreePath" | "envMode">,
+): string | null {
   const projectCwd = resolveProjectCwdForKind({
     kind: thread.projectKind,
     workspaceRoot: thread.workspaceRoot,
@@ -198,11 +245,21 @@ function hasProfileStatsContribution(input: {
 export function aggregateThreadTurnSnapshotRows(
   events: ReadonlyArray<TurnEventRow>,
   threadModelSelectionJson: string | null,
+  session?: {
+    readonly provider: string | null;
+    readonly instanceId: string | null;
+  },
 ): ThreadTurnSnapshotRow[] {
   const threadSelection = parseModelSelectionJson(threadModelSelectionJson);
   const counts = new Map<
     string,
-    { provider: string | null; model: string | null; reasoning: string | null; turnCount: number }
+    {
+      provider: string | null;
+      instanceId: string | null;
+      model: string | null;
+      reasoning: string | null;
+      turnCount: number;
+    }
   >();
 
   for (const event of events) {
@@ -220,15 +277,15 @@ export function aggregateThreadTurnSnapshotRows(
       }
     }
     const selection = eventSelection ?? threadSelection;
-    const provider = selection?.provider ?? null;
+    const { provider, instanceId } = resolveArchivedSelectionRoute(selection, session);
     const model = selection?.model ?? null;
     const reasoning = selection?.reasoning ?? null;
-    const key = `${provider ?? ""}\u0000${model ?? ""}\u0000${reasoning ?? ""}`;
+    const key = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}\u0000${reasoning ?? ""}`;
     const existing = counts.get(key);
     if (existing) {
       existing.turnCount += 1;
     } else {
-      counts.set(key, { provider, model, reasoning, turnCount: 1 });
+      counts.set(key, { provider, instanceId, model, reasoning, turnCount: 1 });
     }
   }
 
@@ -240,15 +297,19 @@ function tokenCounterValue(value: number | bigint | null): number | null {
   return total !== null && Number.isFinite(total) ? total : null;
 }
 
-function tokenProviderModelKey(provider: string | null, model: string | null): string {
-  return `${provider ?? ""}\u0000${model ?? ""}`;
+function tokenProviderModelKey(
+  provider: string | null,
+  instanceId: string | null,
+  model: string | null,
+): string {
+  return `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
 }
 
 function addTokenSnapshotRow(
   rows: Map<string, ThreadTokenSnapshotRow>,
   row: ThreadTokenSnapshotRow,
 ): void {
-  const key = `${row.createdAt}\u0000${tokenProviderModelKey(row.provider, row.model)}`;
+  const key = `${row.createdAt}\u0000${tokenProviderModelKey(row.provider, row.instanceId, row.model)}`;
   const existing = rows.get(key);
   if (existing) {
     rows.set(key, { ...existing, tokens: existing.tokens + row.tokens });
@@ -267,7 +328,11 @@ function addTokenSnapshotRow(
 // thread's own selection fills in rows without turn attribution).
 export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
-  fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
+  fallbackSelection?: {
+    readonly provider: string | null;
+    readonly instanceId: string | null;
+    readonly model: string | null;
+  },
 ): ThreadTokenSnapshotRow[] {
   const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
   const cumulativeProviderModels = new Set<string>();
@@ -276,8 +341,9 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const instanceId = readString(row.instanceId) ?? fallbackSelection?.instanceId ?? provider;
     const model = readString(row.model) ?? fallbackSelection?.model ?? null;
-    cumulativeProviderModels.add(tokenProviderModelKey(provider, model));
+    cumulativeProviderModels.add(tokenProviderModelKey(provider, instanceId, model));
   }
 
   let previousCumulativeTotal: number | null = null;
@@ -295,10 +361,12 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const instanceId = readString(row.instanceId) ?? fallbackSelection?.instanceId ?? provider;
     const model = readString(row.model) ?? fallbackSelection?.model ?? null;
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
+      instanceId,
       model,
       tokens: delta,
     });
@@ -308,8 +376,9 @@ export function aggregateThreadTokenRows(
   let previousUsedProviderModelKey: string | null = null;
   for (const row of rows) {
     const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const instanceId = readString(row.instanceId) ?? fallbackSelection?.instanceId ?? provider;
     const model = readString(row.model) ?? fallbackSelection?.model ?? null;
-    const providerModelKey = tokenProviderModelKey(provider, model);
+    const providerModelKey = tokenProviderModelKey(provider, instanceId, model);
     if (cumulativeProviderModels.has(providerModelKey)) {
       continue;
     }
@@ -330,6 +399,7 @@ export function aggregateThreadTokenRows(
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
+      instanceId,
       model,
       tokens: delta,
     });
@@ -371,11 +441,10 @@ const makeProfileStatsArchive = Effect.gen(function* () {
 
   const loadThreadCheckpointCleanup = (threadId: string) =>
     Effect.gen(function* () {
-      const threadRows = yield* sql<PurgeThreadRow>`
+      const threadRows = yield* sql<
+        Pick<PurgeThreadRow, "envMode" | "worktreePath" | "projectKind" | "workspaceRoot">
+      >`
         SELECT
-          t.project_id AS projectId,
-          t.model_selection_json AS modelSelectionJson,
-          t.deleted_at AS deletedAt,
           t.env_mode AS envMode,
           t.worktree_path AS worktreePath,
           p.kind AS projectKind,
@@ -508,9 +577,12 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           t.env_mode AS envMode,
           t.worktree_path AS worktreePath,
           p.kind AS projectKind,
-          p.workspace_root AS workspaceRoot
+          p.workspace_root AS workspaceRoot,
+          s.provider_name AS sessionProvider,
+          s.provider_instance_id AS sessionProviderInstanceId
         FROM projection_threads t
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
         WHERE t.thread_id = ${threadId}
       `;
       const thread = threadRows[0];
@@ -538,13 +610,19 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
             AS totalProcessedTokens,
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
-          tm.provider AS provider,
+          CASE
+            WHEN tm.provider IS NOT NULL THEN tm.provider
+            WHEN tm.instance_id = s.provider_instance_id THEN s.provider_name
+            ELSE tm.instance_id
+          END AS provider,
+          COALESCE(tm.instance_id, s.provider_instance_id, tm.provider) AS instanceId,
           tm.model AS model,
           a.created_at AS createdAt
         FROM projection_thread_activities a
         LEFT JOIN turn_model tm
           ON tm.thread_id = a.thread_id
          AND tm.turn_id = a.turn_id
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = a.thread_id
         WHERE a.thread_id = ${threadId}
           AND a.kind = 'context-window.updated'
           AND COALESCE(
@@ -570,10 +648,20 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         ORDER BY created_at ASC, message_id ASC
       `;
 
-      const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
+      const sessionRoute = {
+        provider: thread.sessionProvider,
+        instanceId: thread.sessionProviderInstanceId,
+      };
+      const turnRows = aggregateThreadTurnSnapshotRows(
+        turnEventRows,
+        thread.modelSelectionJson,
+        sessionRoute,
+      );
       const threadSelection = parseModelSelectionJson(thread.modelSelectionJson);
+      const threadRoute = resolveArchivedSelectionRoute(threadSelection, sessionRoute);
       const tokenRows = aggregateThreadTokenRows(tokenActivityRows, {
-        provider: threadSelection?.provider ?? null,
+        provider: threadRoute.provider,
+        instanceId: threadRoute.instanceId,
         model: threadSelection?.model ?? null,
       });
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
@@ -608,8 +696,22 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           turnRows,
           (row) => sql`
-            INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
-            VALUES (${threadId}, ${row.provider}, ${row.model}, ${row.reasoning}, ${row.turnCount})
+            INSERT INTO profile_stats_deleted_turns (
+              thread_id,
+              provider,
+              provider_instance_id,
+              model,
+              reasoning,
+              turn_count
+            )
+            VALUES (
+              ${threadId},
+              ${row.provider},
+              ${row.instanceId},
+              ${row.model},
+              ${row.reasoning},
+              ${row.turnCount}
+            )
           `,
           { concurrency: 1, discard: true },
         );
@@ -624,8 +726,22 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           tokenRows,
           (row) => sql`
-            INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, model, tokens)
-            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.model}, ${row.tokens})
+            INSERT INTO profile_stats_deleted_tokens (
+              thread_id,
+              created_at,
+              provider,
+              provider_instance_id,
+              model,
+              tokens
+            )
+            VALUES (
+              ${threadId},
+              ${row.createdAt},
+              ${row.provider},
+              ${row.instanceId},
+              ${row.model},
+              ${row.tokens}
+            )
           `,
           { concurrency: 1, discard: true },
         );

@@ -16,6 +16,7 @@ import {
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
+import { buildProviderProcessEnv } from "./providerProcessEnv.ts";
 
 // Gemini ACP cold starts can take noticeably longer than a normal request path,
 // especially when the CLI has to warm caches or discover auth state. Keep the
@@ -235,12 +236,26 @@ export function parseGeminiDiscoveredModels(
 export const probeGeminiCapabilities = (input: {
   readonly binaryPath: string;
   readonly cwd: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
   readonly capabilities?: ModelCapabilities;
 }) =>
   Effect.tryPromise(
     () =>
       new Promise<GeminiCapabilityProbeResult>((resolve) => {
-        const env = buildGeminiProbeEnv();
+        const env = buildGeminiProbeEnv(
+          buildProviderProcessEnv({
+            driver: "gemini",
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+            ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+            ...(input.isolationRootDir !== undefined
+              ? { isolationRootDir: input.isolationRootDir }
+              : {}),
+          }),
+        );
         const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--acp"], {
           cwd: input.cwd,
           env,

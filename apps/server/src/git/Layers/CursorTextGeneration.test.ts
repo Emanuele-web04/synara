@@ -6,18 +6,35 @@ import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import { expect } from "vitest";
+import { expect, test } from "vitest";
 
 import { TextGenerationError } from "../Errors.ts";
+import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
-import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
+import { CursorTextGenerationLive, resolveCursorSettings } from "./CursorTextGeneration.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
 
 const CursorTextGenerationTestLayer = CursorTextGenerationLive.pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    Layer.succeed(ServerConfig, {
+      homeDir: os.homedir(),
+      stateDir: path.join(os.tmpdir(), "synara-cursor-text-state"),
+    } as any),
+  ),
 );
+
+test("routes an empty-config nondefault Cursor text-generation account", () => {
+  expect(
+    resolveCursorSettings(undefined, { homeDir: "/home/user", stateDir: "/state" }, "cursor_work"),
+  ).toEqual({
+    homeDir: "/home/user",
+    isolationRootDir: "/state",
+    instanceId: "cursor_work",
+  });
+});
 
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -105,13 +122,13 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             stagedPatch:
               "diff --git a/apps/server/src/git/Layers/CursorTextGeneration.ts b/apps/server/src/git/Layers/CursorTextGeneration.ts",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "gpt-5.4",
-              options: {
-                reasoningEffort: "xhigh",
-                fastMode: true,
-                contextWindow: "1m",
-              },
+              options: [
+                { id: "reasoningEffort", value: "xhigh" },
+                { id: "fastMode", value: true },
+                { id: "contextWindow", value: "1m" },
+              ],
             },
             providerOptions: {
               cursor: {
@@ -188,7 +205,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             stagedSummary: "M README.md",
             stagedPatch: "diff --git a/README.md b/README.md",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -219,7 +236,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             patch: "diff --git a/file.ts b/file.ts",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -231,6 +248,35 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
 
           expect(generated.summary).toBe("## Summary\n- Route git summaries through Cursor.");
         }),
+    ),
+  );
+
+  it.effect("passes provider-instance environment to Cursor ACP text generation", () =>
+    withFakeAcpAgent({}, (agentPath) =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateDiffSummary({
+          cwd: process.cwd(),
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            instanceId: "cursor_work",
+            model: "composer-2",
+          },
+          providerOptions: {
+            cursor: {
+              binaryPath: agentPath,
+              environment: {
+                SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+                  summary: "## Summary\n- Used the provider instance env.",
+                }),
+              },
+            },
+          },
+        });
+
+        expect(generated.summary).toBe("## Summary\n- Used the provider instance env.");
+      }),
     ),
   );
 
@@ -247,7 +293,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Improve sidebar thread row spacing and hover states.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -275,7 +321,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Fix the websocket reconnect backoff.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -305,7 +351,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
               cwd: process.cwd(),
               message: "Fix the websocket reconnect backoff.",
               modelSelection: {
-                provider: "cursor",
+                instanceId: "cursor",
                 model: "composer-2",
               },
               providerOptions: {
@@ -351,7 +397,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Fix the reconnect spinner after a resumed session.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {

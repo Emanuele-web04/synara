@@ -7,6 +7,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -16,10 +17,99 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
 
 const projectionSnapshotLayer = it.layer(
-  OrchestrationProjectionSnapshotQueryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+  OrchestrationProjectionSnapshotQueryLive.pipe(
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+  ),
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("uses provider instance settings when decoding providerless model selections", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const serverSettings = yield* ServerSettingsService;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            displayName: "Claude Work",
+          },
+        },
+      });
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-providerless',
+          'Providerless Project',
+          '/tmp/providerless-project',
+          NULL,
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:01.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-providerless',
+          'project-providerless',
+          'Providerless Thread',
+          '{"instanceId":"work","model":"auto"}',
+          NULL,
+          NULL,
+          NULL,
+          '2026-02-24T00:00:02.000Z',
+          '2026-02-24T00:00:03.000Z',
+          NULL
+        )
+      `;
+
+      const snapshot = yield* snapshotQuery.getShellSnapshot();
+      const thread = snapshot.threads.find((candidate) => candidate.id === "thread-providerless");
+
+      assert.deepStrictEqual(thread?.modelSelection, {
+        instanceId: "work",
+        model: "auto",
+      });
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          const serverSettings = yield* ServerSettingsService;
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`DELETE FROM projection_threads WHERE thread_id = 'thread-providerless'`;
+          yield* sql`DELETE FROM projection_projects WHERE project_id = 'project-providerless'`;
+          yield* serverSettings.updateSettings({ providerInstances: {} });
+        }).pipe(Effect.catch(() => Effect.void)),
+      ),
+    ),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -286,7 +376,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           defaultModelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           scripts: [
@@ -310,7 +400,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-1"),
           title: "Thread 1",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: "default",
@@ -831,14 +921,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       const expectedProjectSelection = {
-        provider: "codex",
+        instanceId: "codex",
         model: "imported-project-model",
-        options: { reasoningEffort: "medium" },
+        options: [{ id: "reasoningEffort", value: "medium" }],
       } as const;
       const expectedThreadSelection = {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.5",
-        options: { reasoningEffort: "medium" },
+        options: [{ id: "reasoningEffort", value: "medium" }],
       } as const;
 
       const snapshot = yield* snapshotQuery.getSnapshot();
@@ -1351,7 +1441,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-shell"),
           title: "Shell Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: "default",

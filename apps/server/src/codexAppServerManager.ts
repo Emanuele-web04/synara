@@ -1,12 +1,14 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 
 import {
   ApprovalRequestId,
   EventId,
+  type ProviderStartOptions,
   type ProviderComposerCapabilities,
   ProviderItemId,
   type ProviderListModelsResult,
@@ -15,7 +17,7 @@ import {
   type ProviderPluginAppSummary,
   type ProviderPluginDescriptor,
   type ProviderPluginDetail,
-  type ProviderForkThreadInput,
+  type ProviderInstanceId,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
   type ProviderListSkillsResult,
@@ -43,15 +45,25 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
-import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  buildCodexProcessLaunchContext,
+  readCodexAuthFileIdentityFingerprint,
+  readCodexAuthTrackingFingerprint,
+  resolveCodexAuthTracking,
+  type CodexAuthTracking,
+  type CodexProcessEnvInput,
+} from "./codexProcessEnv.ts";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
+import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 
 const log = createLogger("codex");
 
@@ -115,18 +127,36 @@ interface CodexSessionContext {
   reviewTurnIds: Set<TurnId>;
   nextRequestId: number;
   stopping: boolean;
+  codexOptions?: CodexDiscoveryOptions;
+  authTracking?: CodexAuthTracking;
+  // Compatibility fallback for older in-memory/test contexts.
+  authHomePath?: string;
+  authFingerprint?: string;
   discovery?: boolean;
+  discoveryKey?: string;
 }
 
 interface CodexSkillListInput {
   readonly cwd: string;
   readonly forceReload?: boolean;
   readonly threadId?: string;
+  readonly codexOptions?: CodexDiscoveryOptions;
 }
 
-interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {}
+interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
 
-interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {}
+interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
+
+type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
+
+export interface CodexSessionInspection {
+  readonly session: ProviderSession;
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
 
 interface JsonRpcError {
   code?: number;
@@ -202,10 +232,12 @@ type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
   readonly provider?: "codex";
+  readonly providerInstanceId?: ProviderInstanceId;
   readonly cwd?: string;
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
+  readonly expectedCodexContinuationGeneration?: string;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
 }
@@ -568,8 +600,9 @@ function spawnCodexAppServer(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly args: readonly string[];
 }): ChildProcessWithoutNullStreams {
-  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
     cwd: input.cwd,
     env: input.env,
   });
@@ -738,6 +771,96 @@ function setRecentCacheEntry<K, V>(
   }
 }
 
+function normalizeCodexDiscoveryOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexDiscoveryOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const environment = normalizeProviderEnvironment(options.environment);
+  const normalized = {
+    ...(options.binaryPath?.trim() ? { binaryPath: options.binaryPath.trim() } : {}),
+    ...(options.homePath?.trim() ? { homePath: options.homePath.trim() } : {}),
+    ...(options.shadowHomePath?.trim() ? { shadowHomePath: options.shadowHomePath.trim() } : {}),
+    ...(options.accountId?.trim() ? { accountId: options.accountId.trim() } : {}),
+    ...(environment ? { environment } : {}),
+  } satisfies CodexDiscoveryOptions;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderEnvironment(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | undefined {
+  if (!environment) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = {};
+  for (const [rawName, value] of Object.entries(environment)) {
+    const name = rawName.trim();
+    if (!name) {
+      continue;
+    }
+    normalized[name] = value;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function codexDiscoveryOptionsCacheSafe(options: CodexDiscoveryOptions): Record<string, unknown> {
+  return {
+    ...options,
+    ...(options.environment
+      ? {
+          environment: Object.fromEntries(
+            Object.entries(options.environment)
+              .toSorted(([left], [right]) => left.localeCompare(right))
+              .map(([name, value]) => [name, hashCacheComponent(value)]),
+          ),
+        }
+      : {}),
+  };
+}
+
+function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefined): string {
+  const normalized = normalizeCodexDiscoveryOptions(options);
+  return normalized ? JSON.stringify(codexDiscoveryOptionsCacheSafe(normalized)) : "__default__";
+}
+
+export function readCodexAuthFileFingerprint(codexHomePath: string | undefined): string {
+  if (!codexHomePath?.trim()) {
+    return "missing-home";
+  }
+  return readCodexAuthFileIdentityFingerprint({
+    authFilePath: path.join(codexHomePath, "auth.json"),
+    configPath: path.join(codexHomePath, "config.toml"),
+  });
+}
+
+function codexProcessEnvInputForOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexProcessEnvInput {
+  return {
+    ...(options?.environment ? { env: { ...process.env, ...options.environment } } : {}),
+    ...(options?.homePath ? { homePath: options.homePath } : {}),
+    ...(options?.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options?.accountId ? { accountId: options.accountId } : {}),
+  };
+}
+
+function codexAuthFingerprintForOptions(options: CodexDiscoveryOptions | undefined): string {
+  return readCodexAuthTrackingFingerprint(
+    resolveCodexAuthTracking(codexProcessEnvInputForOptions(options)),
+  );
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -782,6 +905,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
 
+    if (input.resumeCursor !== undefined && !input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native resume requires a verified continuation source generation.");
+    }
+
     try {
       const existing = this.sessions.get(threadId);
       if (existing) {
@@ -792,6 +919,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const session: ProviderSession = {
         provider: "codex",
+        ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
@@ -802,19 +930,46 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       const codexOptions = readCodexProviderOptions(input);
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
+      const codexEnvironment = codexOptions.environment;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
+      });
+      const {
+        env: codexProcessEnv,
+        authTracking,
+        authFingerprint: launchAuthFingerprint,
+        appServerArgs,
+      } = buildCodexProcessLaunchContext({
+        ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: codexProcessEnv,
+        args: appServerArgs,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -835,6 +990,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        authTracking,
+        authFingerprint: launchAuthFingerprint,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -843,6 +1001,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.assertContextAuthCurrent(context);
 
       this.writeMessage(context, { method: "initialized" });
       await this.registerSynaraSkillsRoot(context);
@@ -901,7 +1060,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (resumeThreadId) {
         try {
           threadOpenMethod = "thread/resume";
-          threadOpenResponse = await this.sendRequest(context, "thread/resume", {
+          threadOpenResponse = await this.sendThreadOpenRequest(context, "thread/resume", {
             ...sessionOverrides,
             threadId: resumeThreadId,
           });
@@ -935,11 +1094,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             recoverable: true,
             cause: error instanceof Error ? error.message : String(error),
           }).pipe(this.runPromise);
-          threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+          threadOpenResponse = await this.sendThreadOpenRequest(
+            context,
+            "thread/start",
+            threadStartParams,
+          );
         }
       } else {
         threadOpenMethod = "thread/start";
-        threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+        threadOpenResponse = await this.sendThreadOpenRequest(
+          context,
+          "thread/start",
+          threadStartParams,
+        );
       }
 
       const threadOpenRecord = this.readObject(threadOpenResponse);
@@ -972,12 +1139,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start Codex session.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/startFailed", message);
-        this.stopSession(threadId);
+        if (!context.stopping && this.sessions.get(threadId) === context) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/startFailed", message);
+        }
+        this.stopSessionContext(context);
       } else {
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
@@ -1374,8 +1543,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readExternalThread(input: {
     externalThreadId: string;
     cwd?: string;
+    codexOptions?: CodexDiscoveryOptions;
   }): Promise<CodexThreadSnapshot> {
-    const context = await this.resolveContextForDiscovery(undefined, input.cwd);
+    const context = await this.resolveContextForDiscovery(
+      undefined,
+      input.cwd,
+      normalizeCodexDiscoveryOptions(input.codexOptions),
+    );
     const response = await this.sendRequest(context, "thread/read", {
       threadId: input.externalThreadId,
       includeTurns: true,
@@ -1383,10 +1557,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.parseThreadSnapshot("thread/read", response);
   }
 
-  async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
+  async forkThread(input: ProviderAdapterForkThreadInput): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+
+    if (!input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native fork requires a verified continuation source generation.");
+    }
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1404,10 +1582,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         provider: "codex",
         status: "connecting",
         runtimeMode: input.runtimeMode,
-        model:
-          input.modelSelection?.provider === "codex"
-            ? normalizeCodexModelSlug(input.modelSelection.model)
-            : undefined,
+        model: input.modelSelection
+          ? normalizeCodexModelSlug(input.modelSelection.model)
+          : undefined,
+        ...(input.modelSelection?.instanceId
+          ? { providerInstanceId: input.modelSelection.instanceId }
+          : {}),
         cwd: resolvedCwd,
         threadId,
         createdAt: now,
@@ -1420,19 +1600,46 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: input.runtimeMode,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
+      const codexEnvironment = codexOptions.environment;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
+      });
+      const {
+        env: codexProcessEnv,
+        authTracking,
+        authFingerprint: launchAuthFingerprint,
+        appServerArgs,
+      } = buildCodexProcessLaunchContext({
+        ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: codexProcessEnv,
+        args: appServerArgs,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1453,6 +1660,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        authTracking,
+        authFingerprint: launchAuthFingerprint,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -1460,6 +1670,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.assertContextAuthCurrent(context);
       this.writeMessage(context, { method: "initialized" });
       await this.registerSynaraSkillsRoot(context);
       try {
@@ -1469,15 +1680,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Fork can proceed without account metadata; model fallback will stay best-effort.
       }
 
-      const normalizedModel =
-        input.modelSelection?.provider === "codex"
-          ? resolveCodexModelForAccount(
-              normalizeCodexModelSlug(input.modelSelection.model),
-              context.account,
-            )
-          : undefined;
+      const normalizedModel = input.modelSelection
+        ? resolveCodexModelForAccount(
+            normalizeCodexModelSlug(input.modelSelection.model),
+            context.account,
+          )
+        : undefined;
       const useFastServiceTier =
-        input.modelSelection?.provider === "codex" &&
+        input.modelSelection !== undefined &&
         getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
       const forkParams = {
         threadId: sourceProviderThreadId,
@@ -1492,7 +1702,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "session/threadOpenRequested",
         `Forking Codex thread ${sourceProviderThreadId}.`,
       );
-      const response = await this.sendRequest(context, "thread/fork", forkParams);
+      const response = await this.sendThreadOpenRequest(context, "thread/fork", forkParams);
       const forkedProviderThreadId = this.readThreadIdFromResponse("thread/fork", response);
 
       this.updateSession(context, {
@@ -1515,12 +1725,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/threadForkFailed", message);
-        this.stopSession(threadId);
+        if (!context.stopping && this.sessions.get(threadId) === context) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/threadForkFailed", message);
+        }
+        this.stopSessionContext(context);
       }
       throw new Error(message, { cause: error });
     }
@@ -1711,13 +1923,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    context.stopping = true;
+    this.stopSessionContext(context);
+  }
 
-    for (const pending of context.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Session stopped before request completed."));
+  private stopSessionContext(context: CodexSessionContext): void {
+    if (context.stopping) {
+      return;
     }
-    context.pending.clear();
+
+    context.stopping = true;
+    const threadId = context.session.threadId;
+    // Claim the entry before cleanup or lifecycle emission. EventEmitter
+    // listeners run synchronously and the Codex adapter inspects sessions while
+    // stamping events; leaving this context visible would re-enter stopSession.
+    const ownedSession = this.sessions.get(threadId) === context;
+    if (ownedSession) {
+      this.sessions.delete(threadId);
+    }
+
+    this.rejectPendingRequests(context, "Session stopped before request completed.");
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
@@ -1731,18 +1955,65 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       status: "closed",
       activeTurnId: undefined,
     });
-    this.emitLifecycleEvent(context, "session/closed", "Session stopped");
-    this.sessions.delete(threadId);
+    if (ownedSession) {
+      this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+    }
+  }
+
+  private rejectPendingRequests(context: CodexSessionContext, message: string): void {
+    for (const pending of context.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(message));
+    }
+    context.pending.clear();
   }
 
   listSessions(): ProviderSession[] {
+    this.pruneStaleAuthSessions();
     return Array.from(this.sessions.values(), ({ session }) => ({
       ...session,
     }));
   }
 
+  /**
+   * Side-effect-free snapshots for read-only consumers such as HTTP image
+   * allowlist resolution. Stale-auth sessions are omitted so paths belonging
+   * to a previous account cannot remain trusted, but they are not stopped or
+   * removed here. Lifecycle callers should keep using listSessions to prune
+   * invalid provider processes.
+   */
+  inspectSessions(): CodexSessionInspection[] {
+    const inspections: CodexSessionInspection[] = [];
+    for (const context of this.sessions.values()) {
+      if (!this.isContextAuthCurrent(context)) {
+        continue;
+      }
+
+      const { session, codexOptions } = context;
+      const snapshotOptions = normalizeCodexDiscoveryOptions(codexOptions);
+      inspections.push({
+        session: { ...session },
+        ...(snapshotOptions ? { codexOptions: snapshotOptions } : {}),
+      });
+    }
+    return inspections;
+  }
+
   hasSession(threadId: ThreadId): boolean {
-    return this.sessions.has(threadId);
+    const context = this.sessions.get(threadId);
+    if (context && !this.isContextAuthCurrent(context)) {
+      this.stopSession(threadId);
+      return false;
+    }
+    return context !== undefined;
+  }
+
+  /**
+   * Launch options of a live session. Event projection needs these to predict
+   * generated-image paths against the account home the session writes under.
+   */
+  getSessionCodexOptions(threadId: ThreadId): CodexDiscoveryOptions | undefined {
+    return this.hasSession(threadId) ? this.sessions.get(threadId)?.codexOptions : undefined;
   }
 
   stopAll(): void {
@@ -1756,13 +2027,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
     const cwd = input.cwd.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
       if (cached) {
+        this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
         return {
           ...cached,
           cached: true,
@@ -1770,7 +2046,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      cwd,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     let response: Record<string, unknown>;
     try {
       response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
@@ -1792,20 +2074,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.skillsCache, cacheKey, result);
     return result;
   }
 
   async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
     const cwd = input.cwd?.trim() || null;
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
       forceRemoteSync: input.forceRemoteSync === true,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
       if (cached) {
+        this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
         return {
           ...cached,
           cached: true,
@@ -1813,7 +2101,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd ?? undefined);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      cwd ?? undefined,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
       ...(cwd ? { cwds: [cwd] } : {}),
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
@@ -1823,6 +2117,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.pluginsCache, cacheKey, result);
     return result;
   }
@@ -1830,19 +2125,30 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readPlugin(input: CodexPluginReadInput): Promise<ProviderReadPluginResult> {
     const marketplacePath = input.marketplacePath.trim();
     const pluginName = input.pluginName.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       marketplacePath,
       pluginName,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
+      this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
       return {
         ...cached,
         cached: true,
       };
     }
 
-    const context = await this.resolveContextForDiscovery(undefined);
+    const context = await this.resolveContextForDiscovery(
+      undefined,
+      undefined,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
       marketplacePath,
       pluginName,
@@ -1852,21 +2158,48 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.pluginDetailCache, cacheKey, result);
     return result;
   }
 
-  async listModels(threadId?: string): Promise<ProviderListModelsResult> {
-    const cacheKey = threadId?.trim() || "__default__";
+  async listModels(
+    input?:
+      | string
+      | {
+          readonly threadId?: string;
+          readonly cwd?: string;
+          readonly codexOptions?: CodexDiscoveryOptions;
+        },
+  ): Promise<ProviderListModelsResult> {
+    const threadId = typeof input === "string" ? input : input?.threadId;
+    const cwd = typeof input === "string" ? undefined : input?.cwd;
+    const codexOptions = normalizeCodexDiscoveryOptions(
+      typeof input === "string" ? undefined : input?.codexOptions,
+    );
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
+    const cacheKey = JSON.stringify({
+      threadId: threadId?.trim() || null,
+      cwd: cwd?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
+    });
     const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
+      this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
       return {
         ...cached,
         cached: true,
       };
     }
 
-    const context = await this.resolveContextForDiscovery(threadId);
+    const context = await this.resolveContextForDiscovery(
+      threadId,
+      cwd,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
       cursor: null,
       limit: 50,
@@ -1878,12 +2211,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.modelCache, cacheKey, result);
     return result;
   }
 
   async transcribeVoice(
-    input: ServerVoiceTranscriptionInput,
+    input: ServerVoiceTranscriptionInput & { codexOptions?: CodexDiscoveryOptions },
   ): Promise<ServerVoiceTranscriptionResult> {
     return transcribeVoiceWithChatGptSession({
       request: input,
@@ -1891,6 +2225,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.resolveVoiceTranscriptionAuth({
           cwd: input.cwd,
           ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.codexOptions ? { codexOptions: input.codexOptions } : {}),
           refreshToken,
         }),
     });
@@ -1910,6 +2245,72 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
+  private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
+    if (context.authFingerprint === undefined) {
+      return undefined;
+    }
+    try {
+      const currentFingerprint = context.authTracking
+        ? readCodexAuthTrackingFingerprint(context.authTracking)
+        : context.authHomePath
+          ? readCodexAuthFileFingerprint(context.authHomePath)
+          : context.authFingerprint;
+      return currentFingerprint === context.authFingerprint
+        ? undefined
+        : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
+    } catch (error) {
+      log.warn("codex session auth freshness revalidation failed", {
+        threadId: context.session.threadId,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+      return "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.";
+    }
+  }
+
+  private isContextAuthCurrent(context: CodexSessionContext): boolean {
+    return this.contextAuthStalenessMessage(context) === undefined;
+  }
+
+  private assertContextAuthCurrent(context: CodexSessionContext): void {
+    const stalenessMessage = this.contextAuthStalenessMessage(context);
+    if (stalenessMessage) {
+      throw new Error(stalenessMessage);
+    }
+  }
+
+  private assertDiscoveryAuthMatchesRequest(
+    context: CodexSessionContext,
+    codexOptions: CodexDiscoveryOptions | undefined,
+    expectedFingerprint: string,
+  ): void {
+    this.assertContextAuthCurrent(context);
+    this.assertDiscoveryRequestAuthCurrent(codexOptions, expectedFingerprint);
+    if (context.authFingerprint !== undefined && context.authFingerprint !== expectedFingerprint) {
+      throw new Error(
+        "Codex authentication changed while resolving discovery metadata; retry the request.",
+      );
+    }
+  }
+
+  private assertDiscoveryRequestAuthCurrent(
+    codexOptions: CodexDiscoveryOptions | undefined,
+    expectedFingerprint: string,
+  ): void {
+    if (codexAuthFingerprintForOptions(codexOptions) !== expectedFingerprint) {
+      throw new Error(
+        "Codex authentication changed while resolving discovery metadata; retry the request.",
+      );
+    }
+  }
+
+  private pruneStaleAuthSessions(): void {
+    for (const [threadId, context] of this.sessions) {
+      if (!this.isContextAuthCurrent(context)) {
+        this.stopSession(threadId);
+      }
+    }
+  }
+
   private requireSession(threadId: ThreadId): CodexSessionContext {
     const context = this.sessions.get(threadId);
     if (!context) {
@@ -1919,6 +2320,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.session.status === "closed") {
       throw new Error(`Session is closed for thread: ${threadId}`);
     }
+    const stalenessMessage = this.contextAuthStalenessMessage(context);
+    if (stalenessMessage) {
+      this.stopSession(threadId);
+      throw new Error(stalenessMessage);
+    }
 
     return context;
   }
@@ -1926,13 +2332,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
+    codexOptions?: CodexDiscoveryOptions,
+    expectedAuthFingerprint?: string,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
+    const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
+    const isCompatibleContext = (context: CodexSessionContext): boolean =>
+      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
+      (expectedAuthFingerprint === undefined ||
+        context.authFingerprint === expectedAuthFingerprint) &&
+      this.isContextAuthCurrent(context);
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
-        if (!normalizedCwd || session.session.cwd === normalizedCwd) {
+        if (
+          (!normalizedCwd || session.session.cwd === normalizedCwd) &&
+          isCompatibleContext(session)
+        ) {
           return session;
         }
       } catch {
@@ -1943,31 +2360,44 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
+        if (!this.isContextAuthCurrent(activeSession)) {
+          this.stopSession(activeSession.session.threadId);
+          continue;
+        }
         if (
           !activeSession.stopping &&
           !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
+          activeSession.session.cwd === normalizedCwd &&
+          isCompatibleContext(activeSession)
         ) {
           return activeSession;
         }
       }
-      return this.getOrCreateDiscoverySession(normalizedCwd);
+      return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
     }
     const firstActive = this.sessions.values().next().value;
-    if (firstActive) {
+    if (firstActive && !this.isContextAuthCurrent(firstActive)) {
+      this.stopSession(firstActive.session.threadId);
+      return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
+    }
+    if (firstActive && isCompatibleContext(firstActive)) {
       return firstActive;
     }
-    return this.getOrCreateDiscoverySession(process.cwd());
+    return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
   }
 
   private async resolveVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
     // Voice transcription should always resolve auth from a fresh discovery context
     // instead of reusing a possibly stale thread-bound session token.
-    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
+    const context = await this.getOrCreateDiscoverySession(
+      input.cwd?.trim() || process.cwd(),
+      input.codexOptions,
+    );
     const readAuthStatus = async (refreshToken: boolean) => {
       const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
         includeToken: true,
@@ -1998,23 +2428,59 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
-  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+  private async getOrCreateDiscoverySession(
+    cwd: string,
+    codexOptions?: CodexDiscoveryOptions,
+    expectedAuthFingerprint?: string,
+  ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
-    const existing = this.discoverySessions.get(normalizedCwd);
+    const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
+    const authFingerprint =
+      expectedAuthFingerprint ?? codexAuthFingerprintForOptions(normalizedCodexOptions);
+    const discoveryKey = JSON.stringify({
+      cwd: normalizedCwd,
+      account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
+      auth: authFingerprint,
+    });
+    for (const [existingKey, context] of this.discoverySessions) {
+      if (!this.isContextAuthCurrent(context)) {
+        this.stopDiscoverySession(existingKey);
+      }
+    }
+    const existing = this.discoverySessions.get(discoveryKey);
     if (existing && !existing.stopping && !existing.child.killed) {
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return existing;
     }
 
     const now = new Date().toISOString();
+    const codexBinaryPath = normalizedCodexOptions?.binaryPath ?? "codex";
     this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
+      ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
+      ...(normalizedCodexOptions?.shadowHomePath
+        ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
+        : {}),
+      ...(normalizedCodexOptions?.accountId ? { accountId: normalizedCodexOptions.accountId } : {}),
+      ...(normalizedCodexOptions?.environment
+        ? { environment: normalizedCodexOptions.environment }
+        : {}),
     });
+    const {
+      env: codexProcessEnv,
+      authTracking,
+      authFingerprint: launchAuthFingerprint,
+      appServerArgs,
+    } = buildCodexProcessLaunchContext(codexProcessEnvInputForOptions(normalizedCodexOptions));
+    if (launchAuthFingerprint !== authFingerprint) {
+      throw new Error("Codex authentication changed before discovery launch; retry the request.");
+    }
     const child = spawnCodexAppServer({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
+      env: codexProcessEnv,
+      args: appServerArgs,
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -2024,7 +2490,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: "full-access",
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
-        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
+        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${discoveryKey}`),
         createdAt: now,
         updatedAt: now,
       },
@@ -2043,13 +2509,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
+      authTracking,
+      authFingerprint: launchAuthFingerprint,
+      ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       discovery: true,
+      discoveryKey,
     };
 
-    this.discoverySessions.set(normalizedCwd, context);
+    this.discoverySessions.set(discoveryKey, context);
     this.attachProcessListeners(context);
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.assertContextAuthCurrent(context);
       this.writeMessage(context, { method: "initialized" });
       await this.registerSynaraSkillsRoot(context);
       try {
@@ -2058,11 +2529,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       } catch {
         // Discovery can still function without account metadata.
       }
+      this.assertContextAuthCurrent(context);
       this.updateSession(context, { status: "ready" });
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return context;
     } catch (error) {
-      this.stopDiscoverySession(normalizedCwd);
+      this.stopDiscoverySession(discoveryKey);
       throw error;
     }
   }
@@ -2162,19 +2634,38 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
+      context.stopping = true;
+      let ownedContext = false;
+      if (context.discovery) {
+        const discoveryKey = context.discoveryKey ?? "";
+        ownedContext =
+          discoveryKey.length > 0 && this.discoverySessions.get(discoveryKey) === context;
+        if (ownedContext) {
+          this.discoverySessions.delete(discoveryKey);
+          const idleTimer = this.discoverySessionIdleTimers.get(discoveryKey);
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+            this.discoverySessionIdleTimers.delete(discoveryKey);
+          }
+        }
+      } else {
+        ownedContext = this.sessions.get(context.session.threadId) === context;
+        if (ownedContext) {
+          this.sessions.delete(context.session.threadId);
+        }
+      }
+
+      this.rejectPendingRequests(context, message);
+      context.pendingApprovals.clear();
+      context.pendingUserInputs.clear();
+      context.output.close();
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
         lastError: code === 0 ? context.session.lastError : message,
       });
-      this.emitLifecycleEvent(context, "session/exited", message);
-      if (context.discovery) {
-        const discoveryKey = context.session.cwd ?? "";
-        if (discoveryKey) {
-          this.discoverySessions.delete(discoveryKey);
-        }
-      } else {
-        this.sessions.delete(context.session.threadId);
+      if (ownedContext) {
+        this.emitLifecycleEvent(context, "session/exited", message);
       }
     });
   }
@@ -2552,6 +3043,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result as TResponse;
   }
 
+  private sendThreadOpenRequest<TResponse>(
+    context: CodexSessionContext,
+    method: "thread/start" | "thread/resume" | "thread/fork",
+    params: unknown,
+  ): Promise<TResponse> {
+    this.assertContextAuthCurrent(context);
+    return this.sendRequest(context, method, params);
+  }
+
   private writeMessage(context: CodexSessionContext, message: unknown): void {
     const encoded = JSON.stringify(message);
     if (!context.child.stdin.writable) {
@@ -2573,6 +3073,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       method,
       message,
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
     });
   }
 
@@ -2588,6 +3091,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       method,
       message,
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
     });
   }
 
@@ -2644,6 +3150,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly expectedSharedContinuationGeneration?: string;
   }): void {
     assertSupportedCodexCliVersion(input);
   }
@@ -2949,8 +3459,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
-    const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+    const latestReviewTurn = snapshot.turns
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }
@@ -3360,6 +3870,9 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
 } {
   const options = input.providerOptions?.codex;
   if (!options) {
@@ -3368,6 +3881,9 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   return {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options.accountId ? { accountId: options.accountId } : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
   };
 }
 
@@ -3375,9 +3891,21 @@ function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly expectedSharedContinuationGeneration?: string;
 }): void {
   const env = buildCodexProcessEnv({
+    ...(input.environment ? { env: { ...process.env, ...input.environment } } : {}),
     ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.expectedSharedContinuationGeneration
+      ? {
+          expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration,
+        }
+      : {}),
   });
   const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
@@ -3416,7 +3944,10 @@ function assertSupportedCodexCliVersion(input: {
   }
 
   const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
+  if (!parsedVersion) {
+    throw new Error(CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE);
+  }
+  if (!isCodexCliVersionSupported(parsedVersion)) {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
   }
 }

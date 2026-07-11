@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execSync, spawnSync } from "node:child_process";
 import path from "node:path";
 
 import type {
@@ -12,6 +13,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import { resetApiProviders } from "@earendil-works/pi-ai";
+import { resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -31,6 +34,7 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { getModelSelectionStringOptionValue } from "@synara/shared/model";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -43,12 +47,23 @@ import {
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import {
+  buildProviderProcessEnv,
+  MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
+  providerIsolatedHomePath,
+} from "../providerProcessEnv.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "pi" as const;
+export const resolvePiStartInstanceId = resolveProviderSessionInstanceId;
+const PI_DOWNSTREAM_ENV_BACKED_PROVIDER_IDS = new Set<string>([
+  ...MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.map(({ provider }) => provider),
+  "amazon-bedrock",
+]);
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
 const PI_THINKING_OPTIONS: ReadonlyArray<{
   readonly value: ThinkingLevel;
@@ -73,7 +88,13 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
+type PiModelRegistrySdk = Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry"> &
+  Partial<Pick<PiCodingAgentModule, "getShellConfig">>;
 type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSessionRuntime"]>>;
+interface PiModelRegistryContext {
+  readonly authStorage: AuthStorage;
+  readonly registry: ModelRegistry;
+}
 
 let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
 
@@ -90,6 +111,66 @@ interface PiSessionContext {
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
+  extensionsEnabled: boolean;
+}
+
+export function resolvePiExtensionMode(input: {
+  readonly isolatedAccount: boolean;
+  readonly hasExtensionEnabledDefault: boolean;
+  readonly hasIsolatedMode: boolean;
+}): { readonly noExtensions: boolean } {
+  if (input.isolatedAccount && input.hasExtensionEnabledDefault) {
+    throw new Error(
+      "Stop extension-enabled default Pi sessions before starting an isolated Pi account.",
+    );
+  }
+  return { noExtensions: input.isolatedAccount || input.hasIsolatedMode };
+}
+
+export function makePiExtensionModeCoordinator(
+  getActiveModes: () => {
+    readonly hasExtensionEnabledDefault: boolean;
+    readonly hasIsolatedMode: boolean;
+  },
+) {
+  let pendingExtensionEnabledOperations = 0;
+  let pendingIsolatedModeOperations = 0;
+  return {
+    reserve(
+      isolatedAccount: boolean,
+      activeOverride?: {
+        readonly hasExtensionEnabledDefault: boolean;
+        readonly hasIsolatedMode: boolean;
+      },
+    ) {
+      const active = activeOverride ?? getActiveModes();
+      const hasExtensionEnabledDefault =
+        pendingExtensionEnabledOperations > 0 || active.hasExtensionEnabledDefault;
+      const hasIsolatedMode = pendingIsolatedModeOperations > 0 || active.hasIsolatedMode;
+      if (!isolatedAccount && hasExtensionEnabledDefault && hasIsolatedMode) {
+        throw new Error(
+          "Wait for the Pi account-mode transition to finish before starting default work.",
+        );
+      }
+      const mode = resolvePiExtensionMode({
+        isolatedAccount,
+        hasExtensionEnabledDefault,
+        hasIsolatedMode,
+      });
+      if (mode.noExtensions) pendingIsolatedModeOperations += 1;
+      else pendingExtensionEnabledOperations += 1;
+      let released = false;
+      return {
+        noExtensions: mode.noExtensions,
+        release: () => {
+          if (released) return;
+          released = true;
+          if (mode.noExtensions) pendingIsolatedModeOperations -= 1;
+          else pendingExtensionEnabledOperations -= 1;
+        },
+      };
+    },
+  };
 }
 
 interface PiStoredTurn {
@@ -280,6 +361,9 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
+    ...(context.session.providerInstanceId !== undefined
+      ? { providerInstanceId: context.session.providerInstanceId }
+      : {}),
     status: context.stopped ? "closed" : context.activeTurnId ? "running" : "ready",
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
@@ -743,26 +827,588 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
   return items;
 }
 
-function makeAgentDir(
-  agentDir: string | undefined,
-  piSdk: Pick<PiCodingAgentModule, "getAgentDir">,
+export function makePiStoragePaths(input: {
+  readonly agentDir?: string | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly instanceId?: string | undefined;
+  readonly stateDir: string;
+  readonly homeDir: string;
+  readonly sdkAgentDir: string;
+}): { readonly agentDir: string; readonly sessionDir?: string } {
+  const boundary =
+    input.environment !== undefined ||
+    (input.instanceId !== undefined && input.instanceId !== PROVIDER);
+  const pathApi = process.platform === "win32" ? path.win32 : path.posix;
+  const selectedAbsolutePath = (value: string | undefined) => {
+    const selected = trimToUndefined(value);
+    return selected && pathApi.isAbsolute(selected) ? selected : undefined;
+  };
+  const selectedEnvironmentValue = (name: string) =>
+    Object.entries(input.environment ?? {}).find(
+      ([candidate]) => candidate.toUpperCase() === name,
+    )?.[1];
+  const selectedHome = selectedAbsolutePath(
+    selectedEnvironmentValue("HOME") ?? selectedEnvironmentValue("USERPROFILE"),
+  );
+  const isolatedHome = providerIsolatedHomePath({
+    driver: PROVIDER,
+    instanceId: input.instanceId,
+    homeDir: input.homeDir,
+    isolationRootDir: input.stateDir,
+  });
+  const expansionHome = boundary ? (selectedHome ?? isolatedHome) : (selectedHome ?? input.homeDir);
+  const expandHome = (value: string) =>
+    value === "~" || value.startsWith("~/")
+      ? path.join(expansionHome, value.slice(value === "~" ? 1 : 2))
+      : value;
+  const rawConfiguredAgentDir = trimToUndefined(input.agentDir);
+  const configuredAgentDir = rawConfiguredAgentDir
+    ? rawConfiguredAgentDir === "~" || rawConfiguredAgentDir.startsWith("~/")
+      ? expandHome(rawConfiguredAgentDir)
+      : !boundary || pathApi.isAbsolute(rawConfiguredAgentDir)
+        ? rawConfiguredAgentDir
+        : undefined
+    : undefined;
+  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
+  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
+    return { agentDir: input.sdkAgentDir };
+  }
+  const agentDir =
+    configuredAgentDir ??
+    selectedAgentDir ??
+    path.join(selectedHome ?? isolatedHome, ".pi", "agent");
+  const selectedSessionDir = selectedAbsolutePath(
+    selectedEnvironmentValue("PI_CODING_AGENT_SESSION_DIR"),
+  );
+  return {
+    agentDir,
+    sessionDir: expandHome(selectedSessionDir ?? path.join(agentDir, "sessions")),
+  };
+}
+
+function readPiRuntimeApiKeyOverrides(
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
+): ReadonlyArray<readonly [provider: string, envKey: string, value: string]> {
+  if (!environment) {
+    return [];
+  }
+  return MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.flatMap(({ provider, envKeys }) => {
+    const envKey = envKeys.find((key) => trimToUndefined(environment[key]) !== undefined);
+    if (!envKey) {
+      return [];
+    }
+    const value = trimToUndefined(environment[envKey]);
+    return value ? [[provider, envKey, value] as const] : [];
+  });
+}
+
+export function applyPiRuntimeApiKeysFromEnvironment(
+  authStorage: Pick<AuthStorage, "setRuntimeApiKey">,
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
+): void {
+  for (const [provider, _envKey, value] of readPiRuntimeApiKeyOverrides(environment)) {
+    authStorage.setRuntimeApiKey(provider, value);
+  }
+}
+
+const PI_CONFIG_COMMAND_INHERITED_ENV_KEYS = new Set([
+  "ALL_PROXY",
+  "APPDATA",
+  "COLORTERM",
+  "COMSPEC",
+  "FORCE_COLOR",
+  "HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LANG",
+  "LOCALAPPDATA",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_COLOR",
+  "NO_PROXY",
+  "PATH",
+  "PATHEXT",
+  "PROGRAMDATA",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERPROFILE",
+  "WINDIR",
+]);
+
+interface PiInstanceConfigResolver {
+  readonly selectedValue: (name: string) => string | undefined;
+  readonly resolve: (config: string, cacheCommand?: boolean) => string | undefined;
+  readonly resolveOrThrow: (config: string, description: string) => string;
+  readonly resolveHeadersOrThrow: (
+    headers: Readonly<Record<string, string>> | undefined,
+    description: string,
+  ) => Record<string, string> | undefined;
+}
+
+type PiInstanceAuthResolution =
+  | { readonly status: "resolved"; readonly apiKey: string }
+  | { readonly status: "missing" }
+  | { readonly status: "failedStoredAuth" };
+
+interface PiInstanceResolver extends PiInstanceConfigResolver {
+  readonly resolveAuth: (provider: string) => Promise<PiInstanceAuthResolution>;
+}
+
+interface PiShellConfig {
+  readonly shell: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+interface PiAuthStorageInternals {
+  readonly refreshOAuthTokenWithLock?: (
+    provider: string,
+  ) => Promise<{ readonly apiKey: string; readonly newCredentials: unknown } | null>;
+  readonly recordError?: (error: unknown) => void;
+}
+
+interface PiProviderRequestConfig {
+  readonly apiKey?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly authHeader?: boolean;
+}
+
+interface PiModelRegistryInternals {
+  readonly providerRequestConfigs?: ReadonlyMap<string, PiProviderRequestConfig>;
+  readonly modelRequestHeaders?: ReadonlyMap<string, Readonly<Record<string, string>>>;
+  models?: Array<Model<Api>>;
+}
+
+function hasHeader(headers: Readonly<Record<string, unknown>> | undefined, name: string): boolean {
+  const normalized = name.toLowerCase();
+  return Object.keys(headers ?? {}).some((header) => header.toLowerCase() === normalized);
+}
+
+function buildPiSelectedEnvironment(
+  environment: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly stateDir: string; readonly homeDir: string },
+): NodeJS.ProcessEnv {
+  return buildProviderProcessEnv({
+    driver: PROVIDER,
+    env: {},
+    environment,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    ...(paths ? { isolationRootDir: paths.stateDir, homeDir: paths.homeDir } : {}),
+  });
+}
+
+function isPiConfigCommandEnvironmentKey(name: string): boolean {
+  const normalizedName = name.toUpperCase();
+  return (
+    PI_CONFIG_COMMAND_INHERITED_ENV_KEYS.has(normalizedName) ||
+    normalizedName.startsWith("LC_") ||
+    normalizedName.startsWith("XDG_")
+  );
+}
+
+function makePiInstanceConfigResolver(
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+  getShellConfig: (() => PiShellConfig) | undefined,
+): PiInstanceConfigResolver {
+  const inheritedCommandEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => isPiConfigCommandEnvironmentKey(name)),
+  );
+  const commandEnvironment = buildProviderProcessEnv({
+    driver: PROVIDER,
+    env: inheritedCommandEnvironment,
+    environment: Object.fromEntries(
+      Object.entries(selectedEnvironment).filter((entry): entry is [string, string] => {
+        return entry[1] !== undefined;
+      }),
+    ),
+  });
+  const commandResultCache = new Map<string, string | undefined>();
+  const selectedValue = (name: string): string | undefined => {
+    const normalizedName = process.platform === "win32" ? name.toUpperCase() : name;
+    return selectedEnvironment[normalizedName];
+  };
+  const executeWithDefaultShell = (command: string): string | undefined => {
+    try {
+      const output = execSync(command, {
+        encoding: "utf8",
+        env: commandEnvironment,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      return output.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const executeCommand = (config: string): string | undefined => {
+    const command = config.slice(1);
+    if (process.platform !== "win32" || !getShellConfig) {
+      return executeWithDefaultShell(command);
+    }
+    try {
+      const { shell, args } = getShellConfig();
+      const result = spawnSync(shell, [...args, command], {
+        encoding: "utf8",
+        env: commandEnvironment,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      if (result.error) {
+        return (result.error as NodeJS.ErrnoException).code === "ENOENT"
+          ? executeWithDefaultShell(command)
+          : undefined;
+      }
+      if (result.status !== 0) {
+        return undefined;
+      }
+      return result.stdout.trim() || undefined;
+    } catch {
+      return executeWithDefaultShell(command);
+    }
+  };
+  const resolve = (config: string, cacheCommand = false): string | undefined => {
+    if (!config.startsWith("!")) {
+      return selectedValue(config) || config;
+    }
+    if (!cacheCommand) {
+      return executeCommand(config);
+    }
+    if (!commandResultCache.has(config)) {
+      commandResultCache.set(config, executeCommand(config));
+    }
+    return commandResultCache.get(config);
+  };
+  const resolveOrThrow = (config: string, description: string): string => {
+    const resolved = resolve(config);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+    if (config.startsWith("!")) {
+      throw new Error(`Failed to resolve ${description} from shell command: ${config.slice(1)}`);
+    }
+    throw new Error(`Failed to resolve ${description}`);
+  };
+  const resolveHeadersOrThrow = (
+    headers: Readonly<Record<string, string>> | undefined,
+    description: string,
+  ): Record<string, string> | undefined => {
+    if (!headers) {
+      return undefined;
+    }
+    return Object.fromEntries(
+      Object.entries(headers).map(([name, value]) => [
+        name,
+        resolveOrThrow(value, `${description} header "${name}"`),
+      ]),
+    );
+  };
+  return { selectedValue, resolve, resolveOrThrow, resolveHeadersOrThrow };
+}
+
+export function isolatePiAuthStorageFromAmbientEnvironment(
+  authStorage: AuthStorage,
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+  getShellConfig?: () => PiShellConfig,
+): PiInstanceResolver {
+  const configResolver = makePiInstanceConfigResolver(selectedEnvironment, getShellConfig);
+  const runtimeOverrides = new Map<string, string>();
+  const setRuntimeApiKey = authStorage.setRuntimeApiKey.bind(authStorage);
+  const removeRuntimeApiKey = authStorage.removeRuntimeApiKey?.bind(authStorage);
+  const hasStoredCredential = authStorage.has.bind(authStorage);
+  const getStoredCredential = authStorage.get.bind(authStorage);
+  const getOAuthProviders = authStorage.getOAuthProviders.bind(authStorage);
+  const internals = authStorage as unknown as PiAuthStorageInternals;
+
+  authStorage.setRuntimeApiKey = (provider, apiKey) => {
+    runtimeOverrides.set(provider, apiKey);
+    setRuntimeApiKey(provider, apiKey);
+  };
+  authStorage.removeRuntimeApiKey = (provider) => {
+    runtimeOverrides.delete(provider);
+    removeRuntimeApiKey?.(provider);
+  };
+  const resolveAuth = async (provider: string): Promise<PiInstanceAuthResolution> => {
+    const runtimeOverride = runtimeOverrides.get(provider);
+    if (runtimeOverride) {
+      return { status: "resolved", apiKey: runtimeOverride };
+    }
+
+    const credential = getStoredCredential(provider);
+    if (credential?.type === "api_key") {
+      const apiKey = configResolver.resolve(credential.key, true);
+      return apiKey ? { status: "resolved", apiKey } : { status: "failedStoredAuth" };
+    }
+    if (credential?.type !== "oauth") {
+      return { status: "missing" };
+    }
+
+    const oauthProvider = getOAuthProviders().find((candidate) => candidate.id === provider);
+    if (!oauthProvider) {
+      return { status: "failedStoredAuth" };
+    }
+    if (Date.now() < credential.expires) {
+      const apiKey = oauthProvider.getApiKey(credential);
+      return apiKey ? { status: "resolved", apiKey } : { status: "failedStoredAuth" };
+    }
+
+    try {
+      const refreshed = await internals.refreshOAuthTokenWithLock?.call(authStorage, provider);
+      // A null refresh is terminal for this isolated lookup. Calling Pi's original
+      // resolver here would continue into the ambient process.env fallback.
+      return refreshed?.apiKey
+        ? { status: "resolved", apiKey: refreshed.apiKey }
+        : { status: "failedStoredAuth" };
+    } catch (error) {
+      internals.recordError?.call(authStorage, error);
+      authStorage.reload();
+      const updatedCredential = getStoredCredential(provider);
+      if (updatedCredential?.type === "oauth" && Date.now() < updatedCredential.expires) {
+        const apiKey = oauthProvider.getApiKey(updatedCredential);
+        return apiKey ? { status: "resolved", apiKey } : { status: "failedStoredAuth" };
+      }
+      return { status: "failedStoredAuth" };
+    }
+  };
+  authStorage.getApiKey = async (provider) => {
+    const resolution = await resolveAuth(provider);
+    return resolution.status === "resolved" ? resolution.apiKey : undefined;
+  };
+  authStorage.hasAuth = (provider) =>
+    runtimeOverrides.has(provider) || hasStoredCredential(provider);
+  authStorage.getAuthStatus = (provider) => {
+    if (hasStoredCredential(provider)) {
+      return { configured: true, source: "stored" };
+    }
+    if (runtimeOverrides.has(provider)) {
+      return { configured: false, source: "runtime", label: "--api-key" };
+    }
+    return { configured: false };
+  };
+
+  return { ...configResolver, resolveAuth };
+}
+
+function isolatePiModelRegistryFromAmbientEnvironment(
+  registry: ModelRegistry,
+  authStorage: AuthStorage,
+  configResolver: PiInstanceResolver,
+): void {
+  const internals = registry as unknown as PiModelRegistryInternals;
+  const providerRequestConfig = (provider: string) =>
+    internals.providerRequestConfigs?.get(provider);
+  const modelRequestHeaders = (provider: string, modelId: string) =>
+    internals.modelRequestHeaders?.get(`${provider}:${modelId}`);
+
+  registry.getApiKeyAndHeaders = async (model) => {
+    try {
+      if (model.provider.startsWith("cloudflare-")) {
+        model.baseUrl = model.baseUrl.replace(
+          /(?:\$\{?|\{)(CLOUDFLARE_(?:ACCOUNT|GATEWAY)_ID)\}?/gu,
+          (_match, name: string) => configResolver.selectedValue(name) ?? _match,
+        );
+        if (/(?:\$\{?|\{)CLOUDFLARE_(?:ACCOUNT|GATEWAY)_ID\}?/u.test(model.baseUrl)) {
+          return {
+            ok: false,
+            error: `Missing isolated Cloudflare routing value for ${model.provider}`,
+          };
+        }
+      }
+      if (model.provider === "amazon-bedrock") {
+        return {
+          ok: false,
+          error:
+            "Amazon Bedrock is disabled for isolated Pi accounts because the SDK falls back to the ambient AWS credential chain.",
+        };
+      }
+      if (model.provider === "azure-openai-responses") {
+        return {
+          ok: false,
+          error:
+            "Azure OpenAI is disabled for isolated Pi accounts because the SDK reads process-level Azure routing.",
+        };
+      }
+      const providerConfig = providerRequestConfig(model.provider);
+      const authResolution = await configResolver.resolveAuth(model.provider);
+      const storedApiKey = authResolution.status === "resolved" ? authResolution.apiKey : undefined;
+      const apiKey =
+        storedApiKey ??
+        (providerConfig?.apiKey
+          ? configResolver.resolveOrThrow(
+              providerConfig.apiKey,
+              `API key for provider "${model.provider}"`,
+            )
+          : undefined);
+      if (model.provider === "google-vertex" && (!apiKey || apiKey === "gcp-vertex-credentials")) {
+        return {
+          ok: false,
+          error:
+            "Vertex ADC is disabled for isolated Pi accounts; configure a real instance-scoped API key.",
+        };
+      }
+      if (
+        !apiKey &&
+        (authResolution.status === "failedStoredAuth" ||
+          PI_DOWNSTREAM_ENV_BACKED_PROVIDER_IDS.has(model.provider))
+      ) {
+        return { ok: false, error: `No API key found for "${model.provider}"` };
+      }
+      const providerHeaders = configResolver.resolveHeadersOrThrow(
+        providerConfig?.headers,
+        `provider "${model.provider}"`,
+      );
+      const perModelHeaders = configResolver.resolveHeadersOrThrow(
+        modelRequestHeaders(model.provider, model.id),
+        `model "${model.provider}/${model.id}"`,
+      );
+      let headers =
+        model.headers || providerHeaders || perModelHeaders
+          ? { ...model.headers, ...providerHeaders, ...perModelHeaders }
+          : undefined;
+      const api = (model as { readonly api?: string }).api;
+      if (api?.startsWith("openai-")) {
+        if (!hasHeader(headers, "OpenAI-Organization")) {
+          headers = {
+            ...headers,
+            "OpenAI-Organization":
+              configResolver.selectedValue("OPENAI_ORG_ID") ??
+              configResolver.selectedValue("OPENAI_ORGANIZATION") ??
+              null,
+          } as unknown as Record<string, string>;
+        }
+        if (!hasHeader(headers, "OpenAI-Project")) {
+          headers = {
+            ...headers,
+            "OpenAI-Project":
+              configResolver.selectedValue("OPENAI_PROJECT_ID") ??
+              configResolver.selectedValue("OPENAI_PROJECT") ??
+              null,
+          } as unknown as Record<string, string>;
+        }
+      }
+      if (
+        api === "anthropic-messages" &&
+        !String(apiKey ?? "").startsWith("sk-ant-oat") &&
+        !hasHeader(headers, "Authorization")
+      ) {
+        const authToken = configResolver.selectedValue("ANTHROPIC_AUTH_TOKEN");
+        headers = {
+          ...headers,
+          Authorization: authToken ? `Bearer ${authToken}` : null,
+        } as unknown as Record<string, string>;
+      }
+      if (providerConfig?.authHeader) {
+        if (!apiKey) {
+          return { ok: false, error: `No API key found for "${model.provider}"` };
+        }
+        headers = { ...headers, Authorization: `Bearer ${apiKey}` };
+      }
+      return {
+        ok: true,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+        ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+  registry.getProviderAuthStatus = (provider) => {
+    const authStatus = authStorage.getAuthStatus(provider);
+    if (authStatus.source) {
+      return authStatus;
+    }
+    const providerApiKey = providerRequestConfig(provider)?.apiKey;
+    if (!providerApiKey) {
+      return authStatus;
+    }
+    if (providerApiKey.startsWith("!")) {
+      return { configured: true, source: "models_json_command" };
+    }
+    if (configResolver.selectedValue(providerApiKey)) {
+      return { configured: true, source: "environment", label: providerApiKey };
+    }
+    return { configured: true, source: "models_json_key" };
+  };
+  registry.getApiKeyForProvider = async (provider) => {
+    const authResolution = await configResolver.resolveAuth(provider);
+    if (authResolution.status === "resolved") {
+      return authResolution.apiKey;
+    }
+    const providerApiKey = providerRequestConfig(provider)?.apiKey;
+    return providerApiKey ? configResolver.resolve(providerApiKey) : undefined;
+  };
+}
+
+function piRuntimeEnvironmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+  instanceId?: string,
+  paths?: { readonly stateDir: string; readonly homeDir: string },
 ): string {
-  return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
+  if (environment === undefined) {
+    return "ambient";
+  }
+  const normalized = Object.entries(
+    buildPiSelectedEnvironment(environment, instanceId, paths),
+  ).toSorted(([left], [right]) => left.localeCompare(right));
+  return `isolated:${crypto
+    .createHash("sha256")
+    .update(JSON.stringify(normalized))
+    .digest("hex")
+    .slice(0, 16)}`;
 }
 
 // Keep discovery registries isolated so extension provider registrations reflect
 // the current agent dir + project cwd instead of stale state from prior listings.
-function createPiModelRegistry(
+export function createPiModelRegistry(
   agentDir: string,
-  piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
-): {
-  readonly authStorage: AuthStorage;
-  readonly registry: ModelRegistry;
-} {
+  piSdk: PiModelRegistrySdk,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly stateDir: string; readonly homeDir: string },
+): PiModelRegistryContext {
   const authStorage = piSdk.AuthStorage.create(path.join(agentDir, "auth.json"));
+  // Pi's SDK can read API keys from process.env. Provider-instance keys must stay
+  // scoped to this AuthStorage instead, otherwise unrelated server work can inherit them.
+  const hasAccountBoundary =
+    environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+  const runtimeEnvironment = hasAccountBoundary
+    ? buildPiSelectedEnvironment(environment ?? {}, instanceId, paths)
+    : environment;
+  let configResolver: PiInstanceResolver | undefined;
+  if (hasAccountBoundary) {
+    configResolver = isolatePiAuthStorageFromAmbientEnvironment(
+      authStorage,
+      runtimeEnvironment ?? {},
+      piSdk.getShellConfig,
+    );
+  }
+  applyPiRuntimeApiKeysFromEnvironment(authStorage, runtimeEnvironment);
+  const registry = piSdk.ModelRegistry.create(authStorage, path.join(agentDir, "models.json"));
+  const registryInternals = registry as unknown as PiModelRegistryInternals;
+  if (hasAccountBoundary && registryInternals.models) {
+    registryInternals.models = registryInternals.models.map((model) => ({
+      ...model,
+      ...(model.headers ? { headers: { ...model.headers } } : {}),
+      ...(model.compat ? { compat: { ...model.compat } } : {}),
+    }));
+  }
+  if (configResolver) {
+    isolatePiModelRegistryFromAmbientEnvironment(registry, authStorage, configResolver);
+  }
   return {
     authStorage,
-    registry: piSdk.ModelRegistry.create(authStorage, path.join(agentDir, "models.json")),
+    registry,
   };
 }
 
@@ -856,7 +1502,54 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
     const sessions = new Map<ThreadId, PiSessionContext>();
-    const modelRegistries = new Map<string, ModelRegistry>();
+    const piExtensionModeCoordinator = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: [...sessions.values()].some(
+        (context) => context.extensionsEnabled,
+      ),
+      hasIsolatedMode: [...sessions.values()].some((context) => !context.extensionsEnabled),
+    }));
+    const reservePiExtensionMode = (isolatedAccount: boolean, replacingThreadId?: ThreadId) =>
+      piExtensionModeCoordinator.reserve(
+        isolatedAccount,
+        replacingThreadId === undefined
+          ? undefined
+          : {
+              hasExtensionEnabledDefault: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && context.extensionsEnabled,
+              ),
+              hasIsolatedMode: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && !context.extensionsEnabled,
+              ),
+            },
+      );
+    const preparePiDiscoveryMode = (
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+    ) => {
+      const isolated =
+        environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+      const reservation = reservePiExtensionMode(isolated);
+      if (isolated) {
+        resetApiProviders();
+        resetOAuthProviders();
+      }
+      return reservation;
+    };
+    const withPiDiscoveryReservation = async <A>(
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+      run: (noExtensions: boolean) => Promise<A>,
+    ): Promise<A> => {
+      const reservation = preparePiDiscoveryMode(environment, instanceId);
+      try {
+        return await run(reservation.noExtensions);
+      } finally {
+        reservation.release();
+      }
+    };
+    const modelRegistryContexts = new Map<string, PiModelRegistryContext>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -876,15 +1569,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }),
       });
 
-    const getModelRegistry = async (
+    const getModelRegistryContext = async (
       agentDir: string,
-      piSdk: Pick<PiCodingAgentModule, "AuthStorage" | "ModelRegistry">,
-    ): Promise<ModelRegistry> => {
-      const existing = modelRegistries.get(agentDir);
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+      piSdk: PiModelRegistrySdk,
+    ): Promise<PiModelRegistryContext> => {
+      const paths = { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir };
+      const cacheKey = `${agentDir}:${instanceId ?? PROVIDER}:${piRuntimeEnvironmentFingerprint(environment, instanceId, paths)}`;
+      const existing = modelRegistryContexts.get(cacheKey);
       if (existing) return existing;
-      const { registry } = createPiModelRegistry(agentDir, piSdk);
-      modelRegistries.set(agentDir, registry);
-      return registry;
+      const context = createPiModelRegistry(agentDir, piSdk, environment, instanceId, paths);
+      modelRegistryContexts.set(cacheKey, context);
+      return context;
     };
 
     const makeEventBase = (
@@ -893,6 +1590,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     ) => ({
       eventId: EventId.makeUnsafe(crypto.randomUUID()),
       provider: PROVIDER,
+      ...(context.session.providerInstanceId !== undefined
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
       threadId: context.session.threadId,
       createdAt: new Date().toISOString(),
       ...(options?.includeTurnId !== false && context.activeTurnId
@@ -1567,11 +2267,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       sdk: PiCodingAgentModule;
       cwd: string;
       agentDir: string;
+      environment?: Readonly<Record<string, string>>;
+      instanceId?: string;
       sessionManager: SessionManager;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
+      noExtensions?: boolean;
     }) => {
-      const registry = await getModelRegistry(input.agentDir, input.sdk);
+      const { authStorage, registry } = await getModelRegistryContext(
+        input.agentDir,
+        input.environment,
+        input.instanceId,
+        input.sdk,
+      );
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
         agentDir,
@@ -1581,7 +2289,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const services = await input.sdk.createAgentSessionServices({
           cwd,
           agentDir,
+          authStorage,
           modelRegistry: registry,
+          ...(input.noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
         });
         const model = findModelInRegistry(services.modelRegistry, input.modelId);
         if (input.modelId && !model) {
@@ -1609,154 +2319,196 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return { runtime, modelRegistry: runtime.services.modelRegistry };
     };
 
-    const startSession: PiAdapterShape["startSession"] = (input) =>
-      Effect.gen(function* () {
-        const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const piSdk = yield* loadPiSdk("session/start");
-        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
-        const sessionFile = extractResumeSessionFile(input.resumeCursor);
-        const sessionManager = sessionFile
-          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
-          : piSdk.SessionManager.create(cwd);
-        const modelId =
-          input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
-        const thinkingLevel =
-          input.modelSelection?.provider === "pi"
-            ? normalizePiThinkingLevel(input.modelSelection.options?.thinkingLevel)
-            : undefined;
-        const existingContext = sessions.get(input.threadId);
-        if (existingContext) {
-          sessions.delete(input.threadId);
-          yield* Effect.tryPromise({
-            try: () => disposeSessionContext(existingContext),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/restart",
-                detail: toMessage(cause, "Failed to dispose previous Pi session."),
-                cause,
-              }),
-          });
-        }
-        const { runtime, modelRegistry } = yield* Effect.tryPromise({
-          try: () =>
-            createSdkRuntime({
-              sdk: piSdk,
-              cwd,
-              agentDir,
-              sessionManager,
-              ...(modelId ? { modelId } : {}),
-              ...(thinkingLevel ? { thinkingLevel } : {}),
-            }),
+    const startSession: PiAdapterShape["startSession"] = (input) => {
+      const piOptions = input.providerOptions?.pi;
+      const piEnvironment = piOptions?.environment;
+      const resolvedProviderInstanceId = resolvePiStartInstanceId(input);
+      const isolatedAccount =
+        piEnvironment !== undefined ||
+        (resolvedProviderInstanceId !== undefined && resolvedProviderInstanceId !== PROVIDER);
+      return Effect.acquireUseRelease(
+        Effect.try({
+          try: () => reservePiExtensionMode(isolatedAccount, input.threadId),
           catch: (cause) =>
             new ProviderAdapterRequestError({
               provider: PROVIDER,
               method: "session/start",
-              detail: toMessage(cause, "Failed to start Pi session."),
+              detail: cause instanceof Error ? cause.message : String(cause),
               cause,
             }),
-        });
-        const now = new Date().toISOString();
-        const model = runtime.session.model
-          ? `${runtime.session.model.provider}/${runtime.session.model.id}`
-          : modelId;
-        const resumeCursor = getSessionFile(runtime.session);
-        const session: ProviderSession = {
-          provider: PROVIDER,
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          cwd,
-          threadId: input.threadId,
-          createdAt: now,
-          updatedAt: now,
-          ...(model ? { model } : {}),
-          ...(resumeCursor ? { resumeCursor } : {}),
-        };
-        const context: PiSessionContext = {
-          runtime,
-          modelRegistry,
-          session,
-          turns: [],
-          activeTurnId: undefined,
-          activeAssistantItemId: undefined,
-          activeReasoningItemId: undefined,
-          activeToolItems: new Map(),
-          pendingUserInputs: new Map(),
-          stopped: false,
-          lastKnownTokenUsage: undefined,
-          unsubscribe: undefined,
-        };
-        context.unsubscribe = runtime.session.subscribe((event) =>
-          handleSessionEvent(context, event),
-        );
-        sessions.set(input.threadId, context);
-        yield* Effect.tryPromise({
-          try: () =>
-            runtime.session.bindExtensions({ uiContext: makePiExtensionUIContext(context) }),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "extension/bind",
-              detail: toMessage(cause, "Failed to bind Pi extensions."),
-              cause,
-            }),
-        }).pipe(
-          Effect.catch((error) =>
-            Effect.gen(function* () {
-              sessions.delete(input.threadId);
+        }),
+        (modeReservation) =>
+          Effect.gen(function* () {
+            const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+            const sessionFile = extractResumeSessionFile(input.resumeCursor);
+            const modelId = input.modelSelection?.model;
+            const thinkingLevel = normalizePiThinkingLevel(
+              getModelSelectionStringOptionValue(input.modelSelection, "thinkingLevel"),
+            );
+            const existingContext = sessions.get(input.threadId);
+            if (existingContext) {
               yield* Effect.tryPromise({
-                try: () => disposeSessionContext(context),
-                catch: () => error,
-              }).pipe(Effect.catch(() => Effect.void));
-              return yield* Effect.fail(error);
-            }),
-          ),
-        );
-        const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
-        if (loadedExtensions.length > 0) {
-          const extensionNames = loadedExtensions.map(extensionDisplayName);
-          offerRuntimeEvent({
-            ...makeEventBase(context, { includeTurnId: false }),
-            type: "runtime.warning",
-            payload: {
-              message:
-                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
-              detail: {
-                extensionCount: loadedExtensions.length,
-                extensions: extensionNames,
+                try: () => disposeSessionContext(existingContext),
+                catch: (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "session/restart",
+                    detail: toMessage(cause, "Failed to dispose previous Pi session."),
+                    cause,
+                  }),
+              });
+              sessions.delete(input.threadId);
+            }
+            if (isolatedAccount) {
+              resetApiProviders();
+              resetOAuthProviders();
+            }
+            const piSdk = yield* loadPiSdk("session/start");
+            const noExtensions = modeReservation.noExtensions;
+            const { runtime, modelRegistry } = yield* Effect.tryPromise({
+              try: () => {
+                const storagePaths = makePiStoragePaths({
+                  agentDir: piOptions?.agentDir,
+                  environment: piEnvironment,
+                  instanceId: resolvedProviderInstanceId,
+                  stateDir: serverConfig.stateDir,
+                  homeDir: serverConfig.homeDir,
+                  sdkAgentDir: piSdk.getAgentDir(),
+                });
+                const agentDir = storagePaths.agentDir;
+                const sessionManager = sessionFile
+                  ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
+                  : piSdk.SessionManager.create(cwd, storagePaths.sessionDir);
+                return createSdkRuntime({
+                  sdk: piSdk,
+                  cwd,
+                  agentDir,
+                  ...(resolvedProviderInstanceId !== undefined
+                    ? { instanceId: resolvedProviderInstanceId }
+                    : {}),
+                  ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+                  sessionManager,
+                  ...(noExtensions ? { noExtensions: true } : {}),
+                  ...(modelId ? { modelId } : {}),
+                  ...(thinkingLevel ? { thinkingLevel } : {}),
+                });
               },
-            },
-            raw: {
-              source: "pi.sdk.event",
-              method: "extension/ui-limited-warning",
-              payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
-            },
-          } satisfies ProviderRuntimeEvent);
-        }
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "session.started",
-          payload: { message: "Pi session started", resume: session.resumeCursor },
-        } satisfies ProviderRuntimeEvent);
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "thread.started",
-          payload: { providerThreadId: runtime.session.sessionId },
-        } satisfies ProviderRuntimeEvent);
-        const initialUsage = normalizeTokenUsage(
-          runtime.session.getSessionStats(),
-          runtime.session.model?.contextWindow,
-        );
-        context.lastKnownTokenUsage = initialUsage;
-        if (initialUsage) {
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "thread.token-usage.updated",
-            payload: { usage: initialUsage },
-          } satisfies ProviderRuntimeEvent);
-        }
-        return session;
-      });
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "session/start",
+                  detail: toMessage(cause, "Failed to start Pi session."),
+                  cause,
+                }),
+            });
+            const now = new Date().toISOString();
+            const model = runtime.session.model
+              ? `${runtime.session.model.provider}/${runtime.session.model.id}`
+              : modelId;
+            const resumeCursor = getSessionFile(runtime.session);
+            const session: ProviderSession = {
+              provider: PROVIDER,
+              ...(resolvedProviderInstanceId !== undefined
+                ? { providerInstanceId: resolvedProviderInstanceId }
+                : {}),
+              status: "ready",
+              runtimeMode: input.runtimeMode,
+              cwd,
+              threadId: input.threadId,
+              createdAt: now,
+              updatedAt: now,
+              ...(model ? { model } : {}),
+              ...(resumeCursor ? { resumeCursor } : {}),
+            };
+            const context: PiSessionContext = {
+              runtime,
+              modelRegistry,
+              session,
+              turns: [],
+              activeTurnId: undefined,
+              activeAssistantItemId: undefined,
+              activeReasoningItemId: undefined,
+              activeToolItems: new Map(),
+              pendingUserInputs: new Map(),
+              stopped: false,
+              lastKnownTokenUsage: undefined,
+              unsubscribe: undefined,
+              extensionsEnabled: !noExtensions,
+            };
+            context.unsubscribe = runtime.session.subscribe((event) =>
+              handleSessionEvent(context, event),
+            );
+            sessions.set(input.threadId, context);
+            yield* Effect.tryPromise({
+              try: () =>
+                runtime.session.bindExtensions({ uiContext: makePiExtensionUIContext(context) }),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "extension/bind",
+                  detail: toMessage(cause, "Failed to bind Pi extensions."),
+                  cause,
+                }),
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  sessions.delete(input.threadId);
+                  yield* Effect.tryPromise({
+                    try: () => disposeSessionContext(context),
+                    catch: () => error,
+                  }).pipe(Effect.catch(() => Effect.void));
+                  return yield* Effect.fail(error);
+                }),
+              ),
+            );
+            const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
+            if (loadedExtensions.length > 0) {
+              const extensionNames = loadedExtensions.map(extensionDisplayName);
+              offerRuntimeEvent({
+                ...makeEventBase(context, { includeTurnId: false }),
+                type: "runtime.warning",
+                payload: {
+                  message:
+                    "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
+                  detail: {
+                    extensionCount: loadedExtensions.length,
+                    extensions: extensionNames,
+                  },
+                },
+                raw: {
+                  source: "pi.sdk.event",
+                  method: "extension/ui-limited-warning",
+                  payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
+                },
+              } satisfies ProviderRuntimeEvent);
+            }
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              type: "session.started",
+              payload: { message: "Pi session started", resume: session.resumeCursor },
+            } satisfies ProviderRuntimeEvent);
+            offerRuntimeEvent({
+              ...makeEventBase(context),
+              type: "thread.started",
+              payload: { providerThreadId: runtime.session.sessionId },
+            } satisfies ProviderRuntimeEvent);
+            const initialUsage = normalizeTokenUsage(
+              runtime.session.getSessionStats(),
+              runtime.session.model?.contextWindow,
+            );
+            context.lastKnownTokenUsage = initialUsage;
+            if (initialUsage) {
+              offerRuntimeEvent({
+                ...makeEventBase(context),
+                type: "thread.token-usage.updated",
+                payload: { usage: initialUsage },
+              } satisfies ProviderRuntimeEvent);
+            }
+            return session;
+          }),
+        (modeReservation) => Effect.sync(modeReservation.release),
+      );
+    };
 
     const buildPromptPayload = (input: {
       readonly input?: string | undefined;
@@ -1821,7 +2573,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             issue: "A Pi turn is already active for this thread.",
           });
         }
-        if (input.modelSelection?.provider === "pi") {
+        if (input.modelSelection) {
           const model = findModelInRegistry(context.modelRegistry, input.modelSelection.model);
           if (!model) {
             return yield* new ProviderAdapterValidationError({
@@ -1841,7 +2593,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               }),
           });
           const thinkingLevel = normalizePiThinkingLevel(
-            input.modelSelection.options?.thinkingLevel,
+            getModelSelectionStringOptionValue(input.modelSelection, "thinkingLevel"),
           );
           if (thinkingLevel) {
             context.runtime.session.setThinkingLevel(thinkingLevel);
@@ -2109,47 +2861,62 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
-          const piSdk = await loadPiCodingAgentModule();
-          const agentDir = makeAgentDir(input.agentDir, piSdk);
-          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const { authStorage, registry } = createPiModelRegistry(agentDir, piSdk);
-          const services = await piSdk.createAgentSessionServices({
-            cwd,
-            agentDir,
-            authStorage,
-            modelRegistry: registry,
-          });
-          const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = services.modelRegistry.getAvailable().map((model) => {
-            const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
+        try: () =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const piSdk = await loadPiCodingAgentModule();
+            const { agentDir } = makePiStoragePaths({
+              agentDir: input.agentDir,
+              environment: input.environment,
+              instanceId: input.instanceId,
+              stateDir: serverConfig.stateDir,
+              homeDir: serverConfig.homeDir,
+              sdkAgentDir: piSdk.getAgentDir(),
+            });
+            const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+            const { authStorage, registry } = createPiModelRegistry(
+              agentDir,
+              piSdk,
+              input.environment,
+              input.instanceId,
+              { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+            );
+            const services = await piSdk.createAgentSessionServices({
+              cwd,
+              agentDir,
+              authStorage,
+              modelRegistry: registry,
+              ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+            });
+            const extensionCount = services.resourceLoader.getExtensions().extensions.length;
+            const models = services.modelRegistry.getAvailable().map((model) => {
+              const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
+              return {
+                slug: `${model.provider}/${model.id}`,
+                name: model.name,
+                upstreamProviderId: model.provider,
+                upstreamProviderName: services.modelRegistry.getProviderDisplayName(model.provider),
+                ...(supportedThinkingOptions.length > 0
+                  ? {
+                      supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
+                        value: option.value,
+                        label: option.label,
+                        description: option.description,
+                      })),
+                      ...(supportedThinkingOptions.some(
+                        (option) => option.value === DEFAULT_PI_THINKING_LEVEL,
+                      )
+                        ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
+                        : {}),
+                    }
+                  : {}),
+              };
+            });
             return {
-              slug: `${model.provider}/${model.id}`,
-              name: model.name,
-              upstreamProviderId: model.provider,
-              upstreamProviderName: services.modelRegistry.getProviderDisplayName(model.provider),
-              ...(supportedThinkingOptions.length > 0
-                ? {
-                    supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
-                      value: option.value,
-                      label: option.label,
-                      description: option.description,
-                    })),
-                    ...(supportedThinkingOptions.some(
-                      (option) => option.value === DEFAULT_PI_THINKING_LEVEL,
-                    )
-                      ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
-                      : {}),
-                  }
-                : {}),
-            };
-          });
-          return {
-            models,
-            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
-            cached: false,
-          } satisfies ProviderListModelsResult;
-        },
+              models,
+              source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2161,48 +2928,72 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
-          const active = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : undefined;
-          const loader = active?.runtime.session.resourceLoader;
-          if (active && input.forceReload) {
-            await active.runtime.session.reload();
-          }
-          let services:
-            | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
-            | undefined;
-          if (!loader) {
-            const piSdk = await loadPiCodingAgentModule();
-            services = await piSdk.createAgentSessionServices({
-              cwd: input.cwd,
-              agentDir: makeAgentDir(input.agentDir, piSdk),
-            });
-          }
-          if (services && input.forceReload) {
-            await services.resourceLoader.reload();
-          }
-          const resourceLoader = loader ?? services?.resourceLoader;
-          if (!resourceLoader) {
-            throw new Error("Failed to create Pi resource loader.");
-          }
-          const result = resourceLoader.getSkills();
-          return {
-            skills: result.skills.map((skill) => {
-              const description = trimToUndefined(skill.description);
-              const scope = trimToUndefined(skill.sourceInfo.source);
-              return {
-                name: skill.name,
-                ...(description ? { description } : {}),
-                path: skill.filePath,
-                enabled: !skill.disableModelInvocation,
-                ...(scope ? { scope } : {}),
-              };
-            }),
-            source: "pi.sdk",
-            cached: false,
-          } satisfies ProviderListSkillsResult;
-        },
+        try: () =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const active = input.threadId
+              ? sessions.get(ThreadId.makeUnsafe(input.threadId))
+              : undefined;
+            const loader = active?.runtime.session.resourceLoader;
+            if (active && input.forceReload) {
+              if (noExtensions && active.extensionsEnabled) {
+                throw new Error(
+                  "Extension reload is disabled while an isolated Pi account is active.",
+                );
+              }
+              await active.runtime.session.reload();
+            }
+            let services:
+              | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
+              | undefined;
+            if (!loader) {
+              const piSdk = await loadPiCodingAgentModule();
+              const { agentDir } = makePiStoragePaths({
+                agentDir: input.agentDir,
+                environment: input.environment,
+                instanceId: input.instanceId,
+                stateDir: serverConfig.stateDir,
+                homeDir: serverConfig.homeDir,
+                sdkAgentDir: piSdk.getAgentDir(),
+              });
+              const { authStorage, registry } = createPiModelRegistry(
+                agentDir,
+                piSdk,
+                input.environment,
+                input.instanceId,
+                { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+              );
+              services = await piSdk.createAgentSessionServices({
+                cwd: input.cwd,
+                agentDir,
+                authStorage,
+                modelRegistry: registry,
+                ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+              });
+            }
+            if (services && input.forceReload) {
+              await services.resourceLoader.reload();
+            }
+            const resourceLoader = loader ?? services?.resourceLoader;
+            if (!resourceLoader) {
+              throw new Error("Failed to create Pi resource loader.");
+            }
+            const result = resourceLoader.getSkills();
+            return {
+              skills: result.skills.map((skill) => {
+                const description = trimToUndefined(skill.description);
+                const scope = trimToUndefined(skill.sourceInfo.source);
+                return {
+                  name: skill.name,
+                  ...(description ? { description } : {}),
+                  path: skill.filePath,
+                  enabled: !skill.disableModelInvocation,
+                  ...(scope ? { scope } : {}),
+                };
+              }),
+              source: "pi.sdk",
+              cached: false,
+            } satisfies ProviderListSkillsResult;
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2214,61 +3005,85 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listCommands: NonNullable<PiAdapterShape["listCommands"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
-          const active = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : undefined;
-          const session = active?.runtime.session;
-          const reloadCommand = {
-            name: "reload",
-            description: "Reload Pi extensions, skills, prompts, themes, tools, and settings",
-          };
-          if (session) {
-            if (input.forceReload) {
-              await session.reload();
-            }
-            const extensionCommands = session.extensionRunner
-              .getRegisteredCommands()
-              .map((command) => ({
-                name: command.invocationName,
-                description: trimToUndefined(command.description) ?? "Extension command",
+        try: () =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const active = input.threadId
+              ? sessions.get(ThreadId.makeUnsafe(input.threadId))
+              : undefined;
+            const session = active?.runtime.session;
+            const reloadCommand = {
+              name: "reload",
+              description: "Reload Pi extensions, skills, prompts, themes, tools, and settings",
+            };
+            if (session) {
+              if (input.forceReload) {
+                await session.reload();
+              }
+              const extensionCommands = session.extensionRunner
+                .getRegisteredCommands()
+                .map((command) => ({
+                  name: command.invocationName,
+                  description: trimToUndefined(command.description) ?? "Extension command",
+                }));
+              const promptCommands = session.promptTemplates.map((template) => ({
+                name: template.name,
+                description: trimToUndefined(template.description) ?? "Prompt template",
               }));
-            const promptCommands = session.promptTemplates.map((template) => ({
+              const skillCommands = session.resourceLoader.getSkills().skills.map((skill) => ({
+                name: `skill:${skill.name}`,
+                description: trimToUndefined(skill.description) ?? "Skill",
+              }));
+              return {
+                commands: [
+                  reloadCommand,
+                  ...extensionCommands,
+                  ...promptCommands,
+                  ...skillCommands,
+                ],
+                source: "pi.sdk",
+                cached: false,
+              } satisfies ProviderListCommandsResult;
+            }
+            const piSdk = await loadPiCodingAgentModule();
+            const { agentDir } = makePiStoragePaths({
+              agentDir: input.agentDir,
+              environment: input.environment,
+              instanceId: input.instanceId,
+              stateDir: serverConfig.stateDir,
+              homeDir: serverConfig.homeDir,
+              sdkAgentDir: piSdk.getAgentDir(),
+            });
+            const { authStorage, registry } = createPiModelRegistry(
+              agentDir,
+              piSdk,
+              input.environment,
+              input.instanceId,
+              { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+            );
+            const services = await piSdk.createAgentSessionServices({
+              cwd: input.cwd,
+              agentDir,
+              authStorage,
+              modelRegistry: registry,
+              ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+            });
+            if (input.forceReload) {
+              await services.resourceLoader.reload();
+            }
+            const promptCommands = services.resourceLoader.getPrompts().prompts.map((template) => ({
               name: template.name,
               description: trimToUndefined(template.description) ?? "Prompt template",
             }));
-            const skillCommands = session.resourceLoader.getSkills().skills.map((skill) => ({
+            const skillCommands = services.resourceLoader.getSkills().skills.map((skill) => ({
               name: `skill:${skill.name}`,
               description: trimToUndefined(skill.description) ?? "Skill",
             }));
             return {
-              commands: [reloadCommand, ...extensionCommands, ...promptCommands, ...skillCommands],
+              commands: [reloadCommand, ...promptCommands, ...skillCommands],
               source: "pi.sdk",
               cached: false,
             } satisfies ProviderListCommandsResult;
-          }
-          const piSdk = await loadPiCodingAgentModule();
-          const services = await piSdk.createAgentSessionServices({
-            cwd: input.cwd,
-            agentDir: makeAgentDir(input.agentDir, piSdk),
-          });
-          if (input.forceReload) {
-            await services.resourceLoader.reload();
-          }
-          const promptCommands = services.resourceLoader.getPrompts().prompts.map((template) => ({
-            name: template.name,
-            description: trimToUndefined(template.description) ?? "Prompt template",
-          }));
-          const skillCommands = services.resourceLoader.getSkills().skills.map((skill) => ({
-            name: `skill:${skill.name}`,
-            description: trimToUndefined(skill.description) ?? "Skill",
-          }));
-          return {
-            commands: [reloadCommand, ...promptCommands, ...skillCommands],
-            source: "pi.sdk",
-            cached: false,
-          } satisfies ProviderListCommandsResult;
-        },
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,

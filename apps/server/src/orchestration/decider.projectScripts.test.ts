@@ -184,7 +184,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-mixed-active"),
           title: "Saved chat",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -374,7 +374,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -401,12 +401,12 @@ describe("decider project scripts", () => {
             attachments: [],
           },
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "high" },
+              { id: "fastMode", value: true },
+            ],
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
@@ -431,12 +431,12 @@ describe("decider project scripts", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       messageId: asMessageId("message-user-1"),
       modelSelection: {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.3-codex",
-        options: {
-          reasoningEffort: "high",
-          fastMode: true,
-        },
+        options: [
+          { id: "reasoningEffort", value: "high" },
+          { id: "fastMode", value: true },
+        ],
       },
       runtimeMode: "approval-required",
     });
@@ -485,7 +485,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -568,7 +568,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-1"),
           title: "Thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -651,7 +651,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-handoff"),
           title: "Handoff",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -706,7 +706,7 @@ describe("decider project scripts", () => {
             projectId: asProjectId("project-handoff"),
             title: "Handoff Copy",
             modelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "sonnet",
             },
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -773,7 +773,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-native-handoff"),
           title: "Handoff",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -852,7 +852,7 @@ describe("decider project scripts", () => {
           projectId: asProjectId("project-native-handoff"),
           title: "Handoff Copy",
           modelSelection: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "sonnet",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

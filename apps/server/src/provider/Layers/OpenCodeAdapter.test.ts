@@ -5,6 +5,7 @@ import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import type { ProviderAdapterError } from "../Errors.ts";
 import {
   type OpenCodeCliModelDescriptor,
   OpenCodeRuntimeError,
@@ -12,15 +13,60 @@ import {
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
+import { KiloAdapter } from "../Services/KiloAdapter.ts";
+import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import {
   flattenOpenCodeCliModels,
   flattenOpenCodeModels,
+  makeKiloAdapterLive,
   makeOpenCodeAdapterLive,
   normalizeOpenCodeTokenUsage,
   resolvePreferredOpenCodeModelProviders,
 } from "./OpenCodeAdapter.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+
+function runOpenCodeCompatibleScenario<T>(
+  provider: "opencode" | "kilo",
+  runtime: OpenCodeRuntimeShape,
+  scenario: (
+    adapter: ProviderAdapterShape<ProviderAdapterError>,
+  ) => Effect.Effect<T, ProviderAdapterError>,
+): Promise<T> {
+  if (provider === "opencode") {
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* scenario(adapter);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+  }
+
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const adapter = yield* KiloAdapter;
+      return yield* scenario(adapter);
+    }).pipe(
+      Effect.provide(
+        makeKiloAdapterLive({ runtime }).pipe(
+          Layer.provideMerge(
+            ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+}
 
 type TestModelInput = Omit<Partial<Model>, "capabilities"> &
   Pick<Model, "id" | "name"> & {
@@ -124,6 +170,7 @@ function createMockOpenCodeRuntime(options?: {
   const abortCalls: Array<{ sessionID: string }> = [];
   const cliModelCalls: Array<Parameters<OpenCodeRuntimeShape["listOpenCodeCliModels"]>[0]> = [];
   const connectCalls: Array<Parameters<OpenCodeRuntimeShape["connectToOpenCodeServer"]>[0]> = [];
+  const sdkClientCalls: Array<Parameters<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>[0]> = [];
   const createCalls: Array<Record<string, unknown>> = [];
   const updateCalls: Array<Record<string, unknown>> = [];
   const forkCalls: Array<{ sessionID: string }> = [];
@@ -197,7 +244,8 @@ function createMockOpenCodeRuntime(options?: {
       }),
     );
 
-  const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = () => {
+  const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = (input) => {
+    sdkClientCalls.push(input);
     const commandList = options?.commandLists?.[createClientCallCount];
     createClientCallCount += 1;
     if (!commandList) {
@@ -252,6 +300,7 @@ function createMockOpenCodeRuntime(options?: {
     abortCalls,
     cliModelCalls,
     connectCalls,
+    sdkClientCalls,
     createCalls,
     updateCalls,
     forkCalls,
@@ -302,6 +351,39 @@ function createSubscribedEventQueue() {
             }
             return await new Promise<IteratorResult<unknown>>((resolve) => {
               waitingResolver = resolve;
+            });
+          },
+        };
+      },
+    },
+  };
+}
+
+function createFailingSubscribedEventStream() {
+  let rejectNext: ((error: unknown) => void) | undefined;
+  let pendingError: unknown;
+
+  return {
+    fail(error: unknown) {
+      if (rejectNext) {
+        const reject = rejectNext;
+        rejectNext = undefined;
+        reject(error);
+      } else {
+        pendingError = error;
+      }
+    },
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async (): Promise<IteratorResult<unknown>> => {
+            if (pendingError !== undefined) {
+              const error = pendingError;
+              pendingError = undefined;
+              throw error;
+            }
+            return await new Promise<IteratorResult<unknown>>((_resolve, reject) => {
+              rejectNext = reject;
             });
           },
         };
@@ -1128,6 +1210,296 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it("does not reuse an active OpenCode session for model discovery when the instance envelope differs", async () => {
+    const serverUrl = "http://127.0.0.1:4555";
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-discovery-envelope"),
+          cwd: "/repo/discovery-envelope",
+          runtimeMode: "full-access",
+          providerOptions: {
+            opencode: {
+              serverUrl,
+              serverPassword: "old-password",
+              environment: { OPENCODE_PROFILE: "old" },
+            },
+          },
+        });
+
+        return yield* listModels({
+          provider: "opencode",
+          cwd: "/repo/discovery-envelope",
+          serverUrl,
+          serverPassword: "new-password",
+          experimentalWebSockets: true,
+          environment: { OPENCODE_PROFILE: "new" },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(2);
+    expect(runtime.connectCalls[1]).toMatchObject({
+      cwd: "/repo/discovery-envelope",
+      serverUrl,
+      experimentalWebSockets: true,
+      environment: { OPENCODE_PROFILE: "new" },
+    });
+    expect(runtime.sdkClientCalls[1]).toMatchObject({
+      baseUrl: serverUrl,
+      directory: "/repo/discovery-envelope",
+      serverPassword: "new-password",
+    });
+  });
+
+  it.each([
+    {
+      name: "ambient session then explicit empty discovery",
+      sessionEnvironment: undefined,
+      discoveryEnvironment: {},
+    },
+    {
+      name: "explicit empty session then ambient discovery",
+      sessionEnvironment: {},
+      discoveryEnvironment: undefined,
+    },
+  ])(
+    "does not reuse $name envelopes",
+    async ({ name, sessionEnvironment, discoveryEnvironment }) => {
+      const serverUrl = "http://127.0.0.1:4666";
+      const runtime = createMockOpenCodeRuntime();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const listModels = adapter.listModels;
+          if (!listModels) {
+            throw new Error("Expected OpenCode adapter to support runtime model listing.");
+          }
+
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId(`thread-${name.replaceAll(" ", "-")}`),
+            cwd: "/repo/discovery-environment-boundary",
+            runtimeMode: "full-access",
+            providerOptions: {
+              opencode: {
+                serverUrl,
+                ...(sessionEnvironment !== undefined ? { environment: sessionEnvironment } : {}),
+              },
+            },
+          });
+
+          return yield* listModels({
+            provider: "opencode",
+            cwd: "/repo/discovery-environment-boundary",
+            serverUrl,
+            ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(runtime.connectCalls).toHaveLength(2);
+      expect(runtime.connectCalls.map((call) => call.environment)).toEqual([
+        sessionEnvironment,
+        discoveryEnvironment,
+      ]);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "passes the resolved nondefault %s instance through external thread reads",
+    async (provider) => {
+      const runtime = createMockOpenCodeRuntime();
+      const providerInstanceId = `${provider}_work`;
+
+      if (provider === "opencode") {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* OpenCodeAdapter;
+            if (!adapter.readExternalThread) {
+              throw new Error("Expected OpenCode external thread reads.");
+            }
+            return yield* adapter.readExternalThread({
+              externalThreadId: "external-session",
+              cwd: "/repo/external-import",
+              providerInstanceId,
+            });
+          }).pipe(
+            Effect.provide(
+              makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } else {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* KiloAdapter;
+            if (!adapter.readExternalThread) {
+              throw new Error("Expected Kilo external thread reads.");
+            }
+            return yield* adapter.readExternalThread({
+              externalThreadId: "external-session",
+              cwd: "/repo/external-import",
+              providerInstanceId,
+            });
+          }).pipe(
+            Effect.provide(
+              makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      }
+
+      expect(runtime.connectCalls).toHaveLength(1);
+      expect(runtime.connectCalls[0]).toMatchObject({
+        cwd: "/repo/external-import",
+        instanceId: providerInstanceId,
+      });
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "keeps the stopped %s account on a graceful exit after the thread switches accounts",
+    async (provider) => {
+      const runtime = createMockOpenCodeRuntime();
+      const threadId = asThreadId(`thread-${provider}-account-switch`);
+      const accountA = `${provider}_account_a`;
+      const accountB = `${provider}_account_b`;
+      const events = await runOpenCodeCompatibleScenario(provider, runtime.runtime, (adapter) =>
+        Effect.gen(function* () {
+          const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+            Effect.forkChild,
+          );
+
+          yield* adapter.startSession({
+            provider,
+            providerInstanceId: accountA,
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.stopSession(threadId);
+          yield* adapter.startSession({
+            provider,
+            providerInstanceId: accountB,
+            threadId,
+            runtimeMode: "full-access",
+          });
+
+          return Array.from(yield* Fiber.join(eventsFiber));
+        }),
+      );
+
+      const exited = events.find((event) => event.type === "session.exited");
+      const rebound = events.filter((event) => event.type === "session.started").at(-1);
+      expect(exited?.providerInstanceId).toBe(accountA);
+      expect(rebound?.providerInstanceId).toBe(accountB);
+    },
+  );
+
+  it.each(["opencode", "kilo"] as const)(
+    "keeps the failed %s account on unexpected terminal events after the thread switches accounts",
+    async (provider) => {
+      const failingEvents = createFailingSubscribedEventStream();
+      const runtime = createMockOpenCodeRuntime();
+      const client = runtime.runtime.createOpenCodeSdkClient({
+        baseUrl: "http://127.0.0.1:4099",
+        directory: process.cwd(),
+      }) as unknown as {
+        event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+      };
+      let subscriptionCount = 0;
+      client.event.subscribe = async () => ({
+        stream:
+          subscriptionCount++ === 0
+            ? failingEvents.stream
+            : {
+                async *[Symbol.asyncIterator]() {
+                  // Keep the rebound account healthy after account A fails.
+                },
+              },
+      });
+
+      const threadId = asThreadId(`thread-${provider}-unexpected-account-switch`);
+      const accountA = `${provider}_account_a`;
+      const accountB = `${provider}_account_b`;
+      const events = await runOpenCodeCompatibleScenario(provider, runtime.runtime, (adapter) =>
+        Effect.gen(function* () {
+          const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+            Effect.forkChild,
+          );
+
+          yield* adapter.startSession({
+            provider,
+            providerInstanceId: accountA,
+            threadId,
+            runtimeMode: "full-access",
+          });
+          failingEvents.fail(new Error("account A event stream failed"));
+          yield* Effect.gen(function* () {
+            for (let attempt = 0; attempt < 100; attempt += 1) {
+              if (!(yield* adapter.hasSession(threadId))) return;
+              yield* Effect.sleep("1 millis");
+            }
+            throw new Error("Expected the failed account A session to be removed.");
+          });
+          yield* adapter.startSession({
+            provider,
+            providerInstanceId: accountB,
+            threadId,
+            runtimeMode: "full-access",
+          });
+
+          return Array.from(yield* Fiber.join(eventsFiber));
+        }),
+      );
+
+      const runtimeError = events.find((event) => event.type === "runtime.error");
+      const exited = events.find((event) => event.type === "session.exited");
+      const rebound = events.filter((event) => event.type === "session.started").at(-1);
+      expect(runtimeError?.providerInstanceId).toBe(accountA);
+      expect(exited?.providerInstanceId).toBe(accountA);
+      expect(rebound?.providerInstanceId).toBe(accountB);
+    },
+  );
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({
@@ -1213,6 +1585,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           provider: "opencode",
           binaryPath: "opencode",
           cwd: "/repo/agent-discovery-config",
+          serverUrl: "http://127.0.0.1:4666",
+          serverPassword: "agent-password",
+          experimentalWebSockets: true,
+          environment: { OPENCODE_PROFILE: "agents" },
         });
       }).pipe(
         Effect.provide(
@@ -1238,7 +1614,17 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ],
     });
     expect(runtime.connectCalls).toHaveLength(1);
-    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/agent-discovery-config" });
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/agent-discovery-config",
+      serverUrl: "http://127.0.0.1:4666",
+      experimentalWebSockets: true,
+      environment: { OPENCODE_PROFILE: "agents" },
+    });
+    expect(runtime.sdkClientCalls[0]).toMatchObject({
+      baseUrl: "http://127.0.0.1:4666",
+      directory: "/repo/agent-discovery-config",
+      serverPassword: "agent-password",
+    });
   });
 
   it("does not reuse an unrelated active OpenCode session for command discovery", async () => {
@@ -1430,6 +1816,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-target"),
           sourceResumeCursor: { openCodeSessionId: "source-session-1" },
           sourceCwd: "/repo/source",
+          providerOptions: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4777",
+              serverPassword: "fork-password",
+              experimentalWebSockets: true,
+            },
+          },
           runtimeMode: "full-access",
         });
       }).pipe(
@@ -1446,8 +1839,18 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
     expect(runtime.connectCalls).toHaveLength(2);
-    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
-    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/source" });
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/source",
+      serverUrl: "http://127.0.0.1:4777",
+      experimentalWebSockets: true,
+    });
+    expect(runtime.connectCalls[1]).toMatchObject({
+      cwd: "/repo/source",
+      serverUrl: "http://127.0.0.1:4777",
+      experimentalWebSockets: true,
+    });
+    expect(runtime.sdkClientCalls[0]).toMatchObject({ serverPassword: "fork-password" });
+    expect(runtime.sdkClientCalls[1]).toMatchObject({ serverPassword: "fork-password" });
     expect(result.resumeCursor).toMatchObject({
       openCodeSessionId: "forked-session-1",
       cwd: "/repo/source",
@@ -1543,12 +1946,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-model-pin"),
           runtimeMode: "full-access",
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "opencode/big-pickle",
-            options: {
-              agent: "build",
-              variant: "fast",
-            },
+            options: [
+              { id: "agent", value: "build" },
+              { id: "variant", value: "fast" },
+            ],
           },
         });
       }).pipe(
@@ -1595,11 +1998,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
-            options: {
-              variant: "high",
-            },
+            options: [{ id: "variant", value: "high" }],
           },
         });
 
@@ -1686,7 +2087,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -1822,7 +2223,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -1961,7 +2362,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "plan",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2049,7 +2450,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2096,7 +2497,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           ],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2144,7 +2545,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "plan",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2184,11 +2585,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
-            options: {
-              agent: "reviewer",
-            },
+            options: [{ id: "agent", value: "reviewer" }],
           },
         });
       }).pipe(
@@ -2240,7 +2639,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2336,7 +2735,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2417,7 +2816,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2474,7 +2873,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2542,7 +2941,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2627,7 +3026,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "work through todos",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2701,7 +3100,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2814,7 +3213,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2935,7 +3334,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3083,7 +3482,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3163,7 +3562,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3266,7 +3665,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3396,7 +3795,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3492,7 +3891,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             input: "hello",
             attachments: [],
             modelSelection: {
-              provider: "opencode",
+              instanceId: "opencode",
               model: "opencode/claude-opus-4-7",
             },
           })
@@ -3553,7 +3952,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             input: "hello",
             attachments: [],
             modelSelection: {
-              provider: "opencode",
+              instanceId: "opencode",
               model: "opencode/claude-opus-4-7",
             },
           }),
@@ -3622,7 +4021,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });

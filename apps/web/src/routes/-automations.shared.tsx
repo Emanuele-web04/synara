@@ -10,19 +10,32 @@ import {
   type AutomationUpdateInput,
   type AutomationWorktreeMode,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type RuntimeMode,
   type ThreadId,
 } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import {
+  inferLegacyProviderKindFromInstanceId,
+  inferLegacyProviderKindFromModelSelection,
+} from "@synara/shared/providerInstances";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "~/components/chat/ComposerPickerMenuPopup";
-import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
+import {
+  ProviderModelPicker,
+  type ProviderModelFavorite,
+} from "~/components/chat/ProviderModelPicker";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
@@ -699,40 +712,98 @@ export function AutomationModelPicker({
   readonly projectCwd: string | null;
   readonly onChange: (value: ModelSelection) => void;
 }) {
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
+  const handleFavoriteModelsChange = useCallback(
+    (favorites: ProviderModelFavorite[]) => {
+      updateSettings({ favorites });
+    },
+    [updateSettings],
+  );
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerByInstanceId = useMemo(() => {
+    const result = new Map<ProviderInstanceId, ProviderKind>();
+    for (const instance of providerInstances) {
+      result.set(instance.instanceId, instance.provider);
+    }
+    return result;
+  }, [providerInstances]);
+  const selectedProvider =
+    providerByInstanceId.get(value.instanceId) ??
+    inferLegacyProviderKindFromInstanceId(value.instanceId) ??
+    inferLegacyProviderKindFromModelSelection(value);
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, selectedProvider, value.instanceId),
+    [settings, selectedProvider, value.instanceId],
+  );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [value.provider]: value.model }),
-    [value.model, value.provider],
+    () => ({ [selectedProvider]: value.model }),
+    [selectedProvider, value.model],
   );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: projectCwd,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider, loadingModelProviders } = useProviderModelCatalog({
-    selectedProvider: value.provider,
-    discoveryEnabled: open,
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider,
-  });
+  const { modelOptionsByProvider, modelOptionsByProviderInstance, loadingModelProviders } =
+    useProviderModelCatalog({
+      selectedProvider,
+      selectedProviderInstanceId,
+      discoveryEnabled: open,
+      cwd: providerModelDiscoveryCwd,
+      modelHintByProvider,
+    });
+  const selectedInstanceModelOptions =
+    modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+    modelOptionsByProvider[selectedProvider];
+
+  useEffect(() => {
+    const currentInstanceId = value.instanceId;
+    const instanceChanged = currentInstanceId !== selectedProviderInstanceId;
+    const modelStillAvailable = selectedInstanceModelOptions.some(
+      (option) => option.slug === value.model,
+    );
+    const nextModel =
+      instanceChanged || !modelStillAvailable
+        ? (selectedInstanceModelOptions[0]?.slug ??
+          getDefaultModel(selectedProvider) ??
+          value.model)
+        : value.model;
+    if (!instanceChanged && nextModel === value.model) {
+      return;
+    }
+    onChange(
+      instanceChanged
+        ? buildModelSelection(selectedProvider, nextModel, null, {
+            instanceId: selectedProviderInstanceId,
+          })
+        : { ...value, model: nextModel, instanceId: selectedProviderInstanceId },
+    );
+  }, [onChange, selectedInstanceModelOptions, selectedProvider, selectedProviderInstanceId, value]);
 
   return (
     <ProviderModelPicker
       compact
-      provider={value.provider}
+      provider={selectedProvider}
       model={value.model}
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
+      favoriteModels={settings.favorites}
+      onFavoriteModelsChange={handleFavoriteModelsChange}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => onChange(buildModelSelection(provider, model))}
+      onProviderModelChange={(provider, model, instanceId) =>
+        onChange(buildModelSelection(provider, model, null, { instanceId: instanceId ?? provider }))
+      }
     />
   );
 }

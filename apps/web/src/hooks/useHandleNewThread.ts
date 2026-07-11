@@ -1,8 +1,12 @@
-import { type ProjectId, ThreadId } from "@synara/contracts";
+import { type ProjectId, type ProviderInstanceId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { useCallback } from "react";
-import { useAppSettings } from "../appSettings";
+import { useCallback, useMemo } from "react";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "../appSettings";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
@@ -42,6 +46,7 @@ export interface NewThreadNavigationOptions {
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const navigate = useNavigate();
   const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -69,7 +74,7 @@ export function useHandleNewThread() {
           return;
         }
         setModelSelection(threadId, {
-          provider: options.provider,
+          instanceId: resolveSelectableProviderInstanceId(settings, options.provider),
           model: defaultModel,
         });
       };
@@ -143,6 +148,8 @@ export function useHandleNewThread() {
         activeDraftThread,
         projectId,
       );
+      const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
+        providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
       const resolveCreationState = (
         targetThreadId: ThreadId,
         draftThread: DraftThreadState | null,
@@ -158,6 +165,7 @@ export function useHandleNewThread() {
           options: creationOptions,
           projectDefaultModelSelection,
           projectId,
+          resolveProviderForInstanceId,
         });
       // Terminal-first threads need a real orchestration thread immediately so
       // the sidebar can render them as durable rows instead of draft-only routes.
@@ -326,8 +334,9 @@ export function useHandleNewThread() {
       openTerminalThreadPage,
       focusedThreadId,
       markTemporaryThread,
+      providerInstances,
+      settings,
       router,
-      settings.defaultProvider,
     ],
   );
 

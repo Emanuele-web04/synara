@@ -25,7 +25,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { acquireClaudeAuthStatusLock } from "./claudeAuthStatusLock";
-import { buildClaudeProcessEnv } from "./claudeProcessEnv";
+import { buildClaudeProcessEnv } from "./claudeEnvironment";
 
 const execFileAsync = promisify(execFile);
 

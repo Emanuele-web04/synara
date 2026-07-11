@@ -240,7 +240,7 @@ describe("ProfileStatsQuery", () => {
               'thread.turn-start-requested',
               '2026-06-13T09:35:00.000Z',
               'client',
-              '{"threadId":"thread-codex","modelSelection":{"provider":"codex","model":"gpt-5-codex","options":{"reasoningEffort":"high"}}}',
+              '{"threadId":"thread-codex","modelSelection":{"instanceId":"codex","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
               '{}'
             ),
             (
@@ -267,7 +267,7 @@ describe("ProfileStatsQuery", () => {
         expect(stats.insights.topReasoning).toBe("high");
         expect(stats.insights.topReasoningPercent).toBeCloseTo(66.7);
         expect(stats.providerModels[0]).toMatchObject({
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
           turnCount: 2,
         });
@@ -418,11 +418,429 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
         // Token-based model mix mirrors the token ranking, not the turn counts.
         expect(tokenStats.models).toEqual([
-          { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
-          { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            tokens: 5000,
+            percent: 83.3,
+          },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 1000,
+            percent: 16.7,
+          },
         ]);
         // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
+      }),
+    );
+  });
+
+  it("keeps same-model custom instances separate while attributing their provider", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES
+            (
+              'thread-claude-work',
+              'project-profile',
+              'Claude Work Thread',
+              '{"instanceId":"work","model":"claude-sonnet-4-6"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T10:00:00.000Z',
+              '2026-06-13T10:00:00.000Z',
+              NULL
+            ),
+            (
+              'thread-claude-personal',
+              'project-profile',
+              'Claude Personal Thread',
+              '{"instanceId":"personal","model":"claude-sonnet-4-6"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T11:00:00.000Z',
+              '2026-06-13T11:00:00.000Z',
+              NULL
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES
+            (
+              'thread-claude-work',
+              'ready',
+              'claudeAgent',
+              'work',
+              '2026-06-13T10:00:00.000Z'
+            ),
+            (
+              'thread-claude-personal',
+              'ready',
+              'claudeAgent',
+              'personal',
+              '2026-06-13T11:00:00.000Z'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-claude-work',
+              'thread',
+              'thread-claude-work',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T10:05:00.000Z',
+              'client',
+              '{"threadId":"thread-claude-work","modelSelection":{"instanceId":"work","model":"claude-sonnet-4-6"}}',
+              '{}'
+            ),
+            (
+              'event-claude-personal',
+              'thread',
+              'thread-claude-personal',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T11:05:00.000Z',
+              'client',
+              '{"threadId":"thread-claude-personal","modelSelection":{"instanceId":"personal","model":"claude-sonnet-4-6"}}',
+              '{}'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES
+            (
+              'activity-claude-work',
+              'thread-claude-work',
+              'turn-claude-work',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"totalProcessedTokens":2500}',
+              1,
+              '2026-06-13T10:06:00.000Z'
+            ),
+            (
+              'activity-claude-personal',
+              'thread-claude-personal',
+              'turn-claude-personal',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"totalProcessedTokens":1500}',
+              1,
+              '2026-06-13T11:06:00.000Z'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.insights.topProvider).toBe("claudeAgent");
+        expect(
+          stats.providerModels.map(({ instanceId, turnCount }) => ({ instanceId, turnCount })),
+        ).toEqual([
+          { instanceId: "personal", turnCount: 1 },
+          { instanceId: "work", turnCount: 1 },
+        ]);
+        expect(tokenStats.topProvider).toBe("claudeAgent");
+        expect(tokenStats.providers).toEqual(["claudeAgent"]);
+        expect(
+          tokenStats.models.map(({ instanceId, tokens, percent }) => ({
+            instanceId,
+            tokens,
+            percent,
+          })),
+        ).toEqual([
+          { instanceId: "work", tokens: 2500, percent: 62.5 },
+          { instanceId: "personal", tokens: 1500, percent: 37.5 },
+        ]);
+      }),
+    );
+  });
+
+  it("attributes provider-less token updates to the active session before model heuristics", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'project-profile',
+            'OpenCode Claude Model Thread',
+            '{"instanceId":"work","model":"anthropic/claude-sonnet-4-6"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T10:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'ready',
+            'opencode',
+            'work',
+            '2026-06-13T10:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES (
+            'event-opencode-claude-model',
+            'thread',
+            'thread-opencode-claude-model',
+            1,
+            'thread.turn-start-requested',
+            '2026-06-13T10:05:00.000Z',
+            'client',
+            '{"threadId":"thread-opencode-claude-model","messageId":"message-opencode-claude-model","modelSelection":{"instanceId":"work","model":"anthropic/claude-sonnet-4-6"}}',
+            '{}'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id,
+            turn_id,
+            pending_message_id,
+            state,
+            requested_at,
+            checkpoint_files_json
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'turn-opencode-claude-model',
+            'message-opencode-claude-model',
+            'completed',
+            '2026-06-13T10:05:00.000Z',
+            '[]'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            'activity-opencode-claude-model',
+            'thread-opencode-claude-model',
+            'turn-opencode-claude-model',
+            'info',
+            'context-window.updated',
+            'tokens updated',
+            '{"totalProcessedTokens":3200}',
+            1,
+            '2026-06-13T10:06:00.000Z'
+          )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.topProvider).toBe("opencode");
+        expect(tokenStats.providers).toEqual(["opencode"]);
+        expect(tokenStats.unavailableProviders).not.toContain("claudeAgent");
+      }),
+    );
+  });
+
+  it("keeps historical provider-less turns attributed before latest session fallback", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'project-profile',
+            'Switched Provider Thread',
+            '{"instanceId":"codex_work","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T11:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'ready',
+            'codex',
+            'codex_work',
+            '2026-06-13T11:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-switched-claude',
+              'thread',
+              'thread-switched-provider',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T10:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"work","model":"claude-sonnet-4-6"}}',
+              '{}'
+            ),
+            (
+              'event-switched-codex',
+              'thread',
+              'thread-switched-provider',
+              2,
+              'thread.turn-start-requested',
+              '2026-06-13T11:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"codex_work","model":"gpt-5-codex"}}',
+              '{}'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const claudeRow = stats.providerModels.find(
+          (row) => row.provider === "claudeAgent" && row.instanceId === "work",
+        );
+        const codexRow = stats.providerModels.find(
+          (row) => row.provider === "codex" && row.instanceId === "codex_work",
+        );
+
+        expect(claudeRow).toMatchObject({
+          model: "claude-sonnet-4-6",
+          turnCount: 1,
+        });
+        expect(codexRow).toMatchObject({
+          model: "gpt-5-codex",
+          turnCount: 1,
+        });
       }),
     );
   });
@@ -633,9 +1051,27 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(11000);
         expect(tokenStats.topProvider).toBe("codex");
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 6000, percent: 54.5 },
-          { provider: "claudeAgent", model: "claude-fable-5", tokens: 3000, percent: 27.3 },
-          { provider: "claudeAgent", model: "claude-opus-4-8", tokens: 2000, percent: 18.2 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 6000,
+            percent: 54.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-fable-5",
+            tokens: 3000,
+            percent: 27.3,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-opus-4-8",
+            tokens: 2000,
+            percent: 18.2,
+          },
         ]);
       }),
     );
@@ -816,8 +1252,20 @@ describe("ProfileStatsQuery", () => {
 
         expect(tokenStats.lifetimeTotalTokens).toBe(4200);
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 2500, percent: 59.5 },
-          { provider: "claudeAgent", model: "claude-haiku-4-5", tokens: 1700, percent: 40.5 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 2500,
+            percent: 59.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-haiku-4-5",
+            tokens: 1700,
+            percent: 40.5,
+          },
         ]);
       }),
     );
@@ -1430,7 +1878,13 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(1500);
         expect(tokenStats.providers).toEqual([]);
         expect(tokenStats.models).toEqual([
-          { provider: "unknown", model: "unknown", tokens: 1500, percent: 100 },
+          {
+            provider: "unknown",
+            instanceId: "unknown",
+            model: "unknown",
+            tokens: 1500,
+            percent: 100,
+          },
         ]);
       }),
     );

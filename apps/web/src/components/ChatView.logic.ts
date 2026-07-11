@@ -4,12 +4,14 @@ import {
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
+  type ProviderInstanceId,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
 import { normalizeModelSlug } from "@synara/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@synara/shared/providerInstances";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -103,6 +105,66 @@ export function buildComposerMenuSelectionKey(input: {
     ? `picker:${input.picker}`
     : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
+// Prefer the exact active draft instance; only legacy drafts without that
+// pointer fall back to scanning their provider-instance selection map.
+export function resolveDraftProviderInstanceId(input: {
+  selectedProvider: ProviderKind;
+  activeProviderInstanceId: ProviderInstanceId | null | undefined;
+  activeProvider: ProviderKind | null | undefined;
+  modelSelections: readonly (ModelSelection | undefined)[];
+  resolveProviderForModelSelection: (selection: ModelSelection) => ProviderKind | null;
+}): ProviderInstanceId | undefined {
+  if (input.activeProviderInstanceId && input.activeProvider === input.selectedProvider) {
+    return input.activeProviderInstanceId;
+  }
+
+  const fallbackSelection = input.modelSelections.find(
+    (selection): selection is ModelSelection =>
+      selection !== undefined &&
+      input.resolveProviderForModelSelection(selection) === input.selectedProvider,
+  );
+  return fallbackSelection?.instanceId;
+}
+
+export function shouldShowComposerProviderInstancePicker(input: {
+  provider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
+  providerInstances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId }>;
+}): boolean {
+  const selectedInstanceIsConfigured = input.providerInstances.some(
+    (instance) => instance.instanceId === input.selectedProviderInstanceId,
+  );
+
+  return (
+    input.provider === "codex" ||
+    input.provider === "claudeAgent" ||
+    input.providerInstances.length > 1 ||
+    !selectedInstanceIsConfigured
+  );
+}
+
+export function buildCollapsedCursorModelOptionsReset(input: {
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+  model: ModelSlug;
+  showExpandedCursorModelVariants: boolean;
+}):
+  | {
+      readonly persistSticky: true;
+      readonly instanceId: ProviderInstanceId;
+      readonly model: ModelSlug;
+    }
+  | undefined {
+  if (input.provider !== "cursor" || input.showExpandedCursorModelVariants) {
+    return undefined;
+  }
+  return {
+    persistSticky: true,
+    instanceId: input.instanceId,
+    model: input.model,
+  };
 }
 
 export interface PromptHistoryNavigationState {
@@ -559,6 +621,8 @@ export function describeVoiceRecordingStartError(error: unknown): string {
 }
 
 export function deriveComposerVoiceState(input: {
+  enabled: boolean | undefined;
+  available: boolean;
   authStatus: ServerProviderAuthStatus | null | undefined;
   voiceTranscriptionAvailable: boolean | undefined;
   isRecording: boolean;
@@ -568,8 +632,9 @@ export function deriveComposerVoiceState(input: {
   canStartVoiceNotes: boolean;
   showVoiceNotesControl: boolean;
 } {
-  const canRenderVoiceNotes = input.authStatus !== "unauthenticated";
-  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable !== false;
+  const canRenderVoiceNotes =
+    input.enabled !== false && input.available && input.authStatus !== "unauthenticated";
+  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable === true;
 
   return {
     canRenderVoiceNotes,
@@ -591,7 +656,10 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   }
 
   const draftSelection = input.draftModelSelection;
-  if (draftSelection && draftSelection.provider === input.selectedProvider) {
+  if (
+    draftSelection &&
+    inferLegacyProviderKindFromModelSelection(draftSelection) === input.selectedProvider
+  ) {
     return false;
   }
 
@@ -600,7 +668,8 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
     return false;
   }
 
-  if (persistedSelection.provider !== input.selectedProvider) {
+  const persistedProvider = inferLegacyProviderKindFromModelSelection(persistedSelection);
+  if (persistedProvider !== input.selectedProvider) {
     return true;
   }
 
@@ -611,8 +680,7 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   const normalizedSelectedModel =
     normalizeModelSlug(input.selectedModel, input.selectedProvider) ?? input.selectedModel;
   const normalizedPersistedModel =
-    normalizeModelSlug(persistedSelection.model, persistedSelection.provider) ??
-    persistedSelection.model;
+    normalizeModelSlug(persistedSelection.model, persistedProvider) ?? persistedSelection.model;
 
   return normalizedSelectedModel !== normalizedPersistedModel;
 }

@@ -1,9 +1,14 @@
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { ServerConfig } from "../../config.ts";
 
-import type { CursorModelSelection, ProviderStartOptions } from "@synara/contracts";
+import type { CursorModelOptions, ModelSelection, ProviderStartOptions } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@synara/shared/model";
 
 import {
   applyCursorAcpModelSelection,
@@ -61,32 +66,50 @@ function isTextGenerationError(error: unknown): error is TextGenerationError {
 
 function resolveCursorModelSelection(input: {
   readonly model?: string;
-  readonly modelSelection?: {
-    readonly provider: string;
-    readonly model: string;
-    readonly options?: unknown;
-  };
-}): CursorModelSelection | null {
-  if (input.modelSelection?.provider === "cursor") {
-    return input.modelSelection as CursorModelSelection;
-  }
-
-  return null;
+  readonly modelSelection?: ModelSelection;
+}): ModelSelection | null {
+  return input.modelSelection ?? null;
 }
 
-function resolveCursorSettings(
+function cursorModelOptionsFromSelection(
+  modelSelection: ModelSelection | null | undefined,
+): CursorModelOptions | undefined {
+  if (!modelSelection) {
+    return undefined;
+  }
+  const reasoningEffort = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+  const contextWindow = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
+  const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+  const thinking = getModelSelectionBooleanOptionValue(modelSelection, "thinking");
+  const options: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
+export function resolveCursorSettings(
   providerOptions: ProviderStartOptions | undefined,
+  serverConfig: { readonly homeDir: string; readonly stateDir: string },
+  instanceId?: string,
 ): CursorAcpRuntimeCursorSettings | undefined {
   const cursorOptions = providerOptions?.cursor;
-  if (!cursorOptions) return undefined;
+  if (!cursorOptions && instanceId === undefined) return undefined;
   return {
-    ...(cursorOptions.binaryPath ? { binaryPath: cursorOptions.binaryPath } : {}),
-    ...(cursorOptions.apiEndpoint ? { apiEndpoint: cursorOptions.apiEndpoint } : {}),
+    homeDir: serverConfig.homeDir,
+    isolationRootDir: serverConfig.stateDir,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    ...(cursorOptions?.binaryPath ? { binaryPath: cursorOptions.binaryPath } : {}),
+    ...(cursorOptions?.apiEndpoint ? { apiEndpoint: cursorOptions.apiEndpoint } : {}),
+    ...(cursorOptions?.environment !== undefined ? { environment: cursorOptions.environment } : {}),
   };
 }
 
 const makeCursorTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const serverConfig = yield* ServerConfig;
 
   const runCursorJson = <S extends Schema.Top>({
     operation,
@@ -102,13 +125,17 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     prompt: string;
     outputSchemaJson: S;
     rawTextFallback?: RawTextFallback;
-    modelSelection: CursorModelSelection;
+    modelSelection: ModelSelection;
     providerOptions?: ProviderStartOptions;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const outputRef = yield* Ref.make("");
       const runtime = yield* makeCursorAcpRuntime({
-        cursorSettings: resolveCursorSettings(providerOptions),
+        cursorSettings: resolveCursorSettings(
+          providerOptions,
+          serverConfig,
+          modelSelection.instanceId,
+        ),
         childProcessSpawner: commandSpawner,
         cwd,
         clientInfo: { name: "synara-git-text", version: "0.0.0" },
@@ -132,7 +159,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
         yield* applyCursorAcpModelSelection({
           runtime,
           model: modelSelection.model,
-          options: modelSelection.options,
+          options: cursorModelOptionsFromSelection(modelSelection),
           mapError: ({ cause, configId, step }) =>
             mapCursorAcpError(
               operation,

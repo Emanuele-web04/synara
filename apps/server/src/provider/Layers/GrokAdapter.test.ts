@@ -5,17 +5,61 @@
 
 import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  buildGrokModelDiscoveryEnv,
   isGrokContextCompactionToolCall,
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
+  resolveGrokStartInstanceId,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
 } from "./GrokAdapter.ts";
 
 describe("GrokAdapter runtime event scoping", () => {
+  it("resolves modelSelection-only account identity before Grok launch", () => {
+    expect(
+      resolveGrokStartInstanceId({
+        modelSelection: { instanceId: "grok_work", model: "grok/model" },
+      } as never),
+    ).toBe("grok_work");
+  });
+  it("isolates model discovery credentials from ambient xAI aliases", () => {
+    const env = buildGrokModelDiscoveryEnv(
+      {
+        instanceId: "grok_work",
+        environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+      },
+      {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.example",
+        XAI_API_KEY: "ambient-account-a",
+        XAI_API_BASE_URL: "https://account-a.example",
+      },
+    );
+
+    expect(env.XAI_API_KEY).toBeUndefined();
+    expect(env.XAI_API_BASE_URL).toBeUndefined();
+    expect(env.GROK_CODE_XAI_API_KEY).toBe("selected-account-b");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example");
+  });
+
+  it("uses the configured Synara state root for nondefault discovery without env", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "synara-grok-discovery-"));
+    const env = buildGrokModelDiscoveryEnv({
+      instanceId: "grok_work",
+      homeDir: "/home/user",
+      isolationRootDir: stateDir,
+    });
+    expect(env.HOME).toContain(`${stateDir}/provider-homes/grok/`);
+    expect(env.GROK_AUTH_PATH).toContain(`${stateDir}/provider-homes/grok/`);
+  });
+
   it("makes reused ACP assistant segment ids unique per DP turn", () => {
     const providerItemId = "assistant:grok-session:segment:5";
 

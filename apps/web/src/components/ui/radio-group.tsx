@@ -15,7 +15,7 @@ function RadioGroup({ className, ...props }: RadioGroupPrimitive.Props) {
   );
 }
 
-function Radio({ className, ...props }: RadioPrimitive.Root.Props) {
+function Radio({ className, children, ...props }: RadioPrimitive.Root.Props) {
   return (
     <RadioPrimitive.Root
       className={cn(
@@ -29,6 +29,7 @@ function Radio({ className, ...props }: RadioPrimitive.Root.Props) {
         className="-inset-px absolute flex size-4.5 items-center justify-center rounded-full before:size-2 before:rounded-full before:bg-primary-foreground data-unchecked:hidden data-checked:bg-primary sm:size-4 sm:before:size-1.5"
         data-slot="radio-indicator"
       />
+      {children}
     </RadioPrimitive.Root>
   );
 }

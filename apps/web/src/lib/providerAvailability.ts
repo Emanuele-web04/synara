@@ -1,8 +1,13 @@
 import {
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
+import { isProviderKind } from "../providerOrdering";
+
+const CUSTOM_BINARY_CONFIRMATION_SUFFIX =
+  "Availability will be confirmed when you start a session.";
 
 export interface ProviderSendAvailability {
   readonly provider: ProviderKind;
@@ -39,23 +44,21 @@ export function normalizeProviderStatusForLocalConfig(input: {
     return status;
   }
 
+  if (status.enabled === false) {
+    return status;
+  }
+
   if (status.available || status.authStatus !== "unknown") {
     return status;
   }
 
   if (normalizeCustomBinaryPath(input.confirmedCustomBinaryPath) === customBinaryPath) {
     // Only the exact path used by a successful session can suppress the warning.
+    const { message: _message, ...confirmedStatus } = status;
     return {
-      provider: status.provider,
+      ...confirmedStatus,
       available: true,
       status: "ready",
-      authStatus: status.authStatus,
-      checkedAt: status.checkedAt,
-      ...(status.authType ? { authType: status.authType } : {}),
-      ...(status.authLabel ? { authLabel: status.authLabel } : {}),
-      ...(status.voiceTranscriptionAvailable !== undefined
-        ? { voiceTranscriptionAvailable: status.voiceTranscriptionAvailable }
-        : {}),
     };
   }
 
@@ -63,23 +66,35 @@ export function normalizeProviderStatusForLocalConfig(input: {
     ...status,
     available: true,
     status: "warning",
-    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. Availability will be confirmed when you start a session.`,
+    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. ${CUSTOM_BINARY_CONFIRMATION_SUFFIX}`,
   };
 }
 
+export function providerStatusInstanceKey(
+  status: Pick<ServerProviderStatus, "provider" | "instanceId">,
+): ProviderInstanceId {
+  return (status.instanceId ?? status.provider) as ProviderInstanceId;
+}
+
+// Advisory warnings the health layer marks available (Pi bundled SDK, Cursor
+// model-discovery warnings, unconfirmed custom binaries) stay sendable; only
+// unavailable or unauthenticated statuses block sends.
 export function isProviderUsable(status: ServerProviderStatus | null | undefined): boolean {
   if (!status) {
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  return status.available && status.authStatus !== "unauthenticated";
+  return status.enabled !== false && status.available && status.authStatus !== "unauthenticated";
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {
   if (!status) {
     return "Provider status is still loading.";
   }
-  const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
+  const providerLabelFallback = isProviderKind(status.provider)
+    ? PROVIDER_DISPLAY_NAMES[status.provider]
+    : status.provider;
+  const providerLabel = status.displayName?.trim() || providerLabelFallback || status.provider;
   if (status.authStatus === "unauthenticated") {
     return `${providerLabel} is not authenticated yet.`;
   }
@@ -92,16 +107,88 @@ export function providerUnavailableReason(status: ServerProviderStatus | null | 
 export function findProviderStatus(
   statuses: readonly ServerProviderStatus[],
   provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ServerProviderStatus | null {
-  return statuses.find((status) => status.provider === provider) ?? null;
+  const targetInstanceId = instanceId ?? provider;
+  return (
+    statuses.find(
+      (status) =>
+        (status.driver ?? status.provider) === provider &&
+        (status.instanceId ?? status.provider) === targetInstanceId,
+    ) ?? null
+  );
+}
+
+export interface VoiceTranscriptionTarget {
+  readonly instanceId: ProviderInstanceId;
+  readonly status: ServerProviderStatus;
+}
+
+// Voice always uses a Codex ChatGPT session. Prefer the actively selected Codex
+// account when it advertises voice, otherwise choose a usable configured account
+// by identity (default first, then stable instance id). Status-only identities are
+// deliberately ignored because they can outlive a removed or disabled account.
+export function resolveVoiceTranscriptionTarget(input: {
+  readonly statuses: readonly ServerProviderStatus[];
+  readonly providerInstances: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId;
+    readonly provider: ProviderKind;
+    readonly enabled: boolean;
+    readonly isDefault: boolean;
+  }>;
+  readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
+}): VoiceTranscriptionTarget | null {
+  const statusByInstanceId = new Map<ProviderInstanceId, ServerProviderStatus>();
+  for (const status of input.statuses) {
+    if ((status.driver ?? status.provider) !== "codex") {
+      continue;
+    }
+    statusByInstanceId.set(providerStatusInstanceKey(status), status);
+  }
+
+  const orderedInstanceIds = input.providerInstances
+    .filter((instance) => instance.provider === "codex" && instance.enabled)
+    .toSorted((left, right) => {
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return String(left.instanceId).localeCompare(String(right.instanceId));
+    })
+    .map((instance) => instance.instanceId);
+
+  if (input.selectedProvider === "codex") {
+    const selectedIndex = orderedInstanceIds.indexOf(input.selectedProviderInstanceId);
+    if (selectedIndex >= 0) {
+      orderedInstanceIds.splice(selectedIndex, 1);
+      orderedInstanceIds.unshift(input.selectedProviderInstanceId);
+    }
+  }
+
+  const isUsableVoiceStatus = (instanceId: ProviderInstanceId): boolean => {
+    const status = statusByInstanceId.get(instanceId);
+    return isProviderUsable(status);
+  };
+  const capableInstanceId = orderedInstanceIds.find((instanceId) => {
+    const status = statusByInstanceId.get(instanceId);
+    return isUsableVoiceStatus(instanceId) && status?.voiceTranscriptionAvailable === true;
+  });
+  const fallbackInstanceId =
+    capableInstanceId ?? orderedInstanceIds.find((instanceId) => isUsableVoiceStatus(instanceId));
+  if (!fallbackInstanceId) {
+    return null;
+  }
+  const status = statusByInstanceId.get(fallbackInstanceId);
+  return status ? { instanceId: fallbackInstanceId, status } : null;
 }
 
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
   readonly statuses: readonly ServerProviderStatus[];
 }): ProviderSendAvailability {
-  const status = findProviderStatus(input.statuses, input.provider);
+  const status = findProviderStatus(input.statuses, input.provider, input.instanceId);
   return {
     provider: input.provider,
     status,
@@ -117,6 +204,7 @@ function shouldRefreshBeforeBlocking(status: ServerProviderStatus | null): boole
 // Re-check a blocked provider once before surfacing stale install/auth state to the user.
 export async function resolveProviderSendAvailabilityWithRefresh(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
   readonly statuses: readonly ServerProviderStatus[];
   readonly refreshStatuses: ProviderStatusRefresh;
 }): Promise<ProviderSendAvailability> {
@@ -137,6 +225,7 @@ export async function resolveProviderSendAvailabilityWithRefresh(input: {
 
   return resolveProviderSendAvailability({
     provider: input.provider,
+    instanceId: input.instanceId,
     statuses: refreshedStatuses,
   });
 }

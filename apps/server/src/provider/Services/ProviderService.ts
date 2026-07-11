@@ -15,6 +15,7 @@ import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
+  ProviderInstanceId,
   ProviderKind,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -24,6 +25,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
@@ -122,6 +124,18 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Check whether a persisted session binding was launched with the current
+   * effective options. Returns only a boolean; credential fingerprints remain
+   * inside ProviderService and are never exposed to orchestration callers.
+   */
+  readonly sessionBindingMatchesLaunchOptions?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderKind;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
+
+  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.
@@ -129,10 +143,10 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
-   * Read static capabilities for a provider adapter.
+   * Read static capabilities for a configured provider instance.
    */
   readonly getCapabilities: (
-    provider: ProviderKind,
+    instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
 
   /**

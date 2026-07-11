@@ -98,12 +98,12 @@ describe("GitRunStackedActionInput", () => {
       cwd: "/repo",
       action: "commit",
       textGenerationModelSelection: {
-        provider: "opencode",
+        instanceId: "opencode",
         model: "openrouter/gpt-oss-120b",
       },
     });
 
-    expect(parsed.textGenerationModelSelection?.provider).toBe("opencode");
+    expect(parsed.textGenerationModelSelection?.instanceId).toBe("opencode");
     expect(parsed.textGenerationModelSelection?.model).toBe("openrouter/gpt-oss-120b");
   });
 });

@@ -36,6 +36,7 @@ import {
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
+import { commandForProjectScript } from "../projectScripts";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { getRouter } from "../router";
@@ -151,6 +152,8 @@ function createBaseServerConfig(): ServerConfig {
     providers: [
       {
         provider: "codex",
+        instanceId: "codex",
+        driver: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -292,7 +295,7 @@ function createSnapshotForTargetUser(options: {
         title: "Project",
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         scripts: [],
@@ -307,7 +310,7 @@ function createSnapshotForTargetUser(options: {
         projectId: PROJECT_ID,
         title: THREAD_TITLE,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -472,7 +475,7 @@ function addThreadToSnapshot(
         projectId: PROJECT_ID,
         title: "New thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         interactionMode: "default",
@@ -564,7 +567,7 @@ function withOpenProjectPickerFixtures(snapshot: OrchestrationReadModel): Orches
         title: "Other Project",
         workspaceRoot: "/repo/other",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         scripts: [],
@@ -587,7 +590,7 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
         title: "Home",
         workspaceRoot: "/Users/tester",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         scripts: [],
@@ -610,7 +613,7 @@ function withStudioProject(snapshot: OrchestrationReadModel): OrchestrationReadM
         title: "Studio",
         workspaceRoot: "/Users/tester/Documents/Synara/Studio",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         scripts: [],
@@ -953,7 +956,7 @@ function recordProjectCreateCommand(command: unknown): boolean {
             typeof command.defaultModelSelection === "object"
               ? (command.defaultModelSelection as OrchestrationReadModel["projects"][number]["defaultModelSelection"])
               : {
-                  provider: "codex" as const,
+                  instanceId: "codex" as const,
                   model: "gpt-5",
                 },
           scripts: [],
@@ -2195,11 +2198,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       },
     });
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.4",
-      options: {
-        reasoningEffort: "low",
-      },
+      options: [{ id: "reasoningEffort", value: "low" }],
     });
 
     const mounted = await mountChatView({
@@ -2247,11 +2248,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
             associatedWorktreeBranch: "feature/draft-automation",
             associatedWorktreeRef: "feature/draft-automation",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.4",
-              options: {
-                reasoningEffort: "low",
-              },
+              options: [{ id: "reasoningEffort", value: "low" }],
             },
             runtimeMode: "full-access",
             interactionMode: "default",
@@ -2480,17 +2479,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: commandForProjectScript("lint"),
+              shortcut: {
+                key: "l",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Lint",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Lint button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      dispatchConfiguredShortcut(composerEditor, { key: "l", altKey: true });
 
       await vi.waitFor(
         () => {
@@ -2558,17 +2571,31 @@ describe("ChatView timeline estimator parity (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: commandForProjectScript("test"),
+              shortcut: {
+                key: "t",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
     });
 
     try {
-      const runButton = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll("button")).find(
-            (button) => button.title === "Run Test",
-          ) as HTMLButtonElement | null,
-        "Unable to find Run Test button.",
-      );
-      runButton.click();
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      dispatchConfiguredShortcut(composerEditor, { key: "t", altKey: true });
 
       await vi.waitFor(
         () => {
@@ -3099,7 +3126,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedModel: "gpt-5",
         selectedPromptEffort: null,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -3124,7 +3151,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedModel: "gpt-5",
         selectedPromptEffort: null,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -3215,7 +3242,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedModel: "gpt-5",
         selectedPromptEffort: null,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -3295,7 +3322,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         selectedModel: "gpt-5",
         selectedPromptEffort: null,
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         runtimeMode: "full-access",
@@ -3837,12 +3864,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
-          options: {
-            reasoningEffort: "medium",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "medium" },
+            { id: "fastMode", value: true },
+          ],
         },
       },
       stickyActiveProvider: "codex",
@@ -3872,11 +3899,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
         modelSelectionByProvider: {
           codex: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "medium" },
+              { id: "fastMode", value: true },
+            ],
           },
         },
         activeProvider: "codex",
@@ -3975,6 +4003,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const newWorktreeOption = page.getByText("New worktree");
       await expect.element(newWorktreeOption).toBeInTheDocument();
       await newWorktreeOption.click();
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
+            "worktree",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
       await vi.waitFor(
@@ -4225,12 +4262,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         claudeAgent: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
-          options: {
-            effort: "max",
-            fastMode: true,
-          },
+          options: [
+            { id: "effort", value: "max" },
+            { id: "fastMode", value: true },
+          ],
         },
       },
       stickyActiveProvider: "claudeAgent",
@@ -4260,12 +4297,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]).toMatchObject({
         modelSelectionByProvider: {
           claudeAgent: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-opus-4-6",
-            options: {
-              effort: "max",
-              fastMode: true,
-            },
+            options: [
+              { id: "effort", value: "max" },
+              { id: "fastMode", value: true },
+            ],
           },
         },
         activeProvider: "claudeAgent",
@@ -4307,12 +4344,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
         codex: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
-          options: {
-            reasoningEffort: "medium",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "medium" },
+            { id: "fastMode", value: true },
+          ],
         },
       },
       stickyActiveProvider: "codex",
@@ -4342,35 +4379,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
         modelSelectionByProvider: {
           codex: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "medium" },
+              { id: "fastMode", value: true },
+            ],
           },
         },
         activeProvider: "codex",
       });
 
       useComposerDraftStore.getState().setModelSelection(threadId, {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.4",
-        options: {
-          reasoningEffort: "low",
-          fastMode: true,
-        },
+        options: [
+          { id: "reasoningEffort", value: "low" },
+          { id: "fastMode", value: true },
+        ],
       });
       await vi.waitFor(
         () => {
           expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toMatchObject({
             modelSelectionByProvider: {
               codex: {
-                provider: "codex",
+                instanceId: "codex",
                 model: "gpt-5.4",
-                options: {
-                  reasoningEffort: "low",
-                  fastMode: true,
-                },
+                options: [
+                  { id: "reasoningEffort", value: "low" },
+                  { id: "fastMode", value: true },
+                ],
               },
             },
             activeProvider: "codex",
@@ -4539,11 +4577,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
           queuedTurns: [],
           modelSelectionByProvider: {
             claudeAgent: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-opus-4-6",
-              options: {
-                effort: "max",
-              },
+              options: [{ id: "effort", value: "max" }],
             },
           },
           activeProvider: "claudeAgent",
@@ -4632,11 +4668,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: "/repo/project/.worktrees/terminal-title",
             runtimeMode: "approval-required",
             modelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-opus-4-6",
-              options: {
-                effort: "max",
-              },
+              options: [{ id: "effort", value: "max" }],
             },
           });
         },

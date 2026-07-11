@@ -20,6 +20,10 @@ export default mergeConfig(
         "src/lib/**/*.browser.ts",
         "src/lib/**/*.browser.tsx",
       ],
+      // Browser component tests share page-level mock infrastructure; run files serially
+      // so one spec cannot steal another spec's WebSocket/native-API events.
+      fileParallelism: false,
+      maxWorkers: 1,
       browser: {
         enabled: true,
         provider: playwright(),

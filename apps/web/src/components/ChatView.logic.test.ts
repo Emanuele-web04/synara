@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildCollapsedCursorModelOptionsReset,
   buildComposerMenuSelectionKey,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
@@ -24,6 +25,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveDraftProviderInstanceId,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
@@ -38,10 +40,105 @@ import {
   shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
+  shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("draft provider instance selection", () => {
+  const resolveProvider = (selection: { instanceId: string }) =>
+    selection.instanceId.startsWith("claude_") || selection.instanceId === "claudeAgent"
+      ? ("claudeAgent" as const)
+      : ("codex" as const);
+
+  it("prefers the exact active instance over an older same-provider draft selection", () => {
+    expect(
+      resolveDraftProviderInstanceId({
+        selectedProvider: "claudeAgent",
+        activeProviderInstanceId: "claude_work",
+        activeProvider: "claudeAgent",
+        modelSelections: [
+          { instanceId: "claude_personal", model: "claude-sonnet-4-6" },
+          { instanceId: "claude_work", model: "claude-opus-4-6" },
+        ],
+        resolveProviderForModelSelection: resolveProvider,
+      }),
+    ).toBe("claude_work");
+  });
+
+  it("recovers a matching instance from legacy drafts missing the active pointer", () => {
+    expect(
+      resolveDraftProviderInstanceId({
+        selectedProvider: "claudeAgent",
+        activeProviderInstanceId: null,
+        activeProvider: null,
+        modelSelections: [
+          { instanceId: "codex", model: "gpt-5.4" },
+          { instanceId: "claude_work", model: "claude-sonnet-4-6" },
+        ],
+        resolveProviderForModelSelection: resolveProvider,
+      }),
+    ).toBe("claude_work");
+  });
+
+  it("keeps the account picker visible for a missing profile on every provider", () => {
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "cursor",
+        selectedProviderInstanceId: "cursor_removed",
+        providerInstances: [{ instanceId: "cursor" }],
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "opencode",
+        selectedProviderInstanceId: "opencode_removed",
+        providerInstances: [{ instanceId: "opencode" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("still hides a redundant single-profile picker when the selection exists", () => {
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "cursor",
+        selectedProviderInstanceId: "cursor",
+        providerInstances: [{ instanceId: "cursor" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "codex",
+        selectedProviderInstanceId: "codex",
+        providerInstances: [{ instanceId: "codex" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("targets collapsed Cursor option resets at the selected non-default instance", () => {
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: false,
+      }),
+    ).toEqual({
+      persistSticky: true,
+      instanceId: "cursor_work",
+      model: "cursor/auto",
+    });
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: true,
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("composer menu selection", () => {
   const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
@@ -575,6 +672,8 @@ describe("voice helpers", () => {
   it("derives voice-note availability from provider auth and runtime state", () => {
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "authenticated",
         voiceTranscriptionAvailable: true,
         isRecording: false,
@@ -588,6 +687,8 @@ describe("voice helpers", () => {
 
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "unauthenticated",
         voiceTranscriptionAvailable: true,
         isRecording: true,
@@ -595,6 +696,51 @@ describe("voice helpers", () => {
       }),
     ).toEqual({
       canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: true,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: false,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: false,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: false,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
@@ -849,7 +995,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "openai/gpt-5-codex",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -864,7 +1010,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "openai/gpt-5.4",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -879,11 +1025,11 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "opencode/minimax-m2.5-free",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "opencode/minimax-m2.5-free",
         },
         providerModelsLoading: true,
@@ -897,7 +1043,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "codex",
         selectedModel: "gpt-5.4",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,

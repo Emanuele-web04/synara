@@ -1,4 +1,4 @@
-import { ProjectId, type ModelSelection, ThreadId } from "@synara/contracts";
+import { ProjectId, type ModelSelection, type ProviderKind, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { type ComposerThreadDraftState, type DraftThreadState } from "../composerDraftStore";
 import {
@@ -12,20 +12,17 @@ import {
   resolveThreadBootstrapPlan,
   shouldReuseActiveDraftThread,
 } from "./threadBootstrap";
+import { buildModelSelection, type ProviderOptions } from "../providerModelOptions";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-bootstrap");
 const THREAD_ID = ThreadId.makeUnsafe("thread-bootstrap");
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: ProviderKind,
   model: string,
-  options?: ModelSelection["options"],
+  options?: ProviderOptions,
 ): ModelSelection {
-  return {
-    provider,
-    model,
-    ...(options ? { options } : {}),
-  } as ModelSelection;
+  return buildModelSelection(provider, model, options);
 }
 
 function makeDraftThread(partial?: Partial<DraftThreadState>): DraftThreadState {

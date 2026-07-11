@@ -6,6 +6,7 @@
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -55,6 +56,7 @@ type ProviderTraitRenderInput = {
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
@@ -85,6 +87,7 @@ function renderTraitsMenuContentForProvider(
       runtimeModels={input.runtimeModels}
       runtimeAgents={input.runtimeAgents}
       modelOptions={input.modelOptions}
+      selectedProviderInstanceId={input.selectedProviderInstanceId}
       prompt={input.prompt}
       {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
       onPromptChange={input.onPromptChange}
@@ -105,6 +108,7 @@ function renderTraitsPickerForProvider(
       runtimeModels={input.runtimeModels}
       runtimeAgents={input.runtimeAgents}
       modelOptions={input.modelOptions}
+      selectedProviderInstanceId={input.selectedProviderInstanceId}
       prompt={input.prompt}
       {...(input.open !== undefined ? { open: input.open } : {})}
       {...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {})}
@@ -299,6 +303,7 @@ export function renderProviderTraitsMenuContent(input: {
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   prompt: string;
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
