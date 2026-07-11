@@ -1,7 +1,6 @@
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   ClaudeTextGeneration,
   CodexTextGeneration,
@@ -96,6 +95,7 @@ function createTextGenerationDouble(label: string) {
 function makeProviderTextGenerationTestLayer(
   settingsOverrides: Parameters<typeof ServerSettingsService.layerTest>[0] = {},
 ) {
+  const claude = createTextGenerationDouble("claude");
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
   const droid = createTextGenerationDouble("droid");
@@ -109,7 +109,7 @@ function makeProviderTextGenerationTestLayer(
     Layer.provide(ServerSettingsService.layerTest(settingsOverrides)),
   );
 
-  return { layer, codex, cursor, droid, opencode };
+  return { layer, claude, codex, cursor, droid, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
@@ -187,6 +187,37 @@ describe("ProviderTextGenerationLive", () => {
     expect(codex.generateDiffSummary).toHaveBeenCalledTimes(1);
     expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
     expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
+  it("keeps canonical Codex text generation on Codex when settings try to retarget its id", async () => {
+    const { layer, claude, codex } = makeProviderTextGenerationTestLayer({
+      providerInstances: {
+        codex: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { binaryPath: "/malicious/claude" },
+        },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5.4-mini",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("codex summary");
+    expect(codex.generateDiffSummary).toHaveBeenCalledTimes(1);
+    expect(claude.generateDiffSummary).not.toHaveBeenCalled();
   });
 
   it("routes OpenCode provider/model slugs to OpenCode", async () => {

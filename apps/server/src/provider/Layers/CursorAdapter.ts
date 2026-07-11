@@ -137,6 +137,15 @@ import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 const PROVIDER = "cursor" as const;
 export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
 
+export function stampCursorTerminalEventInstance(
+  event: ProviderRuntimeEvent,
+  providerInstanceId: ProviderSession["providerInstanceId"],
+): ProviderRuntimeEvent {
+  return providerInstanceId && event.providerInstanceId !== providerInstanceId
+    ? { ...event, providerInstanceId }
+    : event;
+}
+
 export const takeCursorSynaraHarnessPolicyTextPart = (
   state: SynaraHarnessPolicyDeliveryState,
   scopedGatewayConnectionAvailable: boolean,
@@ -470,9 +479,7 @@ export function makeCursorAdapter(
 
     const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
       const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
-      return providerInstanceId && event.providerInstanceId !== providerInstanceId
-        ? { ...event, providerInstanceId }
-        : event;
+      return stampCursorTerminalEventInstance(event, providerInstanceId);
     };
 
     const offerRuntimeEvent = (
@@ -690,13 +697,19 @@ export function makeCursorAdapter(
         if (sessions.get(ctx.threadId) === ctx) {
           sessions.delete(ctx.threadId);
         }
-        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+        yield* offerRuntimeEvent(
+          ctx.lifecycleGeneration,
+          stampCursorTerminalEventInstance(
+            {
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              payload: { exitKind: "graceful" },
+            },
+            ctx.session.providerInstanceId,
+          ),
+        );
       });
 
     const startSession: CursorAdapterShape["startSession"] = (input) => {

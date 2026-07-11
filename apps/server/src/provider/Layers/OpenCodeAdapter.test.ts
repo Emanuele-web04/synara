@@ -1024,6 +1024,41 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("keeps the stopped OpenCode account on a graceful exit after the thread switches accounts", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-opencode-account-switch");
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_a",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_b",
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        return Array.from(yield* Fiber.join(eventsFiber));
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    const exited = events.find((event) => event.type === "session.exited");
+    const rebound = events.filter((event) => event.type === "session.started").at(-1);
+    expect(exited?.providerInstanceId).toBe("opencode_account_a");
+    expect(rebound?.providerInstanceId).toBe("opencode_account_b");
+  });
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({
