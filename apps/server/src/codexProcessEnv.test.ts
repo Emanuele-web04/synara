@@ -934,6 +934,57 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
+  it("rejects an A-to-B-to-A race that leaves fallback auth on the wrong account", async () => {
+    const fixture = makeAccountFixture();
+    const sourceAuthPath = path.join(fixture.homePath, "auth.json");
+    const firstAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-first", access_token: "first" },
+    });
+    const secondAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-second", access_token: "second" },
+    });
+    writeFileSync(sourceAuthPath, firstAuth, "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+    });
+    const overlayAuthPath = path.join(overlayHomePath, "auth.json");
+    const copyWhileAuthoritativeTemporarilyChanges: CodexOverlayEntryLinker = {
+      symlink: vi.fn(async (sourcePath, targetPath, type) => {
+        if (path.basename(String(targetPath)) === "auth.json") {
+          throw new Error("auth symlinks unavailable");
+        }
+        symlinkSync(sourcePath, targetPath, type);
+      }),
+      copyFile: vi.fn(async (sourcePath, targetPath) => {
+        if (path.basename(String(targetPath)) !== "auth.json") {
+          copyFileSync(sourcePath, targetPath);
+          return;
+        }
+        writeFileSync(sourcePath, secondAuth, "utf8");
+        copyFileSync(sourcePath, targetPath);
+        writeFileSync(sourcePath, firstAuth, "utf8");
+      }),
+    };
+
+    try {
+      await expect(
+        buildCodexProcessLaunchContext({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          platform: "win32",
+          overlayEntryLinker: copyWhileAuthoritativeTemporarilyChanges,
+        }),
+      ).rejects.toThrow(/authentication did not match the authoritative account/);
+      expect(readFileSync(sourceAuthPath, "utf8")).toBe(firstAuth);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe(secondAuth);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("drops legacy shared-auth aliases from account overlays and keeps own logins", async () => {
     const fixture = makeAccountFixture();
     const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };

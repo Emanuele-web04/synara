@@ -699,6 +699,39 @@ function readCodexPreparedAuthIdentity(content: Buffer | undefined): CodexPrepar
   return { state: "present", authMode: "unknown", identity: contentIdentity, fallback: true };
 }
 
+function preparedEffectiveAuthMatchesAuthoritative(
+  tracking: PreparedCodexAuthTracking,
+  effectiveHomePath: string,
+): boolean {
+  const authoritative = readCodexPreparedAuthIdentity(
+    readCodexPreparedHomeFileSnapshot(tracking.authSource, "auth.json"),
+  );
+  // A changed fallback copy becomes independent state after an explicit logout;
+  // preserving that state is intentional and there is no source copy to race.
+  if (authoritative.state === "missing") {
+    return true;
+  }
+  const effectiveAuthPath = path.join(effectiveHomePath, "auth.json");
+  try {
+    if (lstatSync(effectiveAuthPath).isSymbolicLink()) {
+      return codexPathsReferenceSameLocation(
+        effectiveAuthPath,
+        tracking.authoritativeAuthFilePath,
+      );
+    }
+  } catch {
+    return false;
+  }
+  const effectiveHomeSource = bindCodexPreparedHomeSource(effectiveHomePath, {
+    label: "Codex effective home",
+    requireRealDirectory: true,
+  });
+  const effective = readCodexPreparedAuthIdentity(
+    readCodexPreparedHomeFileSnapshot(effectiveHomeSource, "auth.json"),
+  );
+  return JSON.stringify(effective) === JSON.stringify(authoritative);
+}
+
 export function readCodexPreparedAuthTrackingFingerprint(
   tracking: PreparedCodexAuthTracking,
 ): string {
@@ -2750,6 +2783,11 @@ export async function buildCodexProcessLaunchContext(
   if (authIsMirroredFromAnotherHome && authFingerprint !== initialAuthFingerprint) {
     throw new Error(
       "Codex authentication changed during app-server launch preparation; retry the request.",
+    );
+  }
+  if (!preparedEffectiveAuthMatchesAuthoritative(authTracking, effectiveHomePath)) {
+    throw new Error(
+      "Prepared Codex authentication did not match the authoritative account; refusing to launch.",
     );
   }
   return {
