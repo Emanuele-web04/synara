@@ -106,8 +106,44 @@ describe("writeCodexOverlayConfigAtomically", () => {
       writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n');
 
       expect(readFileSync(targetPath, "utf8")).toBe('model = "new"\n');
-      expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+      }
       expect(readdirSync(root)).toEqual(["config.toml"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves both publication and cleanup errors", () => {
+    const root = mkdtempSync(path.join(OS.tmpdir(), "synara-codex-config-cleanup-"));
+    const targetPath = path.join(root, "config.toml");
+    writeFileSync(targetPath, 'model = "old"\n', "utf8");
+
+    try {
+      let thrown: unknown;
+      try {
+        writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n', {
+          beforeRename: () => {
+            throw new Error("primary publication failure");
+          },
+          removeTemporaryFile: () => {
+            throw new Error("temporary cleanup failure");
+          },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(AggregateError);
+      const aggregate = thrown as AggregateError;
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors.map((error) => (error as Error).message)).toEqual([
+        "primary publication failure",
+        "temporary cleanup failure",
+      ]);
+      expect(aggregate.cause).toBe(aggregate.errors[0]);
+      expect(readFileSync(targetPath, "utf8")).toBe('model = "old"\n');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
