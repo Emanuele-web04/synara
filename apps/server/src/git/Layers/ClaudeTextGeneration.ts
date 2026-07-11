@@ -1,5 +1,7 @@
-import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { spawnSync } from "node:child_process";
+import * as NodePath from "node:path";
 
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
@@ -70,6 +72,60 @@ function normalizeClaudeError(
     });
   }
   return new TextGenerationError({ operation, detail: fallback, cause: error });
+}
+
+function forceKillClaudeProcessGroup(pid: ChildProcessSpawner.ProcessId): void {
+  const numericPid = Number(pid);
+  if (process.platform === "win32") {
+    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+    try {
+      spawnSync(
+        NodePath.win32.join(systemRoot, "System32", "taskkill.exe"),
+        ["/pid", String(numericPid), "/T", "/F"],
+        {
+          stdio: "ignore",
+          timeout: 2_000,
+          windowsHide: true,
+        },
+      );
+    } catch {
+      // Continue to the direct-process fallback below.
+    }
+    try {
+      process.kill(numericPid, "SIGKILL");
+    } catch {
+      // The process tree is already gone or the platform rejected the fallback.
+    }
+    return;
+  }
+
+  try {
+    process.kill(-numericPid, "SIGKILL");
+    return;
+  } catch {
+    // The process may not be its own group; still attempt the individual PID.
+  }
+  try {
+    process.kill(numericPid, "SIGKILL");
+  } catch {
+    // Best-effort cleanup must not replace the original timeout/interruption.
+  }
+}
+
+function collectClaudeChildWithInterruptKill<A, E>(
+  effect: Effect.Effect<A, E>,
+  child: ChildProcessSpawner.ChildProcessHandle,
+): Effect.Effect<A, E> {
+  return Effect.acquireUseRelease(Effect.forkDetach(effect), Fiber.join, (fiber, exit) =>
+    Effect.gen(function* () {
+      if (exit._tag === "Failure") {
+        // The detached collector is not interrupted with its caller. Kill the
+        // tree first so pipe-holding descendants cannot block reader teardown.
+        yield* Effect.sync(() => forceKillClaudeProcessGroup(child.pid));
+      }
+      yield* Fiber.interrupt(fiber).pipe(Effect.timeoutOption("2 seconds"), Effect.ignore);
+    }).pipe(Effect.ignore),
+  );
 }
 
 function resolveClaudeBinaryPath(input: {
@@ -147,10 +203,9 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     Effect.gen(function* () {
       const binaryPath = resolveClaudeBinaryPath({ providerOptions });
       const env = resolveClaudeEnvironment({ providerOptions, homeDir: serverConfig.homeDir });
-      // Environment activation is accepted by older Claude versions that do not
-      // recognize the equivalent --safe-mode flag. It disables CLAUDE.md, hooks,
-      // plugins, skills, MCP, and other user/project customizations without
-      // disabling the selected account's OAuth or explicit API credentials.
+      // Keep the environment switch as defense in depth alongside the mandatory
+      // CLI flag below. Binaries that predate --safe-mode must reject the request
+      // rather than silently running auxiliary generation with customizations.
       env[CLAUDE_SAFE_MODE_ENV_KEY] = "1";
       const isolatedCwd = yield* fileSystem
         .makeTempDirectoryScoped({ prefix: "synara-claude-text-" })
@@ -172,6 +227,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       const effort = resolveClaudeEffort(modelSelection);
       const args = [
         "-p",
+        "--safe-mode",
         // Do not load user, project, or local settings. Safe mode also blocks
         // customization surfaces outside those settings sources, while strict
         // MCP config ensures no inherited MCP server can be started.
@@ -195,6 +251,9 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       const command = ChildProcess.make(prepared.command, prepared.args, {
         cwd: isolatedCwd,
         env,
+        // Auxiliary generation has no state to preserve. A hard scoped kill
+        // avoids waiting forever when a CLI or descendant ignores SIGTERM.
+        killSignal: "SIGKILL",
         shell: prepared.shell,
         stdin: { stream: Stream.make(new TextEncoder().encode(prompt)) },
       });
@@ -211,23 +270,26 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
             ),
           ),
         );
-      const [stdout, stderr, exitCode] = yield* Effect.all(
-        [
-          readStreamAsString(operation, child.stdout),
-          readStreamAsString(operation, child.stderr),
-          child.exitCode.pipe(
-            Effect.map((value) => Number(value)),
-            Effect.mapError((cause) =>
-              normalizeClaudeError(
-                binaryPath,
-                operation,
-                cause,
-                "Failed to read Claude CLI exit code",
+      const [stdout, stderr, exitCode] = yield* collectClaudeChildWithInterruptKill(
+        Effect.all(
+          [
+            readStreamAsString(operation, child.stdout),
+            readStreamAsString(operation, child.stderr),
+            child.exitCode.pipe(
+              Effect.map((value) => Number(value)),
+              Effect.mapError((cause) =>
+                normalizeClaudeError(
+                  binaryPath,
+                  operation,
+                  cause,
+                  "Failed to read Claude CLI exit code",
+                ),
               ),
             ),
-          ),
-        ],
-        { concurrency: "unbounded" },
+          ],
+          { concurrency: "unbounded" },
+        ),
+        child,
       );
 
       if (exitCode !== 0) {

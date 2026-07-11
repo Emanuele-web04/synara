@@ -10,8 +10,7 @@ import { describe, it, assert } from "@effect/vitest";
 
 import {
   buildClaudeProcessEnv,
-  CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS,
-  CLAUDE_EXTERNAL_AUTH_ENV_KEYS,
+  CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS,
   hasUsableClaudeCliCredentials,
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
@@ -19,6 +18,11 @@ import {
 import { buildClaudeInstanceProcessEnv } from "./claudeEnvironment.ts";
 
 describe("claudeProcessEnv", () => {
+  const dynamicAccountEnvironment = {
+    AWS_ENDPOINT_URL_FUTURE_SERVICE: "https://account.example.test/aws",
+    VERTEX_REGION_CLAUDE_FUTURE_MODEL: "account-region",
+  };
+
   it("prefers local Claude CLI credentials over stale direct request credentials", () => {
     const env = {
       PATH: "/bin",
@@ -87,13 +91,13 @@ describe("claudeProcessEnv", () => {
     const result = buildClaudeProcessEnv({
       env: {
         ANTHROPIC_API_KEY: "proxy-api-key",
-        ANTHROPIC_BASE_URL: "https://anthropic-proxy.example.test",
+        CLAUDE_CODE_USE_MANTLE: "1",
       },
       hasClaudeCliCredentials: true,
     });
 
     assert.equal(result.ANTHROPIC_API_KEY, "proxy-api-key");
-    assert.equal(result.ANTHROPIC_BASE_URL, "https://anthropic-proxy.example.test");
+    assert.equal(result.CLAUDE_CODE_USE_MANTLE, "1");
   });
 
   it("keeps direct credentials the provider instance sets explicitly", () => {
@@ -117,16 +121,15 @@ describe("claudeProcessEnv", () => {
   });
 
   it("does not fall back to ambient auth when an explicit instance home lacks OAuth", () => {
+    const accountEnvironment = Object.fromEntries(
+      CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS.map((key) => [key, `account-a-${key}`]),
+    );
     const inherited = {
+      ...accountEnvironment,
+      ...dynamicAccountEnvironment,
       CLAUDE_CONFIG_DIR: "/home/account-a/.claude",
-      ANTHROPIC_API_KEY: "account-a-api-key",
-      ANTHROPIC_AUTH_TOKEN: "account-a-auth-token",
-      CLAUDE_CODE_OAUTH_TOKEN: "account-a-oauth-token",
-      ANTHROPIC_BASE_URL: "https://account-a.example.test",
-      CLAUDE_CODE_USE_BEDROCK: "1",
-      CLAUDE_CODE_USE_VERTEX: "1",
-      CLAUDE_CODE_USE_FOUNDRY: "1",
-      CLAUDE_CODE_USE_ANTHROPIC_AWS: "1",
+      HTTPS_PROXY: "https://shared-network-proxy.example.test",
+      NODE_EXTRA_CA_CERTS: "/shared/network-ca.pem",
     } satisfies NodeJS.ProcessEnv;
     const previous = Object.fromEntries(
       Object.keys(inherited).map((key) => [key, process.env[key]]),
@@ -137,10 +140,15 @@ describe("claudeProcessEnv", () => {
 
       assert.equal(result.HOME, "/home/account-b");
       assert.equal(result.CLAUDE_CONFIG_DIR, undefined);
-      for (const key of [...CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS, ...CLAUDE_EXTERNAL_AUTH_ENV_KEYS]) {
+      for (const key of CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS) {
         assert.equal(result[key], undefined);
         assert.notEqual(inherited[key], undefined);
       }
+      for (const key of Object.keys(dynamicAccountEnvironment)) {
+        assert.equal(result[key], undefined);
+      }
+      assert.equal(result.HTTPS_PROXY, "https://shared-network-proxy.example.test");
+      assert.equal(result.NODE_EXTRA_CA_CERTS, "/shared/network-ca.pem");
     } finally {
       for (const [key, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[key];
@@ -150,16 +158,19 @@ describe("claudeProcessEnv", () => {
   });
 
   it("preserves auth and backend routing explicitly configured by the selected instance", () => {
-    const result = buildClaudeInstanceProcessEnv("/home/account-b", {
-      ANTHROPIC_API_KEY: "account-b-key",
-      ANTHROPIC_BASE_URL: "https://account-b.example.test",
-      CLAUDE_CODE_USE_FOUNDRY: "1",
-    });
+    const instanceEnvironment = Object.fromEntries(
+      CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS.map((key) => [key, `account-b-${key}`]),
+    );
+    Object.assign(instanceEnvironment, dynamicAccountEnvironment);
+    const result = buildClaudeInstanceProcessEnv("/home/account-b", instanceEnvironment);
 
     assert.equal(result.HOME, "/home/account-b");
-    assert.equal(result.ANTHROPIC_API_KEY, "account-b-key");
-    assert.equal(result.ANTHROPIC_BASE_URL, "https://account-b.example.test");
-    assert.equal(result.CLAUDE_CODE_USE_FOUNDRY, "1");
+    for (const key of CLAUDE_ACCOUNT_ISOLATION_ENV_KEYS) {
+      assert.equal(result[key], `account-b-${key}`);
+    }
+    for (const [key, value] of Object.entries(dynamicAccountEnvironment)) {
+      assert.equal(result[key], value);
+    }
   });
 
   it("expands tilde provider instance homes", () => {
