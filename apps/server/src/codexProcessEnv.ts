@@ -5,7 +5,7 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import * as fs from "node:fs/promises";
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
@@ -40,6 +40,11 @@ const CODEX_SQLITE_STATE_ENTRY_PATTERN = /^.+\.sqlite(?:-(?:wal|shm|journal))?$/
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const SYNARA_SHARED_CONTINUATION_MARKER_FILE = "synara-shared-continuation-v1.json";
 const SYNARA_SHARED_CONTINUATION_MARKER_VERSION = 1;
+const SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY = ".synara-shared-continuation-v1.lock";
+const SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE = "owner.json";
+const SYNARA_SHARED_CONTINUATION_LOCK_TIMEOUT_MS = 10_000;
+const SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS = 25;
+const SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS = 30_000;
 const REQUIRED_SHARED_CONTINUATION_DIRECTORIES = [
   "sessions",
   "archived_sessions",
@@ -273,11 +278,113 @@ interface SharedContinuationMigration {
   readonly kind: SharedContinuationEntryKind;
   readonly sourcePath: string;
   readonly targetPath: string;
-  readonly action: "create-source" | "link-only" | "move-target-to-source" | "remove-target";
+  readonly action: "create-source" | "link-only";
 }
 
 function sharedContinuationMarkerPath(sourceHomePath: string): string {
   return path.join(sourceHomePath, SYNARA_SHARED_CONTINUATION_MARKER_FILE);
+}
+
+function sharedContinuationLockPath(sourceHomePath: string): string {
+  return path.join(sourceHomePath, SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY);
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { readonly code?: unknown }).code ?? "")
+    : undefined;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return errorCode(error) === "ENOENT";
+}
+
+async function sleep(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== "ESRCH";
+  }
+}
+
+async function readSharedContinuationLockOwner(lockPath: string): Promise<number | undefined> {
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE), "utf8"),
+    ) as { readonly pid?: unknown };
+    return typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0
+      ? parsed.pid
+      : undefined;
+  } catch (error) {
+    if (isMissingPathError(error) || error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function canReclaimSharedContinuationLock(lockPath: string): Promise<boolean> {
+  const ownerPid = await readSharedContinuationLockOwner(lockPath);
+  if (ownerPid !== undefined) {
+    return !processIsAlive(ownerPid);
+  }
+  const lockStat = await lstatIfExists(lockPath);
+  return (
+    lockStat !== undefined &&
+    Date.now() - Number(lockStat.mtimeMs) >= SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS
+  );
+}
+
+async function withSharedContinuationLock<T>(
+  sourceHomePath: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  await fs.mkdir(sourceHomePath, { recursive: true });
+  const lockPath = sharedContinuationLockPath(sourceHomePath);
+  const startedAt = Date.now();
+
+  while (true) {
+    try {
+      await fs.mkdir(lockPath, { mode: 0o700 });
+      try {
+        await fs.writeFile(
+          path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE),
+          `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
+      } catch (error) {
+        await fs.rm(lockPath, { recursive: true, force: true });
+        throw error;
+      }
+      break;
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw error;
+      }
+      if (await canReclaimSharedContinuationLock(lockPath)) {
+        await fs.rm(lockPath, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() - startedAt >= SYNARA_SHARED_CONTINUATION_LOCK_TIMEOUT_MS) {
+        throw new Error(
+          `Timed out waiting for Codex continuation-state preparation lock at ${lockPath}.`,
+          { cause: error },
+        );
+      }
+      await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
+    }
+  }
+
+  try {
+    return await operation();
+  } finally {
+    await fs.rm(lockPath, { recursive: true, force: true });
+  }
 }
 
 function isSharedContinuationEntry(entryName: string): boolean {
@@ -295,8 +402,11 @@ function isSharedContinuationEntry(entryName: string): boolean {
 async function readDirectoryEntries(directoryPath: string): Promise<readonly string[]> {
   try {
     return await fs.readdir(directoryPath);
-  } catch {
-    return [];
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
   }
 }
 
@@ -308,33 +418,36 @@ function sharedContinuationEntryKind(entryName: string): SharedContinuationEntry
     : "file";
 }
 
-async function isEmptySharedContinuationEntry(
-  entryPath: string,
-  kind: SharedContinuationEntryKind,
-): Promise<boolean> {
-  return kind === "dir"
-    ? (await readDirectoryEntries(entryPath)).length === 0
-    : (await fs.stat(entryPath)).size === 0;
-}
-
 async function resolvedSymlinkTarget(linkPath: string): Promise<string> {
   const target = await fs.readlink(linkPath);
   return path.isAbsolute(target) ? target : path.resolve(path.dirname(linkPath), target);
 }
 
-async function lstatOrUndefined(
+async function lstatIfExists(
   entryPath: string,
 ): Promise<Awaited<ReturnType<typeof fs.lstat>> | undefined> {
   try {
     return await fs.lstat(entryPath);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
   }
 }
 
-async function filesMatch(leftPath: string, rightPath: string): Promise<boolean> {
-  const [left, right] = await Promise.all([fs.readFile(leftPath), fs.readFile(rightPath)]);
-  return left.equals(right);
+function assertSharedContinuationEntryType(input: {
+  readonly entryName: string;
+  readonly entryPath: string;
+  readonly kind: SharedContinuationEntryKind;
+  readonly stat: NonNullable<Awaited<ReturnType<typeof fs.lstat>>>;
+}): void {
+  const matches = input.kind === "dir" ? input.stat.isDirectory() : input.stat.isFile();
+  if (!matches) {
+    throw new Error(
+      `Codex continuation state '${input.entryName}' at ${input.entryPath} is not a ${input.kind === "dir" ? "directory" : "regular file"}.`,
+    );
+  }
 }
 
 async function planSharedContinuationMigration(input: {
@@ -346,8 +459,8 @@ async function planSharedContinuationMigration(input: {
   const sourcePath = path.join(input.sourceHomePath, input.entryName);
   const targetPath = path.join(input.overlayHomePath, input.entryName);
   const [sourceStat, targetStat] = await Promise.all([
-    lstatOrUndefined(sourcePath),
-    lstatOrUndefined(targetPath),
+    lstatIfExists(sourcePath),
+    lstatIfExists(targetPath),
   ]);
 
   if (targetStat?.isSymbolicLink()) {
@@ -356,9 +469,16 @@ async function planSharedContinuationMigration(input: {
         `Codex continuation state at ${targetPath} points outside the shared source home; remove or repair the stale link before starting this account.`,
       );
     }
-    return sourceStat
-      ? undefined
-      : { entryName: input.entryName, kind, sourcePath, targetPath, action: "create-source" };
+    if (sourceStat) {
+      assertSharedContinuationEntryType({
+        entryName: input.entryName,
+        entryPath: sourcePath,
+        kind,
+        stat: sourceStat,
+      });
+      return undefined;
+    }
+    return { entryName: input.entryName, kind, sourcePath, targetPath, action: "create-source" };
   }
 
   if (!sourceStat && !targetStat) {
@@ -368,66 +488,100 @@ async function planSharedContinuationMigration(input: {
     return { entryName: input.entryName, kind, sourcePath, targetPath, action: "link-only" };
   }
   if (!sourceStat && targetStat) {
-    return {
+    assertSharedContinuationEntryType({
       entryName: input.entryName,
+      entryPath: targetPath,
       kind,
-      sourcePath,
-      targetPath,
-      action: "move-target-to-source",
-    };
-  }
-
-  const sourceIsExpectedType = kind === "dir" ? sourceStat!.isDirectory() : sourceStat!.isFile();
-  const targetIsExpectedType = kind === "dir" ? targetStat!.isDirectory() : targetStat!.isFile();
-  if (!sourceIsExpectedType || !targetIsExpectedType) {
+      stat: targetStat,
+    });
     throw new Error(
-      `Codex continuation state '${input.entryName}' has incompatible file types between ${input.sourceHomePath} and ${input.overlayHomePath}.`,
+      `Codex continuation state '${input.entryName}' exists only in ${input.overlayHomePath}; refusing to migrate legacy state automatically because an active Codex process may still own it. Move it to ${input.sourceHomePath} while Codex is stopped, then retry.`,
     );
   }
 
-  const [sourceEmpty, targetEmpty] = await Promise.all([
-    isEmptySharedContinuationEntry(sourcePath, kind),
-    isEmptySharedContinuationEntry(targetPath, kind),
-  ]);
-  if (sourceEmpty && !targetEmpty) {
-    return {
-      entryName: input.entryName,
-      kind,
-      sourcePath,
-      targetPath,
-      action: "move-target-to-source",
-    };
-  }
-  if (targetEmpty) {
-    return { entryName: input.entryName, kind, sourcePath, targetPath, action: "remove-target" };
-  }
-  if (kind === "file" && (await filesMatch(sourcePath, targetPath))) {
-    return { entryName: input.entryName, kind, sourcePath, targetPath, action: "remove-target" };
-  }
+  assertSharedContinuationEntryType({
+    entryName: input.entryName,
+    entryPath: sourcePath,
+    kind,
+    stat: sourceStat!,
+  });
+  assertSharedContinuationEntryType({
+    entryName: input.entryName,
+    entryPath: targetPath,
+    kind,
+    stat: targetStat!,
+  });
 
   throw new Error(
-    `Codex continuation state '${input.entryName}' exists independently in both ${input.sourceHomePath} and ${input.overlayHomePath}; refusing to choose one copy because that could lose native thread history.`,
+    `Codex continuation state '${input.entryName}' exists as real entries in both ${input.sourceHomePath} and ${input.overlayHomePath}; refusing to replace either copy because an active Codex process may still own it.`,
   );
+}
+
+async function assertMigrationPreconditionsStillHold(
+  migration: SharedContinuationMigration,
+): Promise<void> {
+  const [sourceStat, targetStat] = await Promise.all([
+    lstatIfExists(migration.sourcePath),
+    lstatIfExists(migration.targetPath),
+  ]);
+  switch (migration.action) {
+    case "create-source":
+      if (sourceStat !== undefined) {
+        throw new Error(
+          `Codex continuation source appeared during preparation at ${migration.sourcePath}; refusing to overwrite unexpected state.`,
+        );
+      }
+      if (targetStat?.isSymbolicLink()) {
+        if (
+          !codexPathsReferenceSameLocation(
+            await resolvedSymlinkTarget(migration.targetPath),
+            migration.sourcePath,
+          )
+        ) {
+          throw new Error(
+            `Codex continuation link changed during preparation at ${migration.targetPath}.`,
+          );
+        }
+      } else if (targetStat !== undefined) {
+        throw new Error(
+          `Codex continuation target appeared during preparation at ${migration.targetPath}; refusing to overwrite unexpected state.`,
+        );
+      }
+      return;
+    case "link-only":
+      if (!sourceStat || targetStat) {
+        throw new Error(
+          `Codex continuation state changed during preparation for ${migration.entryName}; retry after the active writer stops.`,
+        );
+      }
+      assertSharedContinuationEntryType({
+        entryName: migration.entryName,
+        entryPath: migration.sourcePath,
+        kind: migration.kind,
+        stat: sourceStat,
+      });
+      return;
+  }
+}
+
+async function createSharedContinuationSource(
+  migration: SharedContinuationMigration,
+): Promise<void> {
+  if (migration.kind === "dir") {
+    await fs.mkdir(migration.sourcePath);
+  } else {
+    await fs.writeFile(migration.sourcePath, "", { flag: "wx", mode: 0o600 });
+  }
 }
 
 async function executeSharedContinuationMigration(
   migration: SharedContinuationMigration,
   linker?: CodexOverlayEntryLinker,
 ): Promise<void> {
+  await assertMigrationPreconditionsStillHold(migration);
   switch (migration.action) {
     case "create-source":
-      if (migration.kind === "dir") {
-        await fs.mkdir(migration.sourcePath, { recursive: true });
-      } else {
-        await fs.writeFile(migration.sourcePath, "", { mode: 0o600 });
-      }
-      break;
-    case "move-target-to-source":
-      await fs.rm(migration.sourcePath, { recursive: true, force: true });
-      await fs.rename(migration.targetPath, migration.sourcePath);
-      break;
-    case "remove-target":
-      await fs.rm(migration.targetPath, { recursive: true, force: true });
+      await createSharedContinuationSource(migration);
       break;
     case "link-only":
       break;
@@ -439,13 +593,22 @@ async function executeSharedContinuationMigration(
   if (isCodexSqliteStateEntry(migration.entryName)) {
     return;
   }
-  await ensureCodexOverlaySymlink(
+  const targetStat = await lstatIfExists(migration.targetPath);
+  if (
+    targetStat?.isSymbolicLink() &&
+    codexPathsReferenceSameLocation(
+      await resolvedSymlinkTarget(migration.targetPath),
+      migration.sourcePath,
+    )
+  ) {
+    return;
+  }
+  await linkOrCopyCodexOverlayEntry(
     {
       entryName: migration.entryName,
       sourcePath: migration.sourcePath,
       targetPath: migration.targetPath,
       type: migration.kind,
-      force: true,
     },
     linker,
   );
@@ -456,33 +619,45 @@ async function prepareSharedCodexContinuationState(input: {
   readonly overlayHomePath: string;
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
 }): Promise<void> {
-  await fs.mkdir(input.sourceHomePath, { recursive: true });
-  await fs.rm(sharedContinuationMarkerPath(input.sourceHomePath), { force: true });
-  const [sourceEntries, overlayEntries] = await Promise.all([
-    readDirectoryEntries(input.sourceHomePath),
-    readDirectoryEntries(input.overlayHomePath),
-  ]);
-  const entryNames = new Set<string>([
-    ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
-    ...REQUIRED_SHARED_CONTINUATION_FILES,
-    ...sourceEntries.filter(isSharedContinuationEntry),
-    ...overlayEntries.filter(isSharedContinuationEntry),
-  ]);
-  const migrations = (
-    await Promise.all(
-      [...entryNames].toSorted().map((entryName) =>
-        planSharedContinuationMigration({
-          entryName,
-          sourceHomePath: input.sourceHomePath,
-          overlayHomePath: input.overlayHomePath,
-        }),
-      ),
-    )
-  ).filter((migration): migration is SharedContinuationMigration => migration !== undefined);
+  await withSharedContinuationLock(input.sourceHomePath, async () => {
+    await fs.rm(sharedContinuationMarkerPath(input.sourceHomePath), { force: true });
+    const [sourceEntries, overlayEntries] = await Promise.all([
+      readDirectoryEntries(input.sourceHomePath),
+      readDirectoryEntries(input.overlayHomePath),
+    ]);
+    const entryNames = new Set<string>([
+      ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
+      ...REQUIRED_SHARED_CONTINUATION_FILES,
+      ...sourceEntries.filter(isSharedContinuationEntry),
+      ...overlayEntries.filter(isSharedContinuationEntry),
+    ]);
+    const migrations = (
+      await Promise.all(
+        [...entryNames].toSorted().map((entryName) =>
+          planSharedContinuationMigration({
+            entryName,
+            sourceHomePath: input.sourceHomePath,
+            overlayHomePath: input.overlayHomePath,
+          }),
+        ),
+      )
+    ).filter((migration): migration is SharedContinuationMigration => migration !== undefined);
 
-  for (const migration of migrations) {
-    await executeSharedContinuationMigration(migration, input.overlayEntryLinker);
-  }
+    for (const migration of migrations) {
+      await executeSharedContinuationMigration(migration, input.overlayEntryLinker);
+    }
+    if (
+      !selectedCodexOverlaySharesContinuationState({
+        sourceHomePath: input.sourceHomePath,
+        overlayHomePath: input.overlayHomePath,
+      })
+    ) {
+      throw new Error(
+        `Codex continuation state at ${input.overlayHomePath} is not fully linked to ${input.sourceHomePath}.`,
+      );
+    }
+    await writeSharedCodexContinuationMarker(input.sourceHomePath);
+  });
 }
 
 async function writeSharedCodexContinuationMarker(sourceHomePath: string): Promise<void> {
@@ -499,25 +674,119 @@ async function writeSharedCodexContinuationMarker(sourceHomePath: string): Promi
   await fs.rename(temporaryPath, markerPath);
 }
 
+function lstatSyncIfExists(entryPath: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(entryPath);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function readDirectoryEntriesSync(directoryPath: string): readonly string[] {
+  try {
+    return readdirSync(directoryPath);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function resolvedSymlinkTargetSync(linkPath: string): string {
+  const target = readlinkSync(linkPath);
+  return path.isAbsolute(target) ? target : path.resolve(path.dirname(linkPath), target);
+}
+
+function sharedContinuationIdentityEntryNames(input: {
+  readonly sourceHomePath: string;
+  readonly overlayHomePath: string;
+}): readonly string[] {
+  const stateDatabaseFilePattern = /^.+\.sqlite$/;
+  return [
+    ...new Set([
+      ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
+      ...REQUIRED_SHARED_CONTINUATION_FILES,
+      ...readDirectoryEntriesSync(input.sourceHomePath).filter((entryName) =>
+        stateDatabaseFilePattern.test(entryName),
+      ),
+      ...readDirectoryEntriesSync(input.overlayHomePath).filter(isCodexSqliteStateEntry),
+    ]),
+  ];
+}
+
+function selectedCodexOverlaySharesContinuationState(input: {
+  readonly sourceHomePath: string;
+  readonly overlayHomePath: string;
+}): boolean {
+  if (codexPathsReferenceSameLocation(input.sourceHomePath, input.overlayHomePath)) {
+    return true;
+  }
+  return sharedContinuationIdentityEntryNames(input).every((entryName) => {
+    const sourcePath = path.join(input.sourceHomePath, entryName);
+    const targetPath = path.join(input.overlayHomePath, entryName);
+    const kind = sharedContinuationEntryKind(entryName);
+    const sourceStat = lstatSyncIfExists(sourcePath);
+    const targetStat = lstatSyncIfExists(targetPath);
+    const sourceMatchesExpectedType =
+      sourceStat !== undefined &&
+      (kind === "dir" ? sourceStat.isDirectory() : sourceStat.isFile());
+    if (!sourceMatchesExpectedType) {
+      return false;
+    }
+    if (isCodexSqliteStateEntry(entryName)) {
+      // SQLite state is opened through CODEX_SQLITE_HOME, never through an
+      // overlay mirror, so any overlay-side database entry is stale.
+      return targetStat === undefined;
+    }
+    return (
+      targetStat?.isSymbolicLink() === true &&
+      codexPathsReferenceSameLocation(resolvedSymlinkTargetSync(targetPath), sourcePath)
+    );
+  });
+}
+
 export function isCodexSharedContinuationStatePrepared(input: {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
 } = {}): boolean {
   const env = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(env, input.shadowHomePath)
+    : undefined;
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(
+    env,
+    sourceHomePath,
+    resolveCodexHomeOverlayAccountSegment({
+      homePath: sourceHomePath,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(shadowHomePath ? { shadowHomePath } : {}),
+    }),
+  );
   try {
     const marker = JSON.parse(
       readFileSync(sharedContinuationMarkerPath(sourceHomePath), "utf8"),
     ) as { readonly version?: unknown; readonly sourceHomeIdentity?: unknown };
-    return (
+    const markerMatches =
       marker.version === SYNARA_SHARED_CONTINUATION_MARKER_VERSION &&
-      marker.sourceHomeIdentity === resolveCodexPathIdentity(sourceHomePath) &&
+      marker.sourceHomeIdentity === resolveCodexPathIdentity(sourceHomePath);
+    const sourceHasRequiredState =
       REQUIRED_SHARED_CONTINUATION_DIRECTORIES.every((entryName) =>
         statSync(path.join(sourceHomePath, entryName)).isDirectory(),
       ) &&
       REQUIRED_SHARED_CONTINUATION_FILES.every((entryName) =>
         statSync(path.join(sourceHomePath, entryName)).isFile(),
-      )
+      );
+    return (
+      markerMatches &&
+      sourceHasRequiredState &&
+      selectedCodexOverlaySharesContinuationState({ sourceHomePath, overlayHomePath })
     );
   } catch {
     return false;
@@ -1001,31 +1270,18 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   }
 
   await fs.mkdir(overlayHomePath, { recursive: true });
-
-  let sharedContinuationPrepared = false;
-  try {
-    await prepareSharedCodexContinuationState({
-      sourceHomePath,
-      overlayHomePath,
-      ...(input.overlayEntryLinker
-        ? { overlayEntryLinker: input.overlayEntryLinker }
-        : {}),
-    });
-    sharedContinuationPrepared = true;
-  } catch (error) {
-    await fs.rm(sharedContinuationMarkerPath(sourceHomePath), { force: true });
-    // A default overlay can still start when this host cannot create links.
-    // Account overlays fail closed so a persisted shared identity never points
-    // at an independently-created continuation database.
-    if (accountSegment) {
-      throw error;
-    }
-  }
+  await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
+  // Continuation preparation is all-or-nothing for default and account
+  // overlays. A host that cannot create the required links fails closed.
+  await prepareSharedCodexContinuationState({
+    sourceHomePath,
+    overlayHomePath,
+    ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
+  });
 
   try {
     // Auth must get a best-effort link/copy before optional entries whose
     // symlinks may fail on restricted Windows installs.
-    await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (
         entry === "config.toml" ||
@@ -1142,9 +1398,6 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   }
   await fs.writeFile(overlayConfigPath, overlayConfig, "utf8");
   await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
-  if (sharedContinuationPrepared) {
-    await writeSharedCodexContinuationMarker(sourceHomePath);
-  }
 
   return overlayHomePath;
 }

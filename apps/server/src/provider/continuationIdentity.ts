@@ -35,6 +35,8 @@ export function providerContinuationIdentity(
         isCodexSharedContinuationStatePrepared({
           env,
           ...(codex?.homePath ? { homePath: codex.homePath } : {}),
+          ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
+          ...(codex?.accountId ? { accountId: codex.accountId } : {}),
         })
       ) {
         return `codex:shared-v1:${canonicalStoragePath(sourceHome)}`;

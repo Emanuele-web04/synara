@@ -308,6 +308,8 @@ describe("buildCodexProcessEnv account overlays", () => {
         isCodexSharedContinuationStatePrepared({
           env: fixture.env,
           homePath: fixture.homePath,
+          shadowHomePath: personalShadowHomePath,
+          accountId: "personal",
         }),
       ).toBe(true);
       const personalSessionsPath = path.join(personalEnv.CODEX_HOME!, "sessions");
@@ -334,7 +336,7 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
-  it("repairs legacy account continuation state into the shared store", async () => {
+  it("preserves legacy-only continuation state and requires an explicit migration", async () => {
     const fixture = makeAccountFixture();
     writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
     const overlayHomePath = resolveActiveCodexHomeWritePath({
@@ -347,17 +349,19 @@ describe("buildCodexProcessEnv account overlays", () => {
     writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
 
     try {
-      await buildCodexProcessEnv({
-        env: fixture.env,
-        homePath: fixture.homePath,
-        shadowHomePath: fixture.shadowHomePath,
-        accountId: "work",
-        platform: "win32",
-      });
-      expect(lstatSync(path.join(overlayHomePath, "sessions")).isSymbolicLink()).toBe(true);
-      expect(readFileSync(path.join(fixture.homePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/refusing to migrate legacy state automatically/);
+      expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
         "legacy",
       );
+      expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

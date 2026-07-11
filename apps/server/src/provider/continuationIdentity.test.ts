@@ -65,9 +65,22 @@ describe("providerContinuationIdentity", () => {
         "codex",
         options("personal", personalShadowHomePath),
       );
+      const workBeforePreparation = providerContinuationIdentity(
+        "codex",
+        options("work", workShadowHomePath),
+      );
+      assert.notEqual(personalAfter, workBeforePreparation);
+      assert.match(String(personalAfter), /^codex:shared-v1:/);
+      assert.match(String(workBeforePreparation), /^codex:overlay-v1:/);
+
+      await buildCodexProcessEnv({
+        env: { ...process.env, ...environment },
+        homePath,
+        shadowHomePath: workShadowHomePath,
+        accountId: "work",
+      });
       const workAfter = providerContinuationIdentity("codex", options("work", workShadowHomePath));
       assert.equal(personalAfter, workAfter);
-      assert.match(String(personalAfter), /^codex:shared-v1:/);
 
       fs.unlinkSync(path.join(homePath, "state_5.sqlite"));
       assert.match(
