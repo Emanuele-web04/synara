@@ -13,6 +13,88 @@ import ClearAutomationDefinitionProviderOptions from "./107_ClearAutomationDefin
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
+  it.effect("tombstones a well-formed legacy Codex account id before clearing options", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations({ toMigrationInclusive: 106 });
+      yield* sql`
+        INSERT INTO automation_definitions (
+          automation_id,
+          project_id,
+          name,
+          prompt,
+          schedule_json,
+          enabled,
+          model_selection_json,
+          provider_options_json,
+          runtime_mode,
+          interaction_mode,
+          worktree_mode,
+          mode,
+          stop_on_error,
+          minimum_interval_seconds,
+          retry_policy_json,
+          misfire_policy,
+          acknowledged_risks_json,
+          iteration_count,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'automation-legacy-options',
+          'project-legacy-options',
+          'Legacy options',
+          'Run safely',
+          '{"type":"manual"}',
+          1,
+          '{"provider":"codex","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}',
+          '{"codex":{"accountId":"work"}}',
+          'approval-required',
+          'default',
+          'auto',
+          'standalone',
+          1,
+          60,
+          '{"type":"none"}',
+          'coalesce',
+          '[]',
+          0,
+          '2026-07-08T10:00:00.000Z',
+          '2026-07-08T10:00:00.000Z'
+        )
+      `;
+
+      yield* runMigrations();
+
+      const rows = yield* sql<{
+        readonly instanceId: string;
+        readonly legacyProvider: string | null;
+        readonly modelOptions: string | null;
+        readonly providerOptions: string | null;
+        readonly enabled: number;
+      }>`
+        SELECT
+          json_extract(model_selection_json, '$.instanceId') AS instanceId,
+          json_extract(model_selection_json, '$.provider') AS legacyProvider,
+          json_extract(model_selection_json, '$.options') AS modelOptions,
+          provider_options_json AS providerOptions,
+          enabled
+        FROM automation_definitions
+        WHERE automation_id = 'automation-legacy-options'
+      `;
+      assert.deepStrictEqual(rows, [
+        {
+          instanceId: "synara_unresolved_automation_codex",
+          legacyProvider: null,
+          modelOptions: null,
+          providerOptions: null,
+          enabled: 0,
+        },
+      ]);
+    }),
+  );
+
   it.effect("maps a legacy Codex account id to its exact instance before clearing options", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -49,7 +131,7 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
           '{"type":"manual"}',
           1,
           '{"provider":"codex","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}',
-          '{"codex":{"accountId":"work","homePath":"/tmp/codex-work","environment":{"CODEX_SECRET":"must-be-removed"}}}',
+          '{"codex":{"accountId":"work"}}',
           'approval-required',
           'default',
           'auto',
@@ -70,7 +152,7 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
       const rows = yield* sql<{
         readonly instanceId: string;
         readonly legacyProvider: string | null;
-        readonly modelOptions: string;
+        readonly modelOptions: string | null;
         readonly providerOptions: string | null;
         readonly enabled: number;
       }>`
@@ -85,11 +167,11 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
       `;
       assert.deepStrictEqual(rows, [
         {
-          instanceId: "codex_work",
+          instanceId: "synara_unresolved_automation_codex",
           legacyProvider: null,
-          modelOptions: '[{"id":"reasoningEffort","value":"high"}]',
+          modelOptions: null,
           providerOptions: null,
-          enabled: 1,
+          enabled: 0,
         },
       ]);
     }),
@@ -254,7 +336,7 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
   );
 
   it.effect(
-    "fails closed on empty or mistyped scalar identities but accepts empty environment",
+    "fails closed on account environments and invalid scalar identities but accepts empty environment",
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -267,6 +349,14 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
           worktree_mode, mode, stop_on_error, minimum_interval_seconds, retry_policy_json,
           misfire_policy, acknowledged_risks_json, iteration_count, created_at, updated_at
         ) VALUES
+          (
+            'automation-account-with-environment', 'project-identity-shapes',
+            'Account with environment', 'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            '{"codex":{"accountId":"work","environment":{"CODEX_HOME":"/tmp/other-codex","OPENAI_API_KEY":"secret"}}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
           (
             'automation-empty-account-id', 'project-identity-shapes', 'Empty account id',
             'Run safely', '{"type":"manual"}', 1,
@@ -315,6 +405,11 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
         ORDER BY automation_id ASC
       `;
         assert.deepStrictEqual(rows, [
+          {
+            automationId: "automation-account-with-environment",
+            enabled: 0,
+            instanceId: "synara_unresolved_automation_codex",
+          },
           {
             automationId: "automation-account-with-malformed-home",
             enabled: 0,
