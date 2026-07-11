@@ -67,6 +67,31 @@ describe("makePiStoragePaths", () => {
     expect(paths.agentDir.endsWith("/.pi/agent")).toBe(true);
     expect(paths.sessionDir).toBe(`${paths.agentDir}/sessions`);
   });
+
+  it("expands configured tilde paths against the synthetic account home", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "~/.custom-pi",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.custom-pi");
+    expect(paths.agentDir).not.toContain("/real/server-home");
+  });
+
+  it("falls back to synthetic storage for relative configured agent dirs", () => {
+    const paths = makePiStoragePaths({
+      agentDir: "relative-agent",
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/real/server-home",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir).toContain("/.pi/agent");
+  });
 });
 
 describe("resolvePiExtensionMode", () => {
@@ -160,6 +185,34 @@ describe("Pi extension mode in-flight reservations", () => {
     releaseStart();
     await Promise.all([isolatedStart]);
     expect(modes.reserve(false).noExtensions).toBe(false);
+  });
+
+  it("allows same-thread default to isolated replacement without exposing the transition", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: true,
+      hasIsolatedMode: false,
+    }));
+    expect(() => modes.reserve(true)).toThrow(/Stop extension-enabled default Pi sessions/);
+    const replacement = modes.reserve(true, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(true);
+    expect(() => modes.reserve(false)).toThrow(/account-mode transition/);
+    replacement.release();
+  });
+
+  it("allows same-thread isolated to default replacement in noExtensions mode", () => {
+    const modes = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: true,
+    }));
+    const replacement = modes.reserve(false, {
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    });
+    expect(replacement.noExtensions).toBe(false);
+    replacement.release();
   });
 });
 

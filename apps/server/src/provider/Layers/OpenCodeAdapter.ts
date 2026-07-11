@@ -42,6 +42,7 @@ import {
 } from "../Errors.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
   KILO_CLI_SPEC,
@@ -112,6 +113,7 @@ const KILO_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
 const OPENCODE_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS = 60_000;
 const OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000] as const;
 const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
+export const resolveOpenCodeStartInstanceId = resolveProviderSessionInstanceId;
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -3677,6 +3679,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {
+          const resolvedProviderInstanceId = resolveOpenCodeStartInstanceId(input);
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
@@ -3687,8 +3690,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ? input.providerOptions?.opencode?.experimentalWebSockets
               : undefined;
           const discoveryEnvelopeKey = makeDiscoveryEnvelopeKey({
-            ...(input.providerInstanceId !== undefined
-              ? { instanceId: input.providerInstanceId }
+            ...(resolvedProviderInstanceId !== undefined
+              ? { instanceId: resolvedProviderInstanceId }
               : {}),
             binaryPath,
             ...(serverUrl ? { serverUrl } : {}),
@@ -3724,8 +3727,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cwd: directory,
                   isolationRootDir: serverConfig.stateDir,
                   homeDir: serverConfig.homeDir,
-                  ...(input.providerInstanceId !== undefined
-                    ? { instanceId: input.providerInstanceId }
+                  ...(resolvedProviderInstanceId !== undefined
+                    ? { instanceId: resolvedProviderInstanceId }
                     : {}),
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(environment !== undefined ? { environment } : {}),
@@ -3823,7 +3826,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const createdAt = nowIso();
           const session: ProviderSession = {
             provider,
-            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            ...(resolvedProviderInstanceId
+              ? { providerInstanceId: resolvedProviderInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd: directory,

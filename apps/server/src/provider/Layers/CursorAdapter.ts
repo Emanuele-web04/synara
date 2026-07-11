@@ -107,11 +107,13 @@ import {
   formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 
 const PROVIDER = "cursor" as const;
+export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 // Backstop for an alive-but-silent cursor-agent child: if a turn produces no
@@ -702,6 +704,7 @@ export function makeCursorAdapter(
           }
 
           const cursorModelSelection = input.modelSelection;
+          const resolvedProviderInstanceId = resolveCursorStartInstanceId(input);
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -726,8 +729,8 @@ export function makeCursorAdapter(
           const effectiveCursorSettings: CursorAcpRuntimeCursorSettings = {
             homeDir: serverConfig.homeDir,
             isolationRootDir: serverConfig.stateDir,
-            ...(input.providerInstanceId !== undefined
-              ? { instanceId: input.providerInstanceId }
+            ...(resolvedProviderInstanceId !== undefined
+              ? { instanceId: resolvedProviderInstanceId }
               : {}),
             ...(cursorSettings.binaryPath !== undefined
               ? { binaryPath: cursorSettings.binaryPath }
@@ -970,7 +973,9 @@ export function makeCursorAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
-            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            ...(resolvedProviderInstanceId
+              ? { providerInstanceId: resolvedProviderInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
