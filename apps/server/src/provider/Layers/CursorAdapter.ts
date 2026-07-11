@@ -47,7 +47,10 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  resolveProviderSessionInstanceId,
+} from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
@@ -132,6 +135,7 @@ import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 
 const PROVIDER = "cursor" as const;
+export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
 
 export const takeCursorSynaraHarnessPolicyTextPart = (
   state: SynaraHarnessPolicyDeliveryState,
@@ -718,6 +722,7 @@ export function makeCursorAdapter(
 
           const cursorModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const resolvedProviderInstanceId = resolveCursorStartInstanceId(input);
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -752,8 +757,8 @@ export function makeCursorAdapter(
           const effectiveCursorSettings: CursorAcpRuntimeCursorSettings = {
             homeDir: serverConfig.homeDir,
             isolationRootDir: serverConfig.stateDir,
-            ...(input.providerInstanceId !== undefined
-              ? { instanceId: input.providerInstanceId }
+            ...(resolvedProviderInstanceId !== undefined
+              ? { instanceId: resolvedProviderInstanceId }
               : {}),
             ...(cursorSettings.binaryPath !== undefined
               ? { binaryPath: cursorSettings.binaryPath }
@@ -1001,8 +1006,8 @@ export function makeCursorAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
-            ...(input.providerInstanceId
-              ? { providerInstanceId: input.providerInstanceId }
+            ...(resolvedProviderInstanceId
+              ? { providerInstanceId: resolvedProviderInstanceId }
               : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,

@@ -57,7 +57,10 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  resolveProviderSessionInstanceId,
+} from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
   type OpenCodeCliModelDescriptor,
@@ -129,6 +132,7 @@ const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
 const OPENCODE_EVENT_RECONNECT_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
 const OPENCODE_PERMISSION_REPLY_ACK_DELAYS_MS = [50, 150, 300, 500] as const;
 const OPENCODE_MAX_RELATED_SESSIONS = 256;
+export const resolveOpenCodeStartInstanceId = resolveProviderSessionInstanceId;
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -3372,6 +3376,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {
+          const resolvedProviderInstanceId = resolveOpenCodeStartInstanceId(input);
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
@@ -3426,8 +3431,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       cwd: directory,
                       homeDir: serverConfig.homeDir,
                       isolationRootDir: serverConfig.stateDir,
-                      ...(input.providerInstanceId !== undefined
-                        ? { instanceId: input.providerInstanceId }
+                      ...(resolvedProviderInstanceId !== undefined
+                        ? { instanceId: resolvedProviderInstanceId }
                         : {}),
                       ...(serverUrl ? { serverUrl } : {}),
                       ...(environment !== undefined ? { environment } : {}),
@@ -3583,8 +3588,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 const createdAt = nowIso();
                 const session: ProviderSession = {
                   provider,
-                  ...(input.providerInstanceId
-                    ? { providerInstanceId: input.providerInstanceId }
+                  ...(resolvedProviderInstanceId
+                    ? { providerInstanceId: resolvedProviderInstanceId }
                     : {}),
                   status: "ready",
                   runtimeMode: input.runtimeMode,

@@ -430,13 +430,26 @@ export function makePiExtensionModeCoordinator(
   let pendingExtensionEnabledOperations = 0;
   let pendingIsolatedModeOperations = 0;
   return {
-    reserve(isolatedAccount: boolean) {
-      const active = getActiveModes();
+    reserve(
+      isolatedAccount: boolean,
+      activeOverride?: {
+        readonly hasExtensionEnabledDefault: boolean;
+        readonly hasIsolatedMode: boolean;
+      },
+    ) {
+      const active = activeOverride ?? getActiveModes();
+      const hasExtensionEnabledDefault =
+        pendingExtensionEnabledOperations > 0 || active.hasExtensionEnabledDefault;
+      const hasIsolatedMode = pendingIsolatedModeOperations > 0 || active.hasIsolatedMode;
+      if (!isolatedAccount && hasExtensionEnabledDefault && hasIsolatedMode) {
+        throw new Error(
+          "Wait for the Pi account-mode transition to finish before starting default work.",
+        );
+      }
       const mode = resolvePiExtensionMode({
         isolatedAccount,
-        hasExtensionEnabledDefault:
-          pendingExtensionEnabledOperations > 0 || active.hasExtensionEnabledDefault,
-        hasIsolatedMode: pendingIsolatedModeOperations > 0 || active.hasIsolatedMode,
+        hasExtensionEnabledDefault,
+        hasIsolatedMode,
       });
       if (mode.noExtensions) pendingIsolatedModeOperations += 1;
       else pendingExtensionEnabledOperations += 1;
@@ -1347,26 +1360,33 @@ export function makePiStoragePaths(input: {
   const selectedHome = selectedAbsolutePath(
     selectedEnvironmentValue("HOME") ?? selectedEnvironmentValue("USERPROFILE"),
   );
-  const expandHome = (value: string) =>
-    value === "~" || value.startsWith("~/")
-      ? path.join(selectedHome ?? input.homeDir, value.slice(value === "~" ? 1 : 2))
-      : value;
-  const configuredAgentDir = trimToUndefined(input.agentDir);
-  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
-  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
-    return { agentDir: input.sdkAgentDir };
-  }
   const isolatedHome = providerIsolatedHomePath({
     driver: PROVIDER,
     instanceId: input.instanceId,
     homeDir: input.homeDir,
     isolationRootDir: input.stateDir,
   });
-  const agentDir = expandHome(
+  const expansionHome = boundary ? (selectedHome ?? isolatedHome) : (selectedHome ?? input.homeDir);
+  const expandHome = (value: string) =>
+    value === "~" || value.startsWith("~/")
+      ? path.join(expansionHome, value.slice(value === "~" ? 1 : 2))
+      : value;
+  const rawConfiguredAgentDir = trimToUndefined(input.agentDir);
+  const configuredAgentDir = rawConfiguredAgentDir
+    ? rawConfiguredAgentDir === "~" || rawConfiguredAgentDir.startsWith("~/")
+      ? expandHome(rawConfiguredAgentDir)
+      : !boundary || pathApi.isAbsolute(rawConfiguredAgentDir)
+        ? rawConfiguredAgentDir
+        : undefined
+    : undefined;
+  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
+  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
+    return { agentDir: input.sdkAgentDir };
+  }
+  const agentDir =
     configuredAgentDir ??
       selectedAgentDir ??
-      path.join(selectedHome ?? isolatedHome, ".pi", "agent"),
-  );
+      path.join(selectedHome ?? isolatedHome, ".pi", "agent");
   const selectedSessionDir = selectedAbsolutePath(
     selectedEnvironmentValue("PI_CODING_AGENT_SESSION_DIR"),
   );
@@ -1873,8 +1893,22 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       ),
       hasIsolatedMode: [...sessions.values()].some((context) => !context.extensionsEnabled),
     }));
-    const reservePiExtensionMode = (isolatedAccount: boolean) =>
-      piExtensionModeCoordinator.reserve(isolatedAccount);
+    const reservePiExtensionMode = (isolatedAccount: boolean, replacingThreadId?: ThreadId) =>
+      piExtensionModeCoordinator.reserve(
+        isolatedAccount,
+        replacingThreadId === undefined
+          ? undefined
+          : {
+              hasExtensionEnabledDefault: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && context.extensionsEnabled,
+              ),
+              hasIsolatedMode: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && !context.extensionsEnabled,
+              ),
+            },
+      );
     const preparePiDiscoveryMode = (
       environment: Readonly<Record<string, string>> | undefined,
       instanceId: string | undefined,
@@ -3022,39 +3056,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     ) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const piSdk = yield* loadPiSdk("session/start");
         const piOptions = input.providerOptions?.pi;
         const piEnvironment = piOptions?.environment;
         const isolatedAccount =
           piEnvironment !== undefined ||
           (providerInstanceId !== undefined && providerInstanceId !== PROVIDER);
-        if (isolatedAccount) {
-          resetApiProviders();
-        }
-        const processSupervisor = makePiBashProcessSupervisor({
-          getShellConfig: () => piSdk.getShellConfig(),
-          ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
-          ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
-          homeDir: serverConfig.homeDir,
-          isolationRootDir: serverConfig.stateDir,
-          ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
-          ...(options?.teardownProcessTree
-            ? { teardownProcessTree: options.teardownProcessTree }
-            : {}),
-        });
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
-        const storagePaths = makePiStoragePaths({
-          agentDir: piOptions?.agentDir,
-          environment: piEnvironment,
-          instanceId: providerInstanceId,
-          stateDir: serverConfig.stateDir,
-          homeDir: serverConfig.homeDir,
-          sdkAgentDir: piSdk.getAgentDir(),
-        });
-        const agentDir = storagePaths.agentDir;
-        const sessionManager = sessionFile
-          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
-          : piSdk.SessionManager.create(cwd, storagePaths.sessionDir);
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -3077,6 +3084,33 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             sessions.delete(input.threadId);
           }
         }
+        if (isolatedAccount) {
+          resetApiProviders();
+        }
+        const piSdk = yield* loadPiSdk("session/start");
+        const processSupervisor = makePiBashProcessSupervisor({
+          getShellConfig: () => piSdk.getShellConfig(),
+          ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+          ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+          ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
+          ...(options?.teardownProcessTree
+            ? { teardownProcessTree: options.teardownProcessTree }
+            : {}),
+        });
+        const storagePaths = makePiStoragePaths({
+          agentDir: piOptions?.agentDir,
+          environment: piEnvironment,
+          instanceId: providerInstanceId,
+          stateDir: serverConfig.stateDir,
+          homeDir: serverConfig.homeDir,
+          sdkAgentDir: piSdk.getAgentDir(),
+        });
+        const agentDir = storagePaths.agentDir;
+        const sessionManager = sessionFile
+          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
+          : piSdk.SessionManager.create(cwd, storagePaths.sessionDir);
         const agentGatewaySessionLease = acquireAgentGatewaySessionLease(
           agentGatewayCredentials,
           input.threadId,
@@ -3293,7 +3327,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         (providerInstanceId !== undefined && providerInstanceId !== PROVIDER);
       return Effect.acquireUseRelease(
         Effect.try({
-          try: () => reservePiExtensionMode(isolatedAccount),
+          try: () => reservePiExtensionMode(isolatedAccount, input.threadId),
           catch: (cause) =>
             new ProviderAdapterRequestError({
               provider: PROVIDER,
