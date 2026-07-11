@@ -2736,6 +2736,167 @@ describe("steerTurn", () => {
 
 describe("CodexAppServerManager discovery", () => {
   it.runIf(process.platform !== "win32")(
+    "does not launch or cache discovery under auth superseded during version check",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-discovery-key-race-",
+        "workspace-first",
+        "workspace-first",
+      );
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      const authTracking = prepareCodexAuthTracking({
+        env: { ...process.env, ...environment },
+        homePath: fixture.sourceHome,
+      });
+      const firstFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+      const manager = new CodexAppServerManager();
+      const versionCheck = vi
+        .spyOn(
+          manager as unknown as {
+            assertSupportedCodexCliVersion: (input: unknown) => Promise<void>;
+          },
+          "assertSupportedCodexCliVersion",
+        )
+        .mockImplementationOnce(async () => {
+          writeFileSync(fixture.authPath, codexAuth("workspace-second", "2"), "utf8");
+        })
+        .mockResolvedValue(undefined);
+      const input = {
+        cwd: fixture.projectPath,
+        codexOptions: {
+          binaryPath: fixture.binaryPath,
+          homePath: fixture.sourceHome,
+          environment: {
+            ...environment,
+            SYNARA_FAKE_CODEX_MESSAGES_PATH: fixture.messagesPath,
+          },
+        },
+      } as const;
+
+      try {
+        await expect(manager.listModels(input)).rejects.toThrow(
+          /authentication changed before discovery launch/,
+        );
+        const secondFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+        expect(secondFingerprint).not.toBe(firstFingerprint);
+        expect(existsSync(fixture.messagesPath)).toBe(false);
+        const internals = manager as unknown as {
+          discoverySessions: Map<string, unknown>;
+          modelCache: Map<string, unknown>;
+        };
+        expect(internals.discoverySessions.size).toBe(0);
+        expect(internals.modelCache.size).toBe(0);
+
+        const fresh = await manager.listModels(input);
+        const methodsAfterFreshRequest = readFakeCodexMethods(fixture.messagesPath);
+        const cached = await manager.listModels(input);
+        expect(fresh.cached).toBe(false);
+        expect(cached.cached).toBe(true);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(methodsAfterFreshRequest);
+        expect(internals.discoverySessions.size).toBe(1);
+        expect(internals.modelCache.size).toBe(1);
+        expect(
+          JSON.parse([...internals.discoverySessions.keys()][0] ?? "{}") as { auth?: string },
+        ).toEqual(expect.objectContaining({ auth: secondFingerprint }));
+        expect(
+          JSON.parse([...internals.modelCache.keys()][0] ?? "{}") as { auth?: string },
+        ).toEqual(expect.objectContaining({ auth: secondFingerprint }));
+
+        const originalCacheGet = internals.modelCache.get.bind(internals.modelCache);
+        const cacheGet = vi.spyOn(internals.modelCache, "get").mockImplementationOnce((key) => {
+          writeFileSync(fixture.authPath, codexAuth("workspace-third", "3"), "utf8");
+          return originalCacheGet(key);
+        });
+        await expect(manager.listModels(input)).rejects.toThrow(
+          /authentication changed while resolving discovery metadata/,
+        );
+        cacheGet.mockRestore();
+        const thirdFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+
+        expect(thirdFingerprint).not.toBe(secondFingerprint);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(methodsAfterFreshRequest);
+        expect(internals.modelCache.size).toBe(1);
+
+        const thirdAccount = await manager.listModels(input);
+        const cachedFingerprints = new Set(
+          [...internals.modelCache.keys()].map(
+            (key) => (JSON.parse(key) as { auth?: string }).auth,
+          ),
+        );
+        expect(thirdAccount.cached).toBe(false);
+        expect(internals.discoverySessions.size).toBe(1);
+        expect(internals.modelCache.size).toBe(2);
+        expect(cachedFingerprints).toEqual(new Set([secondFingerprint, thirdFingerprint]));
+        expect(versionCheck).toHaveBeenCalledTimes(3);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not reuse an auth-unbound active context for fingerprint-bound discovery", async () => {
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-unbound-discovery");
+    const activeContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId,
+        cwd: "/repo",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      child: {
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdin: new PassThrough(),
+      },
+      stopping: false,
+      codexOptions: undefined,
+      authFingerprint: undefined,
+    };
+    const discoveryContext = { session: { ...activeContext.session, threadId: "discovery" } };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, activeContext);
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (
+            cwd: string,
+            codexOptions?: unknown,
+            expectedAuthFingerprint?: string,
+          ) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+
+    const resolved = await (
+      manager as unknown as {
+        resolveContextForDiscovery: (
+          threadId: string | undefined,
+          cwd: string | undefined,
+          codexOptions: undefined,
+          expectedAuthFingerprint: string,
+        ) => Promise<unknown>;
+      }
+    ).resolveContextForDiscovery(undefined, "/repo", undefined, "expected-auth-fingerprint");
+
+    expect(resolved).toBe(discoveryContext);
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo",
+      undefined,
+      "expected-auth-fingerprint",
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
     "fails closed when the selected account changes while discovery initializes",
     async () => {
       const fixture = makeAuthMutationFixture(
@@ -2938,9 +3099,12 @@ describe("CodexAppServerManager discovery", () => {
       },
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, undefined, {
-      accountId: "default",
-    });
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      { accountId: "default" },
+      expect.any(String),
+    );
   });
 
   it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
@@ -3040,7 +3204,11 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_missing",
     });
 
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo-b");
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo-b",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "skills/list", {
       cwds: ["/repo-b"],
     });
@@ -3095,7 +3263,11 @@ describe("CodexAppServerManager discovery", () => {
 
     await manager.listModels({ cwd: "/repo" });
 
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo");
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "model/list", {
       cursor: null,
       limit: 50,
@@ -3142,7 +3314,11 @@ describe("CodexAppServerManager discovery", () => {
         }
       ).resolveContextForDiscovery(),
     ).resolves.toBe(discoveryContext);
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(process.cwd());
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith(
+      process.cwd(),
+      undefined,
+      undefined,
+    );
   });
 
   it("reuses one in-flight discovery startup for concurrent callers", async () => {
@@ -3425,7 +3601,12 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_1",
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo", undefined);
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      "thread_1",
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenNthCalledWith(1, context, "skills/list", {
       cwds: ["/repo"],
     });
@@ -3492,7 +3673,12 @@ describe("CodexAppServerManager discovery", () => {
       source: "codex-app-server",
       cached: false,
     });
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo", undefined);
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(
+      "thread_1",
+      "/repo",
+      undefined,
+      expect.any(String),
+    );
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
       cwds: ["/repo"],
       forceRemoteSync: true,
