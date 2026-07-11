@@ -20,6 +20,7 @@ import {
   type ProviderInstanceId,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
+import { unresolvedAutomationInstanceId } from "@synara/shared/providerInstances";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -790,6 +791,53 @@ layer("AutomationService", (it) => {
         const paused = yield* service.update({ id: created.id, enabled: false });
         assert.strictEqual(paused.enabled, false);
       }),
+  );
+
+  it.effect("blocks unresolved automation identities across enable, run-now, and dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const unresolvedId = unresolvedAutomationInstanceId("codex");
+      const created = yield* service.create({ ...createInput("local"), enabled: false });
+      const tombstone = yield* repository.saveDefinition({
+        ...created,
+        enabled: false,
+        nextRunAt: null,
+        modelSelection: {
+          instanceId: unresolvedId,
+          model: "legacy-automation-unresolved",
+        },
+      });
+
+      const edited = yield* service.update({ id: tombstone.id, name: "Needs account repair" });
+      assert.strictEqual(edited.enabled, false);
+
+      const enableError = yield* service
+        .update({ id: tombstone.id, enabled: true })
+        .pipe(Effect.flip);
+      assert.match(enableError.message, /unresolved legacy provider account/);
+
+      const runNowError = yield* service.runNow({ automationId: tombstone.id }).pipe(Effect.flip);
+      assert.match(runNowError.message, /unresolved legacy provider account/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+
+      yield* repository.saveDefinition({
+        ...tombstone,
+        enabled: true,
+        schedule: { type: "once", runAt: now },
+        nextRunAt: now,
+      });
+      const scheduled = yield* service.runDueOnce({
+        now,
+        limit: 10,
+        leaseOwnerId: "unresolved-identity-test",
+      });
+      assert.strictEqual(scheduled.length, 1);
+      assert.strictEqual(scheduled[0]?.run.status, "failed");
+      assert.match(scheduled[0]?.run.error ?? "", /unresolved legacy provider account/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+    }),
   );
 
   it.effect("rejects Claude Auto automations for models that do not support Auto", () =>

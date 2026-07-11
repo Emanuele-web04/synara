@@ -147,7 +147,7 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
         {
           enabled: 0,
           nextRunAt: null,
-          instanceId: "claudeAgent_unresolved_legacy_automation",
+          instanceId: "synara_unresolved_automation_claudeAgent",
           providerOptions: null,
         },
       ]);
@@ -246,7 +246,7 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
         {
           enabled: 0,
           nextRunAt: null,
-          instanceId: "codex_unresolved_legacy_automation",
+          instanceId: "synara_unresolved_automation_codex",
           providerOptions: null,
         },
       ]);
@@ -318,12 +318,12 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
           {
             automationId: "automation-account-with-malformed-home",
             enabled: 0,
-            instanceId: "codex_unresolved_legacy_automation",
+            instanceId: "synara_unresolved_automation_codex",
           },
           {
             automationId: "automation-empty-account-id",
             enabled: 0,
-            instanceId: "codex_unresolved_legacy_automation",
+            instanceId: "synara_unresolved_automation_codex",
           },
           {
             automationId: "automation-empty-environment",
@@ -333,7 +333,7 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
           {
             automationId: "automation-empty-home",
             enabled: 0,
-            instanceId: "claudeAgent_unresolved_legacy_automation",
+            instanceId: "synara_unresolved_automation_claudeAgent",
           },
         ]);
       }),

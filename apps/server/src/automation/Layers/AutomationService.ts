@@ -39,6 +39,7 @@ import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSet
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
+  isUnresolvedAutomationInstanceId,
   providerStartOptionsFromInstance,
   type ResolvedProviderInstance,
   resolveModelSelectionInstanceId,
@@ -1019,6 +1020,18 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
 
+    const validateResolvedAutomationIdentity = (
+      modelSelection: AutomationDefinition["modelSelection"],
+    ) =>
+      isUnresolvedAutomationInstanceId(modelSelection.instanceId)
+        ? Effect.fail(
+            new AutomationServiceError({
+              message:
+                "Automation uses an unresolved legacy provider account. Select a configured provider account before enabling or running it.",
+            }),
+          )
+        : Effect.void;
+
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
       readonly worktreeMode: AutomationDefinition["worktreeMode"];
@@ -1207,6 +1220,8 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
+
+        yield* validateResolvedAutomationIdentity(definition.modelSelection);
 
         // Enforce the gate at dispatch, not just create/update, so an enabled automation that
         // reached a run unacknowledged (e.g. inserted via the API/DB without consent) cannot run
@@ -2752,6 +2767,7 @@ export const AutomationServiceLive = Layer.effect(
         if (proposalError) {
           return yield* Effect.fail(new AutomationServiceError({ message: proposalError }));
         }
+        yield* validateResolvedAutomationIdentity(input.modelSelection);
         yield* requireProject(input.projectId);
         yield* validateSchedulePolicy({
           schedule: input.schedule,
@@ -2798,6 +2814,9 @@ export const AutomationServiceLive = Layer.effect(
 
     const validateDefinitionUpdate = (definition: AutomationDefinition, now: string) =>
       Effect.gen(function* () {
+        if (definition.enabled) {
+          yield* validateResolvedAutomationIdentity(definition.modelSelection);
+        }
         yield* requireProject(definition.projectId);
         yield* validateSchedulePolicy({
           schedule: definition.schedule,
@@ -3199,6 +3218,7 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
+        yield* validateResolvedAutomationIdentity(definition.modelSelection);
         if (!definition.enabled && definition.disabledReason === "failures") {
           return yield* Effect.fail(
             new AutomationServiceError({

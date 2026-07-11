@@ -53,6 +53,17 @@ type MutableProviderInstanceConfigMap = Record<string, ProviderInstanceConfig>;
 type MutableProviderStartOptions = Partial<Record<ProviderKind, unknown>>;
 const PROVIDER_INSTANCE_ID_MAX_CHARS = 64;
 const CODEX_ACCOUNT_INSTANCE_PREFIX = "codex_";
+const UNRESOLVED_AUTOMATION_INSTANCE_PREFIX = "synara_unresolved_automation_";
+
+export function unresolvedAutomationInstanceId(provider: ProviderKind): ProviderInstanceId {
+  return `${UNRESOLVED_AUTOMATION_INSTANCE_PREFIX}${provider}` as ProviderInstanceId;
+}
+
+export function isUnresolvedAutomationInstanceId(instanceId: string | null | undefined): boolean {
+  return (
+    typeof instanceId === "string" && instanceId.startsWith(UNRESOLVED_AUTOMATION_INSTANCE_PREFIX)
+  );
+}
 
 function trimString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -345,6 +356,9 @@ export function deriveProviderInstances(
   const map = deriveProviderInstanceConfigMap(settings);
   const resolved: ResolvedProviderInstance[] = [];
   for (const [instanceId, raw] of Object.entries(map)) {
+    if (isUnresolvedAutomationInstanceId(instanceId)) {
+      continue;
+    }
     if (!isProviderKind(raw.driver)) {
       continue;
     }
@@ -372,6 +386,9 @@ export function deriveUnsupportedProviderInstances(
   const map = deriveProviderInstanceConfigMap(settings);
   const unsupported: UnsupportedProviderInstance[] = [];
   for (const [instanceId, raw] of Object.entries(map)) {
+    if (isUnresolvedAutomationInstanceId(instanceId)) {
+      continue;
+    }
     if (isProviderKind(raw.driver)) {
       continue;
     }
@@ -399,6 +416,9 @@ export function resolveProviderInstance(
     readonly provider?: ProviderKind | undefined;
   },
 ): ResolvedProviderInstance | null {
+  if (isUnresolvedAutomationInstanceId(input.instanceId)) {
+    return null;
+  }
   const instances = deriveProviderInstances(settings);
   if (input.instanceId !== undefined) {
     return (

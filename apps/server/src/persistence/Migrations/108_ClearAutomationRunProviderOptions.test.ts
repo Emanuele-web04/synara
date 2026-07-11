@@ -177,7 +177,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         {
           runId: "run-ambiguous-active",
           status: "interrupted",
-          instanceId: "claudeAgent_unresolved_legacy_automation",
+          instanceId: "synara_unresolved_automation_claudeAgent",
           providerOptions: null,
           claimedBy: null,
           leaseExpiresAt: null,
@@ -185,7 +185,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         {
           runId: "run-ambiguous-complete",
           status: "succeeded",
-          instanceId: "claudeAgent_unresolved_legacy_automation",
+          instanceId: "synara_unresolved_automation_claudeAgent",
           providerOptions: null,
           claimedBy: null,
           leaseExpiresAt: null,
@@ -200,7 +200,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
       if (Option.isSome(decoded)) {
         assert.strictEqual(
           decoded.value.permissionSnapshot.modelSelection.instanceId,
-          "claudeAgent_unresolved_legacy_automation",
+          "synara_unresolved_automation_claudeAgent",
         );
         assert.isUndefined(decoded.value.permissionSnapshot.providerOptions);
       }
@@ -253,7 +253,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
       assert.notInclude(rows[0]?.snapshot ?? "", "secret");
       assert.strictEqual(
         JSON.parse(rows[0]?.snapshot ?? "{}").modelSelection?.instanceId,
-        "codex_unresolved_legacy_automation",
+        "synara_unresolved_automation_codex",
       );
       assert.isNotNull(rows[0]?.finishedAt ?? null);
 
@@ -266,7 +266,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         assert.strictEqual(decoded.value.status, "interrupted");
         assert.strictEqual(
           decoded.value.permissionSnapshot.modelSelection.instanceId,
-          "codex_unresolved_legacy_automation",
+          "synara_unresolved_automation_codex",
         );
         assert.deepStrictEqual(decoded.value.permissionSnapshot.allowedCapabilities, []);
       }
