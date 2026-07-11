@@ -228,6 +228,7 @@ import {
   DismissedProviderHealthBannersSchema,
   PullRequestDialogState,
   appendVoiceTranscriptToPrompt,
+  buildCollapsedCursorModelOptionsReset,
   buildLocalDraftThread,
   buildThreadBreadcrumbs,
   canApplyComposerFocus,
@@ -3677,11 +3678,21 @@ export default function ChatView({
         commit: () => {
           setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
           if (provider === "cursor" && !selectionOptions?.modelOptions) {
-            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-              persistSticky: true,
-              model: resolvedModel,
-              instanceId: resolvedInstanceId,
-            });
+            setComposerDraftProviderModelOptions(
+              activeThread.id,
+              provider,
+              undefined,
+              buildCollapsedCursorModelOptionsReset({
+                provider,
+                instanceId: resolvedInstanceId,
+                model: resolvedModel,
+                showExpandedCursorModelVariants,
+              }) ?? {
+                persistSticky: true,
+                model: resolvedModel,
+                instanceId: resolvedInstanceId,
+              },
+            );
           }
         },
       });
@@ -3704,6 +3715,7 @@ export default function ChatView({
       settings,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
+      showExpandedCursorModelVariants,
     ],
   );
 
