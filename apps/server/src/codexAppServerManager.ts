@@ -69,6 +69,7 @@ import {
   buildCodexProcessEnv,
   prepareCodexAuthTracking,
   readCodexPreparedAuthTrackingFingerprint,
+  type CodexProcessEnvInput,
   type PreparedCodexAuthTracking,
 } from "./codexProcessEnv.ts";
 import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
@@ -1055,6 +1056,23 @@ function codexDiscoveryOptionsCacheSafe(options: CodexDiscoveryOptions): Record<
 function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefined): string {
   const normalized = normalizeCodexDiscoveryOptions(options);
   return normalized ? JSON.stringify(codexDiscoveryOptionsCacheSafe(normalized)) : "__default__";
+}
+
+function codexProcessEnvInputForOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexProcessEnvInput {
+  return {
+    ...(options?.environment ? { env: { ...process.env, ...options.environment } } : {}),
+    ...(options?.homePath ? { homePath: options.homePath } : {}),
+    ...(options?.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options?.accountId ? { accountId: options.accountId } : {}),
+  };
+}
+
+function codexAuthFingerprintForOptions(options: CodexDiscoveryOptions | undefined): string {
+  return readCodexPreparedAuthTrackingFingerprint(
+    prepareCodexAuthTracking(codexProcessEnvInputForOptions(options)),
+  );
 }
 
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
@@ -2633,14 +2651,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
     const cwd = input.cwd.trim();
     const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
       if (cached) {
+        this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
         return {
           ...cached,
           cached: true,
@@ -2648,7 +2669,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd, codexOptions);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      cwd,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     let response: Record<string, unknown>;
     try {
       response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
@@ -2670,6 +2697,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.skillsCache, cacheKey, result);
     return result;
   }
@@ -2677,15 +2705,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
     const cwd = input.cwd?.trim() || null;
     const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
       forceRemoteSync: input.forceRemoteSync === true,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
       if (cached) {
+        this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
         return {
           ...cached,
           cached: true,
@@ -2697,7 +2728,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       input.threadId,
       cwd ?? undefined,
       codexOptions,
+      authFingerprint,
     );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
       ...(cwd ? { cwds: [cwd] } : {}),
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
@@ -2707,6 +2740,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.pluginsCache, cacheKey, result);
     return result;
   }
@@ -2715,20 +2749,29 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const marketplacePath = input.marketplacePath.trim();
     const pluginName = input.pluginName.trim();
     const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       marketplacePath,
       pluginName,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
+      this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
       return {
         ...cached,
         cached: true,
       };
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, input.cwd, codexOptions);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      input.cwd,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
       marketplacePath,
       pluginName,
@@ -2738,6 +2781,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.pluginDetailCache, cacheKey, result);
     return result;
   }
@@ -2753,21 +2797,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   ): Promise<ProviderListModelsResult> {
     const threadId = typeof input === "string" ? input : input?.threadId;
     const cwd = typeof input === "string" ? undefined : input?.cwd;
-    const codexOptions = typeof input === "string" ? undefined : input?.codexOptions;
+    const codexOptions = normalizeCodexDiscoveryOptions(
+      typeof input === "string" ? undefined : input?.codexOptions,
+    );
+    const authFingerprint = codexAuthFingerprintForOptions(codexOptions);
     const cacheKey = JSON.stringify({
       threadId: threadId?.trim() || null,
       cwd: cwd?.trim() || null,
       account: codexDiscoveryOptionsCacheKey(codexOptions),
+      auth: authFingerprint,
     });
     const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
+      this.assertDiscoveryRequestAuthCurrent(codexOptions, authFingerprint);
       return {
         ...cached,
         cached: true,
       };
     }
 
-    const context = await this.resolveContextForDiscovery(threadId, cwd, codexOptions);
+    const context = await this.resolveContextForDiscovery(
+      threadId,
+      cwd,
+      codexOptions,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
       cursor: null,
       limit: 50,
@@ -2779,6 +2834,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
+    this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.modelCache, cacheKey, result);
     return result;
   }
@@ -2884,6 +2940,31 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (stalenessMessage) throw new Error(stalenessMessage);
   }
 
+  private assertDiscoveryAuthMatchesRequest(
+    context: CodexSessionContext,
+    codexOptions: CodexDiscoveryOptions | undefined,
+    expectedFingerprint: string,
+  ): void {
+    this.assertContextAuthCurrent(context);
+    this.assertDiscoveryRequestAuthCurrent(codexOptions, expectedFingerprint);
+    if (context.authFingerprint !== undefined && context.authFingerprint !== expectedFingerprint) {
+      throw new Error(
+        "Codex authentication changed while resolving discovery metadata; retry the request.",
+      );
+    }
+  }
+
+  private assertDiscoveryRequestAuthCurrent(
+    codexOptions: CodexDiscoveryOptions | undefined,
+    expectedFingerprint: string,
+  ): void {
+    if (codexAuthFingerprintForOptions(codexOptions) !== expectedFingerprint) {
+      throw new Error(
+        "Codex authentication changed while resolving discovery metadata; retry the request.",
+      );
+    }
+  }
+
   private pruneStaleAuthSessions(): void {
     for (const [threadId, context] of this.sessions) {
       if (this.isContextAuthCurrent(context)) continue;
@@ -2919,12 +3000,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     threadId?: string,
     cwd?: string,
     codexOptions?: CodexDiscoveryOptions,
+    expectedAuthFingerprint?: string,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
     const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
     const isCompatibleContext = (context: CodexSessionContext): boolean =>
-      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
+      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
+      (expectedAuthFingerprint === undefined ||
+        context.authFingerprint === expectedAuthFingerprint);
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -2951,9 +3035,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           return activeSession;
         }
       }
-      return codexOptions
-        ? this.getOrCreateDiscoverySession(normalizedCwd, codexOptions)
-        : this.getOrCreateDiscoverySession(normalizedCwd);
+      return this.getOrCreateDiscoverySession(
+        normalizedCwd,
+        codexOptions,
+        expectedAuthFingerprint,
+      );
     }
     const firstActive = Array.from(this.sessions.values()).find((context) =>
       this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
@@ -2961,9 +3047,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (firstActive) {
       return firstActive;
     }
-    return codexOptions
-      ? this.getOrCreateDiscoverySession(process.cwd(), codexOptions)
-      : this.getOrCreateDiscoverySession(process.cwd());
+    return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
   }
 
   private async resolveVoiceTranscriptionAuth(input: {
@@ -3059,13 +3143,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async getOrCreateDiscoverySession(
     cwd: string,
     codexOptions?: CodexDiscoveryOptions,
+    expectedAuthFingerprint?: string,
   ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
     const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
+    const authFingerprint =
+      expectedAuthFingerprint ?? codexAuthFingerprintForOptions(normalizedCodexOptions);
     const discoveryKey = JSON.stringify({
       cwd: normalizedCwd,
       account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
+      auth: authFingerprint,
     });
+    for (const [existingKey, context] of this.discoverySessions) {
+      if (!this.isContextAuthCurrent(context)) {
+        await this.stopDiscoverySession(existingKey);
+      }
+    }
     const startup = this.discoverySessionStartups.get(discoveryKey);
     if (startup) {
       return startup;
@@ -3086,6 +3179,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       discoveryKey,
       normalizedCwd,
       normalizedCodexOptions,
+      authFingerprint,
     );
     this.discoverySessionStartups.set(discoveryKey, nextStartup);
     try {
@@ -3101,6 +3195,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     discoveryKey: string,
     normalizedCwd: string,
     normalizedCodexOptions: CodexDiscoveryOptions | undefined,
+    expectedAuthFingerprint: string,
   ): Promise<CodexSessionContext> {
     const existing = this.discoverySessions.get(discoveryKey);
     if (existing) {
@@ -3123,6 +3218,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
     const processLaunch = await this.buildSessionProcessEnv(normalizedCodexOptions, undefined);
     const launchAuthFingerprint = processLaunch.authFingerprint;
+    if (launchAuthFingerprint !== expectedAuthFingerprint) {
+      throw new Error("Codex authentication changed before discovery launch; retry the request.");
+    }
     const child = spawnCodexAppServer({
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
