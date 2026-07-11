@@ -65,6 +65,25 @@ const codexOverlayPreparationQueues = new Map<string, Promise<void>>();
 const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
   /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
+export interface CodexProcessLaunchContext {
+  readonly env: NodeJS.ProcessEnv;
+  readonly appServerArgs: readonly string[];
+}
+
+export function buildCodexAppServerArgs(sourceHomePath: string): readonly string[] {
+  const absoluteSourceHomePath = path.resolve(sourceHomePath);
+  // These are global clap options in the minimum supported Codex 0.105.0 and
+  // remain valid after the app-server subcommand. Keeping them last gives the
+  // managed values precedence over every user and project config layer.
+  return [
+    "app-server",
+    "--config",
+    `sqlite_home=${JSON.stringify(absoluteSourceHomePath)}`,
+    "--config",
+    'cli_auth_credentials_store="file"',
+  ];
+}
+
 interface CodexOverlayEntryLinker {
   readonly symlink: typeof fs.symlink;
   readonly copyFile: typeof fs.copyFile;
@@ -1679,4 +1698,15 @@ export async function buildCodexProcessEnv(
   }
 
   return effectiveEnv;
+}
+
+export async function buildCodexProcessLaunchContext(
+  input: Parameters<typeof buildCodexProcessEnv>[0] = {},
+): Promise<CodexProcessLaunchContext> {
+  const baseEnv = { ...(input.env ?? process.env) };
+  const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
+  return {
+    env: await buildCodexProcessEnv(input),
+    appServerArgs: buildCodexAppServerArgs(sourceHomePath),
+  };
 }

@@ -51,6 +51,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
   compareCodexCliVersions,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
@@ -1049,7 +1050,19 @@ export const makeCheckCodexProviderStatus = (
     const version = versionProbe.result;
 
     const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
-    if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
+    if (!parsedVersion) {
+      return {
+        provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
+      } satisfies ServerProviderStatus;
+    }
+    if (!isCodexCliVersionSupported(parsedVersion)) {
       return {
         provider: CODEX_PROVIDER,
         instanceId: CODEX_PROVIDER,
