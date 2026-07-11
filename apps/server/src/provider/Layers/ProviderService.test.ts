@@ -93,7 +93,9 @@ async function makeSharedCodexContinuationFixture(accountIds: readonly string[])
   const homePath = path.join(root, "codex-home");
   const runtimeHomePath = path.join(root, "synara-runtime");
   const environment = { SYNARA_HOME: runtimeHomePath };
-  const instanceEnvironment = [{ name: "SYNARA_HOME", value: runtimeHomePath }];
+  const instanceEnvironment = [
+    { name: "SYNARA_HOME", value: runtimeHomePath, sensitive: false },
+  ];
   fs.mkdirSync(homePath, { recursive: true });
   fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
   const shadowHomePaths = new Map<string, string>();
