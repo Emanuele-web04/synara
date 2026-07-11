@@ -7,17 +7,15 @@
  *
  * @module ProviderAdapterRegistryLive
  */
-import type {
-  ProviderInstanceId,
-  ProviderRuntimeEvent,
-  ProviderSession,
-  ProviderSessionStartInput,
-} from "@synara/contracts";
+import type { ProviderInstanceId, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { Effect, Layer, Stream } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterSessionStartInput,
+  ProviderAdapterShape,
+} from "../Services/ProviderAdapter.ts";
 import {
   ProviderAdapterRegistry,
   type ProviderAdapterRegistryShape,
@@ -84,7 +82,7 @@ function adapterFacadeForInstance(
         ...input,
         provider: adapter.provider,
         providerInstanceId: input.providerInstanceId ?? instanceId,
-      } satisfies ProviderSessionStartInput)
+      } satisfies ProviderAdapterSessionStartInput)
       .pipe(
         Effect.map((session) => {
           if (session.providerInstanceId === undefined) {

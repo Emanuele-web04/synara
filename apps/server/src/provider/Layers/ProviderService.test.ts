@@ -5,7 +5,6 @@ import { createHash } from "node:crypto";
 
 import type {
   ProviderApprovalDecision,
-  ProviderForkThreadInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -33,7 +32,11 @@ import {
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterForkThreadInput,
+  ProviderAdapterSessionStartInput,
+  ProviderAdapterShape,
+} from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -51,7 +54,9 @@ import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   buildCodexProcessEnv,
+  buildCodexProcessLaunchContext,
   isCodexSharedContinuationStatePrepared,
+  readCodexSharedContinuationGeneration,
 } from "../../codexProcessEnv.ts";
 import { resolveActiveCodexHomeWritePath } from "../../codexHomePaths.ts";
 
@@ -147,9 +152,11 @@ function requireReleaseListSessions(release: ReleaseListSessions | undefined): R
 function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  let beforeStartSession: ((input: ProviderAdapterSessionStartInput) => void) | undefined;
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
+  const startSession = vi.fn((input: ProviderAdapterSessionStartInput) =>
     Effect.sync(() => {
+      beforeStartSession?.(input);
       const now = new Date().toISOString();
       const session: ProviderSession = {
         provider,
@@ -255,7 +262,7 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
     (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
-  const forkThread = vi.fn((input: ProviderForkThreadInput) =>
+  const forkThread = vi.fn((input: ProviderAdapterForkThreadInput) =>
     Effect.succeed({
       threadId: input.threadId,
       resumeCursor: { opaque: `fork-${String(input.threadId)}` },
@@ -318,6 +325,11 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
     emit,
     waitForRuntimeSubscribers,
     updateSession,
+    setBeforeStartSession: (
+      hook: ((input: ProviderAdapterSessionStartInput) => void) | undefined,
+    ) => {
+      beforeStartSession = hook;
+    },
     startSession,
     sendTurn,
     interruptTurn,
@@ -510,6 +522,15 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.equal(routing.codex.forkThread.mock.calls.length, 1);
       const forkInput = routing.codex.forkThread.mock.calls[0]?.[0];
       assert.deepEqual(forkInput?.sourceResumeCursor, source.resumeCursor);
+      assert.equal(
+        forkInput?.expectedCodexContinuationGeneration,
+        readCodexSharedContinuationGeneration({
+          env: { ...process.env, ...fixture.environment },
+          homePath: sharedHomePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+      );
       assert.equal(forkInput?.modelSelection?.instanceId, "codex_work");
       assert.deepEqual(forkInput?.providerOptions, {
         codex: {
@@ -527,7 +548,7 @@ routing.layer("ProviderServiceLive native forks", (it) => {
             ? (targetBinding.runtimePayload as Record<string, unknown>).continuationIdentity
             : "",
         ),
-        /^codex:shared-v1:/,
+        /^codex:shared-v2:[0-9a-f-]{36}:/,
       );
       assert.equal(
         targetBinding.runtimePayload && typeof targetBinding.runtimePayload === "object"
@@ -598,7 +619,7 @@ routing.layer("ProviderServiceLive native forks", (it) => {
 
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.match(String(result.failure), /missing or damaged/);
+        assert.match(String(result.failure), /missing (?:or damaged|'sessions')/);
       }
       assert.equal(routing.codex.forkThread.mock.calls.length, 0);
       assert.equal(fs.existsSync(sourceSessionsPath), false);
@@ -1345,7 +1366,80 @@ routing.layer("ProviderServiceLive routing", (it) => {
         routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
         initial.resumeCursor,
       );
+      assert.equal(
+        routing.codex.startSession.mock.calls[0]?.[0].expectedCodexContinuationGeneration,
+        readCodexSharedContinuationGeneration({
+          env: { ...process.env, ...fixture.environment },
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+      );
       fs.rmSync(fixture.root, { recursive: true, force: true });
+    }),
+  );
+
+  it.effect("pins an imported explicit Codex resume through the adapter launch seam", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-codex-import-explicit-resume");
+      const fixture = makeSharedCodexContinuationFixture(["personal"], ["personal"]);
+      const providerOptions = {
+        codex: {
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath("personal"),
+          accountId: "personal",
+          environment: fixture.environment,
+        },
+      };
+      const overlayHomePath = resolveActiveCodexHomeWritePath({
+        env: { ...process.env, ...fixture.environment },
+        ...providerOptions.codex,
+      });
+      const generationBeforePreflight = readCodexSharedContinuationGeneration({
+        env: { ...process.env, ...fixture.environment },
+        ...providerOptions.codex,
+      });
+      let launchError: unknown;
+      routing.codex.startSession.mockClear();
+      routing.codex.setBeforeStartSession((input) => {
+        fs.rmSync(fixture.homePath, { recursive: true, force: true });
+        fs.rmSync(overlayHomePath, { recursive: true, force: true });
+        try {
+          buildCodexProcessLaunchContext({
+            env: { ...process.env, ...fixture.environment },
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("personal"),
+            accountId: "personal",
+            ...(input.expectedCodexContinuationGeneration
+              ? {
+                  expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+                }
+              : {}),
+          });
+        } catch (error) {
+          launchError = error;
+        }
+      });
+
+      try {
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          providerOptions,
+          resumeCursor: { threadId: "imported-provider-thread" },
+          runtimeMode: "full-access",
+        });
+
+        const launchInput = routing.codex.startSession.mock.calls[0]?.[0];
+        assert.equal(launchInput?.expectedCodexContinuationGeneration, generationBeforePreflight);
+        assert.match(String(launchError), /missing or damaged|refusing to recreate/);
+        assert.equal(fs.existsSync(fixture.homePath), false);
+        assert.equal(fs.existsSync(overlayHomePath), false);
+      } finally {
+        routing.codex.setBeforeStartSession(undefined);
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+      }
     }),
   );
 
@@ -1391,7 +1485,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
-        assert.match(String(result.failure), /missing or damaged/);
+        assert.match(String(result.failure), /missing (?:or damaged|'sessions')/);
       }
       assert.equal(routing.codex.startSession.mock.calls.length, 0);
       assert.equal(routing.codex.stopSession.mock.calls.length, 0);

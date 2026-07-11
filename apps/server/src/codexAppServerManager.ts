@@ -17,7 +17,6 @@ import {
   type ProviderPluginAppSummary,
   type ProviderPluginDescriptor,
   type ProviderPluginDetail,
-  type ProviderForkThreadInput,
   type ProviderInstanceId,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
@@ -64,6 +63,7 @@ import {
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
+import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 
 const log = createLogger("codex");
 
@@ -232,6 +232,7 @@ export interface CodexAppServerStartSessionInput {
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
+  readonly expectedCodexContinuationGeneration?: string;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
 }
@@ -899,6 +900,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
 
+    if (input.resumeCursor !== undefined && !input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native resume requires a verified continuation source generation.");
+    }
+
     try {
       const existing = this.sessions.get(threadId);
       if (existing) {
@@ -933,6 +938,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const {
         env: codexProcessEnv,
@@ -943,6 +953,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
@@ -1525,10 +1540,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.parseThreadSnapshot("thread/read", response);
   }
 
-  async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
+  async forkThread(input: ProviderAdapterForkThreadInput): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
+
+    if (!input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native fork requires a verified continuation source generation.");
+    }
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1577,6 +1596,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const {
         env: codexProcessEnv,
@@ -1587,6 +1611,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
@@ -2944,6 +2973,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
+    readonly environment?: Readonly<Record<string, string>>;
+    readonly expectedSharedContinuationGeneration?: string;
   }): void {
     assertSupportedCodexCliVersion(input);
   }
@@ -3684,12 +3717,18 @@ function assertSupportedCodexCliVersion(input: {
   readonly shadowHomePath?: string;
   readonly accountId?: string;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly expectedSharedContinuationGeneration?: string;
 }): void {
   const env = buildCodexProcessEnv({
     ...(input.environment ? { env: { ...process.env, ...input.environment } } : {}),
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.expectedSharedContinuationGeneration
+      ? {
+          expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration,
+        }
+      : {}),
   });
   const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,

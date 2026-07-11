@@ -1652,6 +1652,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? {
+              expectedCodexContinuationGeneration: input.expectedCodexContinuationGeneration,
+            }
+          : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         runtimeMode: input.runtimeMode,
         ...(input.modelSelection ? { model: input.modelSelection.model } : {}),

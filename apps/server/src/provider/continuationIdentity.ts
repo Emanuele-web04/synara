@@ -10,8 +10,8 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 import {
-  isCodexSharedContinuationStatePrepared,
   prepareCodexHomeOverlayFromPreparedContinuationSource,
+  readCodexSharedContinuationGeneration,
   type CodexProcessEnvInput,
 } from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
@@ -35,8 +35,69 @@ function codexContinuationInput(options: ProviderStartOptions | undefined): Pick
   };
 }
 
-function sharedCodexContinuationIdentity(input: ReturnType<typeof codexContinuationInput>): string {
-  return `codex:shared-v1:${canonicalStoragePath(
+const CODEX_SHARED_CONTINUATION_V1_PREFIX = "codex:shared-v1:";
+const CODEX_SHARED_CONTINUATION_V2_PREFIX = "codex:shared-v2:";
+const CODEX_SHARED_CONTINUATION_GENERATION_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type ParsedCodexSharedContinuationIdentity =
+  | { readonly version: 1; readonly sourceIdentity: string }
+  | {
+      readonly version: 2;
+      readonly generation: string;
+      readonly sourceIdentity: string;
+    };
+
+/**
+ * Parses only the fixed protocol prefix and UUID field. The source path is the
+ * untouched remainder, so a Windows identity such as `C:\\Users\\...` keeps
+ * its drive-letter colon instead of being split as another protocol field.
+ */
+export function parseCodexSharedContinuationIdentity(
+  value: string | undefined,
+): ParsedCodexSharedContinuationIdentity | undefined {
+  if (!value) return undefined;
+  if (value.startsWith(CODEX_SHARED_CONTINUATION_V1_PREFIX)) {
+    const sourceIdentity = value.slice(CODEX_SHARED_CONTINUATION_V1_PREFIX.length);
+    return sourceIdentity ? { version: 1, sourceIdentity } : undefined;
+  }
+  if (!value.startsWith(CODEX_SHARED_CONTINUATION_V2_PREFIX)) return undefined;
+  const generationStart = CODEX_SHARED_CONTINUATION_V2_PREFIX.length;
+  const generationEnd = value.indexOf(":", generationStart);
+  if (generationEnd < 0) return undefined;
+  const generation = value.slice(generationStart, generationEnd);
+  const sourceIdentity = value.slice(generationEnd + 1);
+  if (!CODEX_SHARED_CONTINUATION_GENERATION_PATTERN.test(generation) || !sourceIdentity) {
+    return undefined;
+  }
+  return { version: 2, generation: generation.toLowerCase(), sourceIdentity };
+}
+
+export function codexSharedContinuationGeneration(
+  identity: string | undefined,
+): string | undefined {
+  const parsed = parseCodexSharedContinuationIdentity(identity);
+  return parsed?.version === 2 ? parsed.generation : undefined;
+}
+
+export function codexSharedContinuationIdentityIsSafeMigration(input: {
+  readonly persistedIdentity: string;
+  readonly currentIdentity: string | undefined;
+}): boolean {
+  const persisted = parseCodexSharedContinuationIdentity(input.persistedIdentity);
+  const current = parseCodexSharedContinuationIdentity(input.currentIdentity);
+  return (
+    persisted?.version === 1 &&
+    current?.version === 2 &&
+    persisted.sourceIdentity === current.sourceIdentity
+  );
+}
+
+function sharedCodexContinuationIdentity(
+  input: ReturnType<typeof codexContinuationInput>,
+  generation: string,
+): string {
+  return `codex:shared-v2:${generation}:${canonicalStoragePath(
     resolveBaseCodexHomePath(input.env, input.homePath),
   )}`;
 }
@@ -54,13 +115,39 @@ export function prepareProviderContinuationIdentity(
 ): string | undefined {
   if (provider === "codex") {
     const continuationInput = codexContinuationInput(options);
-    const candidateSharedIdentity = sharedCodexContinuationIdentity(continuationInput);
+    const persistedSharedIdentity = parseCodexSharedContinuationIdentity(persistedIdentity);
+    const candidateSourceIdentity = canonicalStoragePath(
+      resolveBaseCodexHomePath(continuationInput.env, continuationInput.homePath),
+    );
     // Only materialize a target overlay when it could satisfy an existing
     // shared-source identity. Different homes and legacy overlay identities
     // are already incompatible without creating any new filesystem state.
-    if (persistedIdentity === candidateSharedIdentity) {
-      prepareCodexHomeOverlayFromPreparedContinuationSource(continuationInput);
+    if (persistedSharedIdentity?.sourceIdentity === candidateSourceIdentity) {
+      prepareCodexHomeOverlayFromPreparedContinuationSource({
+        ...continuationInput,
+        ...(persistedSharedIdentity.version === 2
+          ? {
+              expectedSharedContinuationGeneration: persistedSharedIdentity.generation,
+            }
+          : { allowLegacySharedContinuationMigration: true }),
+      });
     }
+  }
+  return providerContinuationIdentity(provider, options);
+}
+
+/**
+ * Validates the selected native store for a caller-supplied Codex resume
+ * cursor that has no persisted Synara binding yet. This path accepts only an
+ * already prepared v2 source, repairs the selected target overlay, and returns
+ * the generation identity that must be pinned through the real launch.
+ */
+export function prepareProviderContinuationIdentityForExplicitResume(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): string | undefined {
+  if (provider === "codex") {
+    prepareCodexHomeOverlayFromPreparedContinuationSource(codexContinuationInput(options));
   }
   return providerContinuationIdentity(provider, options);
 }
@@ -78,8 +165,9 @@ export function providerContinuationIdentity(
   switch (provider) {
     case "codex": {
       const continuationInput = codexContinuationInput(options);
-      if (isCodexSharedContinuationStatePrepared(continuationInput)) {
-        return sharedCodexContinuationIdentity(continuationInput);
+      const generation = readCodexSharedContinuationGeneration(continuationInput);
+      if (generation) {
+        return sharedCodexContinuationIdentity(continuationInput, generation);
       }
       // Before shared-state preparation succeeds, bind continuation to the
       // effective overlay. This lets the same account recover exactly while

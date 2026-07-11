@@ -10,10 +10,28 @@ import path from "node:path";
 
 import { describe, it } from "vitest";
 
-import { providerContinuationIdentity } from "./continuationIdentity.ts";
+import {
+  parseCodexSharedContinuationIdentity,
+  prepareProviderContinuationIdentity,
+  providerContinuationIdentity,
+} from "./continuationIdentity.ts";
 import { buildCodexProcessEnv } from "../codexProcessEnv.ts";
+import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 
 describe("providerContinuationIdentity", () => {
+  it("parses v2 identities without splitting Windows drive-letter colons", () => {
+    assert.deepEqual(
+      parseCodexSharedContinuationIdentity(
+        String.raw`codex:shared-v2:123e4567-e89b-42d3-a456-426614174000:C:\Users\Ada\.codex`,
+      ),
+      {
+        version: 2,
+        generation: "123e4567-e89b-42d3-a456-426614174000",
+        sourceIdentity: String.raw`C:\Users\Ada\.codex`,
+      },
+    );
+  });
+
   it("treats Windows and Unix tilde separators as the same Claude home", () => {
     const windowsSpelling = providerContinuationIdentity("claudeAgent", {
       claudeAgent: { homePath: "~\\.claude-work" },
@@ -70,7 +88,7 @@ describe("providerContinuationIdentity", () => {
         options("work", workShadowHomePath),
       );
       assert.notEqual(personalAfter, workBeforePreparation);
-      assert.match(String(personalAfter), /^codex:shared-v1:/);
+      assert.match(String(personalAfter), /^codex:shared-v2:[0-9a-f-]{36}:/);
       assert.match(String(workBeforePreparation), /^codex:overlay-v1:/);
 
       buildCodexProcessEnv({
@@ -86,6 +104,67 @@ describe("providerContinuationIdentity", () => {
       assert.match(
         String(providerContinuationIdentity("codex", options("work", workShadowHomePath))),
         /^codex:overlay-v1:/,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("atomically upgrades a healthy persisted v1 source to a generation identity", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "synara-continuation-v1-migration-"));
+    try {
+      const homePath = path.join(root, "codex-home");
+      const environment = { SYNARA_HOME: path.join(root, "synara-runtime") };
+      fs.mkdirSync(path.join(homePath, "sessions"), { recursive: true });
+      fs.mkdirSync(path.join(homePath, "archived_sessions"), { recursive: true });
+      fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+      fs.writeFileSync(path.join(homePath, "history.jsonl"), "", "utf8");
+      fs.writeFileSync(path.join(homePath, "session_index.jsonl"), "", "utf8");
+      const sourceIdentity = resolveCodexPathIdentity(homePath);
+      fs.writeFileSync(
+        path.join(homePath, "synara-shared-continuation-v1.json"),
+        `${JSON.stringify({ version: 1, sourceHomeIdentity: sourceIdentity })}\n`,
+        "utf8",
+      );
+      const options = { codex: { homePath, environment } };
+
+      const migrated = prepareProviderContinuationIdentity(
+        "codex",
+        options,
+        `codex:shared-v1:${sourceIdentity}`,
+      );
+      const parsed = parseCodexSharedContinuationIdentity(migrated);
+      assert.equal(parsed?.version, 2);
+      assert.equal(parsed?.sourceIdentity, sourceIdentity);
+      assert.equal(
+        JSON.parse(
+          fs.readFileSync(path.join(homePath, "synara-shared-continuation-v2.json"), "utf8"),
+        ).migratedFromVersion,
+        1,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a legacy identity when the same source path has a fresh v2 generation", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "synara-continuation-v1-replaced-"));
+    try {
+      const homePath = path.join(root, "codex-home");
+      const environment = { SYNARA_HOME: path.join(root, "synara-runtime") };
+      fs.mkdirSync(homePath, { recursive: true });
+      fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+      buildCodexProcessEnv({ env: { ...process.env, ...environment }, homePath });
+      const sourceIdentity = resolveCodexPathIdentity(homePath);
+
+      assert.throws(
+        () =>
+          prepareProviderContinuationIdentity(
+            "codex",
+            { codex: { homePath, environment } },
+            `codex:shared-v1:${sourceIdentity}`,
+          ),
+        /new generation, not a verified migration/,
       );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

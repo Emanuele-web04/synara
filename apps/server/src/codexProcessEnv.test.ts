@@ -30,12 +30,15 @@ import {
   buildCodexProcessEnv,
   isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
+  prepareCodexHomeOverlayFromPreparedContinuationSource,
   prioritizeCodexOverlayEntries,
+  readCodexSharedContinuationGeneration,
   readCodexAuthTrackingFingerprint,
   readEffectiveCodexAuthCredentialsStoreMode,
   resolveCodexAuthTracking,
 } from "./codexProcessEnv.ts";
 import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
+import { resolveCodexPathIdentity } from "./codexPathIdentity.ts";
 
 describe("readEffectiveCodexAuthCredentialsStoreMode", () => {
   it("uses only the root auth store and ignores profile lookalikes", () => {
@@ -113,6 +116,21 @@ describe("buildCodexProcessEnv account overlays", () => {
       SYNARA_HOME: path.join(root, "synara-runtime"),
     };
     return { env, homePath, shadowHomePath };
+  }
+
+  function writePreparedLegacyContinuationSource(homePath: string): void {
+    mkdirSync(path.join(homePath, "sessions"), { recursive: true });
+    mkdirSync(path.join(homePath, "archived_sessions"), { recursive: true });
+    writeFileSync(path.join(homePath, "history.jsonl"), "", "utf8");
+    writeFileSync(path.join(homePath, "session_index.jsonl"), "", "utf8");
+    writeFileSync(
+      path.join(homePath, "synara-shared-continuation-v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        sourceHomeIdentity: resolveCodexPathIdentity(homePath),
+      })}\n`,
+      "utf8",
+    );
   }
 
   function aliasHomeThroughParent(homePath: string): string {
@@ -744,7 +762,7 @@ describe("buildCodexProcessEnv account overlays", () => {
       accountId: "personal",
       platform: "win32",
     });
-    const markerPath = path.join(fixture.homePath, "synara-shared-continuation-v1.json");
+    const markerPath = path.join(fixture.homePath, "synara-shared-continuation-v2.json");
     const markerBeforeFailure = readFileSync(markerPath, "utf8");
     const workOverlayHomePath = resolveActiveCodexHomeWritePath({
       env: fixture.env,
@@ -888,9 +906,173 @@ describe("buildCodexProcessEnv account overlays", () => {
       readdirSync(homePath).filter(
         (entryName) =>
           entryName.startsWith(".synara-shared-continuation-") ||
-          entryName.startsWith("synara-shared-continuation-v1.json."),
+          entryName.startsWith("synara-shared-continuation-v2.json."),
       ),
       [],
+    );
+  });
+
+  it("converges on one generation when separate processes migrate a legacy marker", async () => {
+    const root = makeTempRoot();
+    const homePath = path.join(root, "codex-home");
+    const runtimePath = path.join(root, "synara-runtime");
+    mkdirSync(homePath, { recursive: true });
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    writePreparedLegacyContinuationSource(homePath);
+    const env = { HOME: root, SYNARA_HOME: runtimePath };
+    const moduleUrl = pathToFileURL(path.join(import.meta.dirname, "codexProcessEnv.ts")).href;
+    const releasePath = path.join(root, "migration-release");
+    const migrations = [0, 1].map((index) => {
+      const readyPath = path.join(root, `migration-ready-${index}`);
+      const generationPath = path.join(root, `migration-generation-${index}`);
+      const script = `
+        import { existsSync, writeFileSync } from "node:fs";
+        import {
+          prepareCodexHomeOverlayFromPreparedContinuationSource,
+          readCodexSharedContinuationGeneration,
+        } from ${JSON.stringify(moduleUrl)};
+        writeFileSync(${JSON.stringify(readyPath)}, "ready", "utf8");
+        while (!existsSync(${JSON.stringify(releasePath)})) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        const input = ${JSON.stringify({ env, homePath })};
+        prepareCodexHomeOverlayFromPreparedContinuationSource({
+          ...input,
+          allowLegacySharedContinuationMigration: true,
+        });
+        writeFileSync(
+          ${JSON.stringify(generationPath)},
+          readCodexSharedContinuationGeneration(input) ?? "missing",
+          "utf8",
+        );
+      `;
+      return { readyPath, generationPath, ...spawnBunEval(script) };
+    });
+
+    try {
+      await vi.waitFor(
+        () => expect(migrations.every(({ readyPath }) => existsSync(readyPath))).toBe(true),
+        { timeout: 5_000 },
+      );
+      writeFileSync(releasePath, "release", "utf8");
+      const results = await Promise.all(migrations.map(({ completed }) => completed));
+      for (const result of results) {
+        assert.strictEqual(result.code, 0, result.stderr);
+      }
+    } finally {
+      writeFileSync(releasePath, "release", "utf8");
+      for (const { child } of migrations) {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }
+    }
+
+    const generations = migrations.map(({ generationPath }) =>
+      readFileSync(generationPath, "utf8"),
+    );
+    assert.match(generations[0] ?? "", /^[0-9a-f-]{36}$/);
+    assert.equal(generations[0], generations[1]);
+    assert.deepEqual(
+      JSON.parse(readFileSync(path.join(homePath, "synara-shared-continuation-v2.json"), "utf8")),
+      {
+        version: 2,
+        sourceHomeIdentity: resolveCodexPathIdentity(homePath),
+        generation: generations[0],
+        migratedFromVersion: 1,
+      },
+    );
+    assert.equal(existsSync(path.join(homePath, "synara-shared-continuation-v1.json")), false);
+  });
+
+  it("fails closed on an interrupted v2 marker without rewriting source or target state", () => {
+    const root = makeTempRoot();
+    const homePath = path.join(root, "codex-home");
+    const env = { HOME: root, SYNARA_HOME: path.join(root, "synara-runtime") };
+    mkdirSync(homePath, { recursive: true });
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    writePreparedLegacyContinuationSource(homePath);
+    const markerPath = path.join(homePath, "synara-shared-continuation-v2.json");
+    writeFileSync(markerPath, '{"version":2,"generation":', "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({ env, homePath });
+
+    assert.throws(
+      () =>
+        prepareCodexHomeOverlayFromPreparedContinuationSource({
+          env,
+          homePath,
+          allowLegacySharedContinuationMigration: true,
+        }),
+      /v2 marker.*malformed/,
+    );
+    assert.equal(readFileSync(markerPath, "utf8"), '{"version":2,"generation":');
+    assert.equal(existsSync(overlayHomePath), false);
+  });
+
+  it("fails closed when a v2 generation marker belongs to another source home", () => {
+    const root = makeTempRoot();
+    const homePath = path.join(root, "codex-home");
+    const env = { HOME: root, SYNARA_HOME: path.join(root, "synara-runtime") };
+    mkdirSync(homePath, { recursive: true });
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    writePreparedLegacyContinuationSource(homePath);
+    const markerPath = path.join(homePath, "synara-shared-continuation-v2.json");
+    const marker = `${JSON.stringify({
+      version: 2,
+      sourceHomeIdentity: resolveCodexPathIdentity(path.join(root, "different-home")),
+      generation: "123e4567-e89b-42d3-a456-426614174000",
+      migratedFromVersion: 1,
+    })}\n`;
+    writeFileSync(markerPath, marker, "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({ env, homePath });
+
+    assert.throws(
+      () =>
+        prepareCodexHomeOverlayFromPreparedContinuationSource({
+          env,
+          homePath,
+          allowLegacySharedContinuationMigration: true,
+        }),
+      /v2 marker.*belongs to another source home/,
+    );
+    assert.equal(readFileSync(markerPath, "utf8"), marker);
+    assert.equal(existsSync(overlayHomePath), false);
+  });
+
+  it("never lets background preparation recreate a deleted persisted generation", () => {
+    const root = makeTempRoot();
+    const homePath = path.join(root, "codex-home");
+    const env = { HOME: root, SYNARA_HOME: path.join(root, "synara-runtime") };
+    mkdirSync(homePath, { recursive: true });
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    buildCodexProcessEnv({ env, homePath });
+    const persistedGeneration = readCodexSharedContinuationGeneration({ env, homePath });
+    assert.match(persistedGeneration ?? "", /^[0-9a-f-]{36}$/);
+    const overlayHomePath = resolveActiveCodexHomeWritePath({ env, homePath });
+
+    rmSync(homePath, { recursive: true, force: true });
+    rmSync(overlayHomePath, { recursive: true, force: true });
+    // Health/discovery launch preparation has no persisted cursor generation.
+    // If it recreates the selected path, the atomic marker must be a new source.
+    buildCodexProcessEnv({ env, homePath });
+    const replacementGeneration = readCodexSharedContinuationGeneration({ env, homePath });
+    assert.match(replacementGeneration ?? "", /^[0-9a-f-]{36}$/);
+    assert.notEqual(replacementGeneration, persistedGeneration);
+    const replacementMarker = readFileSync(
+      path.join(homePath, "synara-shared-continuation-v2.json"),
+      "utf8",
+    );
+
+    assert.throws(
+      () =>
+        buildCodexProcessLaunchContext({
+          env,
+          homePath,
+          expectedSharedContinuationGeneration: persistedGeneration!,
+        }),
+      /expected .*refusing to launch a persisted cursor against replacement state/,
+    );
+    assert.equal(
+      readFileSync(path.join(homePath, "synara-shared-continuation-v2.json"), "utf8"),
+      replacementMarker,
     );
   });
 
@@ -943,10 +1125,7 @@ describe("buildCodexProcessEnv account overlays", () => {
 
     assert.strictEqual(readFileSync(targetPath, "utf8"), "independent-writer");
     assert.ok(lstatSync(targetPath).isFile());
-    assert.strictEqual(
-      existsSync(path.join(homePath, "synara-shared-continuation-v1.json")),
-      false,
-    );
+    assert.strictEqual(existsSync(path.join(homePath, "synara-shared-continuation-v2.json")), true);
   });
 
   it.runIf(process.platform !== "win32")(

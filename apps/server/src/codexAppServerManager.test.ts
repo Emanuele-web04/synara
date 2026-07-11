@@ -22,9 +22,11 @@ import {
   buildCodexProcessEnv,
   buildCodexProcessLaunchContext,
   disableCodexConfigSections,
+  readCodexSharedContinuationGeneration,
   readCodexAuthTrackingFingerprint,
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
+import { resolveActiveCodexHomeWritePath } from "./codexHomePaths";
 import { CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE } from "./provider/codexCliVersion";
 import {
   buildCodexInitializeParams,
@@ -51,6 +53,13 @@ import fs from "node:fs";
 import readline from "node:readline";
 
 const args = process.argv.slice(2);
+if (process.env.SYNARA_FAKE_CODEX_INVOCATIONS_PATH) {
+  fs.appendFileSync(
+    process.env.SYNARA_FAKE_CODEX_INVOCATIONS_PATH,
+    JSON.stringify(args) + "\\n",
+    "utf8",
+  );
+}
 if (args[0] === "--version") {
   process.stdout.write((process.env.SYNARA_FAKE_CODEX_VERSION_OUTPUT ?? "codex 0.105.0") + "\\n");
   process.exit(0);
@@ -1416,6 +1425,121 @@ describe("startSession", () => {
       }
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "does not recreate or spawn after a persisted source is deleted between preflight and launch",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-guard-"));
+      const sourceHome = path.join(root, "source-home");
+      const runtimeHome = path.join(root, "runtime");
+      const projectPath = path.join(root, "project");
+      const argsPath = path.join(root, "app-server-args.json");
+      const invocationsPath = path.join(root, "codex-invocations.jsonl");
+      const environment = { HOME: root, SYNARA_HOME: runtimeHome };
+      mkdirSync(sourceHome, { recursive: true });
+      mkdirSync(projectPath, { recursive: true });
+      writeFileSync(path.join(sourceHome, "config.toml"), "", "utf8");
+      buildCodexProcessEnv({ env: environment, homePath: sourceHome });
+      const generation = readCodexSharedContinuationGeneration({
+        env: environment,
+        homePath: sourceHome,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+      const overlayHome = resolveActiveCodexHomeWritePath({
+        env: environment,
+        homePath: sourceHome,
+      });
+      rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(overlayHome, { recursive: true, force: true });
+      const binaryPath = writeFakeCodexExecutable(root);
+      const manager = new CodexAppServerManager();
+
+      try {
+        await expect(
+          manager.startSession({
+            threadId: asThreadId("thread-generation-guard"),
+            provider: "codex",
+            cwd: projectPath,
+            runtimeMode: "full-access",
+            resumeCursor: { threadId: "persisted-provider-thread" },
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath,
+                homePath: sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_ARGS_PATH: argsPath,
+                  SYNARA_FAKE_CODEX_INVOCATIONS_PATH: invocationsPath,
+                },
+              },
+            },
+          }),
+        ).rejects.toThrow(/missing or damaged|refusing to recreate persisted session state/);
+        expect(existsSync(sourceHome)).toBe(false);
+        expect(existsSync(overlayHome)).toBe(false);
+        expect(existsSync(invocationsPath)).toBe(false);
+        expect(existsSync(argsPath)).toBe(false);
+      } finally {
+        manager.stopAll();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects a native resume that bypasses the generation-pinned adapter path", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-unpinned-resume-"));
+    const sourceHome = path.join(root, "source-home");
+    const invocationsPath = path.join(root, "codex-invocations.jsonl");
+    const binaryPath = writeFakeCodexExecutable(root);
+    const manager = new CodexAppServerManager();
+
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-unpinned-resume"),
+          provider: "codex",
+          cwd: root,
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "provider-thread" },
+          providerOptions: {
+            codex: {
+              binaryPath,
+              homePath: sourceHome,
+              environment: {
+                HOME: root,
+                SYNARA_FAKE_CODEX_INVOCATIONS_PATH: invocationsPath,
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/requires a verified continuation source generation/);
+      await expect(
+        manager.forkThread({
+          sourceThreadId: asThreadId("source-unpinned-fork"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId: asThreadId("target-unpinned-fork"),
+          cwd: root,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath,
+              homePath: sourceHome,
+              environment: {
+                HOME: root,
+                SYNARA_FAKE_CODEX_INVOCATIONS_PATH: invocationsPath,
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/fork requires a verified continuation source generation/);
+      expect(existsSync(sourceHome)).toBe(false);
+      expect(existsSync(invocationsPath)).toBe(false);
+    } finally {
+      manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it.runIf(process.platform !== "win32")(
     "fails closed when a successful Codex version check cannot be parsed",
@@ -2849,6 +2973,8 @@ describe("thread checkpoint control", () => {
 
   it.skipIf(!process.env.CODEX_BINARY_PATH)("forks a provider thread via thread/fork", async () => {
     const { manager, sendRequest } = createThreadControlHarness();
+    buildCodexProcessEnv();
+    const continuationGeneration = readCodexSharedContinuationGeneration();
     sendRequest.mockResolvedValue({
       thread: {
         id: "thread_forked",
@@ -2860,6 +2986,7 @@ describe("thread checkpoint control", () => {
       sourceResumeCursor: {
         threadId: "thread_1",
       },
+      expectedCodexContinuationGeneration: continuationGeneration!,
       threadId: asThreadId("thread_2"),
       runtimeMode: "full-access",
     });
@@ -3672,6 +3799,10 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       const firstSnapshot = await manager.readThread(firstSession.threadId);
       const originalThreadId = firstSnapshot.threadId;
       const originalTurnCount = firstSnapshot.turns.length;
+      const continuationGeneration = readCodexSharedContinuationGeneration({
+        ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
+      });
+      expect(continuationGeneration).toMatch(/^[0-9a-f-]{36}$/);
 
       manager.stopSession(firstSession.threadId);
 
@@ -3681,6 +3812,7 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
         cwd: workspaceDir,
         runtimeMode: "approval-required",
         resumeCursor: firstSession.resumeCursor,
+        expectedCodexContinuationGeneration: continuationGeneration!,
         providerOptions: {
           codex: {
             ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),

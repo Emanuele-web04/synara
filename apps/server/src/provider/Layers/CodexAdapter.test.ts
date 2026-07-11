@@ -300,6 +300,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
         modelSelection: {
           instanceId: "codex",
           model: "gpt-5.3-codex",
@@ -317,6 +318,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
+        expectedCodexContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
         runtimeMode: "full-access",
       });
     }),
