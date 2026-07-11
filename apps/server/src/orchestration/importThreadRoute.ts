@@ -301,6 +301,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const resolveImportedProviderThreadContext = Effect.fn(function* (input: {
     readonly provider: "codex" | "droid" | "opencode" | "omp";
     readonly externalId: string;
+    readonly providerInstanceId: ProviderInstanceId;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
     readonly prefetchedSnapshot?: ProviderThreadSnapshot | null;
@@ -315,6 +316,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? input.prefetchedSnapshot
         : yield* readExternalThread!({
             externalThreadId: input.externalId,
+            providerInstanceId: input.providerInstanceId,
             ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
             ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           }).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -608,6 +610,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
             return yield* adapter
               .readExternalThread({
                 externalThreadId: externalId,
+                providerInstanceId: resolvedProvider.instance.instanceId,
                 ...(cwd ? { cwd } : {}),
                 ...(providerOptions ? { providerOptions } : {}),
               })
@@ -650,6 +653,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? yield* resolveImportedProviderThreadContext({
             provider,
             externalId,
+            providerInstanceId: resolvedProvider.instance.instanceId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
             ...(provider === "omp"

@@ -24,6 +24,8 @@ export interface GrokAcpRuntimeSettings {
   readonly reasoningEffort?: GrokModelOptions["reasoningEffort"];
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }
 
 export interface GrokAcpRuntimeInput extends Omit<
@@ -132,6 +134,10 @@ export function buildGrokAcpSpawnInput(
       driver: "grok",
       ...(grokSettings?.instanceId !== undefined ? { instanceId: grokSettings.instanceId } : {}),
       ...(grokSettings?.environment !== undefined ? { environment: grokSettings.environment } : {}),
+      ...(grokSettings?.homeDir !== undefined ? { homeDir: grokSettings.homeDir } : {}),
+      ...(grokSettings?.isolationRootDir !== undefined
+        ? { isolationRootDir: grokSettings.isolationRootDir }
+        : {}),
     },
   };
 }
@@ -149,7 +155,12 @@ function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
 }
 
 export const resolveGrokAcpAuthMethodIdForEnv =
-  (environment?: Readonly<Record<string, string>> | undefined, instanceId?: string | undefined) =>
+  (
+    environment?: Readonly<Record<string, string>> | undefined,
+    instanceId?: string | undefined,
+    homeDir?: string | undefined,
+    isolationRootDir?: string | undefined,
+  ) =>
   (initializeResult: Acp.InitializeResponse): Effect.Effect<string, AcpErrors.AcpError> =>
     Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
@@ -160,6 +171,8 @@ export const resolveGrokAcpAuthMethodIdForEnv =
           driver: "grok",
           ...(environment !== undefined ? { environment } : {}),
           ...(instanceId !== undefined ? { instanceId } : {}),
+          ...(homeDir !== undefined ? { homeDir } : {}),
+          ...(isolationRootDir !== undefined ? { isolationRootDir } : {}),
         }),
       }),
     );
@@ -219,6 +232,8 @@ export const makeGrokAcpRuntime = (
         resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(
           input.grokSettings?.environment,
           input.grokSettings?.instanceId,
+          input.grokSettings?.homeDir,
+          input.grokSettings?.isolationRootDir,
         ),
         authenticateMeta: { headless: true },
         freshSessionRetry: {

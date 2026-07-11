@@ -814,6 +814,7 @@ const makeProviderProbeEnv = (
   provider: ProviderChildKind,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): NodeJS.ProcessEnv =>
   buildProviderChildEnvironment({
     provider,
@@ -822,6 +823,10 @@ const makeProviderProbeEnv = (
           driver: provider,
           ...(environment !== undefined ? { environment } : {}),
           ...(instanceId !== undefined ? { instanceId } : {}),
+          ...(paths?.homeDir !== undefined ? { homeDir: paths.homeDir } : {}),
+          ...(paths?.isolationRootDir !== undefined
+            ? { isolationRootDir: paths.isolationRootDir }
+            : {}),
         })
       : environment !== undefined
         ? { ...process.env, ...environment }
@@ -836,7 +841,10 @@ function isAccountIsolatedProviderDriver(
   );
 }
 
-export const makeProviderUpdateEnv = (instance: ResolvedProviderInstance): NodeJS.ProcessEnv => {
+export const makeProviderUpdateEnv = (
+  instance: ResolvedProviderInstance,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): NodeJS.ProcessEnv => {
   const environment =
     instance.raw.environment !== undefined || Object.keys(instance.environment).length > 0
       ? instance.environment
@@ -852,7 +860,7 @@ export const makeProviderUpdateEnv = (instance: ResolvedProviderInstance): NodeJ
     case "droid":
     case "opencode":
     case "pi":
-      return makeProviderProbeEnv(instance.driver, environment, instance.instanceId);
+      return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
 
@@ -1514,12 +1522,13 @@ export const makeCheckGrokProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
   readCachedLogin: typeof readGrokCachedLogin = readGrokCachedLogin,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
-    const probeEnv = makeProviderProbeEnv(GROK_PROVIDER, environment, instanceId);
+    const probeEnv = makeProviderProbeEnv(GROK_PROVIDER, environment, instanceId, paths);
 
     const versionProbe = yield* probeProviderCliVersion(
       runGrokCommand(["--version"], executable, probeEnv),
@@ -1738,6 +1747,7 @@ export const makeCheckOpenCodeProviderStatus = (
     readonly experimentalWebSockets?: boolean | undefined;
   },
   instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -1751,7 +1761,7 @@ export const makeCheckOpenCodeProviderStatus = (
       });
     }
     const executable = expandHomePath(nonEmptyTrimmed(binaryPath) ?? "opencode");
-    const probeEnv = makeProviderProbeEnv(OPENCODE_PROVIDER, environment, instanceId);
+    const probeEnv = makeProviderProbeEnv(OPENCODE_PROVIDER, environment, instanceId, paths);
 
     const versionProbe = yield* probeProviderCliVersion(
       runOpenCodeCommand(["--version"], executable, probeEnv),
@@ -1830,11 +1840,12 @@ export const checkPiProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
-    const probeEnv = makeProviderProbeEnv(PI_PROVIDER, environment, instanceId);
+    const probeEnv = makeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
 
     const versionProbe = yield* probeProviderCliVersion(
       runPiCommand(["--version"], executable, probeEnv),
@@ -2090,11 +2101,12 @@ export const makeCheckCursorProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = resolveCursorAgentBinaryPath(nonEmptyTrimmed(binaryPath));
-    const probeEnv = makeProviderProbeEnv(CURSOR_PROVIDER, environment, instanceId);
+    const probeEnv = makeProviderProbeEnv(CURSOR_PROVIDER, environment, instanceId, paths);
 
     const versionProbe = yield* probeProviderCliVersion(
       runCursorCommand(["--version"], executable, probeEnv),
@@ -2956,7 +2968,10 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           }
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
             binaryPath: binaryPath ?? null,
-            env: makeProviderUpdateEnv(instance),
+            env: makeProviderUpdateEnv(instance, {
+              homeDir: serverConfig.homeDir,
+              isolationRootDir: serverConfig.stateDir,
+            }),
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
         },
@@ -3150,6 +3165,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 binaryPath,
                 cursorOptions?.environment,
                 instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
               ),
             );
           }
@@ -3171,7 +3187,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             const grokOptions = providerStartOptionsFromInstance(instance)?.grok;
             return checkProviderInstanceWhenEnabled(
               instance,
-              makeCheckGrokProviderStatus(binaryPath, grokOptions?.environment, instance.instanceId),
+              makeCheckGrokProviderStatus(
+                binaryPath,
+                grokOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
             );
           }
           case "droid":
@@ -3195,6 +3216,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   ),
                 },
                 instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
               ),
             );
           }
@@ -3207,6 +3229,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 binaryPath,
                 piOptions?.environment,
                 instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
               ),
             );
           }
@@ -3417,7 +3440,10 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         readonly args: ReadonlyArray<string>;
         readonly pathPrepend?: string;
       }) {
-        const baseEnv = makeProviderUpdateEnv(input.instance);
+        const baseEnv = makeProviderUpdateEnv(input.instance, {
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+        });
         const updateEnv = input.pathPrepend
           ? prependPathEntry(baseEnv, input.pathPrepend)
           : baseEnv;

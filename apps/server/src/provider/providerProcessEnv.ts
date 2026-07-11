@@ -8,6 +8,9 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
 } from "@synara/contracts";
+import { chmodSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import NodePath from "node:path";
 
 export type ProviderProcessEnvDriver = Extract<
   ProviderKind,
@@ -90,6 +93,56 @@ const MODEL_PROVIDER_ACCOUNT_ENV_KEYS = new Set<string>([
   "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
 ]);
 
+const MODEL_PROVIDER_ACCOUNT_ENV_PREFIXES = [
+  "AI_GATEWAY_",
+  "ANTHROPIC_",
+  "AWS_",
+  "AZURE_OPENAI_",
+  "CEREBRAS_",
+  "CLOUDFLARE_",
+  "COHERE_",
+  "COPILOT_",
+  "DEEPSEEK_",
+  "FIREWORKS_",
+  "GEMINI_",
+  "GITHUB_",
+  "GOOGLE_",
+  "GROQ_",
+  "HF_",
+  "HUGGINGFACE_",
+  "KIMI_",
+  "MINIMAX_",
+  "MISTRAL_",
+  "MOONSHOT_",
+  "OPENAI_",
+  "OPENCODE_",
+  "OPENROUTER_",
+  "PERPLEXITY_",
+  "TOGETHER_",
+  "VERCEL_AI_",
+  "XAI_",
+  "XIAOMI_",
+  "ZAI_",
+] as const;
+
+const MODEL_PROVIDER_ACCOUNT_ENV_SUFFIXES = [
+  "_ACCESS_TOKEN",
+  "_ACCOUNT_ID",
+  "_API_KEY",
+  "_API_TOKEN",
+  "_API_VERSION",
+  "_AUTH_TOKEN",
+  "_BASE_URL",
+  "_BEARER_TOKEN",
+  "_CLIENT_SECRET",
+  "_DEPLOYMENT_NAME_MAP",
+  "_ENDPOINT",
+  "_GATEWAY_ID",
+  "_ORG_ID",
+  "_PROJECT_ID",
+  "_RESOURCE_NAME",
+] as const;
+
 const GEMINI_ACCOUNT_ENV_KEYS = new Set<string>([
   "GOOGLE_API_KEY",
   "GOOGLE_APPLICATION_CREDENTIALS",
@@ -127,6 +180,147 @@ function normalizedEnvironment(
   return normalized;
 }
 
+const SAFE_INHERITED_ENV_KEYS = new Set([
+  "ALL_PROXY",
+  "CI",
+  "COLORTERM",
+  "COMSPEC",
+  "FORCE_COLOR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LANG",
+  "LANGUAGE",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_COLOR",
+  "NO_PROXY",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "GIT_SSL_CAINFO",
+  "PATH",
+  "PATHEXT",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "WINDIR",
+  "XDG_RUNTIME_DIR",
+]);
+
+function safeInheritedEnvironment(
+  environment: Readonly<NodeJS.ProcessEnv>,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  const safe: NodeJS.ProcessEnv = {};
+  for (const [rawName, value] of Object.entries(environment)) {
+    const name = rawName.toUpperCase();
+    if (SAFE_INHERITED_ENV_KEYS.has(name) || name.startsWith("LC_")) {
+      safe[platform === "win32" ? name : rawName] = value;
+    }
+  }
+  return safe;
+}
+
+function providerInstanceHomeScope(
+  driver: ProviderProcessEnvDriver,
+  instanceId: string | undefined,
+): string {
+  const resolvedInstanceId = instanceId?.trim() || defaultInstanceIdForDriver(driver);
+  return `instance-${Buffer.from(resolvedInstanceId, "utf8").toString("hex")}`;
+}
+
+export function providerIsolatedHomePath(input: {
+  readonly driver: ProviderProcessEnvDriver;
+  readonly instanceId?: ProviderInstanceId | string | undefined;
+  readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
+}): string {
+  const pathApi = input.platform === "win32" ? NodePath.win32 : NodePath;
+  const isolationRoot =
+    input.isolationRootDir?.trim() ||
+    pathApi.join(input.homeDir?.trim() || homedir(), ".synara", "userdata");
+  return pathApi.resolve(
+    isolationRoot,
+    "provider-homes",
+    input.driver,
+    providerInstanceHomeScope(input.driver, input.instanceId),
+  );
+}
+
+/**
+ * Creates the private on-disk boundary used by an account-isolated child
+ * provider. This is intentionally synchronous: it is called only while
+ * constructing a launch environment, before a child can observe the path.
+ */
+function privateProviderHomeDirectories(
+  homePath: string,
+  platform: NodeJS.Platform,
+): ReadonlyArray<string> {
+  const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+  const environment = providerHomeEnvironment(homePath, platform);
+  return [
+    homePath,
+    environment.XDG_CACHE_HOME,
+    environment.XDG_CONFIG_HOME,
+    environment.XDG_DATA_HOME,
+    environment.XDG_STATE_HOME,
+    pathApi.join(homePath, ".cursor"),
+    ...(platform === "win32" ? [environment.APPDATA, environment.LOCALAPPDATA] : []),
+  ].filter((value): value is string => typeof value === "string" && pathApi.isAbsolute(value));
+}
+
+function ensurePrivateProviderHome(homePath: string, platform: NodeJS.Platform): void {
+  const directories = privateProviderHomeDirectories(homePath, platform);
+  for (const directory of directories) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  // mkdir's mode is filtered by umask and an existing directory retains its
+  // previous mode, so tighten it explicitly on platforms that support it.
+  if (platform !== "win32") {
+    for (const directory of directories) chmodSync(directory, 0o700);
+  }
+}
+
+function providerHomeEnvironment(homePath: string, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+  const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+  const environment: NodeJS.ProcessEnv = {
+    HOME: homePath,
+    XDG_CACHE_HOME: pathApi.join(homePath, ".cache"),
+    XDG_CONFIG_HOME: pathApi.join(homePath, ".config"),
+    XDG_DATA_HOME: pathApi.join(homePath, ".local", "share"),
+    XDG_STATE_HOME: pathApi.join(homePath, ".local", "state"),
+  };
+  if (platform !== "win32") {
+    return environment;
+  }
+
+  const appDataRoot = NodePath.win32.join(homePath, "AppData");
+  const parsed = NodePath.win32.parse(homePath);
+  return {
+    ...environment,
+    USERPROFILE: homePath,
+    APPDATA: NodePath.win32.join(appDataRoot, "Roaming"),
+    LOCALAPPDATA: NodePath.win32.join(appDataRoot, "Local"),
+    ...(parsed.root.match(/^[A-Za-z]:\\$/)
+      ? {
+          HOMEDRIVE: parsed.root.slice(0, 2),
+          HOMEPATH: homePath.slice(2) || "\\",
+        }
+      : {}),
+  };
+}
+
+function isModelProviderAccountEnvKey(key: string): boolean {
+  return (
+    MODEL_PROVIDER_ACCOUNT_ENV_KEYS.has(key) ||
+    MODEL_PROVIDER_ACCOUNT_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+    MODEL_PROVIDER_ACCOUNT_ENV_SUFFIXES.some((suffix) => key.endsWith(suffix))
+  );
+}
+
 function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: string): boolean {
   const key = rawKey.toUpperCase();
   switch (driver) {
@@ -143,11 +337,11 @@ function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: strin
         GROK_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("XAI_") || key.startsWith("GROK_CODE_")
       );
     case "opencode":
-      return MODEL_PROVIDER_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("OPENCODE_");
+      return isModelProviderAccountEnvKey(key);
     case "kilo":
-      return MODEL_PROVIDER_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("KILO_");
+      return isModelProviderAccountEnvKey(key) || key.startsWith("KILO_");
     case "pi":
-      return MODEL_PROVIDER_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("PI_");
+      return isModelProviderAccountEnvKey(key) || key.startsWith("PI_");
   }
 }
 
@@ -156,6 +350,8 @@ export function buildProviderProcessEnv(input: {
   readonly environment?: Readonly<Record<string, string>> | undefined;
   readonly instanceId?: ProviderInstanceId | string | undefined;
   readonly env?: Readonly<NodeJS.ProcessEnv> | undefined;
+  readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string | undefined;
   readonly overlay?: Readonly<Record<string, string>> | undefined;
   readonly platform?: NodeJS.Platform | undefined;
 }): NodeJS.ProcessEnv {
@@ -172,17 +368,62 @@ export function buildProviderProcessEnv(input: {
     return baseEnv as NodeJS.ProcessEnv;
   }
 
-  const env = normalizedEnvironment(baseEnv, platform);
+  const normalizedBaseEnv = normalizedEnvironment(baseEnv, platform);
+  const env = isolatesAccount
+    ? safeInheritedEnvironment(normalizedBaseEnv, platform)
+    : normalizedBaseEnv;
+  const ambientHome = normalizedBaseEnv.HOME?.trim() || normalizedBaseEnv.USERPROFILE?.trim();
   if (isolatesAccount) {
     for (const key of Object.keys(env)) {
       if (isProviderAccountEnvKey(input.driver, key)) {
         delete env[key];
       }
     }
+    const selectedEnvironment =
+      input.environment === undefined
+        ? undefined
+        : normalizedEnvironment(input.environment, platform);
+    const selectedHome = selectedEnvironment?.HOME ?? selectedEnvironment?.USERPROFILE;
+    const baseHome = input.homeDir?.trim() || ambientHome || homedir();
+    const syntheticHome = providerIsolatedHomePath({
+      driver: input.driver,
+      ...(instanceId !== undefined ? { instanceId } : {}),
+      homeDir: baseHome,
+      ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
+      platform,
+    });
+    const homePath = selectedHome || syntheticHome;
+    if (!selectedHome) {
+      ensurePrivateProviderHome(homePath, platform);
+    }
+    Object.assign(env, providerHomeEnvironment(homePath, platform));
+    // Cursor's credential file store is configurable independently of HOME.
+    // Pin it into the synthetic root; an explicitly selected value still wins
+    // when the selected environment is overlaid below.
+    if (input.driver === "cursor") {
+      const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+      env.CURSOR_CONFIG_DIR = pathApi.join(homePath, ".cursor");
+    }
   }
 
   if (input.environment !== undefined) {
     Object.assign(env, normalizedEnvironment(input.environment, platform));
+  }
+  if (isolatesAccount) {
+    const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+    const effectiveHome = env.HOME ?? env.USERPROFILE;
+    if (input.driver === "cursor") {
+      // Nondefault Cursor accounts must never fall back to the user's global
+      // Keychain credential entry, even if a selected environment requests it.
+      env.AGENT_CLI_CREDENTIAL_STORE = "file";
+    } else if (input.driver === "gemini") {
+      env.GEMINI_FORCE_FILE_STORAGE = "true";
+      delete env.GEMINI_ENCRYPTED_FILE_STORAGE;
+      delete env.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE;
+    } else if (input.driver === "grok" && effectiveHome) {
+      env.GROK_HOME ??= pathApi.join(effectiveHome, ".grok");
+      env.GROK_AUTH_PATH ??= pathApi.join(env.GROK_HOME, "auth.json");
+    }
   }
   if (input.overlay !== undefined) {
     Object.assign(env, normalizedEnvironment(input.overlay, platform));

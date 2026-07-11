@@ -3,6 +3,7 @@
 // Layer: Provider runtime utility
 // Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
 
+import { createHash } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -217,6 +218,8 @@ export interface OpenCodeRuntimeShape {
     readonly experimentalWebSockets?: boolean;
     readonly environment?: Readonly<Record<string, string>>;
     readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
@@ -229,6 +232,8 @@ export interface OpenCodeRuntimeShape {
     readonly experimentalWebSockets?: boolean;
     readonly environment?: Readonly<Record<string, string>>;
     readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
     /**
      * Makes a managed server private to one owner and closes it immediately
      * when that owner's scope ends. Required before installing per-thread MCP
@@ -243,6 +248,8 @@ export interface OpenCodeRuntimeShape {
     readonly cwd?: string;
     readonly environment?: Readonly<Record<string, string>>;
     readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<OpenCodeCommandResult, OpenCodeRuntimeError>;
   readonly createOpenCodeSdkClient: (input: {
     readonly baseUrl: string;
@@ -259,6 +266,8 @@ export interface OpenCodeRuntimeShape {
     readonly cwd?: string;
     readonly environment?: Readonly<Record<string, string>>;
     readonly instanceId?: string;
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
   }) => Effect.Effect<ReadonlyArray<OpenCodeCliModelDescriptor>, OpenCodeRuntimeError>;
   readonly loadOpenCodeCredentialProviderIDs: (
     client: OpencodeClient,
@@ -370,12 +379,7 @@ function environmentFingerprint(
 }
 
 function hashCacheComponent(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 export function parseOpenCodeModelSlug(
@@ -841,6 +845,8 @@ export function buildOpenCodeServerProcessEnv(input: {
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }): NodeJS.ProcessEnv {
   const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
   const accountIsolatedEnv = buildProviderProcessEnv({
@@ -848,6 +854,8 @@ export function buildOpenCodeServerProcessEnv(input: {
     ...(input.baseEnv !== undefined ? { env: input.baseEnv } : {}),
     ...(input.environment !== undefined ? { environment: input.environment } : {}),
     ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+    ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
   });
   return buildOpenCodeServerLaunchEnv({
     baseEnv: accountIsolatedEnv,
@@ -930,6 +938,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
           ...(input.environment !== undefined ? { environment: input.environment } : {}),
           ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+          ...(input.isolationRootDir !== undefined
+            ? { isolationRootDir: input.isolationRootDir }
+            : {}),
         });
         const child = yield* spawner.spawn(
           makeEffectProcessCommand(expandHomePath(input.binaryPath), input.args, {
@@ -1002,6 +1014,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           cliSpec,
           ...(input.environment !== undefined ? { environment: input.environment } : {}),
           ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+          ...(input.isolationRootDir !== undefined
+            ? { isolationRootDir: input.isolationRootDir }
+            : {}),
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
@@ -1300,6 +1316,8 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       readonly poolIsolationKey?: string;
       readonly environment?: Readonly<Record<string, string>>;
       readonly instanceId?: string;
+      readonly homeDir?: string;
+      readonly isolationRootDir?: string;
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
@@ -1416,6 +1434,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             : {}),
           ...(input.environment !== undefined ? { environment: input.environment } : {}),
           ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+          ...(input.isolationRootDir !== undefined
+            ? { isolationRootDir: input.isolationRootDir }
+            : {}),
         });
         yield* Scope.addFinalizer(callerScope, releasePooledServer(pooledServer));
         return {
@@ -1520,6 +1542,8 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       readonly args: ReadonlyArray<string>;
       readonly environment?: Readonly<Record<string, string>>;
       readonly instanceId?: string;
+      readonly homeDir?: string;
+      readonly isolationRootDir?: string;
     }) =>
       runOpenCodeCommand({
         binaryPath: input.binaryPath,
@@ -1527,6 +1551,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.environment !== undefined ? { environment: input.environment } : {}),
         ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+        ...(input.isolationRootDir !== undefined
+          ? { isolationRootDir: input.isolationRootDir }
+          : {}),
         args: input.args,
       }).pipe(
         Effect.flatMap((result) =>
@@ -1551,6 +1579,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.environment !== undefined ? { environment: input.environment } : {}),
         ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+        ...(input.isolationRootDir !== undefined
+          ? { isolationRootDir: input.isolationRootDir }
+          : {}),
         args: ["models", "--verbose"],
       }).pipe(
         Effect.catch((error) => {
@@ -1577,6 +1609,10 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
             ...(input.environment !== undefined ? { environment: input.environment } : {}),
             ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+            ...(input.isolationRootDir !== undefined
+              ? { isolationRootDir: input.isolationRootDir }
+              : {}),
             args: ["models"],
           });
         }),

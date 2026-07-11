@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { buildProviderProcessEnv } from "./providerProcessEnv.ts";
+import { buildProviderProcessEnv, providerIsolatedHomePath } from "./providerProcessEnv.ts";
 
 describe("buildProviderProcessEnv", () => {
   it("scrubs ambient Grok aliases before applying a selected instance environment", () => {
@@ -38,7 +41,7 @@ describe("buildProviderProcessEnv", () => {
     });
 
     expect(env.CURSOR_API_KEY).toBeUndefined();
-    expect(env.CURSOR_CONFIG_DIR).toBeUndefined();
+    expect(env.CURSOR_CONFIG_DIR).toContain("provider-homes/cursor/");
     expect(env.PATH).toBe("/usr/bin");
   });
 
@@ -122,6 +125,146 @@ describe("buildProviderProcessEnv", () => {
     expect(piEnv.PATH).toBe("/usr/bin");
   });
 
+  it.each(["opencode", "kilo"] as const)(
+    "scrubs extended %s provider credentials and routing metadata",
+    (driver) => {
+      const env = buildProviderProcessEnv({
+        driver,
+        instanceId: `${driver}_work`,
+        env: {
+          PERPLEXITY_API_KEY: "ambient-perplexity",
+          COHERE_API_KEY: "ambient-cohere",
+          TOGETHER_AI_API_KEY: "ambient-together",
+          CLOUDFLARE_API_TOKEN: "ambient-cloudflare-token",
+          CLOUDFLARE_ACCOUNT_ID: "ambient-cloudflare-account",
+          CLOUDFLARE_GATEWAY_ID: "ambient-cloudflare-gateway",
+          PATH: "/usr/bin",
+        },
+      });
+
+      expect(env.PERPLEXITY_API_KEY).toBeUndefined();
+      expect(env.COHERE_API_KEY).toBeUndefined();
+      expect(env.TOGETHER_AI_API_KEY).toBeUndefined();
+      expect(env.CLOUDFLARE_API_TOKEN).toBeUndefined();
+      expect(env.CLOUDFLARE_ACCOUNT_ID).toBeUndefined();
+      expect(env.CLOUDFLARE_GATEWAY_ID).toBeUndefined();
+      expect(env.PATH).toBe("/usr/bin");
+    },
+  );
+
+  it.each(["cursor", "gemini", "grok", "kilo", "opencode"] as const)(
+    "moves explicit-empty %s instances off ambient HOME and XDG account stores",
+    (driver) => {
+      const isolationRootDir = mkdtempSync(join(tmpdir(), "synara-provider-home-"));
+      const instanceId = driver;
+      const env = buildProviderProcessEnv({
+        driver,
+        instanceId,
+        isolationRootDir,
+        env: {
+          HOME: "/accounts/ambient-a",
+          XDG_DATA_HOME: "/accounts/ambient-a/data",
+          XDG_CONFIG_HOME: "/accounts/ambient-a/config",
+          XDG_STATE_HOME: "/accounts/ambient-a/state",
+          XDG_CACHE_HOME: "/accounts/ambient-a/cache",
+          PATH: "/usr/bin",
+        },
+        environment: {},
+      });
+      const isolatedHome = providerIsolatedHomePath({
+        driver,
+        instanceId,
+        isolationRootDir,
+      });
+
+      expect(env.HOME).toBe(isolatedHome);
+      expect(env.XDG_DATA_HOME).toBe(`${isolatedHome}/.local/share`);
+      expect(env.XDG_CONFIG_HOME).toBe(`${isolatedHome}/.config`);
+      expect(env.XDG_STATE_HOME).toBe(`${isolatedHome}/.local/state`);
+      expect(env.XDG_CACHE_HOME).toBe(`${isolatedHome}/.cache`);
+      expect(env.PATH).toBe("/usr/bin");
+    },
+  );
+
+  it("lets an explicit instance HOME override the synthetic root without retaining ambient XDG", () => {
+    const env = buildProviderProcessEnv({
+      driver: "opencode",
+      instanceId: "opencode_work",
+      isolationRootDir: "/synara/state",
+      env: {
+        HOME: "/accounts/ambient-a",
+        XDG_DATA_HOME: "/accounts/ambient-a/data",
+      },
+      environment: { HOME: "/accounts/selected-b" },
+    });
+
+    expect(env.HOME).toBe("/accounts/selected-b");
+    expect(env.XDG_DATA_HOME).toBe("/accounts/selected-b/.local/share");
+  });
+
+  it("inherits only safe system variables at an account boundary", () => {
+    const env = buildProviderProcessEnv({
+      driver: "opencode",
+      instanceId: "opencode_work",
+      isolationRootDir: mkdtempSync(join(tmpdir(), "synara-provider-safe-env-")),
+      env: { PATH: "/usr/bin", LANG: "en_US.UTF-8", CUSTOM_SECRET: "ambient-secret" },
+      environment: {},
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.LANG).toBe("en_US.UTF-8");
+    expect(env.CUSTOM_SECRET).toBeUndefined();
+  });
+
+  it("pins provider-owned file credential switches and preserves explicit Grok roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-provider-switches-"));
+    const cursor = buildProviderProcessEnv({
+      driver: "cursor",
+      instanceId: "cursor_work",
+      isolationRootDir: root,
+      environment: { AGENT_CLI_CREDENTIAL_STORE: "keychain" },
+    });
+    const gemini = buildProviderProcessEnv({
+      driver: "gemini",
+      instanceId: "gemini_work",
+      isolationRootDir: root,
+      environment: { GEMINI_FORCE_ENCRYPTED_FILE_STORAGE: "true" },
+    });
+    const grok = buildProviderProcessEnv({
+      driver: "grok",
+      instanceId: "grok_work",
+      isolationRootDir: root,
+      environment: { GROK_HOME: "/selected/grok", GROK_AUTH_PATH: "/selected/auth.json" },
+    });
+    expect(cursor.AGENT_CLI_CREDENTIAL_STORE).toBe("file");
+    expect(gemini.GEMINI_FORCE_FILE_STORAGE).toBe("true");
+    expect(gemini.GEMINI_FORCE_ENCRYPTED_FILE_STORAGE).toBeUndefined();
+    expect(grok.GROK_HOME).toBe("/selected/grok");
+    expect(grok.GROK_AUTH_PATH).toBe("/selected/auth.json");
+  });
+
+  it("tightens an existing synthetic credential home to owner-only permissions", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-provider-permissions-"));
+    const home = providerIsolatedHomePath({
+      driver: "cursor",
+      instanceId: "cursor_work",
+      isolationRootDir: root,
+    });
+    buildProviderProcessEnv({
+      driver: "cursor",
+      instanceId: "cursor_work",
+      isolationRootDir: root,
+      environment: {},
+    });
+    chmodSync(home, 0o755);
+    buildProviderProcessEnv({
+      driver: "cursor",
+      instanceId: "cursor_work",
+      isolationRootDir: root,
+      environment: {},
+    });
+    expect(statSync(home).mode & 0o777).toBe(0o700);
+  });
+
   it("collapses Windows aliases before scrub and selected overlay", () => {
     const env = buildProviderProcessEnv({
       driver: "grok",
@@ -158,7 +301,7 @@ describe("buildProviderProcessEnv", () => {
     });
 
     expect(env.CURSOR_API_KEY).toBe("selected-account-b");
-    expect(env.CURSOR_CONFIG_DIR).toBeUndefined();
+    expect(env.CURSOR_CONFIG_DIR).toContain("provider-homes\\cursor\\");
     expect(env.PATH).toBe("C:\\Windows\\System32");
     expect(env.NO_BROWSER).toBe("true");
     expect(Object.keys(env)).not.toContain("Cursor_Config_Dir");

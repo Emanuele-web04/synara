@@ -9,6 +9,7 @@ import { Effect, Layer } from "effect";
 import { expect } from "vitest";
 
 import { TextGenerationError } from "../Errors.ts";
+import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
 
@@ -17,6 +18,12 @@ const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts")
 
 const CursorTextGenerationTestLayer = CursorTextGenerationLive.pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    Layer.succeed(ServerConfig, {
+      homeDir: os.homedir(),
+      stateDir: path.join(os.tmpdir(), "synara-cursor-text-state"),
+    } as any),
+  ),
 );
 
 function shellSingleQuote(value: string): string {

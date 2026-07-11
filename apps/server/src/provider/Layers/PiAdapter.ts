@@ -91,6 +91,7 @@ import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
   buildProviderProcessEnv,
   MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
+  providerIsolatedHomePath,
 } from "../providerProcessEnv.ts";
 import {
   compactProviderRuntimeEventForIngress,
@@ -223,6 +224,9 @@ export interface PiBashProcessSupervisor {
 export interface PiBashProcessSupervisorOptions {
   readonly getShellConfig: (shellPath?: string) => PiShellConfig;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
@@ -284,10 +288,18 @@ export function makePiBashProcessSupervisor(
           cwd,
           env: buildProviderChildEnvironment({
             provider: "pi",
-            baseEnv: {
-              ...(execution.env ?? process.env),
-              ...(options.environment ?? {}),
-            },
+            baseEnv: buildProviderProcessEnv({
+              driver: PROVIDER,
+              env: execution.env ?? process.env,
+              ...(options.environment !== undefined
+                ? { environment: options.environment }
+                : {}),
+              ...(options.instanceId !== undefined ? { instanceId: options.instanceId } : {}),
+              ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+              ...(options.isolationRootDir !== undefined
+                ? { isolationRootDir: options.isolationRootDir }
+                : {}),
+            }),
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
         },
@@ -1340,11 +1352,43 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
   return items;
 }
 
-function makeAgentDir(
-  agentDir: string | undefined,
-  piSdk: Pick<PiCodingAgentModule, "getAgentDir">,
-): string {
-  return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
+export function makePiStoragePaths(input: {
+  readonly agentDir?: string | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly instanceId?: string | undefined;
+  readonly stateDir: string;
+  readonly homeDir: string;
+  readonly sdkAgentDir: string;
+}): { readonly agentDir: string; readonly sessionDir?: string } {
+  const boundary =
+    input.environment !== undefined ||
+    (input.instanceId !== undefined && input.instanceId !== PROVIDER);
+  const selectedHome = trimToUndefined(input.environment?.HOME);
+  const expandHome = (value: string) =>
+    value === "~" || value.startsWith("~/")
+      ? path.join(selectedHome ?? input.homeDir, value.slice(value === "~" ? 1 : 2))
+      : value;
+  const configuredAgentDir = trimToUndefined(input.agentDir);
+  const selectedAgentDir = trimToUndefined(input.environment?.PI_CODING_AGENT_DIR);
+  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
+    return { agentDir: input.sdkAgentDir };
+  }
+  const isolatedHome = providerIsolatedHomePath({
+    driver: PROVIDER,
+    instanceId: input.instanceId,
+    homeDir: input.homeDir,
+    isolationRootDir: input.stateDir,
+  });
+  const agentDir = expandHome(
+    configuredAgentDir ??
+      selectedAgentDir ??
+      path.join(selectedHome ?? isolatedHome, ".pi", "agent"),
+  );
+  const selectedSessionDir = trimToUndefined(input.environment?.PI_CODING_AGENT_SESSION_DIR);
+  return {
+    agentDir,
+    sessionDir: expandHome(selectedSessionDir ?? path.join(agentDir, "sessions")),
+  };
 }
 
 function readPiRuntimeApiKeyOverrides(
@@ -1632,8 +1676,41 @@ function isolatePiModelRuntimeFromAmbientEnvironment(
   models.authContext = {
     ...authContext,
     env: async (name) => trimToUndefined(environment[name]),
+    // Vertex is the only built-in provider that probes a credential file.
+    // An isolated account must not discover ADC under the real user home.
+    fileExists: async () => false,
   };
   isolatePiRuntimeConfig(runtime, environment);
+
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (
+    providerOrModel: string | Model<Api>,
+    overrides?: Parameters<ModelRuntime["getAuth"]>[1],
+  ) => {
+    const provider =
+      typeof providerOrModel === "string" ? providerOrModel : providerOrModel.provider;
+    if (provider === "amazon-bedrock") {
+      throw new Error(
+        "Amazon Bedrock is disabled for isolated Pi accounts because the SDK falls back to the ambient AWS credential chain.",
+      );
+    }
+    if (provider === "azure-openai-responses") {
+      throw new Error(
+        "Azure OpenAI is disabled for isolated Pi accounts because the SDK reads process-level Azure routing.",
+      );
+    }
+    const result = await getAuth(providerOrModel as Model<Api>, overrides);
+    if (
+      provider === "google-vertex" &&
+      result &&
+      (!trimToUndefined(result.auth.apiKey) || result.auth.apiKey === "gcp-vertex-credentials")
+    ) {
+      throw new Error(
+        "Vertex ADC is disabled for isolated Pi accounts; configure a real instance-scoped API key.",
+      );
+    }
+    return result;
+  }) as ModelRuntime["getAuth"];
 }
 
 // Keep session runtimes isolated so project extension provider registrations
@@ -1644,6 +1721,7 @@ export async function createPiModelRuntime(
   signal?: AbortSignal,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
+  paths?: { readonly stateDir: string; readonly homeDir: string },
 ): Promise<ModelRuntime> {
   const hasAccountBoundary =
     environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
@@ -1653,6 +1731,9 @@ export async function createPiModelRuntime(
         env: {},
         environment: environment ?? {},
         ...(instanceId !== undefined ? { instanceId } : {}),
+        ...(paths
+          ? { isolationRootDir: paths.stateDir, homeDir: paths.homeDir }
+          : {}),
       })
     : environment;
   const runtime = await piSdk.ModelRuntime.create({
@@ -3012,6 +3093,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.signal,
         input.environment,
         input.instanceId,
+        { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
       );
       input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
@@ -3085,16 +3167,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const processSupervisor = makePiBashProcessSupervisor({
           getShellConfig: () => piSdk.getShellConfig(),
           ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+          ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
           ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
           ...(options?.teardownProcessTree
             ? { teardownProcessTree: options.teardownProcessTree }
             : {}),
         });
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
-        const agentDir = makeAgentDir(piOptions?.agentDir, piSdk);
+        const storagePaths = makePiStoragePaths({
+          agentDir: piOptions?.agentDir,
+          environment: piEnvironment,
+          instanceId: providerInstanceId,
+          stateDir: serverConfig.stateDir,
+          homeDir: serverConfig.homeDir,
+          sdkAgentDir: piSdk.getAgentDir(),
+        });
+        const agentDir = storagePaths.agentDir;
         const sessionManager = sessionFile
           ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
-          : piSdk.SessionManager.create(cwd);
+          : piSdk.SessionManager.create(cwd, storagePaths.sessionDir);
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -3683,7 +3776,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.tryPromise({
         try: async (signal) => {
           const piSdk = await loadPiCodingAgentModule();
-          const agentDir = makeAgentDir(input.agentDir, piSdk);
+          const { agentDir } = makePiStoragePaths({
+            agentDir: input.agentDir,
+            environment: input.environment,
+            instanceId: input.instanceId,
+            stateDir: serverConfig.stateDir,
+            homeDir: serverConfig.homeDir,
+            sdkAgentDir: piSdk.getAgentDir(),
+          });
           const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
           const modelRuntime = await createPiModelRuntime(
             agentDir,
@@ -3691,6 +3791,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             signal,
             input.environment,
             input.instanceId,
+            { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
           );
           const services = await piSdk.createAgentSessionServices({
             cwd,
@@ -3738,13 +3839,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             | undefined;
           if (!loader) {
             const piSdk = await loadPiCodingAgentModule();
-            const agentDir = makeAgentDir(input.agentDir, piSdk);
+            const { agentDir } = makePiStoragePaths({
+              agentDir: input.agentDir,
+              environment: input.environment,
+              instanceId: input.instanceId,
+              stateDir: serverConfig.stateDir,
+              homeDir: serverConfig.homeDir,
+              sdkAgentDir: piSdk.getAgentDir(),
+            });
             const modelRuntime = await createPiModelRuntime(
               agentDir,
               piSdk,
               signal,
               input.environment,
               input.instanceId,
+              { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
             );
             services = await piSdk.createAgentSessionServices({
               cwd: input.cwd,
@@ -3826,13 +3935,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             } satisfies ProviderListCommandsResult;
           }
           const piSdk = await loadPiCodingAgentModule();
-          const agentDir = makeAgentDir(input.agentDir, piSdk);
+          const { agentDir } = makePiStoragePaths({
+            agentDir: input.agentDir,
+            environment: input.environment,
+            instanceId: input.instanceId,
+            stateDir: serverConfig.stateDir,
+            homeDir: serverConfig.homeDir,
+            sdkAgentDir: piSdk.getAgentDir(),
+          });
           const modelRuntime = await createPiModelRuntime(
             agentDir,
             piSdk,
             signal,
             input.environment,
             input.instanceId,
+            { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
           );
           const services = await piSdk.createAgentSessionServices({
             cwd: input.cwd,
