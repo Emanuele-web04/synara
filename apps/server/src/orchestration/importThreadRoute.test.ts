@@ -6,6 +6,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationThread,
   ProjectId,
+  type ProviderInstanceId,
   type ProviderSession,
   type ProviderStartOptions,
   ThreadId,
@@ -15,6 +16,7 @@ import { it, vi } from "@effect/vitest";
 import { Effect, FileSystem, Option, Path } from "effect";
 
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
+import { claudeIsolatedHomePath } from "../provider/claudeEnvironment";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
 import type { ServerSettingsShape } from "../serverSettings";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
@@ -55,6 +57,29 @@ it("expands instance Claude homes against the configured Synara home", () => {
 
   assert.equal(environment?.HOME, path.join("/synara/home", "claude-work"));
   assert.equal(environment?.SYNARA_CLAUDE_IMPORT_TEST, "1");
+});
+
+it("scopes environment-only Claude imports to the selected provider instance", () => {
+  const isolationRootDir = "/synara/userdata";
+  const providerInstanceId = "claude_work" as ProviderInstanceId;
+  const environment = claudeHistoricalSessionEnvironment(
+    {
+      claudeAgent: {
+        environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+      },
+    } satisfies ProviderStartOptions,
+    {
+      homeDir: "/synara/home",
+      isolationRootDir,
+      providerInstanceId,
+    },
+  );
+
+  assert.equal(
+    environment?.HOME,
+    claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }),
+  );
+  assert.equal(environment?.ANTHROPIC_AUTH_TOKEN, "work-token");
 });
 
 it("does not remerge ambient credentials into Claude import child environments", () => {
@@ -147,7 +172,7 @@ it.effect("imports Codex history through a provider-owned fork", () =>
       fileSystem,
       path,
       platform: process.platform,
-      serverConfig: { homeDir: "/tmp/synara-home" },
+      serverConfig: { homeDir: "/tmp/synara-home", stateDir: "/tmp/synara-state" },
       orchestrationEngine: {
         dispatch: (command: OrchestrationCommand) =>
           Effect.sync(() => {
@@ -207,7 +232,7 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
       fileSystem,
       path,
       platform: process.platform,
-      serverConfig: { homeDir: "/tmp/synara-home" },
+      serverConfig: { homeDir: "/tmp/synara-home", stateDir: "/tmp/synara-state" },
       orchestrationEngine: {
         dispatch: () => Effect.die("disabled import must not dispatch"),
       } as unknown as OrchestrationEngineShape,

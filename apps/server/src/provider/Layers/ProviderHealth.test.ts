@@ -1,7 +1,7 @@
 import { symlinkSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ServerProviderStatus } from "@synara/contracts";
+import type { ProviderInstanceId, ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, FileSystem, Layer, Path, Ref, Sink, Stream } from "effect";
@@ -12,6 +12,7 @@ import { vi } from "vitest";
 
 import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE } from "../codexCliVersion.ts";
+import { claudeIsolatedHomePath } from "../claudeEnvironment";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { ProviderHealth } from "../Services/ProviderHealth";
@@ -2022,6 +2023,45 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
       assert.strictEqual(env.HOME, "/tmp/synara-test-home/.claude-work");
       assert.strictEqual(env.SYNARA_TEST_INSTANCE, "claude-work");
+    });
+
+    it.effect("scopes environment-only Claude health probes to the selected instance", () => {
+      const isolationRootDir = "/tmp/synara-provider-health-state";
+      const providerInstanceId = "claude_work" as ProviderInstanceId;
+      return makeCheckClaudeProviderStatus(
+        undefined,
+        "claude",
+        undefined,
+        {
+          providerInstanceId,
+          isolationRootDir,
+          fallbackHomeDir: "/tmp/server-home",
+        },
+        { ANTHROPIC_AUTH_TOKEN: "work-token" },
+      ).pipe(
+        Effect.tap((status) => Effect.sync(() => assert.strictEqual(status.status, "ready"))),
+        Effect.provide(
+          mockSpawnerLayer((args, _command, env) => {
+            assert.strictEqual(
+              env?.HOME,
+              claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }),
+            );
+            assert.strictEqual(env?.ANTHROPIC_AUTH_TOKEN, "work-token");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "1.0.0\n", stderr: "", code: 0 };
+            }
+            if (joined === "auth status") {
+              return {
+                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                stderr: "",
+                code: 0,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
     });
 
     it.effect("trusts usable Claude OAuth credentials after the SDK probe validates them", () =>

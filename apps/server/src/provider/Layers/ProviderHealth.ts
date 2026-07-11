@@ -499,10 +499,12 @@ const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
 const CLAUDE_SUBSCRIPTION_CACHE_TTL_MS = 5 * 60 * 1_000;
 
 interface ClaudeSubscriptionProbeInput {
+  readonly instanceId?: ProviderInstanceId;
   readonly binaryPath?: string | undefined;
   readonly homePath?: string | undefined;
   readonly environment?: Readonly<Record<string, string>> | undefined;
   readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string;
 }
 
 function waitForAbortSignal(signal: AbortSignal): Promise<void> {
@@ -536,9 +538,11 @@ function environmentFingerprint(
 
 function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string {
   return JSON.stringify({
+    instanceId: input.instanceId?.trim() || null,
     binaryPath: input.binaryPath?.trim() || null,
     homeDir: input.homeDir?.trim() || null,
     homePath: input.homePath?.trim() || null,
+    isolationRootDir: input.isolationRootDir?.trim() || null,
     environment: environmentFingerprint(input.environment),
   });
 }
@@ -546,7 +550,13 @@ function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string
 const probeClaudeSubscription = (input: ClaudeSubscriptionProbeInput) => {
   const abort = new AbortController();
   const executable = nonEmptyTrimmed(input.binaryPath) ?? "claude";
-  const env = makeClaudeProbeEnv(input.homePath, input.environment, input.homeDir);
+  const env = makeClaudeProbeEnv(
+    input.homePath,
+    input.environment,
+    input.homeDir,
+    input.instanceId,
+    input.isolationRootDir,
+  );
   return Effect.tryPromise(async () => {
     const { query: claudeQuery } = await loadClaudeAgentSdk();
     const q = claudeQuery({
@@ -924,6 +934,8 @@ export function makeClaudeProbeEnv(
   homePath?: string,
   environment?: Readonly<Record<string, string>>,
   homeDir?: string,
+  providerInstanceId?: ProviderInstanceId,
+  isolationRootDir?: string,
 ): NodeJS.ProcessEnv {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
   const baseHomeDir = nonEmptyTrimmed(homeDir) ?? OS.homedir();
@@ -933,7 +945,11 @@ export function makeClaudeProbeEnv(
       : normalizedHomePath?.startsWith("~/")
         ? nodePath.join(baseHomeDir, normalizedHomePath.slice(2))
         : normalizedHomePath;
-  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
+  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment, {
+    homeDir: baseHomeDir,
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+    ...(isolationRootDir ? { isolationRootDir } : {}),
+  });
 }
 
 export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -1188,13 +1204,24 @@ export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
   homeDir?: string,
-  options?: { readonly falseNegativeRetryDelayMs?: number },
+  options?: {
+    readonly falseNegativeRetryDelayMs?: number;
+    readonly providerInstanceId?: ProviderInstanceId;
+    readonly isolationRootDir?: string;
+    readonly fallbackHomeDir?: string;
+  },
   environment?: Readonly<Record<string, string>>,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const claudeEnv = makeClaudeProbeEnv(homeDir, environment);
+    const claudeEnv = makeClaudeProbeEnv(
+      homeDir,
+      environment,
+      options?.fallbackHomeDir,
+      options?.providerInstanceId,
+      options?.isolationRootDir,
+    );
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* probeProviderCliVersion(
@@ -1304,8 +1331,9 @@ export const makeCheckClaudeProviderStatus = (
 
     let authOutput = authProbe.success.value;
     let parsed = parseClaudeAuthStatusFromOutput(authOutput);
+    const credentialsHome = nonEmptyTrimmed(claudeEnv.HOME) ?? homeDir;
     const credentialSummary = readClaudeCliCredentialsSummary(
-      homeDir ? { env: claudeEnv, homeDir } : { env: claudeEnv },
+      credentialsHome ? { env: claudeEnv, homeDir: credentialsHome } : { env: claudeEnv },
     );
     // A structured `loggedIn:false` with a clean exit and no local credential
     // record to rescue it (macOS keeps OAuth in the Keychain, not on disk) is
@@ -2914,22 +2942,28 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             );
           }
           case "claudeAgent": {
-            const configuredHomePath = readInstanceConfigString(instance, "homePath");
-            const homePath =
-              configuredHomePath ?? (instance.isDefault ? serverConfig.homeDir : undefined);
+            const claudeOptions = providerStartOptionsFromInstance(instance)?.claudeAgent;
+            const homePath = claudeOptions?.homePath;
+            const claudeEnvironment = claudeOptions?.environment;
             return checkProviderInstanceWhenEnabled(
               instance,
               makeCheckClaudeProviderStatus(
                 resolveClaudeSubscription({
+                  instanceId: instance.instanceId,
                   binaryPath,
                   homePath,
-                  environment: instance.environment,
+                  environment: claudeEnvironment,
                   homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
                 }),
                 binaryPath,
                 homePath,
-                undefined,
-                instance.environment,
+                {
+                  providerInstanceId: instance.instanceId,
+                  isolationRootDir: serverConfig.stateDir,
+                  fallbackHomeDir: serverConfig.homeDir,
+                },
+                claudeEnvironment,
               ),
             );
           }

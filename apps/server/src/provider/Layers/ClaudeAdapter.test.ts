@@ -31,6 +31,7 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
+import { claudeIsolatedHomePath } from "../claudeEnvironment.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
@@ -707,6 +708,92 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, "work-token");
       assert.equal(createInput?.options.env?.HOME, "/tmp/claude-home-work");
     }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps command discovery caches and homes isolated by provider instance id", () => {
+    const harness = makeMultiQueryHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      if (!adapter.listCommands) {
+        assert.fail("Expected ClaudeAdapter to expose command discovery");
+      }
+      const sharedInput = {
+        provider: "claudeAgent" as const,
+        cwd: "/tmp/claude-work",
+        environment: { ANTHROPIC_AUTH_TOKEN: "shared-token" },
+      };
+      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_a" });
+      yield* adapter.listCommands({ ...sharedInput, instanceId: "claude_work_b" });
+
+      assert.equal(harness.createInputs.length, 2);
+      assert.equal(
+        harness.createInputs[0]?.options.env?.HOME,
+        claudeIsolatedHomePath({
+          isolationRootDir: "/tmp/userdata",
+          providerInstanceId: "claude_work_a",
+        }),
+      );
+      assert.equal(
+        harness.createInputs[1]?.options.env?.HOME,
+        claudeIsolatedHomePath({
+          isolationRootDir: "/tmp/userdata",
+          providerInstanceId: "claude_work_b",
+        }),
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("starts an environment-only runtime in its Synara-scoped home", () => {
+    const harness = makeHarness();
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env.CLAUDE_CONFIG_DIR;
+        process.env.CLAUDE_CONFIG_DIR = "/tmp/default-claude-config";
+        return previous;
+      }),
+      () =>
+        Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            provider: "claudeAgent",
+            providerInstanceId: "claude_work",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-sonnet-4-5",
+            },
+            providerOptions: {
+              claudeAgent: {
+                environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+              },
+            },
+            runtimeMode: "full-access",
+          });
+
+          const queryEnv = harness.getLastCreateQueryInput()?.options.env;
+          assert.equal(
+            queryEnv?.HOME,
+            claudeIsolatedHomePath({
+              isolationRootDir: "/tmp/userdata",
+              providerInstanceId: "claude_work",
+            }),
+          );
+          assert.equal(queryEnv?.CLAUDE_CONFIG_DIR, undefined);
+          assert.equal(queryEnv?.ANTHROPIC_AUTH_TOKEN, "work-token");
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+          else process.env.CLAUDE_CONFIG_DIR = previous;
+        }),
+    ).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );

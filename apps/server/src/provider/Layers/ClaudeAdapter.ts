@@ -657,9 +657,14 @@ function claudeEnvironment(
   homePath: string | null | undefined,
   fallbackHomePath?: string | undefined,
   environment?: Readonly<Record<string, string>> | undefined,
+  providerInstanceId?: string,
+  isolationRootDir?: string,
 ): NodeJS.ProcessEnv {
-  const resolvedHomePath = homePath?.trim() || fallbackHomePath?.trim();
-  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
+  return buildClaudeInstanceProcessEnv(homePath, environment, {
+    ...(fallbackHomePath ? { homeDir: fallbackHomePath } : {}),
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+    ...(isolationRootDir ? { isolationRootDir } : {}),
+  });
 }
 
 function isUuid(value: string): boolean {
@@ -2011,7 +2016,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const resolveClaudeSdkEnv = (
       homePath?: string | null,
       environment?: Readonly<Record<string, string>>,
-    ) => Effect.sync(() => claudeEnvironment(homePath, serverConfig.homeDir, environment));
+      providerInstanceId?: string,
+    ) =>
+      Effect.sync(() =>
+        claudeEnvironment(
+          homePath,
+          serverConfig.homeDir,
+          environment,
+          providerInstanceId,
+          serverConfig.stateDir,
+        ),
+      );
 
     const bindClaudeProcessOwner =
       (owner: ClaudeProcessOwner) =>
@@ -5370,22 +5385,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
 
         const providerOptions = input.providerOptions?.claudeAgent;
+        const modelSelection =
+          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+        const providerInstanceId = input.providerInstanceId ?? modelSelection?.instanceId;
         const commandDiscoveryKey = claudeDiscoveryKey({
-          instanceId: input.providerInstanceId,
+          instanceId: providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
           environment: providerOptions?.environment,
           cwd: input.cwd,
         });
         const accountDiscoveryKey = claudeDiscoveryKey({
-          instanceId: input.providerInstanceId,
+          instanceId: providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
           environment: providerOptions?.environment,
           includeCwd: false,
         });
-        const modelSelection =
-          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
         const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
         const requestedAutoCompactWindow = trimOrNull(
           modelSelection?.options?.autoCompactWindow ??
@@ -5434,6 +5450,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const claudeSdkEnv = yield* resolveClaudeSdkEnv(
           providerOptions?.homePath,
           providerOptions?.environment,
+          providerInstanceId,
         );
         if (input.runtimeMode === "auto") {
           const binaryPath = providerOptions?.binaryPath ?? "claude";
@@ -5623,7 +5640,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const session: ProviderSession = {
             threadId,
             provider: PROVIDER,
-            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            ...(providerInstanceId ? { providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -6535,7 +6552,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         const discoveryPromise =
           pendingCommandDiscoveryByKey.get(discoveryKey) ??
           discoverCommandsViaTemporaryProcess(
@@ -6652,7 +6673,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // Cold starts have no active Claude session. Discover with one
         // short-lived SDK process so the UI receives model capability flags on
         // its first request instead of caching an empty "pending" catalog.
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         const discoveryPromise =
           pendingModelDiscoveryByKey.get(discoveryKey) ??
           discoverModelsViaTemporaryProcess(

@@ -170,6 +170,70 @@ describe("ClaudeTextGenerationServiceLive", () => {
     ),
   );
 
+  it.effect("uses the selected environment-only instance home for auxiliary generation", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env.CLAUDE_CONFIG_DIR;
+        process.env.CLAUDE_CONFIG_DIR = "/tmp/default-claude-config";
+        return previous;
+      }),
+      () =>
+        Effect.gen(function* () {
+          const textGeneration = yield* ClaudeTextGeneration;
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: "/repo",
+            message: "Add provider instances",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-sonnet-4-5",
+            },
+            providerOptions: {
+              claudeAgent: {
+                environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+              },
+            },
+          });
+
+          assert.strictEqual(generated.title, "Provider instances");
+        }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) {
+            delete process.env.CLAUDE_CONFIG_DIR;
+          } else {
+            process.env.CLAUDE_CONFIG_DIR = previous;
+          }
+        }),
+    ).pipe(
+      Effect.provide(ClaudeTextGenerationServiceLive),
+      Effect.provide(
+        mockSpawnerLayer((_args, _command, env) => {
+          assert.ok(env?.HOME);
+          assert.strictEqual(
+            path.basename(env.HOME),
+            `instance-${Buffer.from("claude_work", "utf8").toString("hex")}`,
+          );
+          assert.strictEqual(path.basename(path.dirname(env.HOME)), "claude");
+          assert.strictEqual(path.basename(path.dirname(path.dirname(env.HOME))), "provider-homes");
+          assert.strictEqual(env.CLAUDE_CONFIG_DIR, undefined);
+          assert.strictEqual(env.ANTHROPIC_AUTH_TOKEN, "work-token");
+          return {
+            stdout: '{"structured_output":{"title":"Provider instances"}}\n',
+            stderr: "",
+            code: 0,
+          };
+        }),
+      ),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "claude-textgen-test-",
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("uses configured Claude instance home as a Windows profile environment", () =>
     withProcessPlatform(
       "win32",
