@@ -67,7 +67,9 @@ function primaryTraitSelectDescriptor(
   return (
     descriptors.find(
       (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
-        descriptor.type === "select" && descriptor.id !== "contextWindow",
+        descriptor.type === "select" &&
+        descriptor.id !== "contextWindow" &&
+        descriptor.id !== "autoCompactWindow",
     ) ?? null
   );
 }
@@ -109,7 +111,8 @@ export function getComposerTraitSelection(
   });
   const primarySelectDescriptor = primaryTraitSelectDescriptor(descriptors);
   const contextWindowDescriptor = asSelectDescriptor(
-    descriptors.find((descriptor) => descriptor.id === "contextWindow"),
+    descriptors.find((descriptor) => descriptor.id === "autoCompactWindow") ??
+      descriptors.find((descriptor) => descriptor.id === "contextWindow"),
   );
   const fastModeDescriptor = asBooleanDescriptor(
     descriptors.find((descriptor) => descriptor.id === "fastMode"),

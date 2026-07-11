@@ -1057,6 +1057,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       model?: string;
       serviceTier?: string | null;
       effort?: string;
+      summary: "auto" | "none";
       approvalPolicy?: CodexApprovalPolicy;
       sandboxPolicy?: CodexTurnSandboxPolicy;
       collaborationMode?: {
@@ -1070,6 +1071,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
+      summary: "auto",
       ...resolveCodexTurnOverrides(context),
     };
     const normalizedModel = resolveCodexModelForAccount(
@@ -1078,6 +1080,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     if (normalizedModel) {
       turnStartParams.model = normalizedModel;
+      if (normalizedModel === CODEX_SPARK_MODEL) {
+        turnStartParams.summary = "none";
+      }
     }
     if (input.serviceTier !== undefined) {
       turnStartParams.serviceTier = input.serviceTier;

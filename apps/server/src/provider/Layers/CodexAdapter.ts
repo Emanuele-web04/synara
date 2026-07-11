@@ -289,25 +289,35 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
   }
 }
 
+function joinedTextParts(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts = value
+    .map((entry) => {
+      if (typeof entry === "string") return entry;
+      const object = asObject(entry);
+      return asString(object?.text) ?? asString(object?.summary);
+    })
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function reasoningSummaryDetail(item: Record<string, unknown>): string | undefined {
+  return asString(item.summary)?.trim() || joinedTextParts(item.summary);
+}
+
 function itemDetail(
   item: Record<string, unknown>,
   payload: Record<string, unknown>,
 ): string | undefined {
   const nestedResult = asObject(item.result);
-  const joinedText = (value: unknown): string | undefined => {
-    if (!Array.isArray(value)) return undefined;
-    const parts = value
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-    return parts.length > 0 ? parts.join("\n\n") : undefined;
-  };
   const candidates = [
     asString(item.command),
     asString(item.title),
     asString(item.summary),
-    joinedText(item.summary),
-    joinedText(item.content),
+    joinedTextParts(item.summary),
+    joinedTextParts(item.content),
     asString(item.review),
     asString(item.text),
     asString(item.saved_path),
@@ -774,7 +784,12 @@ function mapItemLifecycle(
   const canonicalItemType =
     lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
 
-  const detail = itemDetail(source, payload ?? {});
+  // Only the provider-authored summary is user-visible reasoning. Raw content
+  // may contain model trace data and must not leak into transcript activities.
+  const detail =
+    itemType === "reasoning"
+      ? reasoningSummaryDetail(source)
+      : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
 
   return {
