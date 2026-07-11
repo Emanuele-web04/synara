@@ -17,7 +17,7 @@ import {
   statSync,
   type BigIntStats,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 
@@ -552,6 +552,120 @@ export function readCodexPreparedHomeFileSnapshot(
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+function codexAuthNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function codexAuthSecretSafeHash(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function readCodexAuthJwtClaims(value: unknown): Record<string, unknown> | undefined {
+  const token = codexAuthNonEmptyString(value);
+  const payload = token?.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    return asRecord(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+  } catch {
+    return undefined;
+  }
+}
+
+function firstCodexAuthString(
+  records: readonly (Record<string, unknown> | undefined)[],
+  keys: readonly string[],
+): string | undefined {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const value = codexAuthNonEmptyString(record[key]);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+type CodexPreparedAuthIdentity =
+  | { readonly state: "missing" }
+  | {
+      readonly state: "present";
+      readonly authMode: "api-key" | "chatgpt" | "unknown";
+      readonly identity: string;
+      readonly fallback?: true;
+    };
+
+function readCodexPreparedAuthIdentity(content: Buffer | undefined): CodexPreparedAuthIdentity {
+  if (!content) return { state: "missing" };
+  const contentIdentity = codexAuthSecretSafeHash(content.toString("base64"));
+  try {
+    const auth = asRecord(JSON.parse(content.toString("utf8")));
+    if (!auth) {
+      return { state: "present", authMode: "unknown", identity: contentIdentity, fallback: true };
+    }
+    const tokens = asRecord(auth.tokens);
+    const idTokenClaims = readCodexAuthJwtClaims(tokens?.id_token ?? tokens?.idToken);
+    const rawMode = codexAuthNonEmptyString(auth.auth_mode ?? auth.authMode)?.toLowerCase();
+    const apiKey = codexAuthNonEmptyString(
+      auth.OPENAI_API_KEY ?? auth.openai_api_key ?? auth.apiKey,
+    );
+    if (rawMode === "apikey" || rawMode === "api-key" || (apiKey && !tokens)) {
+      return {
+        state: "present",
+        authMode: "api-key",
+        identity: codexAuthSecretSafeHash(apiKey ?? content.toString("base64")),
+        ...(apiKey ? {} : { fallback: true as const }),
+      };
+    }
+    if (tokens || rawMode === "chatgpt" || rawMode === "chatgptauthtokens") {
+      const workspaceId = firstCodexAuthString(
+        [tokens, idTokenClaims, auth],
+        [
+          "account_id",
+          "accountId",
+          "chatgpt_account_id",
+          "chatgptAccountId",
+          "https://api.openai.com/auth/chatgpt_account_id",
+        ],
+      );
+      const userId = firstCodexAuthString(
+        [idTokenClaims, tokens, auth],
+        [
+          "chatgpt_user_id",
+          "chatgptUserId",
+          "user_id",
+          "userId",
+          "https://api.openai.com/auth/user_id",
+          "sub",
+        ],
+      );
+      if (workspaceId || userId) {
+        return {
+          state: "present",
+          authMode: "chatgpt",
+          identity: codexAuthSecretSafeHash(
+            JSON.stringify({ workspaceId: workspaceId ?? null, userId: userId ?? null }),
+          ),
+        };
+      }
+      return { state: "present", authMode: "chatgpt", identity: contentIdentity, fallback: true };
+    }
+  } catch {
+    // Malformed auth still receives a deterministic, secret-safe identity.
+  }
+  return { state: "present", authMode: "unknown", identity: contentIdentity, fallback: true };
+}
+
+export function readCodexPreparedAuthTrackingFingerprint(
+  tracking: PreparedCodexAuthTracking,
+): string {
+  return JSON.stringify({
+    storeMode: readEffectiveCodexAuthCredentialsStoreMode(tracking.sourceConfigSnapshot),
+    auth: readCodexPreparedAuthIdentity(
+      readCodexPreparedHomeFileSnapshot(tracking.authSource, "auth.json"),
+    ),
+  });
 }
 
 export function prepareCodexAuthTracking(
