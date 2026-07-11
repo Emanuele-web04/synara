@@ -46,7 +46,10 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  isCodexSharedContinuationStatePrepared,
+} from "../../codexProcessEnv.ts";
 
 import {
   ProviderAdapterProcessError,
@@ -88,7 +91,10 @@ const asProviderInstanceId = (value: string): ProviderInstanceId => value as Pro
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
-async function makeSharedCodexContinuationFixture(accountIds: readonly string[]) {
+async function makeSharedCodexContinuationFixture(
+  accountIds: readonly string[],
+  preparedAccountIds: readonly string[] = accountIds,
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-continuation-"));
   const homePath = path.join(root, "codex-home");
   const runtimeHomePath = path.join(root, "synara-runtime");
@@ -99,17 +105,20 @@ async function makeSharedCodexContinuationFixture(accountIds: readonly string[])
   fs.mkdirSync(homePath, { recursive: true });
   fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
   const shadowHomePaths = new Map<string, string>();
+  const preparedAccounts = new Set(preparedAccountIds);
   for (const accountId of accountIds) {
     const shadowHomePath = path.join(root, `codex-shadow-${accountId}`);
     fs.mkdirSync(shadowHomePath, { recursive: true });
     fs.writeFileSync(path.join(shadowHomePath, "auth.json"), JSON.stringify({ accountId }), "utf8");
     shadowHomePaths.set(accountId, shadowHomePath);
-    await buildCodexProcessEnv({
-      env: { ...process.env, ...environment },
-      homePath,
-      shadowHomePath,
-      accountId,
-    });
+    if (preparedAccounts.has(accountId)) {
+      await buildCodexProcessEnv({
+        env: { ...process.env, ...environment },
+        homePath,
+        shadowHomePath,
+        accountId,
+      });
+    }
   }
   return {
     root,
@@ -610,7 +619,7 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       const sourceThreadId = asThreadId("thread-fork-source-personal");
       const targetThreadId = asThreadId("thread-fork-target-work");
       const fixture = yield* Effect.promise(() =>
-        makeSharedCodexContinuationFixture(["personal", "work"]),
+        makeSharedCodexContinuationFixture(["personal", "work"], ["personal"]),
       );
       const sharedHomePath = fixture.homePath;
 
@@ -643,6 +652,15 @@ routing.layer("ProviderServiceLive native forks", (it) => {
         threadId: sourceThreadId,
         runtimeMode: "full-access",
       });
+      assert.equal(
+        isCodexSharedContinuationStatePrepared({
+          env: { ...process.env, ...fixture.environment },
+          homePath: sharedHomePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+        false,
+      );
       routing.codex.forkThread.mockClear();
 
       assert.equal(typeof provider.forkThread, "function");
@@ -662,6 +680,15 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       });
 
       assert.notEqual(result, null);
+      assert.equal(
+        isCodexSharedContinuationStatePrepared({
+          env: { ...process.env, ...fixture.environment },
+          homePath: sharedHomePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+        true,
+      );
       assert.equal(routing.codex.forkThread.mock.calls.length, 1);
       const forkInput = routing.codex.forkThread.mock.calls[0]?.[0];
       assert.deepEqual(forkInput?.sourceResumeCursor, source.resumeCursor);
@@ -1493,32 +1520,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("reuses Codex continuation across account options sharing one session home", () =>
+  it.effect("prepares a newly selected Codex account before reusing shared continuation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-codex-shared-continuation-home");
+      const fixture = yield* Effect.promise(() =>
+        makeSharedCodexContinuationFixture(["personal", "work"], ["personal"]),
+      );
       const initial = yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
         providerOptions: {
           codex: {
-            homePath: "/tmp/codex-shared-home",
-            shadowHomePath: "/tmp/codex-personal-auth",
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("personal"),
             accountId: "personal",
+            environment: fixture.environment,
           },
         },
         runtimeMode: "full-access",
       });
       routing.codex.startSession.mockClear();
+      assert.equal(
+        isCodexSharedContinuationStatePrepared({
+          env: { ...process.env, ...fixture.environment },
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+        false,
+      );
 
       yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
         providerOptions: {
           codex: {
-            homePath: "/tmp/codex-shared-home",
-            shadowHomePath: "/tmp/codex-work-auth",
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("work"),
             accountId: "work",
+            environment: fixture.environment,
           },
         },
         runtimeMode: "full-access",
@@ -1528,6 +1569,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
         routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
         initial.resumeCursor,
       );
+      assert.equal(
+        isCodexSharedContinuationStatePrepared({
+          env: { ...process.env, ...fixture.environment },
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath("work"),
+          accountId: "work",
+        }),
+        true,
+      );
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 

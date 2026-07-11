@@ -70,6 +70,18 @@ export interface CodexProcessLaunchContext {
   readonly appServerArgs: readonly string[];
 }
 
+export interface CodexProcessEnvInput {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly readEnvironment?: ShellEnvironmentReader;
+  readonly appendConfigToml?: string;
+  readonly skipHomeOverlay?: boolean;
+  readonly overlayEntryLinker?: CodexOverlayEntryLinker;
+}
+
 export function buildCodexAppServerArgs(sourceHomePath: string): readonly string[] {
   const absoluteSourceHomePath = path.resolve(sourceHomePath);
   // These are global clap options in the minimum supported Codex 0.105.0 and
@@ -84,7 +96,7 @@ export function buildCodexAppServerArgs(sourceHomePath: string): readonly string
   ];
 }
 
-interface CodexOverlayEntryLinker {
+export interface CodexOverlayEntryLinker {
   readonly symlink: typeof fs.symlink;
   readonly copyFile: typeof fs.copyFile;
 }
@@ -125,8 +137,9 @@ function assertCodexSqliteHomeMatchesSource(input: {
   readonly sourceConfig: string;
   readonly sourceHomePath: string;
 }): void {
-  const { root, activeProfile } = parseManagedCodexConfig(input.sourceConfig);
-  const configured = activeProfile?.sqlite_home ?? root.sqlite_home;
+  // Codex 0.105+ defines sqlite_home only on the root Config schema. A
+  // same-named profile key is ignored and cannot override this safety check.
+  const configured = parseManagedCodexConfig(input.sourceConfig).root.sqlite_home;
   if (configured === undefined) {
     return;
   }
@@ -1622,24 +1635,31 @@ async function prepareSynaraCodexHomeOverlay(input: {
   );
 }
 
+/** Materializes the same managed Codex overlay used by a real process launch. */
+export async function prepareCodexHomeOverlay(
+  input: Pick<
+    CodexProcessEnvInput,
+    "env" | "homePath" | "shadowHomePath" | "accountId" | "overlayEntryLinker"
+  > = {},
+): Promise<string | undefined> {
+  const env = { ...(input.env ?? process.env) };
+  return prepareSynaraCodexHomeOverlay({
+    env,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
+  });
+}
+
 export async function buildCodexProcessEnv(
-  input: {
-    readonly env?: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly shadowHomePath?: string;
-    readonly accountId?: string;
-    readonly platform?: NodeJS.Platform;
-    readonly readEnvironment?: ShellEnvironmentReader;
-    readonly appendConfigToml?: string;
-    readonly skipHomeOverlay?: boolean;
-    readonly overlayEntryLinker?: CodexOverlayEntryLinker;
-  } = {},
+  input: CodexProcessEnvInput = {},
 ): Promise<NodeJS.ProcessEnv> {
   const baseEnv = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
   const overlayHomePath = input.skipHomeOverlay
     ? undefined
-    : await prepareSynaraCodexHomeOverlay({
+    : await prepareCodexHomeOverlay({
         env: baseEnv,
         ...(input.homePath ? { homePath: input.homePath } : {}),
         ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
@@ -1701,7 +1721,7 @@ export async function buildCodexProcessEnv(
 }
 
 export async function buildCodexProcessLaunchContext(
-  input: Parameters<typeof buildCodexProcessEnv>[0] = {},
+  input: CodexProcessEnvInput = {},
 ): Promise<CodexProcessLaunchContext> {
   const baseEnv = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);

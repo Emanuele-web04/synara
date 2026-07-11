@@ -243,6 +243,59 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("rejects root sqlite_home despite a misleading selected-profile source path", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-root-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'profile = "work"',
+        'sqlite_home = "/tmp/foreign-codex-home"',
+        "",
+        "[profiles.work]",
+        `sqlite_home = ${JSON.stringify(codexHome)}`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome },
+          homePath: codexHome,
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/sqlite_home.*source CODEX_HOME/);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores profile sqlite_home lookalikes that Codex does not apply", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-profile-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      ['profile = "work"', "", "[profiles.work]", 'sqlite_home = "/tmp/ignored-profile-home"'].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+        platform: "win32",
+      });
+      expect(env.CODEX_SQLITE_HOME).toBe(codexHome);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
   it("replaces a user-defined Synara MCP table only inside the session overlay", async () => {
     const sourceHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-source-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-runtime-"));
