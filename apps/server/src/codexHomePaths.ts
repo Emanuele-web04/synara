@@ -11,6 +11,8 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { expandProviderAccountHomePath } from "./providerAccountHomePath.ts";
+
 export const SYNARA_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
 export const SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR = "accounts";
 
@@ -21,21 +23,11 @@ export interface CodexHomePathsInput {
   readonly accountId?: string;
 }
 
-function expandHomePath(input: string): string {
-  if (input === "~") {
-    return homedir();
-  }
-  if (input.startsWith("~/")) {
-    return path.join(homedir(), input.slice(2));
-  }
-  return input;
-}
-
 export function resolveBaseCodexHomePath(
   env: NodeJS.ProcessEnv,
   explicitHomePath?: string,
 ): string {
-  return expandHomePath(
+  return expandProviderAccountHomePath(
     explicitHomePath?.trim() || env.CODEX_HOME?.trim() || path.join(homedir(), ".codex"),
   );
 }

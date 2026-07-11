@@ -4,7 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Duration, Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, FileSystem, Layer, Path, Ref, Sink, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -40,10 +40,12 @@ import {
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   PACKAGE_MANAGED_PROVIDER_UPDATES,
+  PROVIDER_HEALTH_PROBE_CONCURRENCY,
   providerStatusesEqual,
   ProviderHealthLive,
   projectProviderStatusesForSettings,
   readCodexConfigModelProviderForEnv,
+  runProviderHealthProbes,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
@@ -202,6 +204,42 @@ const allProvidersDisabledServerSettings = {
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
+
+describe("provider health probe concurrency", () => {
+  it.effect("bounds concurrent probes while preserving every result", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const atLimit = yield* Deferred.make<void>();
+      const active = yield* Ref.make(0);
+      const peak = yield* Ref.make(0);
+      const count = PROVIDER_HEALTH_PROBE_CONCURRENCY + 3;
+      const probes = Array.from({ length: count }, (_, index) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.updateAndGet(active, (value) => value + 1);
+          yield* Ref.update(peak, (value) => Math.max(value, current));
+          if (current === PROVIDER_HEALTH_PROBE_CONCURRENCY) {
+            yield* Deferred.succeed(atLimit, undefined);
+          }
+          yield* Deferred.await(release);
+          yield* Ref.update(active, (value) => value - 1);
+          return index;
+        }),
+      );
+
+      const fiber = yield* runProviderHealthProbes(probes).pipe(Effect.forkChild);
+      yield* Deferred.await(atLimit);
+      assert.strictEqual(yield* Ref.get(peak), PROVIDER_HEALTH_PROBE_CONCURRENCY);
+      yield* Deferred.succeed(release, undefined);
+
+      const results = yield* Fiber.join(fiber);
+      assert.deepStrictEqual(
+        results,
+        Array.from({ length: count }, (_, index) => index),
+      );
+      assert.ok((yield* Ref.get(peak)) <= PROVIDER_HEALTH_PROBE_CONCURRENCY);
+    }),
+  );
+});
 
 const disabledProviderHealthLayer = ProviderHealthLive.pipe(
   Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),

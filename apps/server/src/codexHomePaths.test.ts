@@ -27,6 +27,13 @@ describe("Codex home paths", () => {
     assert.ok(!result.startsWith("~"));
   });
 
+  it("expands a Windows-style tilde home", () => {
+    const result = resolveBaseCodexHomePath({}, "~\\.codex_work");
+
+    assert.ok(result.endsWith(`${path.sep}.codex_work`));
+    assert.ok(!result.startsWith("~"));
+  });
+
   it("anchors the overlay under SYNARA_HOME when set", () => {
     assert.equal(
       resolveSynaraCodexHomeOverlayPath({ SYNARA_HOME: "/synara/runtime" }, "/users/me/.codex"),

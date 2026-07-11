@@ -99,6 +99,7 @@ import {
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -987,7 +988,9 @@ const makeWsRpcHandlersLayer = () =>
                   THREAD_DETAIL_EVENT_TYPES,
                 );
           return rpcEffect(
-            Stream.runCollect(replay).pipe(Effect.map((events) => Array.from(events))),
+            Stream.runCollect(
+              replay.pipe(Stream.map(sanitizeOrchestrationEventProviderOptions)),
+            ).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
           );
         },
@@ -1127,6 +1130,7 @@ const makeWsRpcHandlersLayer = () =>
                   bufferLiveUiStream(
                     stream.pipe(
                       Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                      Stream.map(sanitizeOrchestrationEventProviderOptions),
                     ),
                     {
                       label: "orchestration.thread-detail",
@@ -1166,6 +1170,7 @@ const makeWsRpcHandlersLayer = () =>
                   )
                   .pipe(
                     Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                    Stream.map(sanitizeOrchestrationEventProviderOptions),
                     Stream.mapError((cause) =>
                       toWsRpcError(cause, "Failed to replay thread events"),
                     ),
@@ -1201,9 +1206,14 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "orchestration.domain-events" },
-            bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
-              label: "orchestration.domain-events",
-            }),
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(
+                Stream.map(sanitizeOrchestrationEventProviderOptions),
+              ),
+              {
+                label: "orchestration.domain-events",
+              },
+            ),
           ),
 
         [WS_METHODS.projectsListDirectories]: (input) =>

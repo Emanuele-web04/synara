@@ -156,10 +156,17 @@ const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
   buildProviderChildEnvironment({ provider: providerChildKind(provider) });
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
+export const PROVIDER_HEALTH_PROBE_CONCURRENCY = 4;
 const MAX_REFRESH_REVISION_RETRIES = 1;
 const REFRESH_REVISION_RESCHEDULE_DELAY_MS = 100;
 const PROVIDER_UPDATE_ENABLEMENT_POLL_MS = 100;
 export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
+
+export function runProviderHealthProbes<A, E, R>(
+  probes: ReadonlyArray<Effect.Effect<A, E, R>>,
+): Effect.Effect<ReadonlyArray<A>, E, R> {
+  return Effect.all(probes, { concurrency: PROVIDER_HEALTH_PROBE_CONCURRENCY });
+}
 
 function formatProviderUpdateTimeout(timeoutMs: number): string {
   if (timeoutMs < 1_000) {
@@ -2970,11 +2977,10 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         .pipe(
           Effect.flatMap(() => serverSettings.getSettings),
           Effect.flatMap((settings) =>
-            Effect.all(
+            runProviderHealthProbes(
               deriveProviderInstances(settings).map((instance) =>
                 checkProviderInstanceStatus(instance),
               ),
-              { concurrency: "unbounded" },
             ),
           ),
         )
