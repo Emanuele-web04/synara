@@ -153,6 +153,11 @@ interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider">
 
 type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 
+export interface CodexSessionInspection {
+  readonly session: ProviderSession;
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
+
 interface JsonRpcError {
   code?: number;
   message?: string;
@@ -1931,6 +1936,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return Array.from(this.sessions.values(), ({ session }) => ({
       ...session,
     }));
+  }
+
+  /**
+   * Side-effect-free snapshots for read-only consumers such as HTTP image
+   * allowlist resolution. Lifecycle callers should keep using listSessions so
+   * stale authentication still closes invalid provider processes.
+   */
+  inspectSessions(): CodexSessionInspection[] {
+    return Array.from(this.sessions.values(), ({ session, codexOptions }) => {
+      const snapshotOptions = normalizeCodexDiscoveryOptions(codexOptions);
+      return {
+        session: { ...session },
+        ...(snapshotOptions ? { codexOptions: snapshotOptions } : {}),
+      };
+    });
   }
 
   hasSession(threadId: ThreadId): boolean {

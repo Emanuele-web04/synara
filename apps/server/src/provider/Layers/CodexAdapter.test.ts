@@ -217,6 +217,16 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.sessionSnapshots;
   }
 
+  override inspectSessions(): ReturnType<CodexAppServerManager["inspectSessions"]> {
+    return this.sessionSnapshots.map((session) => {
+      const codexOptions = this.codexOptionsByThreadId.get(session.threadId);
+      return {
+        session,
+        ...(codexOptions ? { codexOptions } : {}),
+      };
+    });
+  }
+
   override getSessionCodexOptions(
     threadId: ThreadId,
   ): NonNullable<ProviderStartOptions["codex"]> | undefined {
@@ -430,6 +440,8 @@ validationLayer("CodexAdapterLive validation", (it) => {
       if (!listGeneratedImageHomePaths) {
         throw new Error("Expected Codex adapter to expose generated-image home paths.");
       }
+      const lifecycleListSpy = vi.spyOn(validationManager, "listSessions");
+      const lifecycleOptionsSpy = vi.spyOn(validationManager, "getSessionCodexOptions");
 
       try {
         const homes = yield* listGeneratedImageHomePaths({
@@ -445,7 +457,19 @@ validationLayer("CodexAdapterLive validation", (it) => {
         const roots = homes.flatMap((home) => resolveCodexGeneratedImagesRoots(home));
         assert.ok(roots.includes(path.join("/tmp/codex-live-work", "generated_images")));
         assert.ok(roots.some((root) => root.includes(path.join("codex-home-overlay", "accounts"))));
+        assert.equal(
+          lifecycleListSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not invoke lifecycle session pruning",
+        );
+        assert.equal(
+          lifecycleOptionsSpy.mock.calls.length,
+          0,
+          "generated-image home inspection must not trigger per-session auth validation",
+        );
       } finally {
+        lifecycleOptionsSpy.mockRestore();
+        lifecycleListSpy.mockRestore();
         if (originalSynaraHome === undefined) {
           delete process.env.SYNARA_HOME;
         } else {

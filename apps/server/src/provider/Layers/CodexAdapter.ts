@@ -1953,7 +1953,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
     > = (input) =>
       Effect.sync(() => {
         const homePaths = new Map<string, CodexGeneratedImageHomeCandidate>();
-        for (const session of manager.listSessions()) {
+        for (const { session, codexOptions } of manager.inspectSessions()) {
           const instanceId = session.providerInstanceId ?? (PROVIDER as ProviderInstanceId);
           if (
             input?.enabledProviderInstanceIds &&
@@ -1961,13 +1961,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ) {
             continue;
           }
-          const candidate = manager.getSessionCodexOptions(session.threadId);
-          if (!candidate) {
+          if (!codexOptions) {
             continue;
           }
           const candidateKey =
-            typeof candidate === "string" ? `path:${candidate}` : JSON.stringify(candidate);
-          homePaths.set(candidateKey, candidate);
+            typeof codexOptions === "string"
+              ? `path:${codexOptions}`
+              : JSON.stringify(codexOptions);
+          homePaths.set(candidateKey, codexOptions);
         }
         return [...homePaths.values()];
       });

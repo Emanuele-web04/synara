@@ -1052,6 +1052,74 @@ describe("startSession", () => {
     rmSync(authHome, { recursive: true, force: true });
   });
 
+  it("inspects stale-auth sessions without stopping them until lifecycle listing", () => {
+    const authHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-inspection-"));
+    const authPath = path.join(authHome, "auth.json");
+    writeFileSync(
+      authPath,
+      '{"auth_mode":"chatgpt","tokens":{"account_id":"workspace-first"}}',
+      "utf8",
+    );
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-read-only-inspection");
+    const kill = vi.fn();
+    const close = vi.fn();
+    const session = {
+      provider: "codex" as const,
+      status: "ready" as const,
+      threadId,
+      runtimeMode: "full-access" as const,
+      providerInstanceId: "codex_work",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:00.000Z",
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session,
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authHomePath: authHome,
+      authFingerprint: readCodexAuthFileFingerprint(authHome),
+      codexOptions: { homePath: authHome, accountId: "work" },
+    });
+
+    try {
+      writeFileSync(
+        authPath,
+        '{"auth_mode":"chatgpt","tokens":{"account_id":"workspace-second"}}',
+        "utf8",
+      );
+
+      expect(manager.inspectSessions()).toEqual([
+        {
+          session,
+          codexOptions: { homePath: authHome, accountId: "work" },
+        },
+      ]);
+      expect(kill).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+
+      expect(manager.listSessions()).toEqual([]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      manager.stopAll();
+      rmSync(authHome, { recursive: true, force: true });
+    }
+  });
+
   it("reuses a live app-server session after same-account token rotation", () => {
     const authHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-rotation-"));
     const authPath = path.join(authHome, "auth.json");
