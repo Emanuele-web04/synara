@@ -325,4 +325,107 @@ layer("reconcileMigrationLineage", (it) => {
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
+
+  it.effect("backfills provider instances without parsing malformed legacy JSON", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const now = new Date().toISOString();
+
+      yield* runMigrations({ toMigrationInclusive: 48 });
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          env_mode,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-malformed-runtime',
+          'project-provider-instance',
+          'Malformed Legacy Runtime',
+          'not-json',
+          'full-access',
+          'default',
+          'local',
+          ${now},
+          ${now},
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id,
+          status,
+          provider_name,
+          runtime_mode,
+          active_turn_id,
+          last_error,
+          updated_at
+        )
+        VALUES (
+          'thread-malformed-runtime',
+          'stopped',
+          'codex',
+          'full-access',
+          NULL,
+          NULL,
+          ${now}
+        )
+      `;
+      yield* sql`
+        INSERT INTO provider_session_runtime (
+          thread_id,
+          provider_name,
+          adapter_key,
+          runtime_mode,
+          status,
+          last_seen_at,
+          resume_cursor_json,
+          runtime_payload_json
+        )
+        VALUES (
+          'thread-malformed-runtime',
+          'codex',
+          'codex',
+          'full-access',
+          'stopped',
+          ${now},
+          NULL,
+          'not-json'
+        )
+      `;
+
+      yield* runMigrations({ toMigrationInclusive: 54 });
+
+      const [projectionSession] = yield* sql<{
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE thread_id = 'thread-malformed-runtime'
+      `;
+      const [runtime] = yield* sql<{
+        readonly providerInstanceId: string | null;
+        readonly runtimePayloadJson: string | null;
+      }>`
+        SELECT
+          provider_instance_id AS "providerInstanceId",
+          runtime_payload_json AS "runtimePayloadJson"
+        FROM provider_session_runtime
+        WHERE thread_id = 'thread-malformed-runtime'
+      `;
+
+      assert.deepStrictEqual(projectionSession, { providerInstanceId: "codex" });
+      assert.deepStrictEqual(runtime, {
+        providerInstanceId: "codex",
+        runtimePayloadJson: "not-json",
+      });
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  );
 });

@@ -28,17 +28,21 @@ export default Effect.gen(function* () {
       ),
       '$.modelSelection.provider'
     )
-    WHERE json_extract(runtime_payload_json, '$.modelSelection.provider') IS NOT NULL
+    WHERE json_valid(runtime_payload_json)
+      AND json_extract(runtime_payload_json, '$.modelSelection.provider') IS NOT NULL
       AND json_extract(runtime_payload_json, '$.modelSelection.instanceId') IS NULL
   `;
 
   yield* sql`
     UPDATE provider_session_runtime
-    SET provider_instance_id = COALESCE(
-      json_extract(runtime_payload_json, '$.providerInstanceId'),
-      json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
-      provider_name
-    )
+    SET provider_instance_id = CASE
+      WHEN json_valid(runtime_payload_json) THEN COALESCE(
+        json_extract(runtime_payload_json, '$.providerInstanceId'),
+        json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
+        provider_name
+      )
+      ELSE provider_name
+    END
     WHERE provider_instance_id IS NULL
   `;
 
