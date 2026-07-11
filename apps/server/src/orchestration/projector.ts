@@ -82,6 +82,23 @@ function updateThread(
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
 }
 
+interface ProjectedProviderSessionBinding {
+  readonly status: OrchestrationSession["status"];
+  readonly providerName: string | null;
+  readonly providerInstanceId?: string | null | undefined;
+}
+
+export function canProjectTurnModelSelectionForSession(
+  session: ProjectedProviderSessionBinding | null | undefined,
+  requestedInstanceId: string,
+): boolean {
+  if (!session || session.status === "stopped" || session.status === "error") {
+    return true;
+  }
+  const boundInstanceId = session.providerInstanceId ?? session.providerName;
+  return !boundInstanceId || requestedInstanceId === boundInstanceId;
+}
+
 function canProjectTurnModelSelection(
   thread: OrchestrationThread,
   modelSelection: OrchestrationThread["modelSelection"] | undefined,
@@ -89,12 +106,7 @@ function canProjectTurnModelSelection(
   if (modelSelection === undefined) {
     return false;
   }
-  const session = thread.session;
-  if (!session || session.status === "stopped" || session.status === "error") {
-    return true;
-  }
-  const boundInstanceId = session.providerInstanceId ?? session.providerName;
-  return !boundInstanceId || modelSelection.instanceId === boundInstanceId;
+  return canProjectTurnModelSelectionForSession(thread.session, modelSelection.instanceId);
 }
 
 function decodeForEvent<A>(

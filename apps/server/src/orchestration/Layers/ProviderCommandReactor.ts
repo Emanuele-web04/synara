@@ -881,7 +881,10 @@ const make = Effect.gen(function* () {
     const requestedProviderInstanceChanged =
       requestedModelSelection !== undefined &&
       desiredProviderInstanceId !== currentProviderInstanceId;
-    const hasBoundProviderSession = thread.session !== null && thread.session.status !== "stopped";
+    const hasBoundProviderSession =
+      thread.session !== null &&
+      thread.session.status !== "stopped" &&
+      thread.session.status !== "error";
     if (
       hasBoundProviderSession &&
       requestedModelSelection !== undefined &&

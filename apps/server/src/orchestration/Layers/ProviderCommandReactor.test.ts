@@ -3926,7 +3926,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("rejects and preserves an unknown explicit provider instance before session start", async () => {
+  it("allows a valid provider instance retry after an unknown instance error", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -3967,6 +3967,47 @@ describe("ProviderCommandReactor", () => {
       providerName: null,
       providerInstanceId: "codex_removed",
       lastError: expect.stringContaining("Unknown provider instance 'codex_removed'."),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-valid-instance-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-valid-instance-retry"),
+          role: "user",
+          text: "retry on the valid account",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: "codex",
+      providerInstanceId: "codex",
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      },
+    });
+
+    const retriedReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    const retriedThread = retriedReadModel.threads.find(
+      (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+    );
+    expect(retriedThread?.modelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5-codex",
     });
   });
 

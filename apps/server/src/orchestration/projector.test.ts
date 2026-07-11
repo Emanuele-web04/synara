@@ -243,7 +243,7 @@ describe("orchestration projector", () => {
     });
   });
 
-  it("updates thread model selection from exact routed turn selections", async () => {
+  it("updates sessionless imported threads from exact routed turn selections", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const messageAt = "2026-02-23T08:00:03.000Z";
     const turnRequestedAt = "2026-02-23T08:00:05.000Z";
@@ -294,7 +294,32 @@ describe("orchestration projector", () => {
             text: "Existing conversation",
             turnId: null,
             streaming: false,
-            source: "native",
+            source: "handoff-import",
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+      ),
+    );
+
+    const afterImportedMessages = await Effect.runPromise(
+      projectEvent(
+        afterMessages,
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message-2",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-2",
+            role: "assistant",
+            text: "Imported response",
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
             createdAt: messageAt,
             updatedAt: messageAt,
           },
@@ -304,9 +329,9 @@ describe("orchestration projector", () => {
 
     const next = await Effect.runPromise(
       projectEvent(
-        afterMessages,
+        afterImportedMessages,
         makeEvent({
-          sequence: 3,
+          sequence: 4,
           type: "thread.turn-start-requested",
           aggregateKind: "thread",
           aggregateId: "thread-1",
@@ -314,7 +339,7 @@ describe("orchestration projector", () => {
           commandId: "cmd-turn-start",
           payload: {
             threadId: "thread-1",
-            messageId: "message-2",
+            messageId: "message-3",
             modelSelection: {
               instanceId: "claude_work",
               model: "claude-sonnet-4-6",

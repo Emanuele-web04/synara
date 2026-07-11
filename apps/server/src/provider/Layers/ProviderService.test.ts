@@ -1930,6 +1930,140 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("rejects stopped Claude continuation after credentials change at the same home", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-claude-stopped-credential-boundary");
+      const providerInstanceId = asProviderInstanceId("claude_credential_boundary");
+      const settingsForKey = (value: string): Partial<ServerSettings> => ({
+        providerInstances: {
+          claude_credential_boundary: {
+            driver: "claudeAgent",
+            enabled: true,
+            environment: [{ name: "ANTHROPIC_API_KEY", value, sensitive: true }],
+            config: { homePath: "/tmp/claude-credential-boundary" },
+          },
+        },
+      });
+
+      yield* serverSettings.updateSettings(settingsForKey("credential-v1"));
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        providerInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.ok(initial.resumeCursor);
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) return;
+      yield* provider.stopRuntimeSession({ threadId });
+      routing.claude.startSession.mockClear();
+
+      yield* serverSettings.updateSettings(settingsForKey("credential-v2"));
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          providerInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("rejects stopped Claude continuation on another instance at the same home", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-claude-stopped-instance-boundary");
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          claude_personal: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { homePath: "/tmp/claude-shared-home" },
+          },
+          claude_work: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { homePath: "/tmp/claude-shared-home" },
+          },
+        },
+      });
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        providerInstanceId: asProviderInstanceId("claude_personal"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.ok(initial.resumeCursor);
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) return;
+      yield* provider.stopRuntimeSession({ threadId });
+      routing.claude.startSession.mockClear();
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          providerInstanceId: asProviderInstanceId("claude_work"),
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("rejects stale Claude recovery after credentials change at the same home", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-claude-recovery-credential-boundary");
+      const providerInstanceId = asProviderInstanceId("claude_recovery_boundary");
+      const settingsForKey = (value: string): Partial<ServerSettings> => ({
+        providerInstances: {
+          claude_recovery_boundary: {
+            driver: "claudeAgent",
+            enabled: true,
+            environment: [{ name: "ANTHROPIC_API_KEY", value, sensitive: true }],
+            config: { homePath: "/tmp/claude-recovery-boundary" },
+          },
+        },
+      });
+
+      yield* serverSettings.updateSettings(settingsForKey("credential-v1"));
+      const initial = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        providerInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.ok(initial.resumeCursor);
+      yield* routing.claude.stopAll();
+      routing.claude.startSession.mockClear();
+      routing.claude.sendTurn.mockClear();
+
+      yield* serverSettings.updateSettings(settingsForKey("credential-v2"));
+      const result = yield* Effect.result(
+        provider.sendTurn({
+          threadId,
+          input: "do not recover with changed credentials",
+          attachments: [],
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+      assert.equal(routing.claude.sendTurn.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("matches persisted launch options including server-only credentials", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -3225,7 +3359,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("stops the live runtime without carrying stale provider options into restart", () =>
+  it.effect("rejects stopped Claude continuation when launch options are removed", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(
         path.join(os.tmpdir(), "synara-provider-service-stop-runtime-"),
@@ -3298,27 +3432,20 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
-      yield* Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
-        yield* provider.startSession(initial.threadId, {
-          provider: "claudeAgent",
-          threadId: initial.threadId,
-          cwd: "/tmp/project-stop-runtime",
-          runtimeMode: "full-access",
-        });
+        return yield* Effect.result(
+          provider.startSession(initial.threadId, {
+            provider: "claudeAgent",
+            threadId: initial.threadId,
+            cwd: "/tmp/project-stop-runtime",
+            runtimeMode: "full-access",
+          }),
+        );
       }).pipe(Effect.provide(secondProviderLayer));
 
-      assert.equal(secondClaude.startSession.mock.calls.length, 1);
-      const restartedInput = secondClaude.startSession.mock.calls[0]?.[0];
-      assert.equal(typeof restartedInput === "object" && restartedInput !== null, true);
-      if (restartedInput && typeof restartedInput === "object") {
-        const startPayload = restartedInput as {
-          providerOptions?: unknown;
-          resumeCursor?: unknown;
-        };
-        assert.equal(startPayload.providerOptions, undefined);
-        assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
-      }
+      assert.equal(result._tag, "Failure");
+      assert.equal(secondClaude.startSession.mock.calls.length, 0);
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),

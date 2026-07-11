@@ -85,6 +85,7 @@ import {
   shouldApplyThreadsProjection,
   shouldRefreshThreadShellSummary,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -931,33 +932,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           // Mirror the in-memory projector's binding guard: terminal sessions
           // can move to another instance, while live sessions only accept the
           // instance they are already bound to.
-          const [messages, session] = yield* Effect.all([
-            projectionThreadMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            }),
-            projectionThreadSessionRepository.getByThreadId({
-              threadId: event.payload.threadId,
-            }),
-          ]);
-          const canAdoptFirstTurnInstance =
-            existingRow.value.latestTurnId === null &&
-            Option.isNone(session) &&
-            messages.length <= 1;
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
           const requestedInstanceId =
             event.payload.modelSelection === undefined
               ? null
               : resolveModelSelectionInstanceId(event.payload.modelSelection);
-          const canAdoptProjectedSessionInstance = Option.isSome(session)
-            ? session.value.status === "stopped" ||
-              session.value.status === "error" ||
-              (session.value.providerInstanceId ?? session.value.providerName) === null ||
-              requestedInstanceId ===
-                (session.value.providerInstanceId ?? session.value.providerName)
-            : requestedInstanceId ===
-                resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
-              canAdoptFirstTurnInstance;
           const modelSelectionPatch =
-            event.payload.modelSelection !== undefined && canAdoptProjectedSessionInstance
+            event.payload.modelSelection !== undefined &&
+            requestedInstanceId !== null &&
+            canProjectTurnModelSelectionForSession(Option.getOrNull(session), requestedInstanceId)
               ? { modelSelection: event.payload.modelSelection }
               : {};
           yield* projectionThreadRepository.upsert({

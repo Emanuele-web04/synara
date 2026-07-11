@@ -32,6 +32,7 @@ import {
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
@@ -295,7 +296,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
-  it.effect("persists exact routed model selections from turn start events", () =>
+  it.effect("persists exact routed model selections for sessionless imported threads", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
@@ -368,7 +369,30 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           text: "Existing conversation",
           turnId: null,
           streaming: false,
-          source: "native",
+          source: "handoff-import",
+          createdAt: messageAt,
+          updatedAt: messageAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-routed-message-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-routed"),
+        occurredAt: messageAt,
+        commandId: CommandId.makeUnsafe("cmd-routed-message-2"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-routed-message-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-routed"),
+          messageId: MessageId.makeUnsafe("message-routed-2"),
+          role: "assistant",
+          text: "Imported response",
+          turnId: null,
+          streaming: false,
+          source: "handoff-import",
           createdAt: messageAt,
           updatedAt: messageAt,
         },
@@ -386,7 +410,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         metadata: {},
         payload: {
           threadId: ThreadId.makeUnsafe("thread-routed"),
-          messageId: MessageId.makeUnsafe("message-routed-2"),
+          messageId: MessageId.makeUnsafe("message-routed-3"),
           modelSelection: {
             instanceId: "claude_work",
             model: "claude-sonnet-4-6",
@@ -554,6 +578,154 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 });
+
+it.effect("restores a sessionless imported thread's routed model selection after restart", () =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const makeProjectionReadLayer = () =>
+      Layer.mergeAll(
+        OrchestrationProjectionPipelineLive,
+        OrchestrationProjectionSnapshotQueryLive,
+      ).pipe(
+        Layer.provideMerge(OrchestrationEventStoreLive),
+        Layer.provideMerge(persistenceLayer),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(NodeServices.layer),
+      );
+    const projectId = ProjectId.makeUnsafe("project-sessionless-import-restart");
+    const threadId = ThreadId.makeUnsafe("thread-sessionless-import-restart");
+    const createdAt = "2026-07-11T08:00:00.000Z";
+    const routedAt = "2026-07-11T08:00:05.000Z";
+    const expectedModelSelection = {
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    } as const;
+
+    const firstSnapshot = yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-sessionless-import-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-sessionless-import-project"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-sessionless-import-project"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Imported project",
+          workspaceRoot: "/tmp/project-sessionless-import-restart",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-sessionless-import-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-sessionless-import-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-sessionless-import-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId,
+          title: "Imported thread",
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+      for (const [index, role, text] of [
+        [1, "user", "Imported request"],
+        [2, "assistant", "Imported response"],
+        [3, "user", "Imported follow-up"],
+      ] as const) {
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(`evt-sessionless-import-message-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(`cmd-sessionless-import-message-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-sessionless-import-message-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe(`message-sessionless-import-${index}`),
+            role,
+            text,
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+      }
+      yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-sessionless-import-start"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: routedAt,
+        commandId: CommandId.makeUnsafe("cmd-sessionless-import-start"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-sessionless-import-start"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: MessageId.makeUnsafe("message-sessionless-import-turn"),
+          modelSelection: expectedModelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: routedAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+      return yield* snapshotQuery.getSnapshot();
+    }).pipe(Effect.provide(makeProjectionReadLayer()));
+
+    const firstThread = firstSnapshot.threads.find((thread) => thread.id === threadId);
+    assert.equal(firstThread?.messages.length, 3);
+    assert.deepEqual(firstThread?.modelSelection, expectedModelSelection);
+
+    const restartedSnapshot = yield* Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      yield* projectionPipeline.bootstrap;
+      return yield* snapshotQuery.getSnapshot();
+    }).pipe(Effect.provide(makeProjectionReadLayer()));
+
+    const restartedThread = restartedSnapshot.threads.find((thread) => thread.id === threadId);
+    assert.equal(restartedThread?.messages.length, 3);
+    assert.deepEqual(restartedThread?.modelSelection, expectedModelSelection);
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-sessionless-import-restart-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
 
 it.effect("fast-forwards lagging hot projector cursors before restart replay", () =>
   Effect.gen(function* () {
