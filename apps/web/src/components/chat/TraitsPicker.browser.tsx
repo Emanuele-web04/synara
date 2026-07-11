@@ -307,9 +307,9 @@ describe("TraitsPicker (Claude)", () => {
     // A 1M thread can grow far beyond the normal compaction point: keep the explicit
     // thread choice, but never leak it into sticky defaults for future threads.
     const sticky = useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent;
-    expect(
-      sticky?.provider === "claudeAgent" ? sticky.options?.autoCompactWindow : undefined,
-    ).toBe(undefined);
+    expect(sticky?.provider === "claudeAgent" ? sticky.options?.autoCompactWindow : undefined).toBe(
+      undefined,
+    );
   });
 });
 
