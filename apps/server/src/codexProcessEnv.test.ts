@@ -23,12 +23,14 @@ import { expect, vi } from "vitest";
 import {
   buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
+  isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
   readCodexAuthTrackingFingerprint,
   readEffectiveCodexAuthCredentialsStoreMode,
   resolveCodexAuthTracking,
 } from "./codexProcessEnv.ts";
+import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
 
 describe("readEffectiveCodexAuthCredentialsStoreMode", () => {
   it("uses the selected profile override", () => {
@@ -122,6 +124,201 @@ describe("buildCodexProcessEnv account overlays", () => {
     assert.strictEqual(
       path.resolve(readlinkSync(overlayAuthPath)),
       path.resolve(path.join(fixture.shadowHomePath, "auth.json")),
+    );
+  });
+
+  it("shares fresh Codex continuation state across account overlays while keeping private state separate", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "real" });
+    const personalShadowHomePath = path.join(
+      path.dirname(fixture.shadowHomePath),
+      "codex-shadow-personal",
+    );
+    mkdirSync(personalShadowHomePath, { recursive: true });
+    writeFileSync(path.join(personalShadowHomePath, "auth.json"), '{"account":"personal"}', "utf8");
+    writeFileSync(
+      path.join(personalShadowHomePath, "models_cache.json"),
+      '{"model":"personal"}',
+      "utf8",
+    );
+    writeFileSync(
+      path.join(fixture.shadowHomePath, "models_cache.json"),
+      '{"model":"work"}',
+      "utf8",
+    );
+
+    const personalEnv = buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: personalShadowHomePath,
+      accountId: "personal",
+      platform: "win32",
+    });
+    assert.ok(personalEnv.CODEX_HOME);
+    assert.ok(
+      isCodexSharedContinuationStatePrepared({ env: fixture.env, homePath: fixture.homePath }),
+    );
+    const personalSessionsPath = path.join(personalEnv.CODEX_HOME, "sessions");
+    const personalStateDbPath = path.join(personalEnv.CODEX_HOME, "state_5.sqlite");
+    assert.ok(lstatSync(personalSessionsPath).isSymbolicLink());
+    assert.ok(lstatSync(personalStateDbPath).isSymbolicLink());
+    writeFileSync(
+      path.join(personalSessionsPath, "thread-personal.jsonl"),
+      "personal-thread",
+      "utf8",
+    );
+    writeFileSync(personalStateDbPath, "shared-state", "utf8");
+
+    const workEnv = buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+    assert.ok(workEnv.CODEX_HOME);
+    assert.notStrictEqual(workEnv.CODEX_HOME, personalEnv.CODEX_HOME);
+    assert.strictEqual(
+      readFileSync(path.join(workEnv.CODEX_HOME, "sessions", "thread-personal.jsonl"), "utf8"),
+      "personal-thread",
+    );
+    assert.strictEqual(
+      readFileSync(path.join(workEnv.CODEX_HOME, "state_5.sqlite"), "utf8"),
+      "shared-state",
+    );
+    assert.strictEqual(
+      path.resolve(readlinkSync(path.join(personalEnv.CODEX_HOME, "models_cache.json"))),
+      path.resolve(path.join(personalShadowHomePath, "models_cache.json")),
+    );
+    assert.strictEqual(
+      path.resolve(readlinkSync(path.join(workEnv.CODEX_HOME, "models_cache.json"))),
+      path.resolve(path.join(fixture.shadowHomePath, "models_cache.json")),
+    );
+  });
+
+  it("repairs one legacy account overlay into the shared continuation store without losing data", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "real" });
+    const legacyOverlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+    });
+    mkdirSync(path.join(legacyOverlayHomePath, "sessions"), { recursive: true });
+    writeFileSync(
+      path.join(legacyOverlayHomePath, "sessions", "legacy.jsonl"),
+      "legacy-thread",
+      "utf8",
+    );
+    writeFileSync(path.join(legacyOverlayHomePath, "state_4.sqlite"), "legacy-state", "utf8");
+
+    const env = buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+    assert.strictEqual(env.CODEX_HOME, legacyOverlayHomePath);
+    assert.ok(lstatSync(path.join(legacyOverlayHomePath, "sessions")).isSymbolicLink());
+    assert.ok(lstatSync(path.join(legacyOverlayHomePath, "state_4.sqlite")).isSymbolicLink());
+    assert.strictEqual(
+      readFileSync(path.join(fixture.homePath, "sessions", "legacy.jsonl"), "utf8"),
+      "legacy-thread",
+    );
+    assert.strictEqual(
+      readFileSync(path.join(fixture.homePath, "state_4.sqlite"), "utf8"),
+      "legacy-state",
+    );
+  });
+
+  it("fails closed and preserves both copies when legacy continuation state conflicts", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "real" });
+    const legacyOverlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+    });
+    mkdirSync(path.join(fixture.homePath, "sessions"), { recursive: true });
+    mkdirSync(path.join(legacyOverlayHomePath, "sessions"), { recursive: true });
+    writeFileSync(path.join(fixture.homePath, "sessions", "source.jsonl"), "source", "utf8");
+    writeFileSync(path.join(legacyOverlayHomePath, "sessions", "overlay.jsonl"), "overlay", "utf8");
+
+    assert.throws(
+      () =>
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      /refusing to choose one copy/,
+    );
+    assert.strictEqual(
+      readFileSync(path.join(fixture.homePath, "sessions", "source.jsonl"), "utf8"),
+      "source",
+    );
+    assert.strictEqual(
+      readFileSync(path.join(legacyOverlayHomePath, "sessions", "overlay.jsonl"), "utf8"),
+      "overlay",
+    );
+    assert.strictEqual(
+      isCodexSharedContinuationStatePrepared({ env: fixture.env, homePath: fixture.homePath }),
+      false,
+    );
+  });
+
+  it("fails closed when account continuation state cannot be symlinked on the host platform", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "real" });
+    const copyOnlyLinker = {
+      symlink: vi.fn(() => {
+        throw new Error("symlinks unavailable");
+      }),
+      copyFile: copyFileSync,
+    };
+
+    assert.throws(
+      () =>
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+          overlayEntryLinker: copyOnlyLinker,
+        }),
+      /symlinks unavailable/,
+    );
+    assert.strictEqual(
+      isCodexSharedContinuationStatePrepared({ env: fixture.env, homePath: fixture.homePath }),
+      false,
+    );
+  });
+
+  it("rejects continuation links that alias another storage root", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "real" });
+    const legacyOverlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+    });
+    const foreignSessionsPath = path.join(makeTempRoot(), "foreign-sessions");
+    mkdirSync(legacyOverlayHomePath, { recursive: true });
+    mkdirSync(foreignSessionsPath, { recursive: true });
+    symlinkSync(foreignSessionsPath, path.join(legacyOverlayHomePath, "sessions"), "dir");
+
+    assert.throws(
+      () =>
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      /points outside the shared source home/,
     );
   });
 

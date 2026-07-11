@@ -381,9 +381,18 @@ function persistedContinuationMatchesLaunch(input: {
   }
   const persistedIdentity = readPersistedContinuationIdentity(input.binding.runtimePayload);
   if (persistedIdentity !== undefined) {
-    return (
-      persistedIdentity === providerContinuationIdentity(input.provider, input.providerOptions)
-    );
+    const currentIdentity = providerContinuationIdentity(input.provider, input.providerOptions);
+    if (persistedIdentity === currentIdentity) {
+      return true;
+    }
+    // Identity formats and preparation markers can change independently of an
+    // account's launch settings. An exact Codex launch is safe to upgrade in
+    // place; a different account or instance must first establish a genuinely
+    // shared identity.
+    if (input.provider === "codex") {
+      return persistedLaunchMatchesExactly(input);
+    }
+    return false;
   }
 
   // Legacy bindings predate continuation identities. Only exact launch
@@ -1900,41 +1909,32 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             launchOptionsAuthoritative: true,
           });
         } else {
-          yield* directory.upsert({
-            threadId: input.threadId,
+          const forkedAt = new Date().toISOString();
+          const stoppedForkSession: ProviderSession = {
             provider: adapter.provider,
             providerInstanceId: resolvedSource.instance.instanceId,
             runtimeMode: input.runtimeMode,
-            status: "stopped",
+            status: "closed",
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(resolvedSource.modelSelection?.model
+              ? { model: resolvedSource.modelSelection.model }
+              : {}),
+            threadId: input.threadId,
             ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
-            runtimePayload: {
-              cwd: input.cwd ?? null,
-              model: resolvedSource.modelSelection?.model ?? null,
-              activeTurnId: null,
-              lastError: null,
-              ...(resolvedSource.modelSelection !== undefined
-                ? { modelSelection: resolvedSource.modelSelection }
-                : {}),
-              ...(effectiveProviderOptions !== undefined
-                ? { providerOptions: redactProviderOptionsForPersistence(effectiveProviderOptions) }
-                : {}),
-              ...(() => {
-                const fingerprint =
-                  effectiveProviderOptions !== undefined &&
-                  Schema.is(ProviderKind)(adapter.provider)
-                    ? credentialsFingerprintForProvider(
-                        adapter.provider,
-                        effectiveProviderOptions,
-                        credentialsFingerprintKey,
-                      )
-                    : undefined;
-                return fingerprint !== undefined
-                  ? { providerOptionsCredentialsFingerprint: fingerprint }
-                  : {};
-              })(),
-              lastRuntimeEvent: "provider.thread.forked",
-              lastRuntimeEventAt: new Date().toISOString(),
-            },
+            createdAt: forkedAt,
+            updatedAt: forkedAt,
+          };
+          yield* upsertSessionBinding(stoppedForkSession, input.threadId, {
+            ...(resolvedSource.modelSelection !== undefined
+              ? { modelSelection: resolvedSource.modelSelection }
+              : {}),
+            ...(effectiveProviderOptions !== undefined
+              ? { providerOptions: effectiveProviderOptions }
+              : {}),
+            providerInstanceId: resolvedSource.instance.instanceId,
+            lastRuntimeEvent: "provider.thread.forked",
+            lastRuntimeEventAt: forkedAt,
+            launchOptionsAuthoritative: true,
           });
         }
         yield* analytics.record("provider.thread.forked", {

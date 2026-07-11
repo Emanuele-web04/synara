@@ -49,12 +49,41 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderInstanceId = (value: string): ProviderInstanceId => value as ProviderInstanceId;
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+function makeSharedCodexContinuationFixture(accountIds: readonly string[]) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-continuation-"));
+  const homePath = path.join(root, "codex-home");
+  const runtimeHomePath = path.join(root, "synara-runtime");
+  const environment = { SYNARA_HOME: runtimeHomePath };
+  fs.mkdirSync(homePath, { recursive: true });
+  fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+  const shadowHomePaths = new Map<string, string>();
+  for (const accountId of accountIds) {
+    const shadowHomePath = path.join(root, `codex-shadow-${accountId}`);
+    fs.mkdirSync(shadowHomePath, { recursive: true });
+    fs.writeFileSync(path.join(shadowHomePath, "auth.json"), JSON.stringify({ accountId }), "utf8");
+    shadowHomePaths.set(accountId, shadowHomePath);
+    buildCodexProcessEnv({
+      env: { ...process.env, ...environment },
+      homePath,
+      shadowHomePath,
+      accountId,
+    });
+  }
+  return {
+    root,
+    homePath,
+    environment,
+    shadowHomePath: (accountId: string) => shadowHomePaths.get(accountId)!,
+  };
+}
 
 const providerServiceSecretBytes = new Map<string, Uint8Array>();
 const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
@@ -392,9 +421,11 @@ routing.layer("ProviderServiceLive native forks", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const serverSettings = yield* ServerSettingsService;
+      const directory = yield* ProviderSessionDirectory;
       const sourceThreadId = asThreadId("thread-fork-source-personal");
       const targetThreadId = asThreadId("thread-fork-target-work");
-      const sharedHomePath = "/tmp/codex-fork-shared-home";
+      const fixture = makeSharedCodexContinuationFixture(["personal", "work"]);
+      const sharedHomePath = fixture.homePath;
 
       yield* serverSettings.updateSettings({
         providerInstances: {
@@ -402,16 +433,18 @@ routing.layer("ProviderServiceLive native forks", (it) => {
             driver: "codex",
             config: {
               homePath: sharedHomePath,
-              shadowHomePath: "/tmp/codex-fork-personal-auth",
+              shadowHomePath: fixture.shadowHomePath("personal"),
               accountId: "personal",
+              environment: fixture.environment,
             },
           },
           codex_work: {
             driver: "codex",
             config: {
               homePath: sharedHomePath,
-              shadowHomePath: "/tmp/codex-fork-work-auth",
+              shadowHomePath: fixture.shadowHomePath("work"),
               accountId: "work",
+              environment: fixture.environment,
             },
           },
         },
@@ -448,10 +481,27 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.deepEqual(forkInput?.providerOptions, {
         codex: {
           homePath: sharedHomePath,
-          shadowHomePath: "/tmp/codex-fork-work-auth",
+          shadowHomePath: fixture.shadowHomePath("work"),
           accountId: "work",
         },
       });
+      const targetBinding = Option.getOrUndefined(yield* directory.getBinding(targetThreadId));
+      assert.ok(targetBinding);
+      assert.match(
+        String(
+          targetBinding.runtimePayload && typeof targetBinding.runtimePayload === "object"
+            ? (targetBinding.runtimePayload as Record<string, unknown>).continuationIdentity
+            : "",
+        ),
+        /^codex:shared-v1:/,
+      );
+      assert.equal(
+        targetBinding.runtimePayload && typeof targetBinding.runtimePayload === "object"
+          ? (targetBinding.runtimePayload as Record<string, unknown>).continuationResetRequested
+          : undefined,
+        undefined,
+      );
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -1138,14 +1188,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const threadId = asThreadId("thread-codex-shared-continuation-home");
+      const fixture = makeSharedCodexContinuationFixture(["personal", "work"]);
       const initial = yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
         providerOptions: {
           codex: {
-            homePath: "/tmp/codex-shared-home",
-            shadowHomePath: "/tmp/codex-personal-auth",
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("personal"),
             accountId: "personal",
+            environment: fixture.environment,
           },
         },
         runtimeMode: "full-access",
@@ -1158,9 +1210,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         threadId,
         providerOptions: {
           codex: {
-            homePath: "/tmp/codex-shared-home",
-            shadowHomePath: "/tmp/codex-work-auth",
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("work"),
             accountId: "work",
+            environment: fixture.environment,
           },
         },
         runtimeMode: "full-access",
@@ -1172,6 +1225,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
         initial.resumeCursor,
       );
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -1180,22 +1234,25 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const serverSettings = yield* ServerSettingsService;
       const threadId = asThreadId("thread-codex-stopped-shared-home");
+      const fixture = makeSharedCodexContinuationFixture(["personal", "work"]);
       yield* serverSettings.updateSettings({
         providerInstances: {
           codex_personal: {
             driver: "codex",
             config: {
-              homePath: "/tmp/codex-shared-instance-home",
-              shadowHomePath: "/tmp/codex-personal-instance-auth",
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("personal"),
               accountId: "personal",
+              environment: fixture.environment,
             },
           },
           codex_work: {
             driver: "codex",
             config: {
-              homePath: "/tmp/codex-shared-instance-home",
-              shadowHomePath: "/tmp/codex-work-instance-auth",
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("work"),
               accountId: "work",
+              environment: fixture.environment,
             },
           },
         },
@@ -1224,6 +1281,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
         initial.resumeCursor,
       );
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -2272,6 +2330,19 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const threadId = asThreadId("thread-instance-options-clear");
+      const codexHomePath = path.join(tempDir, "codex-work");
+      const codexShadowHomePath = path.join(tempDir, "codex-work-shadow");
+      const codexEnvironment = { SYNARA_HOME: path.join(tempDir, "synara-runtime") };
+      fs.mkdirSync(codexHomePath, { recursive: true });
+      fs.mkdirSync(codexShadowHomePath, { recursive: true });
+      fs.writeFileSync(path.join(codexHomePath, "config.toml"), "", "utf8");
+      fs.writeFileSync(path.join(codexShadowHomePath, "auth.json"), "{}", "utf8");
+      buildCodexProcessEnv({
+        env: { ...process.env, ...codexEnvironment },
+        homePath: codexHomePath,
+        shadowHomePath: codexShadowHomePath,
+        accountId: "work",
+      });
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
         Layer.provide(persistenceLayer),
@@ -2282,9 +2353,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
             driver: "codex",
             enabled: true,
             config: {
-              homePath: "/tmp/codex-work",
-              shadowHomePath: "/tmp/codex-work-shadow",
+              homePath: codexHomePath,
+              shadowHomePath: codexShadowHomePath,
               accountId: "work",
+              environment: codexEnvironment,
             },
           },
         },
@@ -2295,7 +2367,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
             driver: "codex",
             enabled: true,
             config: {
-              homePath: "/tmp/codex-work",
+              homePath: codexHomePath,
+              environment: codexEnvironment,
             },
           },
         },
@@ -2370,7 +2443,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         };
         assert.equal(startPayload.providerInstanceId, "codex_work");
         assert.deepEqual(startPayload.providerOptions, {
-          codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
+          codex: {
+            homePath: codexHomePath,
+            accountId: "codex_work",
+          },
         });
         assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
       }

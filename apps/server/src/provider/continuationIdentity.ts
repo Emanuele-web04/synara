@@ -7,8 +7,9 @@ import path from "node:path";
 
 import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 
-import { resolveBaseCodexHomePath } from "../codexHomePaths.ts";
+import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
+import { isCodexSharedContinuationStatePrepared } from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
 
 function canonicalStoragePath(value: string): string {
@@ -30,7 +31,25 @@ export function providerContinuationIdentity(
       const codex = options?.codex;
       const env = { ...process.env, ...codex?.environment };
       const sourceHome = resolveBaseCodexHomePath(env, codex?.homePath);
-      return `codex:${canonicalStoragePath(sourceHome)}`;
+      if (
+        isCodexSharedContinuationStatePrepared({
+          env,
+          ...(codex?.homePath ? { homePath: codex.homePath } : {}),
+        })
+      ) {
+        return `codex:shared-v1:${canonicalStoragePath(sourceHome)}`;
+      }
+      // Before shared-state preparation succeeds, bind continuation to the
+      // effective overlay. This lets the same account recover exactly while
+      // preventing another account overlay from claiming access to state it
+      // may not actually share yet.
+      const overlayHome = resolveActiveCodexHomeWritePath({
+        env,
+        ...(codex?.homePath ? { homePath: codex.homePath } : {}),
+        ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
+        ...(codex?.accountId ? { accountId: codex.accountId } : {}),
+      });
+      return `codex:overlay-v1:${canonicalStoragePath(overlayHome)}`;
     }
     case "claudeAgent": {
       const claude = options?.claudeAgent;
