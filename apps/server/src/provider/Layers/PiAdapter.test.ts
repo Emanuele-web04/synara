@@ -22,15 +22,29 @@ import {
   getPiSupportedThinkingOptions,
   buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
+  makePiExtensionModeCoordinator,
   makePiRuntimeEventBase,
   makePiStoragePaths,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
   resolvePiExtensionMode,
+  resolvePiStartInstanceId,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
 
 describe("makePiStoragePaths", () => {
+  it("resolves modelSelection-only account identity before Pi storage setup", () => {
+    expect(
+      resolvePiStartInstanceId({
+        modelSelection: {
+          provider: "pi",
+          instanceId: "pi_work",
+          model: "pi/model",
+        },
+      } as never),
+    ).toBe("pi_work");
+  });
+
   it("keeps legacy defaults byte-for-byte without an account boundary", () => {
     expect(
       makePiStoragePaths({
@@ -48,7 +62,7 @@ describe("makePiStoragePaths", () => {
         environment: {
           HOME: "/accounts/b",
           PI_CODING_AGENT_DIR: "/ignored/env-agent",
-          PI_CODING_AGENT_SESSION_DIR: "~/selected-sessions",
+          PI_CODING_AGENT_SESSION_DIR: "/accounts/b/selected-sessions",
         },
         instanceId: "pi_work",
         stateDir: "/state",
@@ -110,6 +124,61 @@ describe("resolvePiExtensionMode", () => {
         hasIsolatedMode: false,
       }),
     ).toThrow(/Stop extension-enabled default Pi sessions/);
+  });
+});
+
+describe("Pi extension mode in-flight reservations", () => {
+  const coordinator = () =>
+    makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: false,
+      hasIsolatedMode: false,
+    }));
+
+  it("rejects concurrent isolated work after extension-enabled discovery reserves first", async () => {
+    const modes = coordinator();
+    let releaseDiscovery!: () => void;
+    const discoveryGate = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    const defaultDiscovery = (async () => {
+      const reservation = modes.reserve(false);
+      try {
+        await discoveryGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const [isolatedStart] = await Promise.allSettled([
+      Promise.resolve().then(() => modes.reserve(true)),
+    ]);
+    expect(isolatedStart?.status).toBe("rejected");
+    releaseDiscovery();
+    await defaultDiscovery;
+    expect(modes.reserve(true).noExtensions).toBe(true);
+  });
+
+  it("forces concurrent default work into noExtensions after isolated start reserves first", async () => {
+    const modes = coordinator();
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const isolatedStart = (async () => {
+      const reservation = modes.reserve(true);
+      try {
+        await startGate;
+      } finally {
+        reservation.release();
+      }
+    })();
+    await Promise.resolve();
+    const defaultDiscovery = await Promise.resolve().then(() => modes.reserve(false));
+    expect(defaultDiscovery.noExtensions).toBe(true);
+    defaultDiscovery.release();
+    releaseStart();
+    await isolatedStart;
+    expect(modes.reserve(false).noExtensions).toBe(false);
   });
 });
 
