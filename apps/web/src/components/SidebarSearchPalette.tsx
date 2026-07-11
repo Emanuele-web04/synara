@@ -636,7 +636,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       role="radio"
                       aria-checked={importTarget?.instanceId === target.instanceId}
                       aria-label={`${target.label}, ${PROVIDER_DISPLAY_NAMES[target.provider]}`}
-                      className="h-auto min-h-11 w-full min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left aria-checked:bg-muted aria-checked:hover:bg-muted/80"
+                      className="h-auto min-h-11 w-full min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left aria-checked:bg-muted aria-checked:hover:bg-muted/80 sm:h-auto sm:w-full"
                       variant="outline"
                       onClick={() => setImportTargetId(target.instanceId)}
                     >
