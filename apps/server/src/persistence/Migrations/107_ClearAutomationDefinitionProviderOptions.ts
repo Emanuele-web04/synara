@@ -6,7 +6,11 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { parseJson, resolveAutomationProviderIdentity } from "./automationProviderIdentity.ts";
+import {
+  makeUnresolvedAutomationModelSelection,
+  parseJson,
+  resolveAutomationProviderIdentity,
+} from "./automationProviderIdentity.ts";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -40,6 +44,10 @@ export default Effect.gen(function* () {
       continue;
     }
 
+    const unresolved = makeUnresolvedAutomationModelSelection(
+      parseJson(row.modelSelectionJson),
+      parseJson(row.providerOptionsJson),
+    );
     // No settings snapshot is available inside a SQL migration. Fail closed
     // rather than let a legacy home/env/server override fall back to the
     // provider's default account after provider_options_json is removed.
@@ -47,6 +55,7 @@ export default Effect.gen(function* () {
       UPDATE automation_definitions
       SET enabled = 0,
           next_run_at = NULL,
+          model_selection_json = ${JSON.stringify(unresolved.modelSelection)},
           provider_options_json = NULL
       WHERE automation_id = ${row.automationId}
     `;

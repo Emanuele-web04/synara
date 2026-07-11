@@ -3,14 +3,19 @@
 // Layer: Persistence migration test.
 
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { AutomationRunId } from "@synara/contracts";
+import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { AutomationRepositoryLive } from "../Layers/AutomationRepository.ts";
+import { AutomationRepository } from "../Services/AutomationRepository.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 import ClearAutomationRunProviderOptions from "./108_ClearAutomationRunProviderOptions.ts";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(
+  AutomationRepositoryLive.pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),
+);
 
 layer("108_ClearAutomationRunProviderOptions", (it) => {
   it.effect("maps a legacy queued Codex account before removing launch options", () =>
@@ -155,11 +160,13 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
       const rows = yield* sql<{
         readonly runId: string;
         readonly status: string;
+        readonly instanceId: string;
         readonly providerOptions: string | null;
         readonly claimedBy: string | null;
         readonly leaseExpiresAt: string | null;
       }>`
         SELECT run_id AS runId, status,
+          json_extract(permission_snapshot_json, '$.modelSelection.instanceId') AS instanceId,
           json_extract(permission_snapshot_json, '$.providerOptions') AS providerOptions,
           claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt
         FROM automation_runs
@@ -170,6 +177,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         {
           runId: "run-ambiguous-active",
           status: "interrupted",
+          instanceId: "claudeAgent_unresolved_legacy_automation",
           providerOptions: null,
           claimedBy: null,
           leaseExpiresAt: null,
@@ -177,15 +185,29 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         {
           runId: "run-ambiguous-complete",
           status: "succeeded",
+          instanceId: "claudeAgent_unresolved_legacy_automation",
           providerOptions: null,
           claimedBy: null,
           leaseExpiresAt: null,
         },
       ]);
+
+      const repository = yield* AutomationRepository;
+      const decoded = yield* repository.getRunById({
+        id: AutomationRunId.makeUnsafe("run-ambiguous-complete"),
+      });
+      assert.isTrue(Option.isSome(decoded));
+      if (Option.isSome(decoded)) {
+        assert.strictEqual(
+          decoded.value.permissionSnapshot.modelSelection.instanceId,
+          "claudeAgent_unresolved_legacy_automation",
+        );
+        assert.isUndefined(decoded.value.permissionSnapshot.providerOptions);
+      }
     }),
   );
 
-  it.effect("preserves malformed snapshots while retiring them from recovery idempotently", () =>
+  it.effect("replaces malformed snapshots with decodable redacted tombstones idempotently", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -228,11 +250,27 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         WHERE run_id = 'run-malformed-snapshot'
       `;
       assert.strictEqual(rows[0]?.status, "interrupted");
+      assert.notInclude(rows[0]?.snapshot ?? "", "secret");
       assert.strictEqual(
-        rows[0]?.snapshot,
-        '{"providerOptions":{"codex":{"environment":{"TOKEN":"secret"}}}',
+        JSON.parse(rows[0]?.snapshot ?? "{}").modelSelection?.instanceId,
+        "codex_unresolved_legacy_automation",
       );
       assert.isNotNull(rows[0]?.finishedAt ?? null);
+
+      const repository = yield* AutomationRepository;
+      const decoded = yield* repository.getRunById({
+        id: AutomationRunId.makeUnsafe("run-malformed-snapshot"),
+      });
+      assert.isTrue(Option.isSome(decoded));
+      if (Option.isSome(decoded)) {
+        assert.strictEqual(decoded.value.status, "interrupted");
+        assert.strictEqual(
+          decoded.value.permissionSnapshot.modelSelection.instanceId,
+          "codex_unresolved_legacy_automation",
+        );
+        assert.deepStrictEqual(decoded.value.permissionSnapshot.allowedCapabilities, []);
+      }
+      assert.deepStrictEqual(yield* repository.listRecoverableRuns({ limit: 10 }), []);
     }),
   );
 });

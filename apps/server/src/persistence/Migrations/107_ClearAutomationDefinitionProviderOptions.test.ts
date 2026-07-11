@@ -134,13 +134,23 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
       const definitions = yield* sql<{
         readonly enabled: number;
         readonly nextRunAt: string | null;
+        readonly instanceId: string;
         readonly providerOptions: string | null;
       }>`
-        SELECT enabled, next_run_at AS nextRunAt, provider_options_json AS providerOptions
+        SELECT enabled, next_run_at AS nextRunAt,
+          json_extract(model_selection_json, '$.instanceId') AS instanceId,
+          provider_options_json AS providerOptions
         FROM automation_definitions
         WHERE automation_id = 'automation-ambiguous-account'
       `;
-      assert.deepStrictEqual(definitions, [{ enabled: 0, nextRunAt: null, providerOptions: null }]);
+      assert.deepStrictEqual(definitions, [
+        {
+          enabled: 0,
+          nextRunAt: null,
+          instanceId: "claudeAgent_unresolved_legacy_automation",
+          providerOptions: null,
+        },
+      ]);
 
       const runs = yield* sql<{
         readonly status: string;
@@ -223,13 +233,109 @@ layer("107_ClearAutomationDefinitionProviderOptions", (it) => {
       const rows = yield* sql<{
         readonly enabled: number;
         readonly nextRunAt: string | null;
+        readonly instanceId: string;
         readonly providerOptions: string | null;
       }>`
-        SELECT enabled, next_run_at AS nextRunAt, provider_options_json AS providerOptions
+        SELECT enabled, next_run_at AS nextRunAt,
+          json_extract(model_selection_json, '$.instanceId') AS instanceId,
+          provider_options_json AS providerOptions
         FROM automation_definitions
         WHERE automation_id = 'automation-malformed-default'
       `;
-      assert.deepStrictEqual(rows, [{ enabled: 0, nextRunAt: null, providerOptions: null }]);
+      assert.deepStrictEqual(rows, [
+        {
+          enabled: 0,
+          nextRunAt: null,
+          instanceId: "codex_unresolved_legacy_automation",
+          providerOptions: null,
+        },
+      ]);
     }),
+  );
+
+  it.effect(
+    "fails closed on empty or mistyped scalar identities but accepts empty environment",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* runMigrations({ toMigrationInclusive: 56 });
+        yield* sql`
+        INSERT INTO automation_definitions (
+          automation_id, project_id, name, prompt, schedule_json, enabled,
+          model_selection_json, provider_options_json, runtime_mode, interaction_mode,
+          worktree_mode, mode, stop_on_error, minimum_interval_seconds, retry_policy_json,
+          misfire_policy, acknowledged_risks_json, iteration_count, created_at, updated_at
+        ) VALUES
+          (
+            'automation-empty-account-id', 'project-identity-shapes', 'Empty account id',
+            'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            '{"codex":{"accountId":{}}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
+          (
+            'automation-empty-home', 'project-identity-shapes', 'Empty home',
+            'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"claudeAgent","model":"claude-opus-4-1"}',
+            '{"claudeAgent":{"homePath":""}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
+          (
+            'automation-empty-environment', 'project-identity-shapes', 'Empty environment',
+            'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"gemini","model":"gemini-2.5-pro"}',
+            '{"gemini":{"environment":{}}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
+          (
+            'automation-account-with-malformed-home', 'project-identity-shapes',
+            'Account with malformed home', 'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            '{"codex":{"accountId":"work","homePath":{}}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          )
+      `;
+
+        yield* ClearAutomationDefinitionProviderOptions;
+
+        const rows = yield* sql<{
+          readonly automationId: string;
+          readonly enabled: number;
+          readonly instanceId: string;
+        }>`
+        SELECT automation_id AS automationId, enabled,
+          json_extract(model_selection_json, '$.instanceId') AS instanceId
+        FROM automation_definitions
+        WHERE project_id = 'project-identity-shapes'
+        ORDER BY automation_id ASC
+      `;
+        assert.deepStrictEqual(rows, [
+          {
+            automationId: "automation-account-with-malformed-home",
+            enabled: 0,
+            instanceId: "codex_unresolved_legacy_automation",
+          },
+          {
+            automationId: "automation-empty-account-id",
+            enabled: 0,
+            instanceId: "codex_unresolved_legacy_automation",
+          },
+          {
+            automationId: "automation-empty-environment",
+            enabled: 1,
+            instanceId: "gemini",
+          },
+          {
+            automationId: "automation-empty-home",
+            enabled: 0,
+            instanceId: "claudeAgent_unresolved_legacy_automation",
+          },
+        ]);
+      }),
   );
 });
