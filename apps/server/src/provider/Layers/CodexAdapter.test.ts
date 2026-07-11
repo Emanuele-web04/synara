@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import {
   EventId,
   ApprovalRequestId,
@@ -24,6 +26,7 @@ import {
   type CodexAppServerStartSessionInput,
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
+import { CodexJsonlFramer, CodexJsonlWriter } from "../../codexAppServerTransport.ts";
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
 import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
@@ -658,6 +661,83 @@ const lifecycleLayer = it.layer(
     Layer.provideMerge(NodeServices.layer),
   ),
 );
+
+const realStopTeardown = vi.fn(async () => ({
+  escalated: false,
+  signalErrors: [],
+  capturedBeforeRootExit: true,
+}));
+const realStopManager = new CodexAppServerManager(undefined, {
+  teardownProcessTree: realStopTeardown,
+});
+const realStopLayer = it.layer(
+  makeCodexAdapterLive({ manager: realStopManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+realStopLayer("CodexAdapterLive real manager lifecycle", (it) => {
+  it.effect("keeps a non-default provider instance on session/closed after map removal", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-real-stop-work");
+      const providerInstanceId = "codex_work" as ProviderInstanceId;
+      class FakeCodexChild extends EventEmitter {
+        readonly pid = 6060;
+        exitCode: number | null = null;
+        signalCode: NodeJS.Signals | null = null;
+        killed = false;
+        readonly stdin = new PassThrough();
+        readonly stdout = new PassThrough();
+        readonly stderr = new PassThrough();
+      }
+      const child = new FakeCodexChild();
+      realStopTeardown.mockClear();
+      (
+        realStopManager as unknown as {
+          sessions: Map<ThreadId, unknown>;
+        }
+      ).sessions.set(threadId, {
+        session: {
+          provider: "codex",
+          providerInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        account: { type: "unknown", planType: null, sparkEnabled: true },
+        child,
+        stdoutFramer: new CodexJsonlFramer(),
+        stdinWriter: new CodexJsonlWriter(child.stdin),
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        collabReceiverTurns: new Map(),
+        collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
+        nextRequestId: 1,
+        stopping: false,
+      });
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* adapter.stopSession(threadId);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, providerInstanceId);
+      assert.deepEqual(realStopManager.listSessions(), []);
+      assert.equal(realStopTeardown.mock.calls.length, 1);
+    }),
+  );
+});
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("maps session/started to a canonical session.started runtime event", () =>

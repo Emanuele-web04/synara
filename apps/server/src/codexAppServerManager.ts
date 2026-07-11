@@ -1426,12 +1426,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const cause = context?.transportError ?? error;
       const message = cause instanceof Error ? cause.message : "Failed to start Codex session.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/startFailed", message);
-        await (context.stopPromise ?? this.stopSession(threadId));
+        if (!context.stopping) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/startFailed", message);
+        }
+        await (context.stopPromise ?? this.stopSessionContext(context));
       } else {
         gatewaySessionLease?.release();
         this.emitEvent({
@@ -2143,12 +2145,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/threadForkFailed", message);
-        await this.stopSession(threadId);
+        if (!context.stopping) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/threadForkFailed", message);
+        }
+        await (context.stopPromise ?? this.stopSessionContext(context));
       } else {
         gatewaySessionLease?.release();
       }
@@ -2472,6 +2476,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context) {
       return;
     }
+    return this.stopSessionContext(context);
+  }
+
+  private async stopSessionContext(context: CodexSessionContext): Promise<void> {
+    const threadId = context.session.threadId;
     if (context.stopPromise) {
       return context.stopPromise;
     }
@@ -3905,6 +3914,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(context.lifecycleGeneration !== undefined
         ? { lifecycleGeneration: context.lifecycleGeneration }
         : {}),
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
       method,
       message,
     });
@@ -3922,6 +3934,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       ...(context.lifecycleGeneration !== undefined
         ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
         : {}),
       method,
       message,

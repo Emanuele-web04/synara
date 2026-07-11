@@ -82,6 +82,19 @@ function readFakeCodexMethods(messagesPath: string): string[] {
   return readFileSync(messagesPath, "utf8").trim().split("\n").filter(Boolean);
 }
 
+async function settle<T>(
+  promise: Promise<T>,
+): Promise<
+  | { readonly status: "fulfilled"; readonly value: T }
+  | { readonly status: "rejected"; readonly reason: unknown }
+> {
+  try {
+    return { status: "fulfilled", value: await promise };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
 function writeAuthMutationFakeCodexExecutable(root: string): string {
   const binaryPath = path.join(root, "fake-codex.mjs");
   writeFileSync(
@@ -117,7 +130,16 @@ lines.on("line", (line) => {
   let result = {};
   if (message.method === "thread/start") result = { thread: { id: "fake-provider-thread" } };
   if (message.method === "thread/fork") result = { thread: { id: "fake-forked-thread" } };
-  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  const respond = () => process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  if (message.method === "initialize" && process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH) {
+    const timer = setInterval(() => {
+      if (!fs.existsSync(process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH)) return;
+      clearInterval(timer);
+      respond();
+    }, 5);
+    return;
+  }
+  respond();
 });
 `,
     "utf8",
@@ -2006,6 +2028,73 @@ describe("startSession", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "does not let a superseded start failure stop its replacement session",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-start-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-start-replacement");
+      const firstMessagesPath = path.join(fixture.root, "first-messages.txt");
+      const secondMessagesPath = path.join(fixture.root, "second-messages.txt");
+      const initializeGatePath = path.join(fixture.root, "release-first-initialize");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      try {
+        const firstOutcome = settle(
+          manager.startSession({
+            threadId,
+            provider: "codex",
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.startSession({
+          threadId,
+          provider: "codex",
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement.status).toBe("ready");
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toEqual([replacement]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails closed before native fork when the selected account changes during initialization",
     async () => {
       const fixture = makeAuthMutationFixture(
@@ -2043,6 +2132,96 @@ describe("startSession", () => {
         ).rejects.toThrow(/authentication changed on disk/);
         expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
         expect(manager.listSessions()).toEqual([]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not let a superseded fork failure stop its replacement session",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-fork-replacement-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-fork-replacement");
+      const firstMessagesPath = path.join(fixture.root, "first-messages.txt");
+      const secondMessagesPath = path.join(fixture.root, "second-messages.txt");
+      const initializeGatePath = path.join(fixture.root, "release-first-initialize");
+      const environment = { HOME: fixture.root, SYNARA_HOME: fixture.runtimeHome };
+      try {
+        await buildCodexProcessEnv({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        const generation = readCodexSharedContinuationGeneration({
+          env: environment,
+          homePath: fixture.sourceHome,
+        });
+        expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+
+        const firstOutcome = settle(
+          manager.forkThread({
+            sourceThreadId: asThreadId("source-first-fork"),
+            sourceResumeCursor: { threadId: "provider-source-first" },
+            threadId,
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.forkThread({
+          sourceThreadId: asThreadId("source-second-fork"),
+          sourceResumeCursor: { threadId: "provider-source-second" },
+          threadId,
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          expectedCodexContinuationGeneration: generation!,
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement).toEqual({
+          threadId,
+          resumeCursor: { threadId: "fake-forked-thread" },
+        });
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/fork");
+        expect(manager.listSessions()).toEqual([
+          expect.objectContaining({
+            threadId,
+            status: "ready",
+            resumeCursor: { threadId: "fake-forked-thread" },
+          }),
+        ]);
       } finally {
         await manager.stopAll();
         rmSync(fixture.root, { recursive: true, force: true });
