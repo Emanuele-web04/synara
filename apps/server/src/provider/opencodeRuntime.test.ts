@@ -16,9 +16,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenCodePermissionRules,
   buildOpenCodeServerProcessEnv,
+  KILO_CLI_SPEC,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
+  OPENCODE_CLI_SPEC,
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
@@ -87,23 +89,26 @@ function mockOpenCodeServerSpawnerLayer(input: {
 function mockPooledOpenCodeServerSpawnerLayer(state: {
   spawnUrls: Array<string>;
   spawnCwds?: Array<string | undefined>;
+  spawnEnvironments?: Array<NodeJS.ProcessEnv | undefined>;
   killUrls: Array<string>;
   processUrls?: Map<number, string>;
+  readyPrefix?: string;
 }) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
       const cmd = command as unknown as {
-        options?: { cwd?: string };
+        options?: { cwd?: string; env?: NodeJS.ProcessEnv };
       };
       const url = `http://127.0.0.1:${59000 + state.spawnUrls.length}`;
       const pid = 59_000 + state.spawnUrls.length;
       state.spawnUrls.push(url);
       state.spawnCwds?.push(cmd.options?.cwd);
+      state.spawnEnvironments?.push(cmd.options?.env);
       state.processUrls?.set(pid, url);
       return Effect.succeed(
         mockOpenCodeServerHandle({
-          stdout: `opencode server listening on ${url}\n`,
+          stdout: `${state.readyPrefix ?? OPENCODE_CLI_SPEC.serverReadyPrefix} on ${url}\n`,
           stderr: "",
           pid,
           kill: () =>
@@ -130,7 +135,10 @@ const advanceOpenCodePoolAlmostToIdle = Effect.gen(function* () {
 
 function openCodeRuntimePoolTestLayer(state: {
   spawnUrls: Array<string>;
+  spawnCwds?: Array<string | undefined>;
+  spawnEnvironments?: Array<NodeJS.ProcessEnv | undefined>;
   killUrls: Array<string>;
+  readyPrefix?: string;
 }) {
   const processUrls = new Map<number, string>();
   return Layer.merge(
@@ -646,6 +654,69 @@ describe("OpenCodeRuntime local server pool", () => {
       ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
     );
   });
+
+  it.each([
+    { displayName: "OpenCode", binaryPath: "opencode", cliSpec: OPENCODE_CLI_SPEC },
+    { displayName: "Kilo", binaryPath: "kilo", cliSpec: KILO_CLI_SPEC },
+  ])(
+    "$displayName does not reuse an ambient server for an explicit empty environment, or vice versa",
+    async ({ binaryPath, cliSpec }) => {
+      const previousOpenAiKey = process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY = "ambient-account-a";
+
+      try {
+        for (const firstUsesEmptyEnvironment of [false, true]) {
+          const state = {
+            spawnUrls: [] as Array<string>,
+            spawnEnvironments: [] as Array<NodeJS.ProcessEnv | undefined>,
+            killUrls: [] as Array<string>,
+            readyPrefix: cliSpec.serverReadyPrefix,
+          };
+
+          await Effect.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const runtime = yield* OpenCodeRuntime;
+                const firstScope = yield* Scope.make();
+                const secondScope = yield* Scope.make();
+                const first = yield* runtime
+                  .connectToOpenCodeServer({
+                    binaryPath,
+                    cliSpec,
+                    ...(firstUsesEmptyEnvironment ? { environment: {} } : {}),
+                  })
+                  .pipe(Effect.provideService(Scope.Scope, firstScope));
+                const second = yield* runtime
+                  .connectToOpenCodeServer({
+                    binaryPath,
+                    cliSpec,
+                    ...(!firstUsesEmptyEnvironment ? { environment: {} } : {}),
+                  })
+                  .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+                expect(first.url).toBe("http://127.0.0.1:59000");
+                expect(second.url).toBe("http://127.0.0.1:59001");
+
+                yield* Scope.close(firstScope, Exit.void);
+                yield* Scope.close(secondScope, Exit.void);
+              }),
+            ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+          );
+
+          expect(state.spawnEnvironments).toHaveLength(2);
+          expect(state.spawnEnvironments[0]?.OPENAI_API_KEY).toBe(
+            firstUsesEmptyEnvironment ? undefined : "ambient-account-a",
+          );
+          expect(state.spawnEnvironments[1]?.OPENAI_API_KEY).toBe(
+            firstUsesEmptyEnvironment ? "ambient-account-a" : undefined,
+          );
+        }
+      } finally {
+        if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    },
+  );
 
   it("starts local servers in the requested cwd and separates cwd-specific pools", async () => {
     const state = {

@@ -1,7 +1,7 @@
 import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
-import type { ChildProcess } from "node:child_process";
+import { execSync, type ChildProcess } from "node:child_process";
 
 import type {
   BashOperations,
@@ -1300,6 +1300,245 @@ interface PiModelRuntimeInternals {
       env(name: string): Promise<string | undefined>;
       fileExists(path: string): Promise<boolean>;
     };
+    refresh(options?: Record<string, unknown>): Promise<{
+      aborted: boolean;
+      errors: Map<string, Error>;
+    }>;
+  };
+  readonly credentials?: {
+    readonly store?: {
+      read(providerId: string, options?: unknown): Promise<unknown>;
+    };
+  };
+  readonly config?: {
+    readonly providers?: Map<string, PiRuntimeProviderConfig>;
+  };
+  readonly rebuildProviders?: () => void;
+  readonly recomposeProvider?: (providerId: string) => void;
+  readonly updateModelSnapshot?: () => void;
+  readonly queueAvailabilityRefresh?: (signal?: AbortSignal) => Promise<void>;
+  readonly refreshProviderAvailability?: (
+    providerId: string,
+    signal: AbortSignal,
+  ) => Promise<void>;
+}
+
+interface PiRuntimeProviderConfig {
+  readonly apiKey?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly models?: ReadonlyArray<
+    Readonly<Record<string, unknown>> & {
+      readonly headers?: Readonly<Record<string, string>>;
+    }
+  >;
+  readonly modelOverrides?: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, unknown>> & {
+        readonly headers?: Readonly<Record<string, string>>;
+      }
+    >
+  >;
+  readonly [key: string]: unknown;
+}
+
+const PI_CONFIG_COMMAND_INHERITED_ENV_KEYS = new Set([
+  "ALL_PROXY",
+  "APPDATA",
+  "COMSPEC",
+  "HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LANG",
+  "LOCALAPPDATA",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "PATH",
+  "PATHEXT",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERPROFILE",
+  "WINDIR",
+]);
+
+function piConfigCommandEnvironment(
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+): NodeJS.ProcessEnv {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) =>
+        PI_CONFIG_COMMAND_INHERITED_ENV_KEYS.has(name.toUpperCase()) ||
+        name.toUpperCase().startsWith("LC_") ||
+        name.toUpperCase().startsWith("XDG_"),
+    ),
+  );
+  return buildProviderProcessEnv({
+    driver: PROVIDER,
+    env: inherited,
+    environment: Object.fromEntries(
+      Object.entries(selectedEnvironment).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
+  });
+}
+
+function makePiConfigValueResolver(selectedEnvironment: Readonly<NodeJS.ProcessEnv>) {
+  const commandEnvironment = piConfigCommandEnvironment(selectedEnvironment);
+  const commandCache = new Map<string, string | undefined>();
+  return (config: string): string | undefined => {
+    if (config.startsWith("!")) {
+      if (!commandCache.has(config)) {
+        try {
+          const value = execSync(config.slice(1), {
+            encoding: "utf8",
+            env: commandEnvironment,
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 10_000,
+            windowsHide: true,
+          }).trim();
+          commandCache.set(config, value || undefined);
+        } catch {
+          commandCache.set(config, undefined);
+        }
+      }
+      return commandCache.get(config);
+    }
+
+    let missing = false;
+    const resolved = config.replace(
+      /\$\$|\$!|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu,
+      (match, bracedName: string | undefined, plainName: string | undefined) => {
+        if (match === "$$") return "$";
+        if (match === "$!") return "!";
+        const value = selectedEnvironment[bracedName ?? plainName ?? ""];
+        if (value === undefined) {
+          missing = true;
+          return "";
+        }
+        return value;
+      },
+    );
+    return missing ? undefined : resolved;
+  };
+}
+
+function resolvePiConfigHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  resolveValue: (config: string) => string | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const resolved = Object.entries(headers).flatMap(([name, config]) => {
+    const value = resolveValue(config);
+    return value === undefined ? [] : [[name, value] as const];
+  });
+  return resolved.length > 0 ? Object.fromEntries(resolved) : undefined;
+}
+
+function isolatePiRuntimeConfig(
+  runtime: ModelRuntime,
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+): void {
+  const internals = runtime as unknown as PiModelRuntimeInternals;
+  const providers = internals.config?.providers;
+  if (!providers) {
+    throw new Error("Pi ModelRuntime config is unavailable for account isolation.");
+  }
+  const resolveValue = makePiConfigValueResolver(selectedEnvironment);
+  for (const [providerId, provider] of providers) {
+    const apiKey = provider.apiKey === undefined ? undefined : resolveValue(provider.apiKey);
+    const headers = resolvePiConfigHeaders(provider.headers, resolveValue);
+    const models = provider.models?.map((model) => ({
+      ...model,
+      ...(model.headers ? { headers: resolvePiConfigHeaders(model.headers, resolveValue) } : {}),
+    }));
+    const modelOverrides = provider.modelOverrides
+      ? Object.fromEntries(
+          Object.entries(provider.modelOverrides).map(([modelId, model]) => [
+            modelId,
+            {
+              ...model,
+              ...(model.headers
+                ? { headers: resolvePiConfigHeaders(model.headers, resolveValue) }
+                : {}),
+            },
+          ]),
+        )
+      : undefined;
+    providers.set(providerId, {
+      ...provider,
+      ...(provider.apiKey !== undefined ? { apiKey } : {}),
+      ...(provider.headers !== undefined ? { headers } : {}),
+      ...(models !== undefined ? { models } : {}),
+      ...(modelOverrides !== undefined ? { modelOverrides } : {}),
+    });
+  }
+  internals.rebuildProviders?.();
+
+  const store = internals.credentials?.store;
+  if (store) {
+    const read = store.read.bind(store);
+    store.read = async (providerId, options) => {
+      const credential = await read(providerId, options);
+      if (
+        typeof credential !== "object" ||
+        credential === null ||
+        !("type" in credential) ||
+        credential.type !== "api_key" ||
+        !("key" in credential) ||
+        typeof credential.key !== "string" ||
+        !credential.key.startsWith("!")
+      ) {
+        return credential;
+      }
+      const key = resolveValue(credential.key);
+      return key === undefined ? undefined : { ...credential, key };
+    };
+  }
+
+  const models = internals.models;
+  if (
+    !models ||
+    !internals.rebuildProviders ||
+    !internals.recomposeProvider ||
+    !internals.updateModelSnapshot ||
+    !internals.queueAvailabilityRefresh ||
+    !internals.refreshProviderAvailability
+  ) {
+    throw new Error("Pi ModelRuntime refresh internals are unavailable for account isolation.");
+  }
+  runtime.refresh = async (options = {}) => {
+    if (options.providers) {
+      for (const providerId of new Set(options.providers)) internals.recomposeProvider!(providerId);
+      internals.updateModelSnapshot!();
+    } else {
+      internals.rebuildProviders!();
+    }
+    const result = await models.refresh({
+      ...options,
+      allowNetwork: options.allowNetwork ?? false,
+    });
+    internals.updateModelSnapshot!();
+    if (options.providers) {
+      await Promise.all(
+        [...new Set(options.providers)].map((providerId) =>
+          internals.refreshProviderAvailability!(
+            providerId,
+            options.signal ?? new AbortController().signal,
+          ),
+        ),
+      );
+    } else {
+      await internals.queueAvailabilityRefresh!(options.signal);
+    }
+    return result;
   };
 }
 
@@ -1316,6 +1555,7 @@ function isolatePiModelRuntimeFromAmbientEnvironment(
     ...authContext,
     env: async (name) => trimToUndefined(environment[name]),
   };
+  isolatePiRuntimeConfig(runtime, environment);
 }
 
 // Keep session runtimes isolated so project extension provider registrations
@@ -1332,13 +1572,15 @@ export async function createPiModelRuntime(
   const runtimeEnvironment = hasAccountBoundary
     ? buildProviderProcessEnv({
         driver: PROVIDER,
-        ...(environment !== undefined ? { environment } : {}),
+        env: {},
+        environment: environment ?? {},
         ...(instanceId !== undefined ? { instanceId } : {}),
       })
     : environment;
   const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
+    ...(hasAccountBoundary ? { refreshOnCreate: false } : {}),
   });
   if (hasAccountBoundary) {
     isolatePiModelRuntimeFromAmbientEnvironment(runtime, runtimeEnvironment ?? {});

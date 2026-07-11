@@ -926,6 +926,70 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it.each([
+    {
+      name: "ambient session then explicit empty discovery",
+      sessionEnvironment: undefined,
+      discoveryEnvironment: {},
+    },
+    {
+      name: "explicit empty session then ambient discovery",
+      sessionEnvironment: {},
+      discoveryEnvironment: undefined,
+    },
+  ])(
+    "does not reuse $name envelopes",
+    async ({ name, sessionEnvironment, discoveryEnvironment }) => {
+      const serverUrl = "http://127.0.0.1:4666";
+      const runtime = createMockOpenCodeRuntime();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const listModels = adapter.listModels;
+          if (!listModels) {
+            throw new Error("Expected OpenCode adapter to support runtime model listing.");
+          }
+
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId(`thread-${name.replaceAll(" ", "-")}`),
+            cwd: "/repo/discovery-environment-boundary",
+            runtimeMode: "full-access",
+            providerOptions: {
+              opencode: {
+                serverUrl,
+                ...(sessionEnvironment !== undefined ? { environment: sessionEnvironment } : {}),
+              },
+            },
+          });
+
+          return yield* listModels({
+            provider: "opencode",
+            cwd: "/repo/discovery-environment-boundary",
+            serverUrl,
+            ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(runtime.connectCalls).toHaveLength(2);
+      expect(runtime.connectCalls.map((call) => call.environment)).toEqual([
+        sessionEnvironment,
+        discoveryEnvironment,
+      ]);
+    },
+  );
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({

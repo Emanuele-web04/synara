@@ -331,6 +331,122 @@ describe("getPiDiscoverableModels", () => {
     }
   });
 
+  it("resolves custom provider config only from the selected Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-custom-config-isolation-"));
+    const previousCustomKey = process.env.CUSTOM_KEY;
+    const previousCustomHeader = process.env.CUSTOM_HEADER;
+    process.env.CUSTOM_KEY = "ambient-account-key";
+    process.env.CUSTOM_HEADER = "ambient-account-header";
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: "$CUSTOM_KEY",
+              headers: { "X-Custom": "$CUSTOM_HEADER" },
+              models: [{ id: "custom-model" }],
+            },
+            "custom-command": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const selected = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-key", CUSTOM_HEADER: "selected-account-header" },
+        "pi_work",
+      );
+      const empty = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_empty",
+      );
+      const customModel = selected.getModel("custom", "custom-model");
+      if (!customModel) throw new Error("Expected custom Pi model.");
+
+      await expect(selected.getAuth(customModel)).resolves.toMatchObject({
+        auth: {
+          apiKey: "selected-account-key",
+          headers: { "X-Custom": "selected-account-header" },
+        },
+      });
+      await expect(selected.getAuth("custom-command")).resolves.toMatchObject({
+        auth: { apiKey: "selected-account-key" },
+      });
+      expect(empty.hasConfiguredAuth("custom")).toBe(false);
+      expect(empty.hasConfiguredAuth("custom-command")).toBe(false);
+    } finally {
+      if (previousCustomKey === undefined) delete process.env.CUSTOM_KEY;
+      else process.env.CUSTOM_KEY = previousCustomKey;
+      if (previousCustomHeader === undefined) delete process.env.CUSTOM_HEADER;
+      else process.env.CUSTOM_HEADER = previousCustomHeader;
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps identical config commands scoped to each immutable Pi environment", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-command-isolation-"));
+    const commandConfig = `!${JSON.stringify(process.execPath)} -p ${JSON.stringify(
+      "process.env.CUSTOM_KEY",
+    )}`;
+
+    try {
+      writeFileSync(
+        path.join(agentDir, "models.json"),
+        JSON.stringify({
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              apiKey: commandConfig,
+              models: [{ id: "command-model" }],
+            },
+          },
+        }),
+      );
+      const accountAEnvironment = { CUSTOM_KEY: "selected-account-a" };
+      const accountA = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        accountAEnvironment,
+        "pi_account_a",
+      );
+      accountAEnvironment.CUSTOM_KEY = "mutated-after-snapshot";
+      const accountB = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { CUSTOM_KEY: "selected-account-b" },
+        "pi_account_b",
+      );
+
+      await expect(
+        Promise.all([accountA.getAuth("custom"), accountB.getAuth("custom")]),
+      ).resolves.toMatchObject([
+        { auth: { apiKey: "selected-account-a" } },
+        { auth: { apiKey: "selected-account-b" } },
+      ]);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { provider: "zai", id: "glm-5.3-flash", auth: { type: "api_key", key: "test-key" } },
     {
