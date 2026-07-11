@@ -12,8 +12,13 @@ import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 
 function expandHomePath(value: string, fallbackHome: string): string {
   if (value === "~") return fallbackHome;
-  if (value.startsWith("~/")) return path.join(fallbackHome, value.slice(2));
-  return value;
+  if (!value.startsWith("~/") && !value.startsWith("~\\")) return value;
+
+  const segments = value
+    .slice(2)
+    .split(/[\\/]+/u)
+    .filter((segment) => segment.length > 0);
+  return segments.length === 0 ? fallbackHome : path.join(fallbackHome, ...segments);
 }
 
 function canonicalStoragePath(value: string): string {
