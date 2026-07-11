@@ -551,7 +551,7 @@ function persistedContinuationMatchesLaunch(input: {
   const persistedIdentity = readPersistedContinuationIdentity(input.binding.runtimePayload);
   if (persistedIdentity !== undefined) {
     if (persistedIdentity === input.currentIdentity) {
-      return true;
+      return input.provider !== "claudeAgent" || persistedLaunchMatchesExactly(input);
     }
     return (
       input.provider === "codex" &&
