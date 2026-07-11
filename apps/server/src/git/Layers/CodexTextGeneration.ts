@@ -1,5 +1,15 @@
-import { randomUUID } from "node:crypto";
-import { lstat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { join as joinPath } from "node:path";
 
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -56,6 +66,120 @@ import {
 
 const CODEX_TIMEOUT_MS = 180_000;
 
+export type CodexTextGenerationAuthMirror = {
+  readonly mode: "symlink" | "copy";
+  readonly authoritativeAuthFilePath: string;
+  readonly effectiveAuthFilePath: string;
+  readonly baselineFingerprint: string;
+};
+
+export class CodexTextGenerationAuthConflictError extends Error {
+  override readonly name = "CodexTextGenerationAuthConflictError";
+}
+
+function fingerprintAuth(content: Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+async function readAuthFingerprint(filePath: string): Promise<string> {
+  return fingerprintAuth(await readFile(filePath));
+}
+
+async function assertAuthoritativeAuthUnchanged(
+  mirror: CodexTextGenerationAuthMirror,
+): Promise<void> {
+  let authoritativeFingerprint: string;
+  try {
+    authoritativeFingerprint = await readAuthFingerprint(mirror.authoritativeAuthFilePath);
+  } catch {
+    throw new CodexTextGenerationAuthConflictError(
+      "Codex auth changed or disappeared while refreshed credentials were being persisted; the authoritative auth file was preserved.",
+    );
+  }
+  if (authoritativeFingerprint !== mirror.baselineFingerprint) {
+    throw new CodexTextGenerationAuthConflictError(
+      "Codex auth changed concurrently while refreshed credentials were being persisted; the authoritative auth file was preserved.",
+    );
+  }
+}
+
+export async function prepareCodexTextGenerationAuthMirror(
+  authoritativeAuthFilePath: string,
+  isolatedHomePath: string,
+  linker: { readonly symlink: typeof symlink; readonly copyFile: typeof copyFile } = {
+    symlink,
+    copyFile,
+  },
+): Promise<CodexTextGenerationAuthMirror | undefined> {
+  try {
+    await lstat(authoritativeAuthFilePath);
+  } catch {
+    return undefined;
+  }
+
+  const effectiveAuthFilePath = joinPath(isolatedHomePath, "auth.json");
+  let mode: CodexTextGenerationAuthMirror["mode"] = "symlink";
+  try {
+    await linker.symlink(authoritativeAuthFilePath, effectiveAuthFilePath, "file");
+  } catch {
+    mode = "copy";
+    await linker.copyFile(authoritativeAuthFilePath, effectiveAuthFilePath);
+    await chmod(effectiveAuthFilePath, 0o600);
+  }
+  const baselineFingerprint = await readAuthFingerprint(effectiveAuthFilePath);
+  if (
+    mode === "copy" &&
+    (await readAuthFingerprint(authoritativeAuthFilePath)) !== baselineFingerprint
+  ) {
+    throw new CodexTextGenerationAuthConflictError(
+      "Codex auth changed while its isolated fallback copy was being prepared; text generation was not started.",
+    );
+  }
+  return {
+    mode,
+    authoritativeAuthFilePath,
+    effectiveAuthFilePath,
+    baselineFingerprint,
+  };
+}
+
+export async function reconcileCodexTextGenerationAuthMirror(
+  mirror: CodexTextGenerationAuthMirror | undefined,
+): Promise<void> {
+  if (!mirror || mirror.mode === "symlink") return;
+  let effectiveContent: Uint8Array;
+  try {
+    effectiveContent = await readFile(mirror.effectiveAuthFilePath);
+  } catch {
+    return;
+  }
+  if (fingerprintAuth(effectiveContent) === mirror.baselineFingerprint) return;
+  await assertAuthoritativeAuthUnchanged(mirror);
+
+  let authoritativeIsSymbolicLink: boolean;
+  try {
+    authoritativeIsSymbolicLink = (await lstat(mirror.authoritativeAuthFilePath)).isSymbolicLink();
+  } catch {
+    throw new CodexTextGenerationAuthConflictError(
+      "Codex auth changed or disappeared while refreshed credentials were being persisted; the authoritative auth file was preserved.",
+    );
+  }
+  if (authoritativeIsSymbolicLink) {
+    await writeFile(mirror.authoritativeAuthFilePath, effectiveContent, { mode: 0o600 });
+    return;
+  }
+
+  const temporaryPath = `${mirror.authoritativeAuthFilePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, effectiveContent, { flag: "wx", mode: 0o600 });
+    await chmod(temporaryPath, 0o600);
+    await assertAuthoritativeAuthUnchanged(mirror);
+    await rename(temporaryPath, mirror.authoritativeAuthFilePath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
 function normalizeCodexError(
   binaryPath: string,
   operation: string,
@@ -94,34 +218,42 @@ function normalizeCodexError(
   });
 }
 
-function sanitizeCodexConfigForTextGeneration(content: string): string {
+function isCodexUserExtensionSection(header: string): boolean {
+  const match = header.match(/^\[\[?\s*(.*?)\s*\]\]?\s*(?:#.*)?$/);
+  const sectionPath = match?.[1]?.replace(/\s/g, "");
+  return Boolean(
+    sectionPath &&
+    /^(?:skills|"skills"|'skills'|plugins|"plugins"|'plugins')(?:\.|$)/.test(sectionPath),
+  );
+}
+
+export function sanitizeCodexConfigForTextGeneration(content: string): string {
   const lines = content.split(/\r?\n/g);
   const sanitized: string[] = [];
-  let skippingSkillsConfig = false;
+  let inRoot = true;
+  let suppressingUserExtensionSection = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
-
-    if (trimmed.startsWith("[[")) {
-      if (trimmed === "[[skills.config]]") {
-        skippingSkillsConfig = true;
-        continue;
-      }
-
-      skippingSkillsConfig = false;
-      sanitized.push(line);
-      continue;
-    }
-
     if (trimmed.startsWith("[")) {
-      skippingSkillsConfig = false;
-      sanitized.push(line);
+      inRoot = false;
+      suppressingUserExtensionSection = isCodexUserExtensionSection(trimmed);
+      if (suppressingUserExtensionSection) continue;
+    }
+    if (
+      inRoot &&
+      /^(?:skills|"skills"|'skills'|plugins|"plugins"|'plugins')(?:\s*\.|\s*=)/.test(trimmed)
+    ) {
       continue;
     }
-
-    if (!skippingSkillsConfig) {
-      sanitized.push(line);
+    const authStoreAssignment = line.match(
+      /^(\s*(?:(?:profiles\s*\.\s*(?:"[^"]+"|'[^']+'|[A-Za-z0-9_-]+)\s*\.\s*)?(?:cli_auth_credentials_store|"cli_auth_credentials_store"|'cli_auth_credentials_store')))\s*=/,
+    );
+    if (!suppressingUserExtensionSection && authStoreAssignment?.[1]) {
+      sanitized.push(`${authStoreAssignment[1]} = "file"`);
+      continue;
     }
+    if (!suppressingUserExtensionSection) sanitized.push(line);
   }
 
   return sanitized.join("\n").trimEnd();
@@ -182,7 +314,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const safeRemoveDirectory = (directoryPath: string): Effect.Effect<void, never> =>
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
-  const readRealAuthFile = (authFilePath: string): Effect.Effect<string | null, never> =>
+  const isRealAuthFile = (authFilePath: string): Effect.Effect<boolean, never> =>
     Effect.gen(function* () {
       const fileInfo = yield* Effect.promise(async () => {
         try {
@@ -192,11 +324,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         }
       });
       if (!fileInfo || fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
-        return null;
+        return false;
       }
-      return yield* fileSystem
-        .readFileString(authFilePath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+      return true;
     });
 
   const prepareIsolatedCodexHome = (
@@ -208,7 +338,13 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     // which can relocate the env-derived home and the account overlay root
     // (SYNARA_HOME/CODEX_HOME); auth lookup must see the same view.
     launchEnv: NodeJS.ProcessEnv = process.env,
-  ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
+  ): Effect.Effect<
+    {
+      readonly homePath: string;
+      readonly authMirror: CodexTextGenerationAuthMirror | undefined;
+    },
+    TextGenerationError
+  > =>
     Effect.gen(function* () {
       const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(launchEnv);
       const sourceAuthHome = authHomePath?.trim();
@@ -274,6 +410,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           );
       }
 
+      let authMirror: CodexTextGenerationAuthMirror | undefined;
       if (shouldCopyAuth) {
         // Auth precedence: explicit shadow home, then the account's own home,
         // then the Synara account overlay (where in-app logins land when the
@@ -283,32 +420,33 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ...(!trimmedAccountId || hasDedicatedAccountHome ? [sourceCodexHome] : []),
           ...(accountOverlayAuthHome ? [accountOverlayAuthHome] : []),
         ];
-        const sourceAuth = yield* Effect.gen(function* () {
+        const authoritativeAuthFilePath = yield* Effect.gen(function* () {
           for (const authHome of authHomeCandidates) {
-            const content = yield* readRealAuthFile(path.join(authHome, "auth.json"));
-            if (content !== null) {
-              return content;
+            const candidate = path.join(authHome, "auth.json");
+            if (yield* isRealAuthFile(candidate)) {
+              return candidate;
             }
           }
-          return null;
+          return undefined;
         });
-        if (sourceAuth !== null) {
-          yield* fileSystem
-            .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new TextGenerationError({
-                    operation,
-                    detail: "Failed to copy Codex auth for isolated text generation.",
-                    cause,
-                  }),
+        if (authoritativeAuthFilePath) {
+          authMirror = yield* Effect.tryPromise({
+            try: () =>
+              prepareCodexTextGenerationAuthMirror(
+                authoritativeAuthFilePath,
+                isolatedHomePath,
               ),
-            );
+            catch: (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: "Failed to prepare account-owned Codex auth for text generation.",
+                cause,
+              }),
+          });
         }
       }
 
-      return { homePath: isolatedHomePath };
+      return { homePath: isolatedHomePath, authMirror };
     });
 
   const materializeImageAttachments = (
@@ -512,7 +650,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         },
       ).pipe(Effect.asVoid);
 
-      return yield* Effect.gen(function* () {
+      const reconcileAuth = Effect.tryPromise({
+        try: () => reconcileCodexTextGenerationAuthMirror(isolatedCodexHome.authMirror),
+        catch: (cause) =>
+          new TextGenerationError({
+            operation,
+            detail:
+              cause instanceof CodexTextGenerationAuthConflictError
+                ? cause.message
+                : "Failed to persist refreshed Codex auth in the selected account home.",
+            cause,
+          }),
+      });
+
+      const request = Effect.gen(function* () {
         yield* runCodexCommand.pipe(
           Effect.scoped,
           Effect.timeoutOption(CODEX_TIMEOUT_MS),
@@ -547,7 +698,21 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             ),
           ),
         );
-      }).pipe(Effect.ensuring(cleanup));
+      });
+
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const requestExit = yield* Effect.exit(restore(request));
+          const reconcileExit = yield* Effect.exit(reconcileAuth);
+          if (reconcileExit._tag === "Failure") {
+            return yield* Effect.failCause(reconcileExit.cause);
+          }
+          if (requestExit._tag === "Failure") {
+            return yield* Effect.failCause(requestExit.cause);
+          }
+          return requestExit.value;
+        }).pipe(Effect.ensuring(cleanup)),
+      );
     });
 
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = (input) => {
