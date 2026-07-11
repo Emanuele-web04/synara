@@ -42,17 +42,21 @@ function isProvider(value: unknown): value is Provider {
   return typeof value === "string" && PROVIDER_SET.has(value);
 }
 
-function hasIdentityValue(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return false;
+function identityFieldState(
+  options: Record<string, unknown>,
+  key: string,
+): "absent" | "empty-environment" | "present" | "invalid" {
+  if (!Object.hasOwn(options, key)) {
+    return "absent";
   }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
+  const value = options[key];
+  if (key === "environment") {
+    if (!isRecord(value)) {
+      return "invalid";
+    }
+    return Object.keys(value).length === 0 ? "empty-environment" : "present";
   }
-  if (isRecord(value)) {
-    return Object.keys(value).length > 0;
-  }
-  return true;
+  return nonEmptyString(value) === null ? "invalid" : "present";
 }
 
 function canonicalSelection(
@@ -140,8 +144,14 @@ export function resolveAutomationProviderIdentity(
   }
 
   if (provider === "codex") {
-    const accountId = nonEmptyString(selectedOptions.accountId);
-    if (accountId !== null) {
+    if (Object.hasOwn(selectedOptions, "accountId")) {
+      const accountId = nonEmptyString(selectedOptions.accountId);
+      const hasMalformedCompanionIdentity = IDENTITY_KEYS.codex.some(
+        (key) => identityFieldState(selectedOptions, key) === "invalid",
+      );
+      if (accountId === null || hasMalformedCompanionIdentity) {
+        return { safe: false };
+      }
       return {
         safe: true,
         modelSelection: canonicalSelection(
@@ -150,20 +160,116 @@ export function resolveAutomationProviderIdentity(
         ),
       };
     }
-    if (hasIdentityValue(selectedOptions.accountId)) {
-      return { safe: false };
-    }
   }
 
-  const carriesAmbiguousIdentity = IDENTITY_KEYS[provider].some((key) =>
-    hasIdentityValue(selectedOptions[key]),
-  );
+  // An explicitly empty environment is the only identity-bearing field with
+  // a legitimate empty value. Empty/mistyped scalar fields are malformed,
+  // not evidence that the default account was intended.
+  const carriesAmbiguousIdentity = IDENTITY_KEYS[provider].some((key) => {
+    const state = identityFieldState(selectedOptions, key);
+    return state === "present" || state === "invalid";
+  });
   return carriesAmbiguousIdentity
     ? { safe: false }
     : {
         safe: true,
         modelSelection: canonicalSelection(modelSelectionValue, provider),
       };
+}
+
+const UNRESOLVED_INSTANCE_SUFFIX = "_unresolved_legacy_automation";
+const UNRESOLVED_MODEL = "legacy-automation-unresolved";
+const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+
+function providerForUnresolvedIdentity(
+  modelSelectionValue: unknown,
+  providerOptionsValue?: unknown,
+  providerHintValue?: unknown,
+): Provider {
+  if (isProvider(providerHintValue)) {
+    return providerHintValue;
+  }
+  if (isRecord(modelSelectionValue)) {
+    if (isProvider(modelSelectionValue.instanceId)) {
+      return modelSelectionValue.instanceId;
+    }
+    if (isProvider(modelSelectionValue.provider)) {
+      return modelSelectionValue.provider;
+    }
+  }
+  if (isRecord(providerOptionsValue)) {
+    const configuredProviders = PROVIDERS.filter((provider) =>
+      Object.hasOwn(providerOptionsValue, provider),
+    );
+    if (configuredProviders.length === 1) {
+      return configuredProviders[0]!;
+    }
+  }
+  return "codex";
+}
+
+export function makeUnresolvedAutomationModelSelection(
+  modelSelectionValue: unknown,
+  providerOptionsValue?: unknown,
+  providerHintValue?: unknown,
+): { readonly provider: Provider; readonly modelSelection: Record<string, unknown> } {
+  const provider = providerForUnresolvedIdentity(
+    modelSelectionValue,
+    providerOptionsValue,
+    providerHintValue,
+  );
+  const model = isRecord(modelSelectionValue)
+    ? (nonEmptyString(modelSelectionValue.model) ?? UNRESOLVED_MODEL)
+    : UNRESOLVED_MODEL;
+  return {
+    provider,
+    modelSelection: {
+      instanceId: `${provider}${UNRESOLVED_INSTANCE_SUFFIX}`,
+      model,
+    },
+  };
+}
+
+export function makeUnresolvedAutomationPermissionSnapshot(
+  snapshotValue: unknown,
+  createdAtFallback: string,
+): Record<string, unknown> {
+  const snapshot = isRecord(snapshotValue) ? snapshotValue : {};
+  const unresolved = makeUnresolvedAutomationModelSelection(
+    snapshot.modelSelection,
+    snapshot.providerOptions,
+    snapshot.provider,
+  );
+  const createdAt =
+    typeof snapshot.createdAt === "string" && ISO_DATE_TIME_PATTERN.test(snapshot.createdAt)
+      ? snapshot.createdAt
+      : ISO_DATE_TIME_PATTERN.test(createdAtFallback)
+        ? createdAtFallback
+        : "1970-01-01T00:00:00.000Z";
+  const allowedCapabilities = Array.isArray(snapshot.allowedCapabilities)
+    ? snapshot.allowedCapabilities.filter(
+        (capability): capability is string =>
+          capability === "send-turn" ||
+          capability === "create-worktree" ||
+          capability === "full-access",
+      )
+    : [];
+  return {
+    provider: unresolved.provider,
+    modelSelection: unresolved.modelSelection,
+    ...(Number.isInteger(snapshot.completionPolicyVersion) &&
+    Number(snapshot.completionPolicyVersion) >= 0
+      ? { completionPolicyVersion: snapshot.completionPolicyVersion }
+      : {}),
+    runtimeMode: snapshot.runtimeMode === "full-access" ? "full-access" : "approval-required",
+    interactionMode: snapshot.interactionMode === "plan" ? "plan" : "default",
+    worktreeMode:
+      snapshot.worktreeMode === "local" || snapshot.worktreeMode === "worktree"
+        ? snapshot.worktreeMode
+        : "auto",
+    allowedCapabilities: Array.from(new Set(allowedCapabilities)),
+    createdAt,
+  };
 }
 
 export const INVALID_AUTOMATION_JSON = Symbol("InvalidAutomationJson");

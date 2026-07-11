@@ -2,11 +2,17 @@
 // Purpose: Migrate queued-run account identity before removing legacy launch snapshots.
 // Layer: SQLite data migration for automation persistence.
 
+import { AutomationPermissionSnapshot } from "@synara/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { parseJson, resolveAutomationProviderIdentity } from "./automationProviderIdentity.ts";
+import {
+  makeUnresolvedAutomationPermissionSnapshot,
+  parseJson,
+  resolveAutomationProviderIdentity,
+} from "./automationProviderIdentity.ts";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -15,11 +21,13 @@ export default Effect.gen(function* () {
     readonly runId: string;
     readonly status: string;
     readonly permissionSnapshotJson: string;
+    readonly createdAt: string;
   }>`
     SELECT
       run_id AS "runId",
       status,
-      permission_snapshot_json AS "permissionSnapshotJson"
+      permission_snapshot_json AS "permissionSnapshotJson",
+      created_at AS "createdAt"
     FROM automation_runs
     WHERE NOT json_valid(permission_snapshot_json)
        OR json_type(permission_snapshot_json, '$.providerOptions') IS NOT NULL
@@ -39,21 +47,35 @@ export default Effect.gen(function* () {
           snapshotRecord.provider,
         )
       : { safe: false as const };
-    if (snapshotRecord) {
+    let unsafeSnapshot = !resolution.safe;
+    let migratedSnapshot: Record<string, unknown>;
+    if (snapshotRecord && resolution.safe) {
       const sanitizedSnapshot: Record<string, unknown> = {
         ...snapshotRecord,
-        ...(resolution.safe ? { modelSelection: resolution.modelSelection } : {}),
+        modelSelection: resolution.modelSelection,
       };
       delete sanitizedSnapshot.providerOptions;
-      yield* sql`
-        UPDATE automation_runs
-        SET permission_snapshot_json = ${JSON.stringify(sanitizedSnapshot)}
-        WHERE run_id = ${row.runId}
-      `;
+      if (Schema.is(AutomationPermissionSnapshot)(sanitizedSnapshot)) {
+        migratedSnapshot = sanitizedSnapshot;
+      } else {
+        unsafeSnapshot = true;
+        migratedSnapshot = makeUnresolvedAutomationPermissionSnapshot(snapshot, row.createdAt);
+      }
+    } else {
+      // Unsafe and malformed rows become a valid redacted tombstone. Keeping
+      // the opaque payload here would preserve both secrets and a repository
+      // decode failure; keeping the default model selection would falsely
+      // attribute historical work to the provider's default account.
+      migratedSnapshot = makeUnresolvedAutomationPermissionSnapshot(snapshot, row.createdAt);
     }
+    yield* sql`
+      UPDATE automation_runs
+      SET permission_snapshot_json = ${JSON.stringify(migratedSnapshot)}
+      WHERE run_id = ${row.runId}
+    `;
 
     if (
-      !resolution.safe &&
+      unsafeSnapshot &&
       (row.status === "pending" ||
         row.status === "claimed" ||
         row.status === "running" ||
