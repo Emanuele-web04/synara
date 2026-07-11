@@ -86,6 +86,7 @@ import {
   shouldApplyThreadsProjection,
   THREAD_PROJECTION_EVENT_TYPES,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -803,15 +804,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : resolveModelSelectionInstanceId(requestedModelSelection);
           const canAdoptRequestedInstance =
             requestedModelSelection === undefined ||
-            (Option.isSome(session)
-              ? session.value.status === "stopped" ||
-                session.value.status === "error" ||
-                (session.value.providerInstanceId ?? session.value.providerName) === null ||
+            (requestedInstanceId !== null &&
+              canProjectTurnModelSelectionForSession(
+                Option.getOrNull(session),
+                requestedInstanceId,
+              ) &&
+              (Option.isSome(session) ||
                 requestedInstanceId ===
-                  (session.value.providerInstanceId ?? session.value.providerName)
-              : requestedInstanceId ===
                   resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
-                canAdoptFirstTurnSelection);
+                canAdoptFirstTurnSelection));
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
             requestedModelSelection: canAdoptRequestedInstance

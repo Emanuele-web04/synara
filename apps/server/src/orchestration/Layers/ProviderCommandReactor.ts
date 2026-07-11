@@ -1820,7 +1820,10 @@ const make = Effect.gen(function* () {
     // the binding decision when a session row exists but no turn has run yet
     // (an optimistic placeholder) AND the turn contests the row's provider.
     // Every other case resolves identically without it, so skip the lookup.
+    const hasTerminalProviderSession =
+      thread.session?.status === "stopped" || thread.session?.status === "error";
     const activeSession =
+      !hasTerminalProviderSession &&
       currentProvider !== undefined &&
       thread.latestTurn === null &&
       requestedModelSelection !== undefined &&
@@ -1831,7 +1834,9 @@ const make = Effect.gen(function* () {
     // first turn; only treat the provider as an immutable binding when a real
     // runtime session exists or the thread has actually run a turn.
     const establishedProvider =
-      currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
+      !hasTerminalProviderSession &&
+      currentProvider !== undefined &&
+      (activeSession !== undefined || thread.latestTurn !== null)
         ? currentProvider
         : undefined;
     if (
