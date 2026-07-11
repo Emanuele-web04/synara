@@ -268,6 +268,50 @@ describe("resolveVoiceTranscriptionTarget", () => {
       })?.instanceId,
     ).toBe("codex_alpha");
   });
+
+  it("ignores a removed selected account even when its stale status advertises voice", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_removed", true)],
+        providerInstances,
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_removed",
+      })?.instanceId,
+    ).toBe("codex");
+  });
+
+  it("returns no target when all configured Codex instances are disabled", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_work", true)],
+        providerInstances: providerInstances.map((instance) => ({ ...instance, enabled: false })),
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_work",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not resurrect a status-only stale Codex instance", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex_removed", true)],
+        providerInstances: [],
+        selectedProvider: "gemini",
+        selectedProviderInstanceId: "gemini",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fall back to an unavailable configured instance", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [{ ...codexStatus("codex", true), available: false }],
+        providerInstances: providerInstances.slice(0, 1),
+        selectedProvider: "gemini",
+        selectedProviderInstanceId: "gemini",
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("isProviderUsable", () => {

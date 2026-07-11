@@ -125,8 +125,9 @@ export interface VoiceTranscriptionTarget {
 }
 
 // Voice always uses a Codex ChatGPT session. Prefer the actively selected Codex
-// account when it advertises voice, otherwise choose a capable configured account
-// by identity (default first, then stable instance id) rather than status arrival order.
+// account when it advertises voice, otherwise choose a usable configured account
+// by identity (default first, then stable instance id). Status-only identities are
+// deliberately ignored because they can outlive a removed or disabled account.
 export function resolveVoiceTranscriptionTarget(input: {
   readonly statuses: readonly ServerProviderStatus[];
   readonly providerInstances: ReadonlyArray<{
@@ -155,39 +156,25 @@ export function resolveVoiceTranscriptionTarget(input: {
       return String(left.instanceId).localeCompare(String(right.instanceId));
     })
     .map((instance) => instance.instanceId);
-  const configuredInstanceIds = new Set(orderedInstanceIds);
-  for (const instanceId of [...statusByInstanceId.keys()].toSorted((left, right) =>
-    String(left).localeCompare(String(right)),
-  )) {
-    if (!configuredInstanceIds.has(instanceId)) {
-      orderedInstanceIds.push(instanceId);
-      configuredInstanceIds.add(instanceId);
-    }
-  }
 
   if (input.selectedProvider === "codex") {
     const selectedIndex = orderedInstanceIds.indexOf(input.selectedProviderInstanceId);
     if (selectedIndex >= 0) {
       orderedInstanceIds.splice(selectedIndex, 1);
+      orderedInstanceIds.unshift(input.selectedProviderInstanceId);
     }
-    orderedInstanceIds.unshift(input.selectedProviderInstanceId);
   }
 
+  const isUsableVoiceStatus = (instanceId: ProviderInstanceId): boolean => {
+    const status = statusByInstanceId.get(instanceId);
+    return isProviderUsable(status);
+  };
   const capableInstanceId = orderedInstanceIds.find((instanceId) => {
     const status = statusByInstanceId.get(instanceId);
-    return (
-      status?.enabled !== false &&
-      status?.authStatus !== "unauthenticated" &&
-      status?.voiceTranscriptionAvailable === true
-    );
+    return isUsableVoiceStatus(instanceId) && status?.voiceTranscriptionAvailable === true;
   });
   const fallbackInstanceId =
-    capableInstanceId ??
-    (input.selectedProvider === "codex" && statusByInstanceId.has(input.selectedProviderInstanceId)
-      ? input.selectedProviderInstanceId
-      : statusByInstanceId.has("codex" as ProviderInstanceId)
-        ? ("codex" as ProviderInstanceId)
-        : orderedInstanceIds.find((instanceId) => statusByInstanceId.has(instanceId)));
+    capableInstanceId ?? orderedInstanceIds.find((instanceId) => isUsableVoiceStatus(instanceId));
   if (!fallbackInstanceId) {
     return null;
   }

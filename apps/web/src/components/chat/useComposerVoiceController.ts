@@ -88,13 +88,17 @@ export function useComposerVoiceController(
   const { canStartVoiceNotes, showVoiceNotesControl } = useMemo(
     () =>
       deriveComposerVoiceState({
+        enabled: activeProviderStatus?.enabled,
+        available: activeProviderStatus?.available === true,
         authStatus: activeProviderStatus?.authStatus,
         voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
         isRecording: isVoiceRecording,
         isTranscribing: isVoiceTranscribing,
       }),
     [
+      activeProviderStatus?.available,
       activeProviderStatus?.authStatus,
+      activeProviderStatus?.enabled,
       activeProviderStatus?.voiceTranscriptionAvailable,
       isVoiceRecording,
       isVoiceTranscribing,

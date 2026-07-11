@@ -513,6 +513,7 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  deriveComposerVoiceState,
   DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
   DismissedProviderHealthBannersSchema,
   shouldRenderTerminalWorkspace,
@@ -3947,11 +3948,14 @@ export default function ChatView({
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
   );
-  const canRenderVoiceNotes = voiceProviderStatus?.authStatus !== "unauthenticated";
-  const canStartVoiceNotes =
-    voiceProviderStatus?.authStatus !== "unauthenticated" &&
-    voiceProviderStatus?.voiceTranscriptionAvailable !== false;
-  const showVoiceNotesControl = canRenderVoiceNotes || isVoiceRecording || isVoiceTranscribing;
+  const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
+    enabled: voiceProviderStatus?.enabled,
+    available: voiceProviderStatus?.available === true,
+    authStatus: voiceProviderStatus?.authStatus,
+    voiceTranscriptionAvailable: voiceProviderStatus?.voiceTranscriptionAvailable,
+    isRecording: isVoiceRecording,
+    isTranscribing: isVoiceTranscribing,
+  });
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const hasNativeUserMessages = useMemo(
