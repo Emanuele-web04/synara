@@ -111,4 +111,93 @@ describe("ProviderInstancePicker", () => {
       await screen.unmount();
     }
   });
+
+  it("shows a missing profile and lets an unlocked draft choose a configured replacement", async () => {
+    const onProviderInstanceChange = vi.fn();
+    const cursorInstance = {
+      instanceId: "cursor" as const,
+      provider: "cursor" as const,
+      label: "Default Cursor",
+      enabled: true,
+      isDefault: true,
+    };
+    const cursorStatus: ServerProviderStatus = {
+      provider: "cursor",
+      instanceId: "cursor",
+      driver: "cursor",
+      displayName: "Default Cursor",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: "2026-07-08T12:00:00.000Z",
+    };
+    const screen = await render(
+      <ProviderInstancePicker
+        provider="cursor"
+        providerInstances={[cursorInstance]}
+        providers={[cursorStatus]}
+        selectedProviderInstanceId="cursor_removed"
+        onProviderInstanceChange={onProviderInstanceChange}
+        onManageAccounts={vi.fn()}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: /Account: Missing account/ }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: /Missing account/ }))
+        .toBeDisabled();
+      await page.getByRole("menuitemradio", { name: "Default Cursor" }).click();
+
+      expect(onProviderInstanceChange).toHaveBeenCalledWith("cursor");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps a missing profile visible without unlocking a started thread", async () => {
+    const onProviderInstanceChange = vi.fn();
+    const cursorInstance = {
+      instanceId: "cursor" as const,
+      provider: "cursor" as const,
+      label: "Default Cursor",
+      enabled: true,
+      isDefault: true,
+    };
+    const cursorStatus: ServerProviderStatus = {
+      provider: "cursor",
+      instanceId: "cursor",
+      driver: "cursor",
+      displayName: "Default Cursor",
+      status: "ready",
+      available: true,
+      authStatus: "authenticated",
+      checkedAt: "2026-07-08T12:00:00.000Z",
+    };
+    const screen = await render(
+      <ProviderInstancePicker
+        provider="cursor"
+        providerInstances={[cursorInstance]}
+        providers={[cursorStatus]}
+        selectedProviderInstanceId="cursor_removed"
+        selectionLocked
+        onProviderInstanceChange={onProviderInstanceChange}
+        onManageAccounts={vi.fn()}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: /Account: Missing account/ }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: /Missing account/ }))
+        .toBeDisabled();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: /Default Cursor/ }))
+        .toBeDisabled();
+      await expect.element(page.getByText("New thread")).toBeInTheDocument();
+      expect(onProviderInstanceChange).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
 });

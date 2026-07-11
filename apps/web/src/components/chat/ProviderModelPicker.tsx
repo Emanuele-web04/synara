@@ -57,6 +57,7 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
+import { MISSING_PROVIDER_INSTANCE_LABEL } from "../../lib/providerInstancePresentation";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -384,10 +385,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const getSelectedInstanceIdForProvider = useCallback(
     (provider: ProviderKind): ProviderInstanceId => {
       const instances = getProviderInstances(provider);
-      if (
-        activeProvider === provider &&
-        instances.some((instance) => instance.instanceId === selectedProviderInstanceId)
-      ) {
+      if (activeProvider === provider) {
+        // The active instance id is identity-bearing. Keep a removed id selected
+        // so callers can present an explicit missing state instead of making a
+        // healthy sibling look selected while the saved value still points at
+        // the removed account.
         return selectedProviderInstanceId;
       }
       return (
@@ -468,7 +470,14 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
   const renderProviderInstanceRadioGroup = (provider: ProviderKind) => {
     const instances = getProviderInstances(provider);
-    if (props.showProviderInstanceChoices === false || instances.length <= 1) {
+    const selectedInstanceId = getSelectedInstanceIdForProvider(provider);
+    const selectedInstanceIsMissing =
+      activeProvider === provider &&
+      !instances.some((instance) => instance.instanceId === selectedInstanceId);
+    if (
+      props.showProviderInstanceChoices === false ||
+      (instances.length <= 1 && !selectedInstanceIsMissing)
+    ) {
       return null;
     }
     const sectionLabel =
@@ -479,13 +488,21 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           {sectionLabel}
         </div>
         <MenuRadioGroup
-          value={getSelectedInstanceIdForProvider(provider)}
+          value={selectedInstanceId}
           onValueChange={(value) => {
             if (!props.disabled && value) {
               handleInstanceChange(provider, value);
             }
           }}
         >
+          {selectedInstanceIsMissing ? (
+            <MenuRadioItem value={selectedInstanceId} disabled>
+              <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
+              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                Unavailable
+              </span>
+            </MenuRadioItem>
+          ) : null}
           {instances.map((instance) => {
             const availability = resolveInstanceAvailability(instance);
             return (
@@ -806,7 +823,18 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
-  const triggerLabel = selectedModelLabel;
+  const selectedProviderInstanceIsMissing =
+    props.showProviderInstanceChoices !== false &&
+    props.providerInstances !== undefined &&
+    props.selectedProviderInstanceId !== undefined &&
+    !props.providerInstances.some(
+      (instance) =>
+        instance.provider === activeProvider &&
+        instance.instanceId === props.selectedProviderInstanceId,
+    );
+  const triggerLabel = selectedProviderInstanceIsMissing
+    ? `${MISSING_PROVIDER_INSTANCE_LABEL} · ${selectedModelLabel}`
+    : selectedModelLabel;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = (nextOpen: boolean) => {

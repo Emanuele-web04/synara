@@ -315,6 +315,23 @@ export function resolveThreadArtifactWorkspaceRoot(input: {
   return input.isStudioContainer ? null : input.projectCwd;
 }
 
+export function shouldShowComposerProviderInstancePicker(input: {
+  provider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
+  providerInstances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId }>;
+}): boolean {
+  const selectedInstanceIsConfigured = input.providerInstances.some(
+    (instance) => instance.instanceId === input.selectedProviderInstanceId,
+  );
+
+  return (
+    input.provider === "codex" ||
+    input.provider === "claudeAgent" ||
+    input.providerInstances.length > 1 ||
+    !selectedInstanceIsConfigured
+  );
+}
+
 export interface PromptHistoryNavigationState {
   index: number;
   draft: string;

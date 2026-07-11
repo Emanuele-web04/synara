@@ -412,6 +412,46 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("shows a removed active account and commits a valid replacement account", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      selectedProviderInstanceId: "codex_removed",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+      ],
+      providers: [providerStatus("codex")],
+    });
+
+    try {
+      await expect
+        .element(page.getByRole("button", { name: /Missing account · GPT-5 Codex/ }))
+        .toBeInTheDocument();
+      await page.getByRole("button", { name: /Missing account · GPT-5 Codex/ }).click();
+      await page.getByText("Codex", { exact: true }).click();
+
+      const missingAccount = page.getByRole("menuitemradio", { name: /Missing account/ });
+      await expect.element(missingAccount).toBeDisabled();
+      await page.getByRole("menuitemradio", { name: "Personal" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith("codex", "gpt-5-codex", "codex");
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-codex",
+        "codex_removed",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("preserves the selected same-provider instance when selecting one of its models", async () => {
     const mounted = await mountPicker({
       provider: "codex",
