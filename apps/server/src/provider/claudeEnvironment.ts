@@ -46,22 +46,26 @@ export function buildClaudeInstanceProcessEnv(
   const resolvedHomePath = trimmedHomePath
     ? expandProviderAccountHomePath(trimmedHomePath)
     : undefined;
-  const env = {
-    ...process.env,
-    ...(environment ?? {}),
-    ...(resolvedHomePath ? claudeHomeEnvironment(resolvedHomePath) : {}),
-  };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // An explicit provider home or environment selects a distinct account
+  // boundary. Remove account-scoped ambient values first, then overlay only
+  // values deliberately supplied by the selected instance.
+  if (resolvedHomePath || environment !== undefined) {
+    for (const key of Object.keys(env)) {
+      if (isClaudeAccountIsolationEnvKey(key)) {
+        delete env[key];
+      }
+    }
+  }
+  if (environment) {
+    Object.assign(env, environment);
+  }
+  if (resolvedHomePath) {
+    Object.assign(env, claudeHomeEnvironment(resolvedHomePath));
+  }
   if (resolvedHomePath) {
     if (!environment || !("CLAUDE_CONFIG_DIR" in environment)) {
       delete env.CLAUDE_CONFIG_DIR;
-    }
-    // An explicit provider home selects a distinct account boundary. Ambient
-    // credentials and backend-routing flags belong to the server account and
-    // must never select it instead. Instance-provided values remain authoritative.
-    for (const key of Object.keys(env)) {
-      if (!isClaudeAccountIsolationEnvKey(key)) continue;
-      if (environment && key in environment) continue;
-      delete env[key];
     }
   }
   return buildClaudeProcessEnv({
