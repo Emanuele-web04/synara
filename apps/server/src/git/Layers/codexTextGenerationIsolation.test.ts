@@ -6,19 +6,24 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
+  realpathSync,
   readFileSync,
   renameSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, FileSystem } from "effect";
 import { parse as parseToml } from "smol-toml";
 import { expect } from "vitest";
+
+import { prepareCodexAuthTracking, type CodexPreparedAuthSource } from "../../codexProcessEnv.ts";
 
 import {
   acquireSecureTempDirectory,
@@ -36,6 +41,17 @@ import {
 
 function privateMode(path: string): number {
   return statSync(path).mode & 0o777;
+}
+
+function bindAuthSource(authFilePath: string): CodexPreparedAuthSource {
+  const canonicalHomePath = realpathSync(dirname(authFilePath));
+  const stat = lstatSync(canonicalHomePath, { bigint: true });
+  return {
+    kind: "bound",
+    canonicalHomePath,
+    device: stat.dev,
+    inode: stat.ino,
+  };
 }
 
 function jwt(expirySeconds: number, extra: Record<string, unknown> = {}): string {
@@ -404,10 +420,14 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
         }),
       );
 
-      const snapshot = prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome, {
-        nowMs,
-        minimumValidityMs: 300_000,
-      });
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(
+        bindAuthSource(authPath),
+        isolatedHome,
+        {
+          nowMs,
+          minimumValidityMs: 300_000,
+        },
+      );
       const candidate = JSON.parse(readFileSync(snapshot!.effectiveAuthFilePath, "utf8"));
       expect(snapshot?.mode).toBe("chatgpt");
       expect(candidate.auth_mode).toBe("chatgptAuthTokens");
@@ -420,6 +440,114 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       expect(lstatSync(snapshot!.effectiveAuthFilePath).isSymbolicLink()).toBe(false);
       expect(statSync(snapshot!.effectiveAuthFilePath).ino).not.toBe(statSync(authPath).ino);
       expect(privateMode(snapshot!.effectiveAuthFilePath)).toBe(0o600);
+    }),
+  );
+
+  it.effect("rejects a replaced account directory without copying replacement auth", () => {
+    if (process.platform === "win32") return Effect.void;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-swap-parent-" });
+      const isolatedHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-target-" });
+      const selectedHome = join(parent, "selected");
+      const movedSelectedHome = join(parent, "selected-original");
+      const replacementHome = join(parent, "replacement");
+      mkdirSync(selectedHome);
+      mkdirSync(replacementHome);
+      writeFileSync(
+        join(selectedHome, "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"selected-key"}',
+      );
+      writeFileSync(
+        join(replacementHome, "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"replacement-key"}',
+      );
+      const source = bindAuthSource(join(selectedHome, "auth.json"));
+
+      renameSync(selectedHome, movedSelectedHome);
+      symlinkSync(replacementHome, selectedHome, "dir");
+
+      expect(() => prepareCodexTextGenerationAuthSnapshot(source, isolatedHome)).toThrowError(
+        /auth home changed/i,
+      );
+      expect(existsSync(join(isolatedHome, "auth.json"))).toBe(false);
+    });
+  });
+
+  it.effect("stays bound to the canonical account when an ancestor alias is retargeted", () => {
+    if (process.platform === "win32") return Effect.void;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-alias-parent-" });
+      const isolatedHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-target-" });
+      const selectedHome = join(parent, "selected");
+      const replacementHome = join(parent, "replacement");
+      const aliasHome = join(parent, "alias");
+      mkdirSync(selectedHome);
+      mkdirSync(replacementHome);
+      writeFileSync(
+        join(selectedHome, "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"selected-key"}',
+      );
+      writeFileSync(
+        join(replacementHome, "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"replacement-key"}',
+      );
+      symlinkSync(selectedHome, aliasHome, "dir");
+      const source = bindAuthSource(join(aliasHome, "auth.json"));
+
+      unlinkSync(aliasHome);
+      symlinkSync(replacementHome, aliasHome, "dir");
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(source, isolatedHome)!;
+
+      expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).toContain("selected-key");
+      expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).not.toContain("replacement-key");
+    });
+  });
+
+  it.effect("does not adopt auth when the selected account home was missing", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-missing-parent-" });
+      const sourceHome = join(parent, "source");
+      const missingShadowHome = join(parent, "missing-shadow");
+      const isolatedHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-target-" });
+      mkdirSync(sourceHome);
+      const tracking = prepareCodexAuthTracking({
+        env: { ...process.env, CODEX_HOME: sourceHome },
+        homePath: sourceHome,
+        shadowHomePath: missingShadowHome,
+        accountId: "work",
+      });
+      expect(tracking.authSource.kind).toBe("missing");
+
+      mkdirSync(missingShadowHome);
+      writeFileSync(
+        join(missingShadowHome, "auth.json"),
+        '{"auth_mode":"apikey","OPENAI_API_KEY":"late-key"}',
+      );
+
+      expect(
+        prepareCodexTextGenerationAuthSnapshot(tracking.authSource, isolatedHome),
+      ).toBeUndefined();
+      expect(existsSync(join(isolatedHome, "auth.json"))).toBe(false);
+    }),
+  );
+
+  it.effect("accepts an atomic auth rotation inside the same bound account directory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sourceHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-source-" });
+      const isolatedHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-target-" });
+      const authPath = join(sourceHome, "auth.json");
+      writeFileSync(authPath, '{"auth_mode":"apikey","OPENAI_API_KEY":"old-key"}');
+      const source = bindAuthSource(authPath);
+      const replacementPath = join(sourceHome, "auth.next.json");
+      writeFileSync(replacementPath, '{"auth_mode":"apikey","OPENAI_API_KEY":"rotated-key"}');
+      renameSync(replacementPath, authPath);
+
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(source, isolatedHome)!;
+      expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).toContain("rotated-key");
     }),
   );
 
@@ -458,7 +586,7 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
           }),
         );
         expect(() =>
-          prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome, {
+          prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome, {
             nowMs,
             minimumValidityMs: 300_000,
           }),
@@ -479,9 +607,9 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
         authPath,
         JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "ignored-explicit-key" }),
       );
-      expect(() => prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)).toThrowError(
-        /requires a refresh/,
-      );
+      expect(() =>
+        prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome),
+      ).toThrowError(/requires a refresh/);
 
       writeFileSync(
         authPath,
@@ -491,7 +619,10 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
           legacy_secret: "must-not-reach-child",
         }),
       );
-      const snapshot = prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)!;
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(
+        bindAuthSource(authPath),
+        isolatedHome,
+      )!;
       const candidate = JSON.parse(readFileSync(snapshot.effectiveAuthFilePath, "utf8"));
       expect(snapshot.mode).toBe("api-key");
       expect(candidate).toEqual({ auth_mode: "apikey", OPENAI_API_KEY: "selected-key" });
@@ -516,7 +647,7 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       ]) {
         writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens }));
         expect(() =>
-          prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome, {
+          prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome, {
             nowMs,
             minimumValidityMs: 300_000,
           }),
@@ -539,7 +670,10 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
         const baseline = '{"auth_mode":"apikey","OPENAI_API_KEY":"key-a"}';
         const concurrent = '{"auth_mode":"apikey","OPENAI_API_KEY":"key-b"}';
         writeFileSync(authPath, baseline);
-        const snapshot = prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)!;
+        const snapshot = prepareCodexTextGenerationAuthSnapshot(
+          bindAuthSource(authPath),
+          isolatedHome,
+        )!;
 
         if (update === "atomic") {
           const replacement = join(sourceHome, "auth.next.json");
@@ -563,10 +697,15 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       const sourceHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-source-" });
       const isolatedHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "auth-target-" });
       const authPath = join(sourceHome, "auth.json");
-      expect(prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)).toBeUndefined();
+      expect(
+        prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome),
+      ).toBeUndefined();
 
       writeFileSync(authPath, '{"auth_mode":"apikey","OPENAI_API_KEY":"api-key"}');
-      const snapshot = prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)!;
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(
+        bindAuthSource(authPath),
+        isolatedHome,
+      )!;
       expect(snapshot.mode).toBe("api-key");
       expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).toContain("api-key");
       expect(statSync(snapshot.effectiveAuthFilePath).ino).not.toBe(statSync(authPath).ino);
@@ -589,9 +728,9 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
         }),
       );
 
-      expect(() => prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)).toThrowError(
-        CodexTextGenerationAuthError,
-      );
+      expect(() =>
+        prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome),
+      ).toThrowError(CodexTextGenerationAuthError);
       expect(existsSync(join(isolatedHome, "auth.json"))).toBe(false);
     }),
   );
@@ -605,9 +744,9 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       const linkPath = join(sourceHome, "auth.json");
       writeFileSync(realPath, '{"auth_mode":"apikey","OPENAI_API_KEY":"api-key"}');
       symlinkSync(realPath, linkPath);
-      expect(() => prepareCodexTextGenerationAuthSnapshot(linkPath, isolatedHome)).toThrowError(
-        /symbolic link/,
-      );
+      expect(() =>
+        prepareCodexTextGenerationAuthSnapshot(bindAuthSource(linkPath), isolatedHome),
+      ).toThrowError(/symbolic link/);
     }),
   );
 
@@ -620,9 +759,9 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
       const authPath = join(sourceHome, "auth.json");
       execFileSync("mkfifo", [authPath]);
 
-      expect(() => prepareCodexTextGenerationAuthSnapshot(authPath, isolatedHome)).toThrowError(
-        /regular file/,
-      );
+      expect(() =>
+        prepareCodexTextGenerationAuthSnapshot(bindAuthSource(authPath), isolatedHome),
+      ).toThrowError(/regular file/);
     });
   });
 
