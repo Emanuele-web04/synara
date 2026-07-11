@@ -46,6 +46,12 @@ import type {
 } from "@synara/contracts";
 import type { Deferred, Effect } from "effect";
 import type { Stream } from "effect";
+
+export function resolveProviderSessionInstanceId(
+  input: Pick<ProviderSessionStartInput, "providerInstanceId" | "modelSelection">,
+): ProviderInstanceId | undefined {
+  return input.providerInstanceId ?? input.modelSelection?.instanceId;
+}
 import type { CodexGeneratedImageHomeCandidate } from "../../codexGeneratedImages.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";

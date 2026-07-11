@@ -30,11 +30,24 @@ import {
   selectGrokDiscoveredModelGroups,
   resolveGrokPlanHookResponse,
   resolveGrokRuntimeModelSettings,
+  resolveGrokStartInstanceId,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
 } from "./GrokAdapter.ts";
 
 describe("GrokAdapter runtime event scoping", () => {
+  it("resolves modelSelection-only account identity before Grok launch", () => {
+    expect(
+      resolveGrokStartInstanceId({
+        modelSelection: {
+          provider: "grok",
+          instanceId: "grok_work",
+          model: "grok/model",
+        },
+      } as never),
+    ).toBe("grok_work");
+  });
+
   it("isolates model discovery credentials from ambient xAI aliases", () => {
     const env = buildGrokModelDiscoveryEnv(
       {

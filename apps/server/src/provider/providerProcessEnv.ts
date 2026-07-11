@@ -225,6 +225,37 @@ function safeInheritedEnvironment(
   return safe;
 }
 
+const PROVIDER_OWNED_PATH_ENV_KEYS = new Set([
+  "HOME",
+  "USERPROFILE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "CURSOR_CONFIG_DIR",
+  "GROK_HOME",
+  "GROK_AUTH_PATH",
+  "PI_CODING_AGENT_DIR",
+  "PI_CODING_AGENT_SESSION_DIR",
+]);
+
+function sanitizedSelectedEnvironment(
+  environment: Readonly<Record<string, string>>,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  const selected = normalizedEnvironment(environment, platform);
+  const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;
+  for (const key of PROVIDER_OWNED_PATH_ENV_KEYS) {
+    const value = selected[key];
+    if (value !== undefined && (!value.trim() || !pathApi.isAbsolute(value.trim()))) {
+      delete selected[key];
+    } else if (value !== undefined) {
+      selected[key] = value.trim();
+    }
+  }
+  return selected;
+}
+
 function providerInstanceHomeScope(
   driver: ProviderProcessEnvDriver,
   instanceId: string | undefined,
@@ -373,16 +404,16 @@ export function buildProviderProcessEnv(input: {
     ? safeInheritedEnvironment(normalizedBaseEnv, platform)
     : normalizedBaseEnv;
   const ambientHome = normalizedBaseEnv.HOME?.trim() || normalizedBaseEnv.USERPROFILE?.trim();
+  const selectedEnvironment =
+    input.environment === undefined
+      ? undefined
+      : sanitizedSelectedEnvironment(input.environment, platform);
   if (isolatesAccount) {
     for (const key of Object.keys(env)) {
       if (isProviderAccountEnvKey(input.driver, key)) {
         delete env[key];
       }
     }
-    const selectedEnvironment =
-      input.environment === undefined
-        ? undefined
-        : normalizedEnvironment(input.environment, platform);
     const selectedHome = selectedEnvironment?.HOME ?? selectedEnvironment?.USERPROFILE;
     const baseHome = input.homeDir?.trim() || ambientHome || homedir();
     const syntheticHome = providerIsolatedHomePath({
@@ -407,7 +438,7 @@ export function buildProviderProcessEnv(input: {
   }
 
   if (input.environment !== undefined) {
-    Object.assign(env, normalizedEnvironment(input.environment, platform));
+    Object.assign(env, selectedEnvironment);
   }
   if (isolatesAccount) {
     const pathApi = platform === "win32" ? NodePath.win32 : NodePath.posix;

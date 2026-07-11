@@ -202,6 +202,54 @@ describe("buildProviderProcessEnv", () => {
     expect(env.XDG_DATA_HOME).toBe("/accounts/selected-b/.local/share");
   });
 
+  it.each(["", "   ", "relative/home"])(
+    "rejects invalid selected HOME %j and retains absolute synthetic roots",
+    (selectedHome) => {
+      const root = mkdtempSync(join(tmpdir(), "synara-invalid-provider-home-"));
+      const env = buildProviderProcessEnv({
+        driver: "cursor",
+        instanceId: "cursor_work",
+        isolationRootDir: root,
+        environment: {
+          HOME: selectedHome,
+          XDG_CONFIG_HOME: "relative/config",
+          CURSOR_CONFIG_DIR: "relative/cursor",
+        },
+      });
+      expect(env.HOME).toContain(`${root}/provider-homes/cursor/`);
+      expect(env.XDG_CONFIG_HOME).toContain(`${root}/provider-homes/cursor/`);
+      expect(env.CURSOR_CONFIG_DIR).toContain(`${root}/provider-homes/cursor/`);
+    },
+  );
+
+  it("rejects invalid selected Grok storage roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-invalid-grok-home-"));
+    const env = buildProviderProcessEnv({
+      driver: "grok",
+      instanceId: "grok_work",
+      isolationRootDir: root,
+      environment: { GROK_HOME: "relative/grok", GROK_AUTH_PATH: " " },
+    });
+    expect(env.GROK_HOME).toContain(`${root}/provider-homes/grok/`);
+    expect(env.GROK_AUTH_PATH).toContain(`${root}/provider-homes/grok/`);
+  });
+
+  it("removes invalid selected Pi agent and session roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-invalid-pi-home-"));
+    const env = buildProviderProcessEnv({
+      driver: "pi",
+      instanceId: "pi_work",
+      isolationRootDir: root,
+      environment: {
+        PI_CODING_AGENT_DIR: "relative/agent",
+        PI_CODING_AGENT_SESSION_DIR: " ",
+      },
+    });
+    expect(env.PI_CODING_AGENT_DIR).toBeUndefined();
+    expect(env.PI_CODING_AGENT_SESSION_DIR).toBeUndefined();
+    expect(env.HOME).toContain(`${root}/provider-homes/pi/`);
+  });
+
   it("inherits only safe system variables at an account boundary", () => {
     const env = buildProviderProcessEnv({
       driver: "opencode",

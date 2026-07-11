@@ -135,9 +135,11 @@ import {
   type GrokAcpRuntimeSettings,
 } from "../acp/GrokAcpSupport.ts";
 import { GrokAdapter, type GrokAdapterShape } from "../Services/GrokAdapter.ts";
+import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "grok" as const;
+export const resolveGrokStartInstanceId = resolveProviderSessionInstanceId;
 
 export const takeGrokSynaraHarnessPolicyTextPart = (
   state: SynaraHarnessPolicyDeliveryState,
@@ -1038,7 +1040,7 @@ export function makeGrokAdapter(
 
           const grokModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
-          const providerInstanceId = input.providerInstanceId ?? grokModelSelection?.instanceId;
+          const resolvedProviderInstanceId = resolveGrokStartInstanceId(input);
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -1084,7 +1086,9 @@ export function makeGrokAdapter(
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
             homeDir: serverConfig.homeDir,
             isolationRootDir: serverConfig.stateDir,
-            ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
+            ...(resolvedProviderInstanceId !== undefined
+              ? { instanceId: resolvedProviderInstanceId }
+              : {}),
             ...(grokSettings.binaryPath !== undefined
               ? { binaryPath: grokSettings.binaryPath }
               : {}),
@@ -1166,7 +1170,7 @@ export function makeGrokAdapter(
                         payload: params,
                       },
                     },
-                    providerInstanceId,
+                    resolvedProviderInstanceId,
                   );
                   const resolved = yield* Deferred.await(answers);
                   pendingUserInputs.delete(requestId);
@@ -1181,7 +1185,7 @@ export function makeGrokAdapter(
                       requestId: runtimeRequestId,
                       payload: { answers: resolved },
                     },
-                    providerInstanceId,
+                    resolvedProviderInstanceId,
                   );
                   return makeGrokQuestionResponse(params, resolved);
                 }),
@@ -1221,7 +1225,7 @@ export function makeGrokAdapter(
                           payload: params,
                         },
                       },
-                      providerInstanceId,
+                      resolvedProviderInstanceId,
                     );
                     if (
                       ctx !== undefined &&
@@ -1294,7 +1298,7 @@ export function makeGrokAdapter(
                     method: "session/request_permission",
                     rawPayload: params,
                   }),
-                  providerInstanceId,
+                  resolvedProviderInstanceId,
                 );
                 const resolved = yield* Deferred.await(decision);
                 pendingApprovals.delete(requestId);
@@ -1309,7 +1313,7 @@ export function makeGrokAdapter(
                     permissionRequest,
                     decision: resolved,
                   }),
-                  providerInstanceId,
+                  resolvedProviderInstanceId,
                 );
                 return {
                   outcome:
@@ -1342,7 +1346,9 @@ export function makeGrokAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
-            ...(providerInstanceId ? { providerInstanceId } : {}),
+            ...(resolvedProviderInstanceId !== undefined
+              ? { providerInstanceId: resolvedProviderInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
