@@ -790,6 +790,38 @@ const makeProviderProbeEnv = (
         : process.env,
   });
 
+const tryMakeProviderProbeEnv = (
+  provider: Extract<ProviderProcessEnvDriver, ProviderChildKind>,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+):
+  | { readonly ok: true; readonly env: NodeJS.ProcessEnv }
+  | { readonly ok: false; readonly cause: unknown } => {
+  try {
+    return { ok: true, env: makeProviderProbeEnv(provider, environment, instanceId, paths) };
+  } catch (cause) {
+    return { ok: false, cause };
+  }
+};
+
+function providerHomePreparationFailure(
+  provider: Extract<ProviderProcessEnvDriver, ProviderChildKind>,
+  checkedAt: string,
+  cause: unknown,
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "error",
+    available: false,
+    authStatus: "unknown",
+    checkedAt,
+    message: `Failed to prepare the private provider account home. ${cause instanceof Error ? cause.message : String(cause)}`,
+  };
+}
+
 function isAccountIsolatedProviderDriver(
   provider: ProviderChildKind,
 ): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
@@ -1475,7 +1507,16 @@ export const makeCheckGrokProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
-    const probeEnv = makeProviderProbeEnv(GROK_PROVIDER, environment, instanceId, paths);
+    const probeEnvResult = tryMakeProviderProbeEnv(
+      GROK_PROVIDER,
+      environment,
+      instanceId,
+      paths,
+    );
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(GROK_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
     const versionProbe = yield* probeProviderCliVersion(
       runGrokCommand(["--version"], executable, probeEnv),
@@ -1703,7 +1744,16 @@ export const makeCheckOpenCodeProviderStatus = (
       });
     }
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
-    const probeEnv = makeProviderProbeEnv(OPENCODE_PROVIDER, environment, instanceId, paths);
+    const probeEnvResult = tryMakeProviderProbeEnv(
+      OPENCODE_PROVIDER,
+      environment,
+      instanceId,
+      paths,
+    );
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OPENCODE_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
     const versionProbe = yield* probeProviderCliVersion(
       runOpenCodeCommand(["--version"], executable, probeEnv),
@@ -1787,7 +1837,16 @@ export const checkPiProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
-    const probeEnv = makeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
+    const probeEnvResult = tryMakeProviderProbeEnv(
+      PI_PROVIDER,
+      environment,
+      instanceId,
+      paths,
+    );
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(PI_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
     const versionProbe = yield* probeProviderCliVersion(
       runPiCommand(["--version"], executable, probeEnv),
@@ -1980,7 +2039,16 @@ export const makeCheckCursorProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = resolveCursorAgentBinaryPath(nonEmptyTrimmed(binaryPath));
-    const probeEnv = makeProviderProbeEnv(CURSOR_PROVIDER, environment, instanceId, paths);
+    const probeEnvResult = tryMakeProviderProbeEnv(
+      CURSOR_PROVIDER,
+      environment,
+      instanceId,
+      paths,
+    );
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(CURSOR_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
     const versionProbe = yield* probeProviderCliVersion(
       runCursorCommand(["--version"], executable, probeEnv),
@@ -2836,12 +2904,21 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           if (!definition) {
             return makeManualProviderMaintenanceCapabilities(target.provider);
           }
+          const updateEnv = yield* Effect.try({
+            try: () =>
+              makeProviderUpdateEnv(instance, {
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+              }),
+            catch: (cause) =>
+              new Error(
+                `Failed to prepare the private provider account home. ${cause instanceof Error ? cause.message : String(cause)}`,
+                { cause },
+              ),
+          });
           return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
             binaryPath: binaryPath ?? null,
-            env: makeProviderUpdateEnv(instance, {
-              homeDir: serverConfig.homeDir,
-              isolationRootDir: serverConfig.stateDir,
-            }),
+            env: updateEnv,
             platform: process.platform,
           }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
         },
@@ -3305,9 +3382,13 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         readonly args: ReadonlyArray<string>;
         readonly pathPrepend?: string;
       }) {
-        const baseEnv = makeProviderUpdateEnv(input.instance, {
-          homeDir: serverConfig.homeDir,
-          isolationRootDir: serverConfig.stateDir,
+        const baseEnv = yield* Effect.try({
+          try: () =>
+            makeProviderUpdateEnv(input.instance, {
+              homeDir: serverConfig.homeDir,
+              isolationRootDir: serverConfig.stateDir,
+            }),
+          catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
         });
         const updateEnv = input.pathPrepend
           ? {

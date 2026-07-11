@@ -163,19 +163,22 @@ export const resolveGrokAcpAuthMethodIdForEnv =
   ) =>
   (initializeResult: Acp.InitializeResponse): Effect.Effect<string, AcpErrors.AcpError> =>
     Effect.gen(function* () {
-    const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = hasGrokApiKeyEnv(
-      buildProviderChildEnvironment({
-        provider: "grok",
-        baseEnv: buildProviderProcessEnv({
-          driver: "grok",
-          ...(environment !== undefined ? { environment } : {}),
-          ...(instanceId !== undefined ? { instanceId } : {}),
-          ...(homeDir !== undefined ? { homeDir } : {}),
-          ...(isolationRootDir !== undefined ? { isolationRootDir } : {}),
-        }),
-      }),
-    );
+      const authMethodIds = availableAuthMethodIds(initializeResult);
+      const effectiveEnv = yield* Effect.try({
+        try: () =>
+          buildProviderChildEnvironment({
+            provider: "grok",
+            baseEnv: buildProviderProcessEnv({
+              driver: "grok",
+              ...(environment !== undefined ? { environment } : {}),
+              ...(instanceId !== undefined ? { instanceId } : {}),
+              ...(homeDir !== undefined ? { homeDir } : {}),
+              ...(isolationRootDir !== undefined ? { isolationRootDir } : {}),
+            }),
+          }),
+        catch: (cause) => new AcpErrors.AcpSpawnError({ command: "grok", cause }),
+      });
+      const hasApiKey = hasGrokApiKeyEnv(effectiveEnv);
     if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
       return GROK_API_KEY_AUTH_METHOD_ID;
     }

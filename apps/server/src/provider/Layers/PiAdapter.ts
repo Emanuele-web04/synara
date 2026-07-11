@@ -16,6 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import { resetApiProviders } from "@earendil-works/pi-ai/compat";
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -402,6 +403,20 @@ interface PiSessionContext {
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
+  readonly extensionsEnabled: boolean;
+}
+
+export function resolvePiExtensionMode(input: {
+  readonly isolatedAccount: boolean;
+  readonly hasExtensionEnabledDefault: boolean;
+  readonly hasIsolatedMode: boolean;
+}): { readonly noExtensions: boolean } {
+  if (input.isolatedAccount && input.hasExtensionEnabledDefault) {
+    throw new Error(
+      "Stop extension-enabled default Pi sessions before starting an isolated Pi account.",
+    );
+  }
+  return { noExtensions: input.isolatedAccount || input.hasIsolatedMode };
 }
 
 export function makePiRuntimeEventBase(
@@ -1804,6 +1819,31 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
+    const shouldDisableExtensions = (
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+    ) =>
+      environment !== undefined ||
+      (instanceId !== undefined && instanceId !== PROVIDER) ||
+      [...sessions.values()].some((context) => !context.extensionsEnabled);
+    const preparePiDiscoveryMode = (
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+    ) => {
+      const isolatedAccount =
+        environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+      const mode = resolvePiExtensionMode({
+        isolatedAccount,
+        hasExtensionEnabledDefault: [...sessions.values()].some(
+          (context) => context.extensionsEnabled,
+        ),
+        hasIsolatedMode: [...sessions.values()].some((context) => !context.extensionsEnabled),
+      });
+      if (isolatedAccount) {
+        resetApiProviders();
+      }
+      return mode.noExtensions;
+    };
     // Serializes session lifecycle and turn dispatch per thread. Dispatch also
     // waits for a prior prompt's preflight decision before choosing prompt(),
     // steer(), or followUp().
@@ -2847,6 +2887,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
       signal?: AbortSignal;
+      noExtensions?: boolean;
     }) => {
       const modelRuntime = await createPiModelRuntime(
         input.agentDir,
@@ -2867,6 +2908,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           cwd,
           agentDir,
           modelRuntime,
+          ...(input.noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
         });
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
         const requested = parseModelReference(input.modelId);
@@ -2925,6 +2967,31 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const piOptions = input.providerOptions?.pi;
         const piEnvironment = piOptions?.environment;
         const providerInstanceId = input.providerInstanceId ?? input.modelSelection?.instanceId;
+        const isolatedAccount =
+          piEnvironment !== undefined ||
+          (providerInstanceId !== undefined && providerInstanceId !== PROVIDER);
+        let noExtensions: boolean;
+        try {
+          noExtensions = resolvePiExtensionMode({
+            isolatedAccount,
+            hasExtensionEnabledDefault: [...sessions.values()].some(
+              (context) => context.extensionsEnabled,
+            ),
+            hasIsolatedMode: [...sessions.values()].some(
+              (context) => !context.extensionsEnabled,
+            ),
+          }).noExtensions;
+        } catch (cause) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/start",
+            detail: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          });
+        }
+        if (isolatedAccount) {
+          resetApiProviders();
+        }
         const processSupervisor = makePiBashProcessSupervisor({
           getShellConfig: () => piSdk.getShellConfig(),
           ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
@@ -3021,6 +3088,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
                 ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                 sessionManager,
+                ...(noExtensions ? { noExtensions: true } : {}),
                 ...(modelId ? { modelId } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
                 processSupervisor,
@@ -3085,6 +3153,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
+          extensionsEnabled: !noExtensions,
         };
         context.unsubscribe = runtime.session.subscribe((event) =>
           handleSessionEvent(context, event),
@@ -3501,6 +3570,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: async (signal) => {
+          const noExtensions = preparePiDiscoveryMode(input.environment, input.instanceId);
           const piSdk = await loadPiCodingAgentModule();
           const { agentDir } = makePiStoragePaths({
             agentDir: input.agentDir,
@@ -3523,6 +3593,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             cwd,
             agentDir,
             modelRuntime,
+            ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
           });
           await refreshPiOpenRouterModels(services.modelRuntime);
           const registry = modelRegistryFacade(services.modelRuntime, piSdk);
@@ -3553,11 +3624,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
         try: async (signal) => {
+          const noExtensions = preparePiDiscoveryMode(input.environment, input.instanceId);
           const active = input.threadId
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : undefined;
           const loader = active?.runtime.session.resourceLoader;
           if (active && input.forceReload) {
+            if (
+              shouldDisableExtensions(input.environment, input.instanceId) &&
+              active.extensionsEnabled
+            ) {
+              throw new Error(
+                "Extension reload is disabled while an isolated Pi account is active.",
+              );
+            }
             await active.runtime.session.reload();
           }
           let services:
@@ -3585,6 +3665,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               cwd: input.cwd,
               agentDir,
               modelRuntime,
+              ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
             });
           }
           if (services && input.forceReload) {
@@ -3623,6 +3704,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const listCommands: NonNullable<PiAdapterShape["listCommands"]> = (input) =>
       Effect.tryPromise({
         try: async (signal) => {
+          const noExtensions = preparePiDiscoveryMode(input.environment, input.instanceId);
           const active = input.threadId
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : undefined;
@@ -3681,6 +3763,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             cwd: input.cwd,
             agentDir,
             modelRuntime,
+            ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
           });
           if (input.forceReload) {
             await services.resourceLoader.reload();

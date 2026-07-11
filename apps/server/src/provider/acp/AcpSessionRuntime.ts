@@ -1476,7 +1476,10 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
-    const env = buildAcpSpawnProcessEnv(options.spawn);
+    const env = yield* Effect.try({
+      try: () => buildAcpSpawnProcessEnv(options.spawn),
+      catch: (cause) => new AcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
+    });
     const child = yield* spawner
       .spawn(
         makeEffectProcessCommand(options.spawn.command, options.spawn.args, {

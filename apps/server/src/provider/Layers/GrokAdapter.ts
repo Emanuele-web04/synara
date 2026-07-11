@@ -613,6 +613,8 @@ export function buildGrokModelDiscoveryEnv(
   input: {
     readonly instanceId?: string | undefined;
     readonly environment?: Readonly<Record<string, string>> | undefined;
+    readonly homeDir?: string | undefined;
+    readonly isolationRootDir?: string | undefined;
   },
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -623,8 +625,10 @@ export function buildGrokModelDiscoveryEnv(
       driver: PROVIDER,
       env,
       platform,
-      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+    ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+    ...(input.environment !== undefined ? { environment: input.environment } : {}),
+    ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+    ...(input.isolationRootDir !== undefined ? { isolationRootDir: input.isolationRootDir } : {}),
     }),
   });
 }
@@ -2441,7 +2445,23 @@ export function makeGrokAdapter(
 
     const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
-      const childEnv = buildGrokModelDiscoveryEnv(input);
+      let childEnv: NodeJS.ProcessEnv;
+      try {
+        childEnv = buildGrokModelDiscoveryEnv({
+          ...input,
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+        });
+      } catch (cause) {
+        return Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: "Failed to prepare the private Grok account home.",
+            cause,
+          }),
+        );
+      }
       return Effect.gen(function* () {
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;

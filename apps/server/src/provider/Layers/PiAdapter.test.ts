@@ -26,6 +26,7 @@ import {
   makePiStoragePaths,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  resolvePiExtensionMode,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
 
@@ -70,6 +71,45 @@ describe("makePiStoragePaths", () => {
     expect(paths.agentDir).toContain("/state/provider-homes/pi/");
     expect(paths.agentDir.endsWith("/.pi/agent")).toBe(true);
     expect(paths.sessionDir).toBe(`${paths.agentDir}/sessions`);
+  });
+});
+
+describe("resolvePiExtensionMode", () => {
+  it("preserves default-only extension behavior", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: false });
+  });
+
+  it("forces noExtensions for isolated accounts and coexisting default discovery", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: true });
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: true,
+      }),
+    ).toEqual({ noExtensions: true });
+  });
+
+  it("rejects isolated startup while an extension-enabled default is active", () => {
+    expect(() =>
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: true,
+        hasIsolatedMode: false,
+      }),
+    ).toThrow(/Stop extension-enabled default Pi sessions/);
   });
 });
 

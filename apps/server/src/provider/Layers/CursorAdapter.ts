@@ -1627,15 +1627,23 @@ export function makeCursorAdapter(
 
     const listSkills: NonNullable<CursorAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
-        try: async () =>
-          ({
+        try: async () => {
+          const accountEnv = buildProviderProcessEnv({
+            driver: PROVIDER,
+            homeDir: serverConfig.homeDir,
+            isolationRootDir: serverConfig.stateDir,
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+          });
+          return {
             skills: await discoverCursorSkills({
               cwd: input.cwd,
-              homeDir: serverConfig.homeDir,
+              homeDir: accountEnv.HOME ?? accountEnv.USERPROFILE ?? serverConfig.homeDir,
             }),
             source: "cursor.filesystem",
             cached: false,
-          }) satisfies ProviderListSkillsResult,
+          } satisfies ProviderListSkillsResult;
+        },
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -1648,13 +1656,25 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
-      const childEnv = buildProviderProcessEnv({
-        driver: PROVIDER,
-        homeDir: serverConfig.homeDir,
-        isolationRootDir: serverConfig.stateDir,
-        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-        ...(input.environment !== undefined ? { environment: input.environment } : {}),
-      });
+      let childEnv: NodeJS.ProcessEnv;
+      try {
+        childEnv = buildProviderProcessEnv({
+          driver: PROVIDER,
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
+        });
+      } catch (cause) {
+        return Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: "Failed to prepare the private Cursor account home.",
+            cause,
+          }),
+        );
+      }
       const effectiveBinaryPath = resolveCursorAgentBinaryPath(
         binaryPath || cursorSettings.binaryPath,
       );
