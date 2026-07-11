@@ -1553,7 +1553,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const cause = context?.transportError ?? failureError;
       const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        if (!context.terminalFailure) {
+        if (!context.terminalFailure && !context.stopping) {
           this.updateSession(context, {
             status: "error",
             lastError: message,
@@ -1565,7 +1565,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         } else if (context.teardownError) {
           throw context.teardownError;
         } else {
-          await this.stopSession(threadId);
+          await this.stopSessionContext(context);
         }
       } else {
         gatewaySessionLease?.release();
@@ -2383,7 +2383,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const cause = context?.transportError ?? failureError;
       const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        if (!context.terminalFailure) {
+        if (!context.terminalFailure && !context.stopping) {
           this.updateSession(context, {
             status: "error",
             lastError: message,
@@ -2395,7 +2395,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         } else if (context.teardownError) {
           throw context.teardownError;
         } else {
-          await this.stopSession(threadId);
+          await this.stopSessionContext(context);
         }
       } else {
         gatewaySessionLease?.release();
@@ -2745,6 +2745,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context) {
       return;
     }
+    return this.stopSessionContext(context);
+  }
+
+  private async stopSessionContext(context: CodexSessionContext): Promise<void> {
+    const threadId = context.session.threadId;
     if (context.stopPromise) {
       return context.stopPromise;
     }
@@ -4257,6 +4262,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(context.lifecycleGeneration !== undefined
         ? { lifecycleGeneration: context.lifecycleGeneration }
         : {}),
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
       method,
       message,
     });
@@ -4274,6 +4282,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       ...(context.lifecycleGeneration !== undefined
         ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
         : {}),
       method,
       message,
