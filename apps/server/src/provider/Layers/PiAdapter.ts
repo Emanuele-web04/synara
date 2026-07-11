@@ -83,6 +83,10 @@ import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import {
+  buildProviderProcessEnv,
+  MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
+} from "../providerProcessEnv.ts";
+import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
   PROVIDER_RUNTIME_CALLBACK_BUFFER_MAX_BYTES,
@@ -1265,48 +1269,13 @@ function makeAgentDir(
   return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
 }
 
-const PI_RUNTIME_API_KEY_ENV_MAPPINGS: ReadonlyArray<{
-  readonly provider: string;
-  readonly envKeys: ReadonlyArray<string>;
-}> = [
-  { provider: "github-copilot", envKeys: ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] },
-  { provider: "anthropic", envKeys: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] },
-  { provider: "openai", envKeys: ["OPENAI_API_KEY"] },
-  { provider: "azure-openai-responses", envKeys: ["AZURE_OPENAI_API_KEY"] },
-  { provider: "deepseek", envKeys: ["DEEPSEEK_API_KEY"] },
-  { provider: "google", envKeys: ["GEMINI_API_KEY"] },
-  { provider: "google-vertex", envKeys: ["GOOGLE_CLOUD_API_KEY"] },
-  { provider: "groq", envKeys: ["GROQ_API_KEY"] },
-  { provider: "cerebras", envKeys: ["CEREBRAS_API_KEY"] },
-  { provider: "xai", envKeys: ["XAI_API_KEY"] },
-  { provider: "openrouter", envKeys: ["OPENROUTER_API_KEY"] },
-  { provider: "vercel-ai-gateway", envKeys: ["AI_GATEWAY_API_KEY"] },
-  { provider: "zai", envKeys: ["ZAI_API_KEY"] },
-  { provider: "mistral", envKeys: ["MISTRAL_API_KEY"] },
-  { provider: "minimax", envKeys: ["MINIMAX_API_KEY"] },
-  { provider: "minimax-cn", envKeys: ["MINIMAX_CN_API_KEY"] },
-  { provider: "moonshotai", envKeys: ["MOONSHOT_API_KEY"] },
-  { provider: "moonshotai-cn", envKeys: ["MOONSHOT_API_KEY"] },
-  { provider: "huggingface", envKeys: ["HF_TOKEN"] },
-  { provider: "fireworks", envKeys: ["FIREWORKS_API_KEY"] },
-  { provider: "opencode", envKeys: ["OPENCODE_API_KEY"] },
-  { provider: "opencode-go", envKeys: ["OPENCODE_API_KEY"] },
-  { provider: "kimi-coding", envKeys: ["KIMI_API_KEY"] },
-  { provider: "cloudflare-workers-ai", envKeys: ["CLOUDFLARE_API_KEY"] },
-  { provider: "cloudflare-ai-gateway", envKeys: ["CLOUDFLARE_API_KEY"] },
-  { provider: "xiaomi", envKeys: ["XIAOMI_API_KEY"] },
-  { provider: "xiaomi-token-plan-cn", envKeys: ["XIAOMI_TOKEN_PLAN_CN_API_KEY"] },
-  { provider: "xiaomi-token-plan-ams", envKeys: ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"] },
-  { provider: "xiaomi-token-plan-sgp", envKeys: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"] },
-];
-
 function readPiRuntimeApiKeyOverrides(
-  environment: Readonly<Record<string, string>> | undefined,
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
 ): ReadonlyArray<readonly [provider: string, envKey: string, value: string]> {
   if (!environment) {
     return [];
   }
-  return PI_RUNTIME_API_KEY_ENV_MAPPINGS.flatMap(({ provider, envKeys }) => {
+  return MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.flatMap(({ provider, envKeys }) => {
     const envKey = envKeys.find((key) => trimToUndefined(environment[key]) !== undefined);
     if (!envKey) {
       return [];
@@ -1318,11 +1287,35 @@ function readPiRuntimeApiKeyOverrides(
 
 export async function applyPiRuntimeApiKeysFromEnvironment(
   runtime: Pick<ModelRuntime, "setRuntimeApiKey">,
-  environment: Readonly<Record<string, string>> | undefined,
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
 ): Promise<void> {
   for (const [provider, _envKey, value] of readPiRuntimeApiKeyOverrides(environment)) {
     await runtime.setRuntimeApiKey(provider, value);
   }
+}
+
+interface PiModelRuntimeInternals {
+  readonly models?: {
+    authContext?: {
+      env(name: string): Promise<string | undefined>;
+      fileExists(path: string): Promise<boolean>;
+    };
+  };
+}
+
+function isolatePiModelRuntimeFromAmbientEnvironment(
+  runtime: ModelRuntime,
+  environment: Readonly<NodeJS.ProcessEnv>,
+): void {
+  const models = (runtime as unknown as PiModelRuntimeInternals).models;
+  const authContext = models?.authContext;
+  if (!models || !authContext) {
+    throw new Error("Pi ModelRuntime auth context is unavailable for account isolation.");
+  }
+  models.authContext = {
+    ...authContext,
+    env: async (name) => trimToUndefined(environment[name]),
+  };
 }
 
 // Keep session runtimes isolated so project extension provider registrations
@@ -1332,12 +1325,28 @@ export async function createPiModelRuntime(
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
   signal?: AbortSignal,
   environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
 ): Promise<ModelRuntime> {
+  const hasAccountBoundary =
+    environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+  const runtimeEnvironment = hasAccountBoundary
+    ? buildProviderProcessEnv({
+        driver: PROVIDER,
+        ...(environment !== undefined ? { environment } : {}),
+        ...(instanceId !== undefined ? { instanceId } : {}),
+      })
+    : environment;
   const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
   });
-  await applyPiRuntimeApiKeysFromEnvironment(runtime, environment);
+  if (hasAccountBoundary) {
+    isolatePiModelRuntimeFromAmbientEnvironment(runtime, runtimeEnvironment ?? {});
+  }
+  await applyPiRuntimeApiKeysFromEnvironment(runtime, runtimeEnvironment);
+  if (hasAccountBoundary) {
+    await runtime.refresh({ allowNetwork: false });
+  }
   await refreshPiOpenCodeCatalog(runtime, { signal });
   return runtime;
 }
@@ -2508,6 +2517,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       cwd: string;
       agentDir: string;
       environment?: Readonly<Record<string, string>>;
+      instanceId?: string;
       sessionManager: SessionManager;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
@@ -2520,6 +2530,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.sdk,
         input.signal,
         input.environment,
+        input.instanceId,
       );
       input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
@@ -2589,9 +2600,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const piSdk = yield* loadPiSdk("session/start");
         const piOptions = input.providerOptions?.pi;
         const piEnvironment = piOptions?.environment;
+        const providerInstanceId = input.providerInstanceId ?? input.modelSelection?.instanceId;
         const processSupervisor = makePiBashProcessSupervisor({
           getShellConfig: () => piSdk.getShellConfig(),
-          ...(piEnvironment ? { environment: piEnvironment } : {}),
+          ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
           ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
           ...(options?.teardownProcessTree
             ? { teardownProcessTree: options.teardownProcessTree }
@@ -2671,7 +2683,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 sdk: piSdk,
                 cwd,
                 agentDir,
-                ...(piEnvironment ? { environment: piEnvironment } : {}),
+                ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+                ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                 sessionManager,
                 ...(modelId ? { modelId } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -2694,7 +2707,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ),
         );
         const now = new Date().toISOString();
-        const providerInstanceId = input.providerInstanceId ?? input.modelSelection?.instanceId;
         const model = runtime.session.model
           ? `${runtime.session.model.provider}/${runtime.session.model.id}`
           : modelId;
@@ -3162,6 +3174,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             piSdk,
             signal,
             input.environment,
+            input.instanceId,
           );
           const services = await piSdk.createAgentSessionServices({
             cwd,
@@ -3215,6 +3228,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               piSdk,
               signal,
               input.environment,
+              input.instanceId,
             );
             services = await piSdk.createAgentSessionServices({
               cwd: input.cwd,
@@ -3302,6 +3316,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             piSdk,
             signal,
             input.environment,
+            input.instanceId,
           );
           const services = await piSdk.createAgentSessionServices({
             cwd: input.cwd,

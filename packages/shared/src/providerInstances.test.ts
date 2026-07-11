@@ -229,6 +229,23 @@ describe("provider instance resolution", () => {
     expect(resolved?.config.binaryPath).toBe("/opt/bin/opencode-updated");
     expect(resolved?.config.serverUrl).toBe("http://127.0.0.1:5000");
   });
+
+  it("preserves an explicitly empty default-instance environment as an account boundary", () => {
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          grok: {
+            driver: "grok",
+            environment: [],
+          },
+        },
+      },
+      { provider: "grok" },
+    );
+
+    expect(providerStartOptionsFromInstance(resolved!)?.grok?.environment).toEqual({});
+  });
 });
 
 describe("providerStartOptionsFromInstance codex account isolation", () => {

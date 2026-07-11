@@ -30,6 +30,10 @@ import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec }
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
+  buildProviderProcessEnv,
+  type ProviderProcessEnvDriver,
+} from "../providerProcessEnv.ts";
+import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
   type SupervisedProcessTeardownResult,
@@ -292,6 +296,29 @@ export interface AcpSpawnInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  readonly providerEnvironment?: {
+    readonly driver: ProviderProcessEnvDriver;
+    readonly instanceId?: string | undefined;
+    readonly environment?: Readonly<Record<string, string>> | undefined;
+  };
+}
+
+export function buildAcpSpawnProcessEnv(
+  spawn: AcpSpawnInput,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const accountIsolatedEnv = spawn.providerEnvironment
+    ? buildProviderProcessEnv({
+        ...spawn.providerEnvironment,
+        env,
+        platform,
+        ...(spawn.env !== undefined ? { overlay: spawn.env } : {}),
+      })
+    : spawn.env
+      ? { ...spawn.env }
+      : env;
+  return buildProviderChildEnvironment({ provider: "acp", baseEnv: accountIsolatedEnv });
 }
 
 /**
@@ -1447,10 +1474,7 @@ const makeAcpSessionRuntime = (
     // A supplied environment is an exact capability set prepared by the
     // provider boundary. Merging process.env here would silently restore
     // stripped control-plane credentials and launcher capabilities.
-    const env = buildProviderChildEnvironment({
-      provider: "acp",
-      baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
-    });
+    const env = buildAcpSpawnProcessEnv(options.spawn);
     const child = yield* spawner
       .spawn(
         makeEffectProcessCommand(options.spawn.command, options.spawn.args, {

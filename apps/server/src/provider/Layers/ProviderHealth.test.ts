@@ -38,6 +38,7 @@ import {
   makeCheckGrokProviderStatus,
   makeClaudeProbeEnv,
   makeCheckOpenCodeProviderStatus,
+  makeProviderUpdateEnv,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
@@ -241,6 +242,55 @@ describe("provider health probe concurrency", () => {
       assert.ok((yield* Ref.get(peak)) <= PROVIDER_HEALTH_PROBE_CONCURRENCY);
     }),
   );
+});
+
+describe("provider update environment isolation", () => {
+  it("scrubs ambient aliases before applying a selected provider update environment", () => {
+    const previousXaiApiKey = process.env.XAI_API_KEY;
+    process.env.XAI_API_KEY = "ambient-account-a";
+    try {
+      const env = makeProviderUpdateEnv({
+        instanceId: "grok_work" as ProviderInstanceId,
+        driver: "grok",
+        displayName: "Grok Work",
+        enabled: true,
+        isDefault: false,
+        config: {},
+        environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+        raw: { driver: "grok" },
+      });
+
+      assert.strictEqual(env.XAI_API_KEY, undefined);
+      assert.strictEqual(env.GROK_CODE_XAI_API_KEY, "selected-account-b");
+      assert.strictEqual(env.PATH, process.env.PATH);
+    } finally {
+      if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
+      else process.env.XAI_API_KEY = previousXaiApiKey;
+    }
+  });
+
+  it("honors an explicitly empty environment for a default-instance update", () => {
+    const previousXaiApiKey = process.env.XAI_API_KEY;
+    process.env.XAI_API_KEY = "ambient-account-a";
+    try {
+      const env = makeProviderUpdateEnv({
+        instanceId: "grok" as ProviderInstanceId,
+        driver: "grok",
+        displayName: "Grok",
+        enabled: true,
+        isDefault: true,
+        config: {},
+        environment: {},
+        raw: { driver: "grok", environment: [] },
+      });
+
+      assert.strictEqual(env.XAI_API_KEY, undefined);
+      assert.strictEqual(env.PATH, process.env.PATH);
+    } finally {
+      if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
+      else process.env.XAI_API_KEY = previousXaiApiKey;
+    }
+  });
 });
 
 const disabledProviderHealthLayer = ProviderHealthLive.pipe(
@@ -2754,16 +2804,76 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("marks Grok authenticated from configured instance environment", () => {
+    it.effect("treats a non-default Grok instance as an empty credential boundary", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      process.env.XAI_API_KEY = "ambient-account-a";
+      return Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          undefined,
+          "grok_work",
+        );
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "unknown");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/grok");
+            assert.strictEqual(env?.XAI_API_KEY, undefined);
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
+            else process.env.XAI_API_KEY = previousXaiApiKey;
+          }),
+        ),
+      );
+    });
+
+    it.effect("honors an explicit empty environment on the default Grok probe", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      process.env.XAI_API_KEY = "ambient-account-a";
+      return Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok", {}, "grok");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "unknown");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/grok");
+            assert.strictEqual(env?.XAI_API_KEY, undefined);
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
+            else process.env.XAI_API_KEY = previousXaiApiKey;
+          }),
+        ),
+      );
+    });
+
+    it.effect("isolates configured Grok credentials from ambient aliases", () => {
       const previousXaiApiKey = process.env.XAI_API_KEY;
       const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      delete process.env.XAI_API_KEY;
+      process.env.XAI_API_KEY = "ambient-account-a";
       delete process.env.GROK_CODE_XAI_API_KEY;
       return Effect.gen(function* () {
-        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok", {
-          XAI_API_KEY: "xai-instance-key",
-          SYNARA_TEST_INSTANCE: "grok-work",
-        });
+        const status = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          {
+            GROK_CODE_XAI_API_KEY: "selected-account-b",
+            SYNARA_TEST_INSTANCE: "grok-work",
+          },
+          "grok_work",
+        );
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "apiKey");
       }).pipe(
@@ -2771,7 +2881,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/grok");
             assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "grok-work");
-            assertProviderInstanceEnv(env, "XAI_API_KEY", "xai-instance-key");
+            assert.strictEqual(env?.XAI_API_KEY, undefined);
+            assertProviderInstanceEnv(env, "GROK_CODE_XAI_API_KEY", "selected-account-b");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);

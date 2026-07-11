@@ -125,6 +125,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -137,6 +138,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -155,6 +157,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -174,6 +177,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -194,6 +198,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -215,6 +220,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 });

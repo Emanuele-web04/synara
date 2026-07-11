@@ -303,6 +303,34 @@ describe("getPiDiscoverableModels", () => {
     }
   });
 
+  it("blocks ambient API-key fallback for an isolated Pi instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-account-isolation-"));
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "ambient-account-key";
+
+    try {
+      const isolatedRuntime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+      const defaultRuntime = await createPiModelRuntime(agentDir, { ModelRuntime });
+
+      expect(isolatedRuntime.hasConfiguredAuth("openai")).toBe(false);
+      await expect(isolatedRuntime.getAuth("openai")).resolves.toBeUndefined();
+      expect(defaultRuntime.hasConfiguredAuth("openai")).toBe(true);
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { provider: "zai", id: "glm-5.3-flash", auth: { type: "api_key", key: "test-key" } },
     {

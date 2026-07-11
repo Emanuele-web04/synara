@@ -64,6 +64,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -608,6 +609,26 @@ function xaiApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return (env.XAI_API_BASE_URL?.trim() || XAI_API_BASE_URL).replace(/\/+$/u, "");
 }
 
+export function buildGrokModelDiscoveryEnv(
+  input: {
+    readonly instanceId?: string | undefined;
+    readonly environment?: Readonly<Record<string, string>> | undefined;
+  },
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return buildProviderChildEnvironment({
+    provider: "grok",
+    baseEnv: buildProviderProcessEnv({
+      driver: PROVIDER,
+      env,
+      platform,
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+    }),
+  });
+}
+
 function fetchXaiLanguageModels(input: {
   readonly apiKey: string;
   readonly baseUrl?: string;
@@ -1055,6 +1076,7 @@ export function makeGrokAdapter(
           const providerGrokOptions = input.providerOptions?.grok;
           const runtimeGrokModelSettings = resolveGrokRuntimeModelSettings(grokModelSelection);
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
+            ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
             ...(grokSettings.binaryPath !== undefined
               ? { binaryPath: grokSettings.binaryPath }
               : {}),
@@ -2417,14 +2439,11 @@ export function makeGrokAdapter(
 
     const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
+      const childEnv = buildGrokModelDiscoveryEnv(input);
       return Effect.gen(function* () {
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({
-            provider: "grok",
-            ...(input.environment ? { overrides: input.environment } : {}),
-          });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models"], {
               env: childEnv,

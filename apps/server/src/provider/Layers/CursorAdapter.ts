@@ -129,6 +129,7 @@ import {
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 
 const PROVIDER = "cursor" as const;
 
@@ -749,6 +750,9 @@ export function makeCursorAdapter(
           });
           const providerCursorOptions = input.providerOptions?.cursor;
           const effectiveCursorSettings: CursorAcpRuntimeCursorSettings = {
+            ...(input.providerInstanceId !== undefined
+              ? { instanceId: input.providerInstanceId }
+              : {}),
             ...(cursorSettings.binaryPath !== undefined
               ? { binaryPath: cursorSettings.binaryPath }
               : {}),
@@ -1642,7 +1646,11 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
-      const childEnv = input.environment ? { ...process.env, ...input.environment } : process.env;
+      const childEnv = buildProviderProcessEnv({
+        driver: PROVIDER,
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      });
       const effectiveBinaryPath = resolveCursorAgentBinaryPath(
         binaryPath || cursorSettings.binaryPath,
       );
@@ -1707,6 +1715,8 @@ export function makeCursorAdapter(
       const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
         binaryPath: effectiveBinaryPath,
         ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+        ...(input.environment !== undefined ? { environment: input.environment } : {}),
       };
       const runCursorAcpModelDiscovery = Effect.gen(function* () {
         const runtime = yield* makeCursorAcpRuntime({

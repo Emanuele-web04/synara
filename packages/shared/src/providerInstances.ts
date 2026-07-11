@@ -89,10 +89,13 @@ function materializeProviderInstanceEnvironment(
   return environment;
 }
 
-function providerEnvironmentOption(environment: Readonly<Record<string, string>>): {
+function providerEnvironmentOption(
+  environment: Readonly<Record<string, string>>,
+  explicitlyConfigured: boolean,
+): {
   readonly environment?: Readonly<Record<string, string>>;
 } {
-  return Object.keys(environment).length > 0 ? { environment } : {};
+  return explicitlyConfigured || Object.keys(environment).length > 0 ? { environment } : {};
 }
 
 function normalizeBinaryPathOverride(provider: ProviderKind, value: unknown): string {
@@ -487,7 +490,10 @@ export function providerStartOptionsFromInstance(
 ): ProviderStartOptions | undefined {
   const config = instance.config;
   const binaryPath = normalizeBinaryPathOverride(instance.driver, config.binaryPath);
-  const environment = providerEnvironmentOption(instance.environment);
+  const environment = providerEnvironmentOption(
+    instance.environment,
+    instance.raw.environment !== undefined,
+  );
   switch (instance.driver) {
     case "codex": {
       const homePath = trimString(config.homePath);
