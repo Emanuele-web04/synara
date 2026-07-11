@@ -1,4 +1,4 @@
-import { CommandId, EventId, ProjectId, ThreadId } from "@synara/contracts";
+import { CommandId, EventId, MessageId, ProjectId, ThreadId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -34,6 +34,89 @@ const providerInstanceSettingsLayer = it.layer(
 );
 
 layer("OrchestrationEventStore", (it) => {
+  it.effect("strips provider passwords and environments before appending turn events", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-07-11T10:00:00.000Z";
+
+      const appended = yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-provider-options-sanitized"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-provider-options-sanitized"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-provider-options-sanitized"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-provider-options-sanitized"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-provider-options-sanitized"),
+          messageId: MessageId.makeUnsafe("message-provider-options-sanitized"),
+          modelSelection: {
+            provider: "opencode",
+            instanceId: "opencode_work",
+            model: "openai/gpt-5",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/codex-work",
+              environment: { CODEX_API_KEY: "codex-secret" },
+            },
+            droid: {
+              binaryPath: "/usr/local/bin/droid",
+              environment: { DROID_TOKEN: "droid-env-secret" },
+            },
+            opencode: {
+              serverUrl: "https://opencode.example.test",
+              serverPassword: "opencode-secret",
+              environment: { OPENCODE_TOKEN: "opencode-env-secret" },
+            },
+          },
+          dispatchMode: "queue",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      });
+
+      const expectedProviderOptions = {
+        codex: { homePath: "/tmp/codex-work" },
+        droid: { binaryPath: "/usr/local/bin/droid" },
+        opencode: { serverUrl: "https://opencode.example.test" },
+      };
+      assert.equal(
+        appended.type === "thread.turn-start-requested"
+          ? appended.payload.providerOptions?.opencode?.serverPassword
+          : undefined,
+        "opencode-secret",
+      );
+
+      const [stored] = yield* sql<{ readonly payloadJson: string }>`
+        SELECT payload_json AS "payloadJson"
+        FROM orchestration_events
+        WHERE event_id = 'evt-provider-options-sanitized'
+      `;
+      const storedPayload = JSON.parse(stored?.payloadJson ?? "{}") as {
+        readonly providerOptions?: unknown;
+      };
+      assert.deepStrictEqual(storedPayload.providerOptions, expectedProviderOptions);
+
+      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      );
+      const replayedTurn = replayed.find(
+        (event) => event.eventId === EventId.makeUnsafe("evt-provider-options-sanitized"),
+      );
+      assert.deepStrictEqual(
+        replayedTurn?.type === "thread.turn-start-requested"
+          ? replayedTurn.payload.providerOptions
+          : undefined,
+        expectedProviderOptions,
+      );
+    }),
+  );
+
   it.effect("projector replay pages keep the primary-key range scan for every filter shape", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

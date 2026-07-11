@@ -138,6 +138,7 @@ import Migration0119 from "./Migrations/119_ProviderSessionRuntimeInstanceId.ts"
 import Migration0120 from "./Migrations/120_ProfileStatsDeletedProviderInstances.ts";
 import Migration0121 from "./Migrations/121_ClearAutomationDefinitionProviderOptions.ts";
 import Migration0122 from "./Migrations/122_ClearAutomationRunProviderOptions.ts";
+import Migration0123 from "./Migrations/123_ScrubOrchestrationEventProviderOptions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -276,6 +277,7 @@ export const migrationEntries = [
   [120, "ProfileStatsDeletedProviderInstances", Migration0120],
   [121, "ClearAutomationDefinitionProviderOptions", Migration0121],
   [122, "ClearAutomationRunProviderOptions", Migration0122],
+  [123, "ScrubOrchestrationEventProviderOptions", Migration0123],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

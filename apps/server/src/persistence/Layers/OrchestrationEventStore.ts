@@ -23,6 +23,10 @@ import {
 } from "../Errors.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
+  restoreTransientOrchestrationEventProviderOptions,
+  sanitizeOrchestrationEventProviderOptions,
+} from "../../orchestration/providerOptionsSecurity.ts";
+import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
@@ -310,6 +314,7 @@ function decodePersistedEventRow(
     }
 
     return yield* decodeEvent(candidate).pipe(
+      Effect.map(sanitizeOrchestrationEventProviderOptions),
       Effect.mapError(
         toPersistenceDecodeError(persistedEventDecodeOperation(operation, row, schemaVersion)),
       ),
@@ -578,20 +583,21 @@ const makeEventStore = Effect.gen(function* () {
     },
   });
 
-  const append: OrchestrationEventStoreShape["append"] = (event) =>
-    appendEventRow({
-      eventId: event.eventId,
-      aggregateKind: event.aggregateKind,
-      streamId: event.aggregateId,
-      type: event.type,
-      causationEventId: event.causationEventId,
-      correlationId: event.correlationId,
-      actorKind: inferActorKind(event),
-      occurredAt: event.occurredAt,
-      commandId: event.commandId,
-      payloadJson: event.payload,
+  const append: OrchestrationEventStoreShape["append"] = (event) => {
+    const sanitizedEvent = sanitizeOrchestrationEventProviderOptions(event);
+    return appendEventRow({
+      eventId: sanitizedEvent.eventId,
+      aggregateKind: sanitizedEvent.aggregateKind,
+      streamId: sanitizedEvent.aggregateId,
+      type: sanitizedEvent.type,
+      causationEventId: sanitizedEvent.causationEventId,
+      correlationId: sanitizedEvent.correlationId,
+      actorKind: inferActorKind(sanitizedEvent),
+      occurredAt: sanitizedEvent.occurredAt,
+      commandId: sanitizedEvent.commandId,
+      payloadJson: sanitizedEvent.payload,
       metadataJson: {
-        ...event.metadata,
+        ...sanitizedEvent.metadata,
         [PERSISTED_EVENT_SCHEMA_VERSION_KEY]: CURRENT_PERSISTED_EVENT_SCHEMA_VERSION,
       },
     }).pipe(
@@ -602,9 +608,16 @@ const makeEventStore = Effect.gen(function* () {
         ),
       ),
       Effect.flatMap((row) =>
-        decodePersistedEventRow("OrchestrationEventStore.append:rowToEvent", row),
+        decodePersistedEventRow("OrchestrationEventStore.append:rowToEvent", row).pipe(
+          // Durable JSON is sanitized above, while the just-committed in-memory
+          // event keeps transient launch credentials for internal runtime consumers.
+          Effect.map((savedEvent) =>
+            restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          ),
+        ),
       ),
     );
+  };
 
   interface EventPageState {
     readonly cursor: number;
