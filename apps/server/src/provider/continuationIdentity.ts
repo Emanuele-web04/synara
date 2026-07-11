@@ -9,17 +9,7 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 
 import { resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
-
-function expandHomePath(value: string, fallbackHome: string): string {
-  if (value === "~") return fallbackHome;
-  if (!value.startsWith("~/") && !value.startsWith("~\\")) return value;
-
-  const segments = value
-    .slice(2)
-    .split(/[\\/]+/u)
-    .filter((segment) => segment.length > 0);
-  return segments.length === 0 ? fallbackHome : path.join(fallbackHome, ...segments);
-}
+import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
 
 function canonicalStoragePath(value: string): string {
   return resolveCodexPathIdentity(value);
@@ -53,10 +43,10 @@ export function providerContinuationIdentity(
         ? claude?.environment?.CLAUDE_CONFIG_DIR?.trim()
         : env.CLAUDE_CONFIG_DIR?.trim();
       const effectiveHome = explicitHome
-        ? expandHomePath(explicitHome, fallbackHome)
+        ? expandProviderAccountHomePath(explicitHome, fallbackHome)
         : env.HOME?.trim() || fallbackHome;
       const storageRoot = configuredRoot
-        ? expandHomePath(configuredRoot, effectiveHome)
+        ? expandProviderAccountHomePath(configuredRoot, effectiveHome)
         : path.join(effectiveHome, ".claude");
       return `claudeAgent:${canonicalStoragePath(storageRoot)}`;
     }
