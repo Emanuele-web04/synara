@@ -1350,6 +1350,8 @@ export default function ChatView({
     selectedProviderInstanceId,
     providerInstances: selectedProviderInstances,
   });
+  // Cursor model variants always render collapsed in the composer picker.
+  const showExpandedCursorModelVariants = false;
   const {
     selectedComposerSkills,
     selectedComposerMentions,
