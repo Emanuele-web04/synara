@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   forgetOpenCodeMessage,
@@ -205,6 +205,7 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
+  readonly discoveryEnvironmentKey: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly replyingPermissions: Map<string, "once" | "always" | "reject">;
@@ -245,6 +246,28 @@ function serverPasswordForOpenCodeClient(
 function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
   context.gatewaySessionLease?.release();
   delete context.gatewaySessionLease;
+}
+
+function normalizeDiscoveryEnvironment(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | undefined {
+  if (environment === undefined) return undefined;
+  return Object.fromEntries(
+    Object.entries(environment)
+      .map(([name, value]) => [name.trim(), value] as const)
+      .filter(([name]) => name.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [
+        name,
+        createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16),
+      ]),
+  );
+}
+
+function openCodeDiscoveryEnvironmentKey(
+  environment: Readonly<Record<string, string>> | undefined,
+): string {
+  return JSON.stringify(normalizeDiscoveryEnvironment(environment) ?? null);
 }
 
 const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(function* (input: {
@@ -3688,6 +3711,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   client: started.client,
                   server: started.server,
                   directory,
+                  discoveryEnvironmentKey: openCodeDiscoveryEnvironmentKey(environment),
                   openCodeSessionId: started.openCodeSessionId,
                   pendingPermissions: new Map(),
                   replyingPermissions: new Map(),
@@ -4421,6 +4445,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.gen(function* () {
           const requestedCwd = input.cwd?.trim();
           const requestedServerUrl = input.serverUrl?.trim();
+          const requestedEnvironmentKey = openCodeDiscoveryEnvironmentKey(input.environment);
           const activeContext = input.threadId
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : input.reuseAnyActiveContext
@@ -4434,7 +4459,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             activeContext &&
             (!input.instanceId || activeContext.session.providerInstanceId === input.instanceId) &&
             (!requestedCwd || requestedCwd === activeContext.directory) &&
-            (!requestedServerUrl || requestedServerUrl === activeContext.server.url)
+            (!requestedServerUrl || requestedServerUrl === activeContext.server.url) &&
+            requestedEnvironmentKey === activeContext.discoveryEnvironmentKey
           ) {
             return yield* fn({
               client: activeContext.client,
