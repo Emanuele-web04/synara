@@ -250,6 +250,7 @@ import {
   resolveWorkingLabel,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
+  shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
   type PendingFileUndo,
 } from "./ChatView.logic";
@@ -1343,10 +1344,11 @@ export default function ChatView({
     selectedProviderInstances,
     selectedProviderInstanceId,
   );
-  const showProviderInstancePicker =
-    selectedProvider === "codex" ||
-    selectedProvider === "claudeAgent" ||
-    selectedProviderInstances.length > 1;
+  const showProviderInstancePicker = shouldShowComposerProviderInstancePicker({
+    provider: selectedProvider,
+    selectedProviderInstanceId,
+    providerInstances: selectedProviderInstances,
+  });
   const {
     selectedComposerSkills,
     selectedComposerMentions,

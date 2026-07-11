@@ -23,6 +23,7 @@ import {
 import {
   type FilesystemBrowseResult,
   type ProjectImportProvider,
+  PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
   type ProviderKind,
 } from "@synara/contracts";
@@ -707,20 +708,29 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
                 <p className="text-ui leading-snug font-medium text-muted-foreground">Provider</p>
-                <div className="flex gap-2">
+                <div
+                  role="radiogroup"
+                  aria-label="Provider account"
+                  className="grid max-h-44 grid-cols-1 gap-2 overflow-y-auto overscroll-contain pe-1 sm:grid-cols-2"
+                  data-testid="import-target-options"
+                >
                   {props.importTargets.map((target) => (
                     <Button
                       key={target.instanceId}
-                      className={
-                        importTarget?.instanceId === target.instanceId
-                          ? "flex-1 justify-start border-border bg-muted text-foreground hover:bg-muted/80"
-                          : "flex-1 justify-start"
-                      }
+                      role="radio"
+                      aria-checked={importTarget?.instanceId === target.instanceId}
+                      aria-label={`${target.label}, ${PROVIDER_DISPLAY_NAMES[target.provider]}`}
+                      className="h-auto min-h-11 w-full min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left aria-checked:bg-muted aria-checked:hover:bg-muted/80"
                       variant="outline"
                       onClick={() => setImportTargetId(target.instanceId)}
                     >
                       <SharedProviderIcon provider={target.provider} className="size-[15px]" />
-                      <span className="truncate">{target.label}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-ui font-medium">{target.label}</span>
+                        <span className="block truncate text-ui-xs text-muted-foreground">
+                          {PROVIDER_DISPLAY_NAMES[target.provider]}
+                        </span>
+                      </span>
                     </Button>
                   ))}
                 </div>
