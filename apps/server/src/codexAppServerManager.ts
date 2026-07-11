@@ -77,6 +77,7 @@ import {
 import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import {
   buildCodexAppServerArgs,
+  buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
   prepareCodexAuthTracking,
   readCodexPreparedAuthTrackingFingerprint,
@@ -1223,12 +1224,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
     };
-    const env = await buildCodexProcessEnv(processEnvInput);
+    const processLaunch = await buildCodexProcessLaunchContext(processEnvInput);
+    const env = processLaunch.env;
     if (gatewayBearerToken) {
       env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
     }
-    const authTracking = prepareCodexAuthTracking(processEnvInput);
-    return { env, authTracking };
+    return {
+      env,
+      authTracking: processLaunch.authTracking,
+      authFingerprint: processLaunch.authFingerprint,
+    };
   }
 
   // Registers `~/.synara/skills` as a codex skill root so portable skills are
@@ -1336,9 +1341,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         gatewaySessionLease?.connection.bearerToken,
         input.expectedCodexContinuationGeneration,
       );
-      const launchAuthFingerprint = readCodexPreparedAuthTrackingFingerprint(
-        processLaunch.authTracking,
-      );
+      const launchAuthFingerprint = processLaunch.authFingerprint;
       const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -1553,7 +1556,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const cause = context?.transportError ?? failureError;
       const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        if (!context.terminalFailure && !context.stopping) {
+        if (
+          !context.terminalFailure &&
+          !context.stopping &&
+          this.sessions.get(threadId) === context
+        ) {
           this.updateSession(context, {
             status: "error",
             lastError: message,
@@ -2260,9 +2267,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         input.expectedCodexContinuationGeneration,
       );
       signal?.throwIfAborted();
-      const launchAuthFingerprint = readCodexPreparedAuthTrackingFingerprint(
-        processLaunch.authTracking,
-      );
+      const launchAuthFingerprint = processLaunch.authFingerprint;
       const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -2383,7 +2388,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const cause = context?.transportError ?? failureError;
       const message = context?.terminalFailure?.message ?? failureError.message;
       if (context) {
-        if (!context.terminalFailure && !context.stopping) {
+        if (
+          !context.terminalFailure &&
+          !context.stopping &&
+          this.sessions.get(threadId) === context
+        ) {
           this.updateSession(context, {
             status: "error",
             lastError: message,
@@ -2748,7 +2757,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.stopSessionContext(context);
   }
 
-  private async stopSessionContext(context: CodexSessionContext): Promise<void> {
+  private async stopSessionContext(
+    context: CodexSessionContext,
+    emitClosedLifecycle = true,
+  ): Promise<void> {
     const threadId = context.session.threadId;
     if (context.stopPromise) {
       return context.stopPromise;
@@ -2787,7 +2799,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         status: "closed",
         activeTurnId: undefined,
       });
-      this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+      if (emitClosedLifecycle && this.sessions.get(threadId) === context) {
+        this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+      }
     }
     let stopPromise: Promise<void>;
     // Teardown starts synchronously unless parked requests still need answering,
@@ -3375,9 +3389,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
     });
     const processLaunch = await this.buildSessionProcessEnv(normalizedCodexOptions, undefined);
-    const launchAuthFingerprint = readCodexPreparedAuthTrackingFingerprint(
-      processLaunch.authTracking,
-    );
+    const launchAuthFingerprint = processLaunch.authFingerprint;
     const child = this.spawnAppServer({
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
@@ -3492,6 +3504,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context) {
       return;
     }
+    return this.stopDiscoverySessionContext(context);
+  }
+
+  private async stopDiscoverySessionContext(context: CodexSessionContext): Promise<void> {
+    const discoveryKey = context.discoveryKey ?? context.session.cwd ?? "";
+    if (this.discoverySessions.get(discoveryKey) === context) {
+      const idleTimer = this.discoverySessionIdleTimers.get(discoveryKey);
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        this.discoverySessionIdleTimers.delete(discoveryKey);
+      }
+    }
     if (context.stopPromise) {
       return context.stopPromise;
     }
@@ -3586,6 +3610,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
+      const ownedContext = context.discovery
+        ? this.discoverySessions.get(context.discoveryKey ?? "") === context
+        : this.sessions.get(context.session.threadId) === context;
       context.stdinWriter.close(exitError);
       this.requestRegistry(context).processExited(exitError);
       // The child is gone, so the responses cannot land; settling still clears
@@ -3596,7 +3623,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: code === 0 ? context.session.lastError : message,
       });
-      this.emitLifecycleEvent(context, "session/exited", message);
+      if (ownedContext) {
+        this.emitLifecycleEvent(context, "session/exited", message);
+      }
       // Retire resources promptly while retaining the replacement barrier until
       // teardown settles. Post-exit capture keeps startup failures uncertain.
       this.stopFailedContext(context);
@@ -3643,8 +3672,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private stopFailedContext(context: CodexSessionContext): void {
     const stopping = context.discovery
-      ? this.stopDiscoverySession(context.discoveryKey ?? context.session.cwd ?? "")
-      : this.stopSession(context.session.threadId);
+      ? this.stopDiscoverySessionContext(context)
+      : this.stopSessionContext(context, false);
     void stopping.catch((stopError) => {
       log.error("failed to stop Codex session after process or transport failure", {
         threadId: context.session.threadId,

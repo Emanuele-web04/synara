@@ -81,6 +81,9 @@ const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
 
 export interface CodexProcessLaunchContext {
   readonly env: NodeJS.ProcessEnv;
+  readonly authTracking: PreparedCodexAuthTracking;
+  /** Effective launch baseline recorded after authoritative pre/post validation. */
+  readonly authFingerprint: string;
   readonly appServerArgs: readonly string[];
 }
 
@@ -2734,8 +2737,25 @@ export async function buildCodexProcessLaunchContext(
 ): Promise<CodexProcessLaunchContext> {
   const baseEnv = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
+  const initialAuthTracking = prepareCodexAuthTracking(input);
+  const initialAuthFingerprint = readCodexPreparedAuthTrackingFingerprint(initialAuthTracking);
+  const env = await buildCodexProcessEnv(input);
+  const authTracking = prepareCodexAuthTracking(input);
+  const authFingerprint = readCodexPreparedAuthTrackingFingerprint(authTracking);
+  const effectiveHomePath = resolveBaseCodexHomePath(env);
+  const authIsMirroredFromAnotherHome = !codexPathsReferenceSameLocation(
+    path.dirname(initialAuthTracking.authoritativeAuthFilePath),
+    effectiveHomePath,
+  );
+  if (authIsMirroredFromAnotherHome && authFingerprint !== initialAuthFingerprint) {
+    throw new Error(
+      "Codex authentication changed during app-server launch preparation; retry the request.",
+    );
+  }
   return {
-    env: await buildCodexProcessEnv(input),
+    env,
+    authTracking,
+    authFingerprint,
     appServerArgs: buildCodexAppServerArgs(sourceHomePath),
   };
 }
