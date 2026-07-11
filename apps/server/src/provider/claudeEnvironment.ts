@@ -8,8 +8,7 @@ import * as NodePath from "node:path";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
 import {
   buildClaudeProcessEnv,
-  CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS,
-  CLAUDE_EXTERNAL_AUTH_ENV_KEYS,
+  isClaudeAccountIsolationEnvKey,
 } from "./claudeProcessEnv.ts";
 
 export function claudeHomeEnvironment(
@@ -59,10 +58,10 @@ export function buildClaudeInstanceProcessEnv(
     // An explicit provider home selects a distinct account boundary. Ambient
     // credentials and backend-routing flags belong to the server account and
     // must never select it instead. Instance-provided values remain authoritative.
-    for (const key of [...CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS, ...CLAUDE_EXTERNAL_AUTH_ENV_KEYS]) {
-      if (!environment || !(key in environment)) {
-        delete env[key];
-      }
+    for (const key of Object.keys(env)) {
+      if (!isClaudeAccountIsolationEnvKey(key)) continue;
+      if (environment && key in environment) continue;
+      delete env[key];
     }
   }
   return buildClaudeProcessEnv({

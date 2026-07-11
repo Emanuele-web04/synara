@@ -5,9 +5,11 @@
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Sink, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -16,6 +18,13 @@ import { ClaudeTextGeneration } from "../Services/TextGeneration.ts";
 import { ClaudeTextGenerationServiceLive } from "./ClaudeTextGeneration.ts";
 
 const encoder = new TextEncoder();
+const require = createRequire(import.meta.url);
+
+interface MockCommandOptions {
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly killSignal?: string;
+}
 
 function mockHandle(result: { stdout: string; stderr: string; code: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -38,6 +47,7 @@ function mockSpawnerLayer(
     command: string,
     env: NodeJS.ProcessEnv | undefined,
     cwd: string | undefined,
+    options: MockCommandOptions | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -50,10 +60,10 @@ function mockSpawnerLayer(
       const cmd = command as unknown as {
         command: string;
         args: ReadonlyArray<string>;
-        options?: { cwd?: string; env?: NodeJS.ProcessEnv };
+        options?: MockCommandOptions;
       };
       return Effect.succeed(
-        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options?.cwd)),
+        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options?.cwd, cmd.options)),
       );
     }),
   );
@@ -77,6 +87,49 @@ function withProcessPlatform<T, E, R>(
         }
       }),
   );
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    if (typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ESRCH") {
+      return false;
+    }
+    throw cause;
+  }
+}
+
+function waitForFile(filePath: string) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (existsSync(filePath)) return;
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    }
+    return yield* Effect.die(new Error(`Timed out waiting for ${filePath}`));
+  });
+}
+
+function resolveBundledClaudeBinaryPath(): string {
+  const sdkEntryPath = realpathSync(require.resolve("@anthropic-ai/claude-agent-sdk"));
+  const anthropicPackagesDirectory = path.resolve(
+    path.dirname(sdkEntryPath),
+    "..",
+    "..",
+    "@anthropic-ai",
+  );
+  const platformPackagePrefix = `claude-agent-sdk-${process.platform}-${process.arch}`;
+  const platformPackage = readdirSync(anthropicPackagesDirectory).find((entry) =>
+    entry.startsWith(platformPackagePrefix),
+  );
+  assert.ok(platformPackage, `Missing bundled Claude package ${platformPackagePrefix}`);
+  const packageDirectory = path.join(anthropicPackagesDirectory, platformPackage);
+  const binaryName = readdirSync(packageDirectory).find(
+    (entry) => entry === "claude" || entry === "claude.exe",
+  );
+  assert.ok(binaryName, `Missing bundled Claude binary in ${packageDirectory}`);
+  return path.join(packageDirectory, binaryName);
 }
 
 describe("ClaudeTextGenerationServiceLive", () => {
@@ -235,7 +288,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
     }).pipe(
       Effect.provide(ClaudeTextGenerationServiceLive),
       Effect.provide(
-        mockSpawnerLayer((args, command, env, cwd) => {
+        mockSpawnerLayer((args, command, env, cwd, options) => {
           assert.strictEqual(command, "claude");
           assert.ok(cwd);
           isolatedCwd = cwd;
@@ -250,8 +303,10 @@ describe("ClaudeTextGenerationServiceLive", () => {
           assert.strictEqual(env?.PWD, cwd);
           assert.strictEqual(env?.ANTHROPIC_AUTH_TOKEN, "selected-account-token");
           assert.strictEqual(env?.CLAUDE_CODE_SAFE_MODE, "1");
-          assert.deepStrictEqual(args.slice(0, 7), [
+          assert.strictEqual(options?.killSignal, "SIGKILL");
+          assert.deepStrictEqual(args.slice(0, 8), [
             "-p",
+            "--safe-mode",
             "--setting-sources",
             "",
             "--strict-mcp-config",
@@ -280,6 +335,132 @@ describe("ClaudeTextGenerationServiceLive", () => {
       Effect.provide(NodeServices.layer),
     );
   });
+
+  it.effect("hard-kills an interrupted Claude child that ignores SIGTERM", () => {
+    if (process.platform === "win32") return Effect.void;
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const fixtureDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "claude-nonterminating-child-",
+      });
+      const binaryPath = path.join(fixtureDirectory, "fake-claude");
+      const startedPath = path.join(fixtureDirectory, "started");
+      yield* fileSystem.writeFileString(
+        binaryPath,
+        [
+          "#!/bin/sh",
+          "trap '' TERM",
+          "(trap '' TERM; while :; do sleep 1; done) &",
+          "descendant_pid=$!",
+          `printf '%s\\n%s\\n%s\\n' "$PWD" "$$" "$descendant_pid" > "$SYNARA_CLAUDE_STARTED_FILE"`,
+          'wait "$descendant_pid"',
+          "",
+        ].join("\n"),
+      );
+      yield* fileSystem.chmod(binaryPath, 0o755);
+
+      const textGeneration = yield* ClaudeTextGeneration;
+      const fiber = yield* textGeneration
+        .generateThreadTitle({
+          cwd: "/hostile-repo",
+          message: "Add provider instances",
+          modelSelection: {
+            instanceId: "claudeAgent",
+            model: "claude-sonnet-4-5",
+          },
+          providerOptions: {
+            claudeAgent: {
+              binaryPath,
+              environment: { SYNARA_CLAUDE_STARTED_FILE: startedPath },
+            },
+          },
+        })
+        .pipe(Effect.forkChild);
+
+      yield* waitForFile(startedPath);
+      const [isolatedCwd, pidText, descendantPidText] = readFileSync(startedPath, "utf8")
+        .trim()
+        .split("\n");
+      assert.ok(isolatedCwd);
+      assert.ok(pidText);
+      assert.ok(descendantPidText);
+      const pid = Number(pidText);
+      const descendantPid = Number(descendantPidText);
+      assert.strictEqual(processIsRunning(pid), true);
+      assert.strictEqual(processIsRunning(descendantPid), true);
+
+      const interruptStartedAt = Date.now();
+      yield* Fiber.interrupt(fiber);
+      assert.ok(Date.now() - interruptStartedAt < 3_000);
+      assert.strictEqual(processIsRunning(pid), false);
+      assert.strictEqual(processIsRunning(descendantPid), false);
+      assert.strictEqual(existsSync(isolatedCwd), false);
+    }).pipe(
+      Effect.provide(ClaudeTextGenerationServiceLive),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "claude-textgen-test-",
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("fails closed when the bundled Claude binary does not support safe mode", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const home = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "claude-old-safe-home-",
+      });
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "claude-old-safe-cwd-",
+      });
+      const binaryPath = resolveBundledClaudeBinaryPath();
+      const environment = {
+        HOME: home,
+        PATH: process.env.PATH ?? "",
+        CLAUDE_CODE_SAFE_MODE: "1",
+      };
+      const help = spawnSync(binaryPath, ["--help"], {
+        cwd,
+        env: environment,
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      assert.ifError(help.error);
+      if (help.stdout.includes("--safe-mode")) return;
+
+      const result = spawnSync(
+        binaryPath,
+        [
+          "-p",
+          "--safe-mode",
+          "--setting-sources",
+          "",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--tools",
+          "",
+          "--output-format",
+          "json",
+          "--model",
+          "invalid-model",
+        ],
+        {
+          cwd,
+          env: environment,
+          input: "Return structured text.",
+          encoding: "utf8",
+          timeout: 5_000,
+        },
+      );
+
+      assert.ifError(result.error);
+      assert.notStrictEqual(result.status, 0);
+      assert.match(result.stderr, /unknown option '--safe-mode'/);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("removes the isolated workspace when Claude generation fails", () => {
     let isolatedCwd = "";
