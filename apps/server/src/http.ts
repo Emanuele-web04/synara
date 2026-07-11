@@ -9,7 +9,6 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
-  type ProviderInstanceId,
   ThreadId,
 } from "@synara/contracts";
 import {
@@ -815,8 +814,9 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     }
 
     // Dedicated per-account Codex homes anchor their own generated-image roots;
-    // resolve them from settings when the service is available so those images
-    // stay servable. The route keeps working without settings (e.g. tests).
+    // resolve them from settings when the service can be read so those images
+    // stay servable. When settings are unavailable, configured roots cannot be
+    // trusted, but auth-fresh live session homes remain eligible.
     const settingsService = yield* Effect.serviceOption(ServerSettingsService);
     const codexSettingsScope = Option.isSome(settingsService)
       ? yield* settingsService.value.getSettings.pipe(
@@ -824,12 +824,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
             configuredHomePaths: codexConfiguredHomePathsFromSettings(settings),
             enabledProviderInstanceIds: enabledCodexProviderInstanceIdsFromSettings(settings),
           })),
-          Effect.catch(() =>
-            Effect.succeed({
-              configuredHomePaths: [] as readonly CodexGeneratedImageHomeCandidate[],
-              enabledProviderInstanceIds: new Set<ProviderInstanceId>(),
-            }),
-          ),
+          Effect.catch(() => Effect.succeed(null)),
         )
       : null;
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);

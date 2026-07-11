@@ -7,6 +7,11 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ServerSettingsError,
+  type ProviderInstanceId,
+} from "@synara/contracts";
 import { DateTime, Effect, Exit, Layer, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,6 +31,7 @@ import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import type { ProviderAdapterError } from "./provider/Errors.ts";
 import type { ProviderAdapterShape } from "./provider/Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry.ts";
+import { ServerSettingsService, type ServerSettingsShape } from "./serverSettings.ts";
 
 const tempDirs: string[] = [];
 
@@ -39,6 +45,20 @@ function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function makeRepoTempDir(prefix: string): string {
+  const dir = mkdtempSync(path.join(process.cwd(), `.${prefix}`));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function makeGeneratedImage(prefix: string): { readonly homePath: string; readonly path: string } {
+  const homePath = makeRepoTempDir(prefix);
+  const imagePath = path.join(homePath, "generated_images", "thread-live", "call-live.png");
+  mkdirSync(path.dirname(imagePath), { recursive: true });
+  writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  return { homePath, path: imagePath };
 }
 
 function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerConfigShape {
@@ -120,8 +140,15 @@ function makeFakeServerAuth(): ServerAuthShape {
 }
 
 function makeGeneratedImageHomeRegistry(
-  homePaths: readonly CodexGeneratedImageHomeCandidate[],
-): typeof ProviderAdapterRegistry.Service {
+  sessions: readonly {
+    readonly instanceId: ProviderInstanceId;
+    readonly homePath: CodexGeneratedImageHomeCandidate;
+  }[],
+): {
+  readonly service: typeof ProviderAdapterRegistry.Service;
+  readonly enabledInstanceScopes: Array<ReadonlySet<ProviderInstanceId> | undefined>;
+} {
+  const enabledInstanceScopes: Array<ReadonlySet<ProviderInstanceId> | undefined> = [];
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider: "codex",
     capabilities: { sessionModelSwitch: "in-session" },
@@ -132,7 +159,18 @@ function makeGeneratedImageHomeRegistry(
     respondToUserInput: () => Effect.void,
     stopSession: () => Effect.void,
     listSessions: () => Effect.succeed([]),
-    listGeneratedImageHomePaths: () => Effect.succeed(homePaths),
+    listGeneratedImageHomePaths: (input) => {
+      enabledInstanceScopes.push(input?.enabledProviderInstanceIds);
+      return Effect.succeed(
+        sessions
+          .filter(
+            ({ instanceId }) =>
+              !input?.enabledProviderInstanceIds ||
+              input.enabledProviderInstanceIds.has(instanceId),
+          )
+          .map(({ homePath }) => homePath),
+      );
+    },
     hasSession: () => Effect.succeed(false),
     readThread: () => Effect.die("unused"),
     rollbackThread: () => Effect.die("unused"),
@@ -140,8 +178,21 @@ function makeGeneratedImageHomeRegistry(
     streamEvents: Stream.empty,
   };
   return {
-    getByProvider: () => Effect.succeed(adapter),
-    listProviders: () => Effect.succeed(["codex"]),
+    service: {
+      getByProvider: () => Effect.succeed(adapter),
+      listProviders: () => Effect.succeed(["codex"]),
+    },
+    enabledInstanceScopes,
+  };
+}
+
+function makeServerSettings(getSettings: ServerSettingsShape["getSettings"]): ServerSettingsShape {
+  return {
+    start: Effect.void,
+    ready: Effect.void,
+    getSettings,
+    updateSettings: () => Effect.die("unused"),
+    streamChanges: Stream.empty,
   };
 }
 
@@ -149,24 +200,25 @@ async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
-  options: { readonly providerRegistry?: typeof ProviderAdapterRegistry.Service } = {},
+  options: {
+    readonly providerRegistry?: typeof ProviderAdapterRegistry.Service;
+    readonly serverSettings?: ServerSettingsShape;
+  } = {},
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
-  const servicesLayer = options.providerRegistry
-    ? Layer.mergeAll(
-        Layer.succeed(ServerConfig, config),
-        Layer.succeed(ServerAuth, makeFakeServerAuth()),
-        Layer.succeed(ProviderAdapterRegistry, options.providerRegistry),
-        ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-        NodeHttpServer.layerHttpServices,
-      )
-    : Layer.mergeAll(
-        Layer.succeed(ServerConfig, config),
-        Layer.succeed(ServerAuth, makeFakeServerAuth()),
-        ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-        NodeHttpServer.layerHttpServices,
-      );
+  const servicesLayer = Layer.mergeAll(
+    Layer.succeed(ServerConfig, config),
+    Layer.succeed(ServerAuth, makeFakeServerAuth()),
+    ...(options.providerRegistry
+      ? [Layer.succeed(ProviderAdapterRegistry, options.providerRegistry)]
+      : []),
+    ...(options.serverSettings
+      ? [Layer.succeed(ServerSettingsService, options.serverSettings)]
+      : []),
+    ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    NodeHttpServer.layerHttpServices,
+  );
   try {
     await Effect.runPromise(
       Scope.provide(
@@ -382,25 +434,104 @@ describe("localImageEffectRouteLayer", () => {
   it("serves generated images from live Codex session homes after settings drift", async () => {
     const workspace = makeTempDir("dpcode-effect-image-live-session-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
-    const liveCodexHome = makeTempDir("dpcode-live-codex-home-");
-    const generatedDir = path.join(liveCodexHome, "generated_images", "thread-live");
-    mkdirSync(generatedDir, { recursive: true });
-    const imagePath = path.join(generatedDir, "call-live.png");
-    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const image = makeGeneratedImage("synara-live-codex-home-");
     const config = makeServerConfig({ cwd: workspace });
+    const liveHomes = makeGeneratedImageHomeRegistry([
+      { instanceId: "codex" as ProviderInstanceId, homePath: image.homePath },
+    ]);
 
     await withEffectServer(
       config,
       localImageEffectRouteLayer,
       async (origin) => {
-        const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+        const params = new URLSearchParams({ path: image.path, cwd: workspace });
         const response = await fetch(`${origin}/api/local-image?${params}`);
 
         expect(response.status).toBe(200);
         expect(response.headers.get("content-type")).toContain("image/png");
       },
-      { providerRegistry: makeGeneratedImageHomeRegistry([liveCodexHome]) },
+      {
+        providerRegistry: liveHomes.service,
+      },
     );
+    expect(liveHomes.enabledInstanceScopes).toEqual([undefined]);
+  });
+
+  it("serves live Codex session images when settings cannot be read", async () => {
+    const workspace = makeTempDir("synara-effect-image-settings-failure-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const image = makeGeneratedImage("synara-live-codex-settings-failure-home-");
+    const config = makeServerConfig({ cwd: workspace });
+    const liveHomes = makeGeneratedImageHomeRegistry([
+      { instanceId: "codex_work" as ProviderInstanceId, homePath: image.homePath },
+    ]);
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const params = new URLSearchParams({ path: image.path, cwd: workspace });
+        const response = await fetch(`${origin}/api/local-image?${params}`);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("image/png");
+      },
+      {
+        providerRegistry: liveHomes.service,
+        serverSettings: makeServerSettings(
+          Effect.fail(
+            new ServerSettingsError({
+              settingsPath: "<unavailable>",
+              detail: "settings unavailable",
+            }),
+          ),
+        ),
+      },
+    );
+    expect(liveHomes.enabledInstanceScopes).toEqual([undefined]);
+  });
+
+  it("filters live Codex session images to instances enabled by readable settings", async () => {
+    const workspace = makeTempDir("synara-effect-image-settings-scope-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const disabledImage = makeGeneratedImage("synara-live-codex-disabled-home-");
+    const config = makeServerConfig({ cwd: workspace });
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        ...DEFAULT_SERVER_SETTINGS.providerInstances,
+        codex_work: { driver: "codex", enabled: true },
+        codex_disabled: { driver: "codex", enabled: false },
+      },
+    };
+    const liveHomes = makeGeneratedImageHomeRegistry([
+      {
+        instanceId: "codex_disabled" as ProviderInstanceId,
+        homePath: disabledImage.homePath,
+      },
+    ]);
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const disabledParams = new URLSearchParams({
+          path: disabledImage.path,
+          cwd: workspace,
+        });
+        const disabledResponse = await fetch(`${origin}/api/local-image?${disabledParams}`);
+        expect(disabledResponse.status).toBe(404);
+      },
+      {
+        providerRegistry: liveHomes.service,
+        serverSettings: makeServerSettings(Effect.succeed(settings)),
+      },
+    );
+    const [scope] = liveHomes.enabledInstanceScopes;
+    if (!scope) {
+      throw new Error("Expected readable settings to provide an explicit instance scope");
+    }
+    expect([...scope]).toEqual(["codex", "codex_work"]);
   });
 
   it("returns 404 for missing files", async () => {
