@@ -113,7 +113,10 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
-import { providerContinuationIdentity } from "../continuationIdentity.ts";
+import {
+  prepareProviderContinuationIdentity,
+  providerContinuationIdentity,
+} from "../continuationIdentity.ts";
 
 const isStaleDevinSessionLoadError = (
   provider: ProviderKind,
@@ -536,14 +539,14 @@ function persistedContinuationMatchesLaunch(input: {
   readonly providerInstanceId: ProviderInstanceId;
   readonly providerOptions: ProviderStartOptions | undefined;
   readonly credentialsFingerprintKey: Uint8Array;
+  readonly currentIdentity: string | undefined;
 }): boolean {
   if (input.binding.provider !== input.provider) {
     return false;
   }
   const persistedIdentity = readPersistedContinuationIdentity(input.binding.runtimePayload);
   if (persistedIdentity !== undefined) {
-    const currentIdentity = providerContinuationIdentity(input.provider, input.providerOptions);
-    if (persistedIdentity === currentIdentity) {
+    if (persistedIdentity === input.currentIdentity) {
       return true;
     }
     // Exact launch equivalence may adopt an upgraded shared identity, but it
@@ -551,11 +554,35 @@ function persistedContinuationMatchesLaunch(input: {
     // broken account overlay.
     return (
       input.provider === "codex" &&
-      currentIdentity?.startsWith("codex:shared-v1:") === true &&
+      input.currentIdentity?.startsWith("codex:shared-v1:") === true &&
       persistedLaunchMatchesExactly(input)
     );
   }
   return persistedLaunchMatchesExactly(input);
+}
+
+function prepareContinuationIdentityForCompatibility(input: {
+  readonly operation: string;
+  readonly provider: ProviderKind;
+  readonly providerOptions: ProviderStartOptions | undefined;
+  readonly persistedIdentity: string | undefined;
+}) {
+  return Effect.tryPromise({
+    try: () =>
+      prepareProviderContinuationIdentity(
+        input.provider,
+        input.providerOptions,
+        input.persistedIdentity,
+      ),
+    catch: (cause) =>
+      toValidationError(
+        input.operation,
+        cause instanceof Error
+          ? cause.message
+          : "Provider continuation storage could not be prepared safely.",
+        cause,
+      ),
+  });
 }
 
 function incompatibleContinuationMessage(input: {
@@ -2202,6 +2229,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   }
                 : {}),
             });
+            const currentContinuationIdentity =
+              hasPersistedResumeCursor && binding.provider === resolved.instance.driver
+                ? yield* prepareContinuationIdentityForCompatibility({
+                    operation: input.operation,
+                    provider: resolved.instance.driver,
+                    providerOptions: resolved.providerOptions,
+                    persistedIdentity: readPersistedContinuationIdentity(binding.runtimePayload),
+                  })
+                : undefined;
             const canReusePersistedResumeCursor =
               hasPersistedResumeCursor &&
               persistedContinuationMatchesLaunch({
@@ -2210,6 +2246,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInstanceId: resolved.instance.instanceId,
                 providerOptions: resolved.providerOptions,
                 credentialsFingerprintKey,
+                currentIdentity: currentContinuationIdentity,
               });
             if (
               hasPersistedResumeCursor &&
@@ -2797,6 +2834,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   `Provider instance '${resolved.instance.instanceId}' changed while its session was starting.`,
                 );
               }
+              const currentContinuationIdentity =
+                persistedBinding !== undefined &&
+                persistedBinding.provider === resolved.instance.driver
+                  ? yield* prepareContinuationIdentityForCompatibility({
+                      operation: "ProviderService.startSession",
+                      provider: resolved.instance.driver,
+                      providerOptions: resolved.providerOptions,
+                      persistedIdentity: readPersistedContinuationIdentity(
+                        persistedBinding.runtimePayload,
+                      ),
+                    })
+                  : undefined;
               const bindingMatchesResolvedInstance =
                 persistedBinding?.provider === resolved.instance.driver &&
                 persistedProviderInstanceId === resolved.instance.instanceId;
@@ -2808,6 +2857,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   providerInstanceId: resolved.instance.instanceId,
                   providerOptions: resolved.providerOptions,
                   credentialsFingerprintKey,
+                  currentIdentity: currentContinuationIdentity,
                 });
               const continuationCompatible =
                 persistedBinding !== undefined &&
@@ -3265,6 +3315,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
         const effectiveProviderOptions = resolvedSource.providerOptions;
         const hasSourceResumeCursor = hasResumeCursor(sourceBinding.resumeCursor);
+        const currentContinuationIdentity = hasSourceResumeCursor
+          ? yield* prepareContinuationIdentityForCompatibility({
+              operation: "ProviderService.forkThread",
+              provider: resolvedSource.instance.driver,
+              providerOptions: effectiveProviderOptions,
+              persistedIdentity: readPersistedContinuationIdentity(sourceBinding.runtimePayload),
+            })
+          : undefined;
         const canReuseSourceResumeCursor =
           hasSourceResumeCursor &&
           persistedContinuationMatchesLaunch({
@@ -3273,6 +3331,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             providerInstanceId: resolvedSource.instance.instanceId,
             providerOptions: effectiveProviderOptions,
             credentialsFingerprintKey,
+            currentIdentity: currentContinuationIdentity,
           });
         if (
           resolvedSource.instance.instanceId !== sourceBoundProviderInstanceId &&
