@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.5.0 - 2026-07-09
+## 0.5.0 - 2026-07-11
+
+### Added
+
+- Added live Claude context-usage controls, near-window warnings, in-session model/context switching, and resumable context state.
+- Added Claude task tracking for TaskCreate, TaskUpdate, TaskGet, TaskList, and TodoWrite, normalized into the shared runtime task list.
+- Added shared provider task progress and richer Codex reasoning summaries, compaction events, and runtime task updates for clearer long-running turns.
 
 ### Changed
 
@@ -8,6 +14,23 @@
 - Set the production bundle ID and Windows AUMID to `com.emanueledipietro.synara`, with `.dev` used only for development.
 - Published the CLI identity as `@synara/cli` with the `synara` executable and moved all first-party workspaces to `@synara/*`.
 - Kept persisted renderer state available through the 0.4.2 origin bridge and retained brand-neutral structural access to existing checkpoint refs and migration lineage.
+- Deferred secondary chat dock panels and added a repeatable LCP measurement script so the main conversation can become interactive sooner.
+- Hardened the staged updater feed, compatibility-channel checks, and desktop startup around bundle swaps.
+
+### Fixed
+
+- Fixed Claude and Codex resume paths so task progress, context state, reasoning summaries, and streamed runtime events survive reconnects without unnecessary provider restarts.
+- Fixed noisy Codex app-server stdout and incomplete reasoning ingestion from obscuring or dropping live transcript activity.
+- Fixed deleted-project reconciliation and browser profile migration edge cases by preserving client tombstones and repairing database sidecars transactionally.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,057 files.
+- `bun run lint` passed with 178 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed with Bun temporary staging available; it reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, and large Vite chunk warnings.
+- Final full `bun run test` passed: 10 Turbo tasks; `@synara/web` passed 200 files / 2,426 tests, and `@synara/cli` passed 152 files / 1,698 tests with 1 skipped file and 6 skipped tests. The initial run was interrupted while waiting on the serial server suite; the final rerun completed cleanly.
 
 ### Upgrade note
 
