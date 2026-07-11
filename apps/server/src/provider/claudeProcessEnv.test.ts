@@ -10,6 +10,8 @@ import { describe, it, assert } from "@effect/vitest";
 
 import {
   buildClaudeProcessEnv,
+  CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS,
+  CLAUDE_EXTERNAL_AUTH_ENV_KEYS,
   hasUsableClaudeCliCredentials,
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
@@ -112,6 +114,52 @@ describe("claudeProcessEnv", () => {
     const result = buildClaudeInstanceProcessEnv("/home/work-account");
 
     assert.equal(result.HOME, "/home/work-account");
+  });
+
+  it("does not fall back to ambient auth when an explicit instance home lacks OAuth", () => {
+    const inherited = {
+      CLAUDE_CONFIG_DIR: "/home/account-a/.claude",
+      ANTHROPIC_API_KEY: "account-a-api-key",
+      ANTHROPIC_AUTH_TOKEN: "account-a-auth-token",
+      CLAUDE_CODE_OAUTH_TOKEN: "account-a-oauth-token",
+      ANTHROPIC_BASE_URL: "https://account-a.example.test",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+      CLAUDE_CODE_USE_ANTHROPIC_AWS: "1",
+    } satisfies NodeJS.ProcessEnv;
+    const previous = Object.fromEntries(
+      Object.keys(inherited).map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, inherited);
+    try {
+      const result = buildClaudeInstanceProcessEnv("/home/account-b");
+
+      assert.equal(result.HOME, "/home/account-b");
+      assert.equal(result.CLAUDE_CONFIG_DIR, undefined);
+      for (const key of [...CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS, ...CLAUDE_EXTERNAL_AUTH_ENV_KEYS]) {
+        assert.equal(result[key], undefined);
+        assert.notEqual(inherited[key], undefined);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("preserves auth and backend routing explicitly configured by the selected instance", () => {
+    const result = buildClaudeInstanceProcessEnv("/home/account-b", {
+      ANTHROPIC_API_KEY: "account-b-key",
+      ANTHROPIC_BASE_URL: "https://account-b.example.test",
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+    });
+
+    assert.equal(result.HOME, "/home/account-b");
+    assert.equal(result.ANTHROPIC_API_KEY, "account-b-key");
+    assert.equal(result.ANTHROPIC_BASE_URL, "https://account-b.example.test");
+    assert.equal(result.CLAUDE_CODE_USE_FOUNDRY, "1");
   });
 
   it("expands tilde provider instance homes", () => {
