@@ -83,18 +83,68 @@ describe("claudeProcessEnv", () => {
     assert.equal(result.CLAUDE_CODE_USE_MANTLE, "1");
   });
 
-  it("keeps direct credentials the provider instance sets explicitly", () => {
+  it("treats an instance-only environment as an account isolation boundary", () => {
     const result = buildClaudeProcessEnv({
       env: {
         PATH: "/bin",
+        HOME: "/home/account-a",
         ANTHROPIC_API_KEY: "stale-inherited-key",
+        AWS_PROFILE: "account-a-profile",
+        GOOGLE_APPLICATION_CREDENTIALS: "/account-a/google.json",
+        AZURE_CLIENT_SECRET: "account-a-azure-secret",
+        HTTPS_PROXY: "https://shared-network-proxy.example.test",
       },
       environment: { ANTHROPIC_AUTH_TOKEN: "instance-auth-token" },
-      hasClaudeCliCredentials: true,
+      hasClaudeCliCredentials: false,
+    });
+
+    assert.equal(result.HOME, "/home/account-a");
+    assert.equal(result.PATH, "/bin");
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-auth-token");
+    assert.equal(result.AWS_PROFILE, undefined);
+    assert.equal(result.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+    assert.equal(result.AZURE_CLIENT_SECRET, undefined);
+    assert.equal(result.HTTPS_PROXY, "https://shared-network-proxy.example.test");
+  });
+
+  it("preserves cloud auth explicitly supplied by an environment-only instance", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        HOME: "/home/account-a",
+        ANTHROPIC_API_KEY: "account-a-key",
+        AWS_PROFILE: "account-a-profile",
+        GOOGLE_APPLICATION_CREDENTIALS: "/account-a/google.json",
+        AZURE_CLIENT_SECRET: "account-a-azure-secret",
+      },
+      environment: {
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_PROFILE: "account-b-profile",
+        GOOGLE_APPLICATION_CREDENTIALS: "/account-b/google.json",
+        AZURE_CLIENT_SECRET: "account-b-azure-secret",
+      },
+      hasClaudeCliCredentials: false,
     });
 
     assert.equal(result.ANTHROPIC_API_KEY, undefined);
-    assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-auth-token");
+    assert.equal(result.CLAUDE_CODE_USE_BEDROCK, "1");
+    assert.equal(result.AWS_PROFILE, "account-b-profile");
+    assert.equal(result.GOOGLE_APPLICATION_CREDENTIALS, "/account-b/google.json");
+    assert.equal(result.AZURE_CLIENT_SECRET, "account-b-azure-secret");
+  });
+
+  it("treats an explicitly empty instance environment as an isolation boundary", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        ANTHROPIC_API_KEY: "account-a-key",
+        AWS_PROFILE: "account-a-profile",
+      },
+      environment: {},
+      hasClaudeCliCredentials: false,
+    });
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.AWS_PROFILE, undefined);
   });
 
   it("overlays the instance home and looks up credentials there", () => {
