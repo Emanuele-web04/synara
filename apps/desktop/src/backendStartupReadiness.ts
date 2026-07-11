@@ -10,6 +10,25 @@ export interface MonitorBackendStartupHealthOptions {
   readonly waitUntilReady: (signal: AbortSignal) => Promise<void>;
   readonly isCurrent: () => boolean;
   readonly onReady: () => void;
+  readonly retryDelayMs?: number;
+}
+
+const DEFAULT_STARTUP_HEALTH_RETRY_DELAY_MS = 1_000;
+
+function waitForStartupHealthRetry(signal: AbortSignal, delayMs: number): Promise<void> {
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 export async function isBackendStartupReadyResponse(response: Response): Promise<boolean> {
@@ -30,15 +49,26 @@ export function monitorBackendStartupHealth(
   options: MonitorBackendStartupHealthOptions,
 ): AbortController {
   const controller = new AbortController();
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_STARTUP_HEALTH_RETRY_DELAY_MS;
 
-  void options.waitUntilReady(controller.signal).then(
-    () => {
+  void (async () => {
+    while (!controller.signal.aborted && options.isCurrent()) {
+      try {
+        await options.waitUntilReady(controller.signal);
+      } catch {
+        if (controller.signal.aborted || !options.isCurrent()) {
+          return;
+        }
+        await waitForStartupHealthRetry(controller.signal, retryDelayMs);
+        continue;
+      }
+
       if (!controller.signal.aborted && options.isCurrent()) {
         options.onReady();
       }
-    },
-    () => undefined,
-  );
+      return;
+    }
+  })();
 
   return controller;
 }

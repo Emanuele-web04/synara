@@ -97,17 +97,50 @@ describe("monitorBackendStartupHealth", () => {
     expect(onReady).not.toHaveBeenCalled();
   });
 
-  it("does not report readiness when the health monitor fails", async () => {
+  it("keeps monitoring when startup readiness arrives after an earlier timeout", async () => {
+    vi.useFakeTimers();
     const onReady = vi.fn();
+    const waitUntilReady = vi
+      .fn<(signal: AbortSignal) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("health readiness timed out"))
+      .mockResolvedValueOnce(undefined);
 
     monitorBackendStartupHealth({
-      waitUntilReady: () => Promise.reject(new Error("health readiness timed out")),
+      waitUntilReady,
       isCurrent: () => true,
       onReady,
+      retryDelayMs: 1_000,
     });
     await Promise.resolve();
 
+    expect(waitUntilReady).toHaveBeenCalledTimes(1);
     expect(onReady).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(waitUntilReady).toHaveBeenCalledTimes(2);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("does not retry a failed health monitor after the backend session is cancelled", async () => {
+    vi.useFakeTimers();
+    const waitUntilReady = vi
+      .fn<(signal: AbortSignal) => Promise<void>>()
+      .mockRejectedValue(new Error("health readiness timed out"));
+    const monitor = monitorBackendStartupHealth({
+      waitUntilReady,
+      isCurrent: () => true,
+      onReady: vi.fn(),
+      retryDelayMs: 1_000,
+    });
+    await Promise.resolve();
+
+    monitor.abort();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(waitUntilReady).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("requires a successful health response with startupReady enabled", async () => {
