@@ -149,7 +149,6 @@ const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
       providerServiceSecretBytes.delete(name);
     }),
 });
-
 const makeProviderServiceLive = (
   options?: Parameters<typeof makeProviderServiceLiveBase>[0],
 ) => makeProviderServiceLiveBase(options).pipe(Layer.provide(ProviderServiceTestSecretStoreLayer));
@@ -1578,6 +1577,58 @@ routing.layer("ProviderServiceLive routing", (it) => {
         }),
         true,
       );
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }),
+  );
+
+  it.effect("never recreates a damaged persisted Codex continuation source", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-codex-damaged-shared-continuation-home");
+      const fixture = yield* Effect.promise(() =>
+        makeSharedCodexContinuationFixture(["personal", "work"], ["personal"]),
+      );
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        providerOptions: {
+          codex: {
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath("personal"),
+            accountId: "personal",
+            environment: fixture.environment,
+          },
+        },
+        runtimeMode: "full-access",
+      });
+      const sourceSessionsPath = path.join(fixture.homePath, "sessions");
+      fs.rmSync(sourceSessionsPath, { recursive: true, force: true });
+      routing.codex.startSession.mockClear();
+      routing.codex.stopSession.mockClear();
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          providerOptions: {
+            codex: {
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("work"),
+              accountId: "work",
+              environment: fixture.environment,
+            },
+          },
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.match(String(result.failure), /missing or damaged|refusing to recreate/);
+      }
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.stopSession.mock.calls.length, 0);
+      assert.equal(fs.existsSync(sourceSessionsPath), false);
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
