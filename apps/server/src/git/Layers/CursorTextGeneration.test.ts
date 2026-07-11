@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import { expect } from "vitest";
+import { expect, test } from "vitest";
 
 import { TextGenerationError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
-import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
+import { CursorTextGenerationLive, resolveCursorSettings } from "./CursorTextGeneration.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -25,6 +25,16 @@ const CursorTextGenerationTestLayer = CursorTextGenerationLive.pipe(
     } as any),
   ),
 );
+
+test("routes an empty-config nondefault Cursor text-generation account", () => {
+  expect(
+    resolveCursorSettings(undefined, { homeDir: "/home/user", stateDir: "/state" }, "cursor_work"),
+  ).toEqual({
+    homeDir: "/home/user",
+    isolationRootDir: "/state",
+    instanceId: "cursor_work",
+  });
+});
 
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;

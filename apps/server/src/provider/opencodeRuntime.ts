@@ -352,6 +352,8 @@ function pooledOpenCodeServerKey(input: {
   readonly poolIsolationKey?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }): string {
   return JSON.stringify({
     binaryPath: input.binaryPath,
@@ -361,6 +363,8 @@ function pooledOpenCodeServerKey(input: {
     experimentalWebSockets: input.experimentalWebSockets === true,
     poolIsolationKey: input.poolIsolationKey ?? null,
     instanceId: input.instanceId ?? null,
+    homeDir: input.homeDir ?? null,
+    isolationRootDir: input.isolationRootDir ?? null,
     environment: environmentFingerprint(input.environment),
   });
 }
@@ -934,14 +938,23 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
 
     const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
       Effect.gen(function* () {
-        const childEnv = buildOpenCodeServerProcessEnv({
-          ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
-          ...(input.environment !== undefined ? { environment: input.environment } : {}),
-          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
-          ...(input.isolationRootDir !== undefined
-            ? { isolationRootDir: input.isolationRootDir }
-            : {}),
+        const childEnv = yield* Effect.try({
+          try: () =>
+            buildOpenCodeServerProcessEnv({
+              ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+              ...(input.isolationRootDir !== undefined
+                ? { isolationRootDir: input.isolationRootDir }
+                : {}),
+            }),
+          catch: (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "runOpenCodeCommand",
+              detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+              cause,
+            }),
         });
         const child = yield* spawner.spawn(
           makeEffectProcessCommand(expandHomePath(input.binaryPath), input.args, {
@@ -1010,17 +1023,26 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           configuredServerPassword && configuredServerPassword.length > 0
             ? configuredServerPassword
             : randomBytes(32).toString("base64url");
-        const childEnv = buildOpenCodeServerProcessEnv({
-          cliSpec,
-          ...(input.environment !== undefined ? { environment: input.environment } : {}),
-          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
-          ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
-          ...(input.isolationRootDir !== undefined
-            ? { isolationRootDir: input.isolationRootDir }
-            : {}),
-          ...(input.experimentalWebSockets !== undefined
-            ? { experimentalWebSockets: input.experimentalWebSockets }
-            : {}),
+        const childEnv = yield* Effect.try({
+          try: () =>
+            buildOpenCodeServerProcessEnv({
+              cliSpec,
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              ...(input.homeDir !== undefined ? { homeDir: input.homeDir } : {}),
+              ...(input.isolationRootDir !== undefined
+                ? { isolationRootDir: input.isolationRootDir }
+                : {}),
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
+            }),
+          catch: (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `Failed to prepare private account home: ${openCodeRuntimeErrorDetail(cause)}`,
+              cause,
+            }),
         });
         childEnv.OPENCODE_SERVER_USERNAME = cliSpec.serverAuthUsername;
         childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;

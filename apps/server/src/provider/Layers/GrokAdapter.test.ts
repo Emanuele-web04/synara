@@ -55,6 +55,17 @@ describe("GrokAdapter runtime event scoping", () => {
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HTTPS_PROXY).toBe("http://proxy.example");
   });
+
+  it("uses the configured Synara state root for nondefault discovery without env", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "synara-grok-discovery-"));
+    const env = buildGrokModelDiscoveryEnv({
+      instanceId: "grok_work",
+      homeDir: "/home/user",
+      isolationRootDir: stateDir,
+    });
+    expect(env.HOME).toContain(`${stateDir}/provider-homes/grok/`);
+    expect(env.GROK_AUTH_PATH).toContain(`${stateDir}/provider-homes/grok/`);
+  });
 });
 
 describe("Grok runtime model settings", () => {

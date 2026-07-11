@@ -74,6 +74,45 @@ describe("makePiStoragePaths", () => {
   });
 });
 
+describe("resolvePiExtensionMode", () => {
+  it("preserves default-only extension behavior", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: false });
+  });
+
+  it("forces noExtensions for isolated accounts and coexisting default discovery", () => {
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: false,
+      }),
+    ).toEqual({ noExtensions: true });
+    expect(
+      resolvePiExtensionMode({
+        isolatedAccount: false,
+        hasExtensionEnabledDefault: false,
+        hasIsolatedMode: true,
+      }),
+    ).toEqual({ noExtensions: true });
+  });
+
+  it("rejects isolated startup while an extension-enabled default is active", () => {
+    expect(() =>
+      resolvePiExtensionMode({
+        isolatedAccount: true,
+        hasExtensionEnabledDefault: true,
+        hasIsolatedMode: false,
+      }),
+    ).toThrow(/Stop extension-enabled default Pi sessions/);
+  });
+});
+
 describe("Pi native Synara gateway tools", () => {
   it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
     const requests: Array<{ readonly token: string | null; readonly body: any }> = [];
