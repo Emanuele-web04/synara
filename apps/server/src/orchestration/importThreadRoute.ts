@@ -18,6 +18,7 @@ import {
   type ModelSlug,
   type OmpThinkingLevel,
   type OrchestrationImportThreadInput,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderStartOptions,
   type ServerSettings,
@@ -167,25 +168,21 @@ async function queryClaudeHistoricalSession<T>(input: {
 
 export function claudeHistoricalSessionEnvironment(
   providerOptions: ProviderStartOptions | undefined,
-  input?: { readonly homeDir?: string | undefined },
+  input?: {
+    readonly homeDir?: string;
+    readonly isolationRootDir?: string;
+    readonly providerInstanceId?: ProviderInstanceId;
+  },
 ): NodeJS.ProcessEnv | undefined {
   const claudeOptions = providerOptions?.claudeAgent;
-  if (!claudeOptions) {
+  if (!claudeOptions && !input?.homeDir && !input?.isolationRootDir && !input?.providerInstanceId) {
     return undefined;
   }
-  const homePath = claudeOptions.homePath?.trim();
-  const environment = claudeOptions.environment ?? {};
-  if (!homePath && Object.keys(environment).length === 0) {
-    return undefined;
-  }
-  const baseHomeDir = input?.homeDir?.trim();
-  const resolvedHomePath =
-    baseHomeDir && homePath === "~"
-      ? baseHomeDir
-      : baseHomeDir && homePath?.startsWith("~/")
-        ? nodePath.join(baseHomeDir, homePath.slice(2))
-        : homePath;
-  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
+  return buildClaudeInstanceProcessEnv(claudeOptions?.homePath, claudeOptions?.environment, {
+    ...(input?.homeDir ? { homeDir: input.homeDir } : {}),
+    ...(input?.isolationRootDir ? { isolationRootDir: input.isolationRootDir } : {}),
+    ...(input?.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+  });
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -232,7 +229,7 @@ export interface ImportThreadHandlerOptions {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
-  readonly serverConfig: Pick<ServerConfigShape, "homeDir">;
+  readonly serverConfig: Pick<ServerConfigShape, "homeDir" | "stateDir">;
   readonly serverSettings: ServerSettingsShape;
 }
 
@@ -255,10 +252,13 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
     readonly externalId: string;
+    readonly providerInstanceId: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
   }) {
     const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
       homeDir: options.serverConfig.homeDir,
+      isolationRootDir: options.serverConfig.stateDir,
+      providerInstanceId: input.providerInstanceId,
     });
     const claudeSessionInfo = yield* Effect.tryPromise({
       try: () =>
@@ -279,10 +279,13 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     if (claudeSessionInfo) return;
 
     const sessionFoundElsewhere = yield* Effect.tryPromise({
-      try: async () => {
-        const { getSessionInfo } = await loadClaudeAgentSdk();
-        return getSessionInfo(input.externalId);
-      },
+      try: () =>
+        queryClaudeHistoricalSession<SDKSessionInfo | null | undefined>({
+          method: "getSessionInfo",
+          sessionId: input.externalId,
+          dir: undefined,
+          environment: historicalEnv,
+        }),
       catch: () => undefined,
     });
 
@@ -418,11 +421,14 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly cwd: string | undefined;
     readonly externalId: string;
     readonly importedAt: string;
+    readonly providerInstanceId: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
     const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
       homeDir: options.serverConfig.homeDir,
+      isolationRootDir: options.serverConfig.stateDir,
+      providerInstanceId: input.providerInstanceId,
     });
     const sessionMessages = yield* Effect.tryPromise({
       try: () =>
@@ -675,6 +681,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
+        providerInstanceId: resolvedProvider.instance.instanceId,
         ...(providerOptions ? { providerOptions } : {}),
       });
     }
@@ -704,9 +711,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         });
       } else if (provider === "claudeAgent") {
         yield* importClaudeThreadHistory({
-          threadId: thread.id,
-          externalId,
-          cwd,
+        threadId: thread.id,
+        externalId,
+        cwd,
+        providerInstanceId: resolvedProvider.instance.instanceId,
           ...(providerOptions ? { providerOptions } : {}),
           importedAt: session.updatedAt,
         });

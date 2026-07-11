@@ -739,9 +739,14 @@ function claudeEnvironment(
   homePath: string | null | undefined,
   fallbackHomePath?: string | undefined,
   environment?: Readonly<Record<string, string>> | undefined,
+  providerInstanceId?: string,
+  isolationRootDir?: string,
 ): NodeJS.ProcessEnv {
-  const resolvedHomePath = homePath?.trim() || fallbackHomePath?.trim();
-  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
+  return buildClaudeInstanceProcessEnv(homePath, environment, {
+    ...(fallbackHomePath ? { homeDir: fallbackHomePath } : {}),
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+    ...(isolationRootDir ? { isolationRootDir } : {}),
+  });
 }
 
 function isUuid(value: string): boolean {
@@ -2176,7 +2181,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const resolveClaudeSdkEnv = (
       homePath?: string | null,
       environment?: Readonly<Record<string, string>>,
-    ) => Effect.sync(() => claudeEnvironment(homePath, serverConfig.homeDir, environment));
+      providerInstanceId?: string,
+    ) =>
+      Effect.sync(() =>
+        claudeEnvironment(
+          homePath,
+          serverConfig.homeDir,
+          environment,
+          providerInstanceId,
+          serverConfig.stateDir,
+        ),
+      );
 
     const bindClaudeProcessOwner =
       (owner: ClaudeProcessOwner) =>
@@ -5404,6 +5419,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const claudeSdkEnv = yield* resolveClaudeSdkEnv(
           input.providerOptions?.claudeAgent?.homePath,
           input.providerOptions?.claudeAgent?.environment,
+          input.providerInstanceId,
         );
         if (input.runtimeMode !== "auto") return { claudeSdkEnv, snapshotSupported: false };
         const binaryPath = input.providerOptions?.claudeAgent?.binaryPath ?? "claude";
@@ -5940,22 +5956,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
 
         const providerOptions = input.providerOptions?.claudeAgent;
+        const modelSelection =
+          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+        const providerInstanceId = input.providerInstanceId ?? modelSelection?.instanceId;
         const commandDiscoveryKey = claudeDiscoveryKey({
-          instanceId: input.providerInstanceId,
+          instanceId: providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
           environment: providerOptions?.environment,
           cwd: input.cwd,
         });
         const accountDiscoveryKey = claudeDiscoveryKey({
-          instanceId: input.providerInstanceId,
+          instanceId: providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
           environment: providerOptions?.environment,
           includeCwd: false,
         });
-        const modelSelection =
-          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
         const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
         const requestedAutoCompactWindow = normalizeClaudeModelOptions(
           modelSelection?.model,
@@ -6167,7 +6184,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const session: ProviderSession = {
             threadId,
             provider: PROVIDER,
-            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            ...(providerInstanceId ? { providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -7498,7 +7515,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         const binaryPath = input.binaryPath ?? "claude";
         const pendingKey = JSON.stringify([discoveryKey, enableArtifacts]);
         let discoveryPromise = pendingCommandDiscoveries.get(pendingKey);
@@ -7602,7 +7623,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // ProviderDiscoveryService owns caching and single-flight. The SDK's
         // supportedModels() returns initialization metadata, so an existing
         // session cannot discover models added by a CLI update.
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment, input.instanceId);
         return yield* Effect.tryPromise({
           try: () =>
             discoverModelsViaTemporaryProcess(
