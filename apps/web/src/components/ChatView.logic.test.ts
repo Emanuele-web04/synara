@@ -948,6 +948,8 @@ describe("voice helpers", () => {
   it("derives voice-note availability from provider auth and runtime state", () => {
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "authenticated",
         voiceTranscriptionAvailable: true,
         isRecording: false,
@@ -961,6 +963,8 @@ describe("voice helpers", () => {
 
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "unauthenticated",
         voiceTranscriptionAvailable: true,
         isRecording: true,
@@ -968,6 +972,51 @@ describe("voice helpers", () => {
       }),
     ).toEqual({
       canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: true,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: false,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: false,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: false,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
