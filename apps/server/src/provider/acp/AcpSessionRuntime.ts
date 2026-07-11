@@ -300,6 +300,8 @@ export interface AcpSpawnInput {
     readonly driver: ProviderProcessEnvDriver;
     readonly instanceId?: string | undefined;
     readonly environment?: Readonly<Record<string, string>> | undefined;
+    readonly homeDir?: string | undefined;
+    readonly isolationRootDir?: string | undefined;
   };
 }
 

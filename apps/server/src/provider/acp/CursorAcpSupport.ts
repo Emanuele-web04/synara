@@ -33,6 +33,8 @@ export interface CursorAcpRuntimeCursorSettings {
   readonly binaryPath?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }
 
 export const CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES = {
@@ -114,6 +116,10 @@ export function buildCursorAcpSpawnInput(
         : {}),
       ...(cursorSettings?.environment !== undefined
         ? { environment: cursorSettings.environment }
+        : {}),
+      ...(cursorSettings?.homeDir !== undefined ? { homeDir: cursorSettings.homeDir } : {}),
+      ...(cursorSettings?.isolationRootDir !== undefined
+        ? { isolationRootDir: cursorSettings.isolationRootDir }
         : {}),
     },
   };

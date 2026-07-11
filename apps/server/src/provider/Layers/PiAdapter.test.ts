@@ -23,10 +23,55 @@ import {
   buildPiAgentGatewayCustomTools,
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
+  makePiStoragePaths,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
+
+describe("makePiStoragePaths", () => {
+  it("keeps legacy defaults byte-for-byte without an account boundary", () => {
+    expect(
+      makePiStoragePaths({
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({ agentDir: "/sdk/default-agent" });
+  });
+
+  it("uses selected Pi roots and never falls back to the global session directory", () => {
+    expect(
+      makePiStoragePaths({
+        agentDir: "~/configured-agent",
+        environment: {
+          HOME: "/accounts/b",
+          PI_CODING_AGENT_DIR: "/ignored/env-agent",
+          PI_CODING_AGENT_SESSION_DIR: "~/selected-sessions",
+        },
+        instanceId: "pi_work",
+        stateDir: "/state",
+        homeDir: "/home/user",
+        sdkAgentDir: "/sdk/default-agent",
+      }),
+    ).toEqual({
+      agentDir: "/accounts/b/configured-agent",
+      sessionDir: "/accounts/b/selected-sessions",
+    });
+  });
+
+  it("derives persistent synthetic agent and session roots for nondefault instances", () => {
+    const paths = makePiStoragePaths({
+      instanceId: "pi_work",
+      stateDir: "/state",
+      homeDir: "/home/user",
+      sdkAgentDir: "/sdk/default-agent",
+    });
+    expect(paths.agentDir).toContain("/state/provider-homes/pi/");
+    expect(paths.agentDir.endsWith("/.pi/agent")).toBe(true);
+    expect(paths.sessionDir).toBe(`${paths.agentDir}/sessions`);
+  });
+});
 
 describe("Pi native Synara gateway tools", () => {
   it("uses canonical MCP schemas and keeps same-cwd thread tokens distinct", async () => {
@@ -443,6 +488,87 @@ describe("getPiDiscoverableModels", () => {
         { auth: { apiKey: "selected-account-b" } },
       ]);
     } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["amazon-bedrock", "stored-bedrock", "Amazon Bedrock"],
+    ["azure-openai-responses", "stored-azure", "Azure OpenAI"],
+    ["google-vertex", "gcp-vertex-credentials", "Vertex ADC"],
+  ])("fails closed for isolated %s ambient-chain auth", async (provider, key, message) => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-routing-isolation-"));
+    try {
+      writeFileSync(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify({ [provider]: { type: "api_key", key } }),
+      );
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {},
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth(provider)).rejects.toThrow(message);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves Cloudflare routing only from the selected instance", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-cloudflare-isolation-"));
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+          CLOUDFLARE_API_KEY: "key-b",
+        },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("cloudflare-ai-gateway")).resolves.toMatchObject({
+        env: {
+          CLOUDFLARE_ACCOUNT_ID: "account-b",
+          CLOUDFLARE_GATEWAY_ID: "gateway-b",
+        },
+      });
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses ambient OpenAI and Anthropic routing credentials", async () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-header-isolation-"));
+    const previousOpenAiOrg = process.env.OPENAI_ORG_ID;
+    const previousAnthropicToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.OPENAI_ORG_ID = "ambient-org";
+    process.env.ANTHROPIC_AUTH_TOKEN = "ambient-token";
+    try {
+      const runtime = await createPiModelRuntime(
+        agentDir,
+        { ModelRuntime },
+        undefined,
+        { OPENAI_API_KEY: "selected-openai", ANTHROPIC_API_KEY: "selected-anthropic" },
+        "pi_work",
+      );
+
+      await expect(runtime.getAuth("openai")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ "OpenAI-Organization": "ambient-org" }) },
+      });
+      await expect(runtime.getAuth("anthropic")).resolves.not.toMatchObject({
+        auth: { headers: expect.objectContaining({ Authorization: "Bearer ambient-token" }) },
+      });
+    } finally {
+      if (previousOpenAiOrg === undefined) delete process.env.OPENAI_ORG_ID;
+      else process.env.OPENAI_ORG_ID = previousOpenAiOrg;
+      if (previousAnthropicToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+      else process.env.ANTHROPIC_AUTH_TOKEN = previousAnthropicToken;
       rmSync(agentDir, { recursive: true, force: true });
     }
   });

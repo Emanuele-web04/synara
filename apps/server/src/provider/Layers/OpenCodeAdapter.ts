@@ -3424,6 +3424,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       binaryPath,
                       cliSpec: adapterConfig.cliSpec,
                       cwd: directory,
+                      homeDir: serverConfig.homeDir,
+                      isolationRootDir: serverConfig.stateDir,
                       ...(input.providerInstanceId !== undefined
                         ? { instanceId: input.providerInstanceId }
                         : {}),
@@ -4119,8 +4121,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 binaryPath,
                 cliSpec: adapterConfig.cliSpec,
                 cwd: directory,
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+                ...(input.providerInstanceId !== undefined
+                  ? { instanceId: input.providerInstanceId }
+                  : {}),
                 ...(serverUrl ? { serverUrl } : {}),
-                ...(environment ? { environment } : {}),
+                ...(environment !== undefined ? { environment } : {}),
                 ...(provider === "opencode" && experimentalWebSockets
                   ? { experimentalWebSockets: true }
                   : {}),
@@ -4267,6 +4274,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
                     cwd: sourceDirectory,
+                    homeDir: serverConfig.homeDir,
+                    isolationRootDir: serverConfig.stateDir,
                     ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                     ...(serverUrl ? { serverUrl } : {}),
                     ...(environment !== undefined ? { environment } : {}),
@@ -4373,6 +4382,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   cwd: input.cwd?.trim() || serverConfig.cwd,
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
                   ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(input.environment !== undefined ? { environment: input.environment } : {}),
@@ -4442,6 +4453,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             .listOpenCodeCliModels({
               binaryPath,
               cliSpec: adapterConfig.cliSpec,
+              homeDir: serverConfig.homeDir,
+              isolationRootDir: serverConfig.stateDir,
               ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               ...(input.cwd ? { cwd: input.cwd } : {}),
               ...(input.environment !== undefined ? { environment: input.environment } : {}),

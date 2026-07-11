@@ -104,6 +104,7 @@ interface SharedOpenCodeTextGenerationServerState {
   cwd: string | null;
   experimentalWebSockets: boolean;
   environmentKey: string | null;
+  instanceId: string | null;
   activeRequests: number;
   idleCloseFiber: Fiber.Fiber<void, never> | null;
 }
@@ -185,6 +186,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       cwd: null,
       experimentalWebSockets: false,
       environmentKey: null,
+      instanceId: null,
       activeRequests: 0,
       idleCloseFiber: null,
     };
@@ -197,6 +199,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       sharedServerState.cwd = null;
       sharedServerState.experimentalWebSockets = false;
       sharedServerState.environmentKey = null;
+      sharedServerState.instanceId = null;
       if (scope !== null) {
         yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
       }
@@ -237,6 +240,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       readonly experimentalWebSockets: boolean;
       readonly environment?: Readonly<Record<string, string>>;
       readonly environmentKey: string | null;
+      readonly instanceId?: string;
       readonly operation: TextGenerationOperation;
     }) =>
       sharedServerMutex.withPermit(
@@ -251,7 +255,10 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
                   binaryPath: input.binaryPath,
                   cliSpec: config.cliSpec,
                   cwd: input.cwd,
-                  ...(input.environment ? { environment: input.environment } : {}),
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
+                  ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+                  ...(input.environment !== undefined ? { environment: input.environment } : {}),
                   ...(input.experimentalWebSockets
                     ? { experimentalWebSockets: input.experimentalWebSockets }
                     : {}),
@@ -287,10 +294,11 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               sharedServerState.cwd === input.cwd &&
               sharedServerState.experimentalWebSockets === input.experimentalWebSockets &&
               sharedServerState.environmentKey === input.environmentKey;
-            if (!sameConfigScope && sharedServerState.activeRequests === 0) {
+            const sameInstance = sharedServerState.instanceId === (input.instanceId ?? null);
+            if ((!sameConfigScope || !sameInstance) && sharedServerState.activeRequests === 0) {
               yield* closeSharedServer();
             } else {
-              if (!sameConfigScope) {
+              if (!sameConfigScope || !sameInstance) {
                 yield* Effect.logWarning(
                   `${config.displayName} shared server config scope mismatch: requested ` +
                     input.binaryPath +
@@ -331,6 +339,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               sharedServerState.cwd = input.cwd;
               sharedServerState.experimentalWebSockets = input.experimentalWebSockets;
               sharedServerState.environmentKey = input.environmentKey;
+              sharedServerState.instanceId = input.instanceId ?? null;
               sharedServerState.activeRequests = 1;
               return {
                 server,
@@ -502,7 +511,10 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
                 binaryPath,
                 cwd: input.cwd,
                 experimentalWebSockets,
-                ...(environment ? { environment } : {}),
+                ...(environment !== undefined ? { environment } : {}),
+                ...(input.modelSelection.instanceId !== undefined
+                  ? { instanceId: input.modelSelection.instanceId }
+                  : {}),
                 environmentKey,
                 operation: input.operation,
               }),

@@ -718,6 +718,38 @@ describe("OpenCodeRuntime local server pool", () => {
     },
   );
 
+  it("keeps servers separate when environment values collide under the old 32-bit hash", async () => {
+    const state = { spawnUrls: [] as Array<string>, killUrls: [] as Array<string> };
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+          const first = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              environment: { OPENAI_API_KEY: "a02hh7njhk5" },
+            })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: "opencode",
+              environment: { OPENAI_API_KEY: "p7fe9wsknu9" },
+            })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+          expect(first.url).toBe("http://127.0.0.1:59000");
+          expect(second.url).toBe("http://127.0.0.1:59001");
+
+          yield* Scope.close(firstScope, Exit.void);
+          yield* Scope.close(secondScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
   it("starts local servers in the requested cwd and separates cwd-specific pools", async () => {
     const state = {
       spawnUrls: [] as Array<string>,

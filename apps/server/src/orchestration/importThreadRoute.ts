@@ -295,6 +295,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const resolveImportedProviderThreadContext = Effect.fn(function* (input: {
     readonly provider: "codex" | "droid" | "opencode";
     readonly externalId: string;
+    readonly providerInstanceId: ProviderInstanceId;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
     readonly providerOptions?: ProviderStartOptions;
@@ -305,6 +306,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     const snapshot = yield* adapter
       .readExternalThread({
         externalThreadId: input.externalId,
+        providerInstanceId: input.providerInstanceId,
         ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       })
@@ -572,6 +574,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? yield* resolveImportedProviderThreadContext({
             provider,
             externalId,
+            providerInstanceId: resolvedProvider.instance.instanceId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
             ...(providerOptions ? { providerOptions } : {}),

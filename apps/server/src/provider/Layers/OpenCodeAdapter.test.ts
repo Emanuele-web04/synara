@@ -990,6 +990,40 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     },
   );
 
+  it("passes the resolved nondefault OpenCode instance through external thread reads", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const providerInstanceId = "opencode_work";
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        if (!adapter.readExternalThread) {
+          throw new Error("Expected OpenCode external thread reads.");
+        }
+        return yield* adapter.readExternalThread({
+          externalThreadId: "external-session",
+          cwd: "/repo/external-import",
+          providerInstanceId,
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/external-import",
+      instanceId: providerInstanceId,
+    });
+  });
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({
