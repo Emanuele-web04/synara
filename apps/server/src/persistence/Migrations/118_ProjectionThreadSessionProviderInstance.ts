@@ -21,16 +21,19 @@ export default Effect.gen(function* () {
         SELECT json_extract(provider_session_runtime.runtime_payload_json, '$.providerInstanceId')
         FROM provider_session_runtime
         WHERE provider_session_runtime.thread_id = projection_thread_sessions.thread_id
+          AND json_valid(provider_session_runtime.runtime_payload_json)
       ),
       (
         SELECT json_extract(provider_session_runtime.runtime_payload_json, '$.modelSelection.instanceId')
         FROM provider_session_runtime
         WHERE provider_session_runtime.thread_id = projection_thread_sessions.thread_id
+          AND json_valid(provider_session_runtime.runtime_payload_json)
       ),
       (
         SELECT json_extract(projection_threads.model_selection_json, '$.instanceId')
         FROM projection_threads
         WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
+          AND json_valid(projection_threads.model_selection_json)
       ),
       provider_name
     )
