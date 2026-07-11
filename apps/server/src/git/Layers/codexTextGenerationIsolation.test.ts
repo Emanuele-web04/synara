@@ -474,7 +474,7 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
     });
   });
 
-  it.effect("stays bound to the canonical account when an ancestor alias is retargeted", () => {
+  it.effect("keeps config and auth bound to one home when an ancestor alias is retargeted", () => {
     if (process.platform === "win32") return Effect.void;
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -490,18 +490,75 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
         '{"auth_mode":"apikey","OPENAI_API_KEY":"selected-key"}',
       );
       writeFileSync(
+        join(selectedHome, "config.toml"),
+        [
+          'model_provider = "selected"',
+          "[model_providers.selected]",
+          'base_url = "https://selected.example.test"',
+          'env_key = "SELECTED_API_KEY"',
+        ].join("\n"),
+      );
+      writeFileSync(
         join(replacementHome, "auth.json"),
         '{"auth_mode":"apikey","OPENAI_API_KEY":"replacement-key"}',
       );
+      writeFileSync(
+        join(replacementHome, "config.toml"),
+        [
+          'model_provider = "replacement"',
+          "[model_providers.replacement]",
+          'base_url = "https://replacement.example.test"',
+          'env_key = "REPLACEMENT_API_KEY"',
+        ].join("\n"),
+      );
       symlinkSync(selectedHome, aliasHome, "dir");
-      const source = bindAuthSource(join(aliasHome, "auth.json"));
+      const tracking = prepareCodexAuthTracking({
+        env: { ...process.env, CODEX_HOME: aliasHome },
+        homePath: aliasHome,
+      });
 
       unlinkSync(aliasHome);
       symlinkSync(replacementHome, aliasHome, "dir");
-      const snapshot = prepareCodexTextGenerationAuthSnapshot(source, isolatedHome)!;
+      const config = buildCodexTextGenerationConfig(tracking.sourceConfigSnapshot);
+      const snapshot = prepareCodexTextGenerationAuthSnapshot(tracking.authSource, isolatedHome)!;
 
+      expect(config.content).toContain("selected.example.test");
+      expect(config.content).not.toContain("replacement.example.test");
       expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).toContain("selected-key");
       expect(readFileSync(snapshot.effectiveAuthFilePath, "utf8")).not.toContain("replacement-key");
+    });
+  });
+
+  it.effect("rejects symlinked source config before auxiliary generation", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sourceHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "config-source-" });
+      const realConfigPath = join(sourceHome, "real-config.toml");
+      writeFileSync(realConfigPath, 'model = "replacement"');
+      symlinkSync(realConfigPath, join(sourceHome, "config.toml"));
+
+      expect(() =>
+        prepareCodexAuthTracking({
+          env: { ...process.env, CODEX_HOME: sourceHome },
+          homePath: sourceHome,
+        }),
+      ).toThrowError(/config\.toml must not be a symbolic link/i);
+    }),
+  );
+
+  it.effect("rejects FIFO source config without blocking", () => {
+    if (process.platform === "win32") return Effect.void;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const sourceHome = yield* fileSystem.makeTempDirectoryScoped({ prefix: "config-source-" });
+      execFileSync("mkfifo", [join(sourceHome, "config.toml")]);
+
+      expect(() =>
+        prepareCodexAuthTracking({
+          env: { ...process.env, CODEX_HOME: sourceHome },
+          homePath: sourceHome,
+        }),
+      ).toThrowError(/config\.toml must be a regular file/i);
     });
   });
 

@@ -2,8 +2,6 @@
 // Purpose: Runs schema-constrained Codex CLI text generation against account-owned auth.
 // Layer: Git and orchestration text-generation service.
 
-import { readFileSync } from "node:fs";
-
 import {
   Effect,
   Fiber,
@@ -371,31 +369,19 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       }
     });
 
-  const readSourceCodexConfig = (
+  const parsePreparedCodexConfig = (
     operation: TextGenerationOperation,
-    sourceConfigPath: string,
+    sourceConfigSnapshot: string,
   ): Effect.Effect<CodexTextGenerationConfig, TextGenerationError> =>
     Effect.try({
-      try: () => {
-        let source = "";
-        try {
-          source = readFileSync(sourceConfigPath, "utf8");
-        } catch (cause) {
-          const code =
-            typeof cause === "object" && cause !== null && "code" in cause
-              ? String((cause as { readonly code?: unknown }).code ?? "")
-              : "";
-          if (code !== "ENOENT") throw cause;
-        }
-        return buildCodexTextGenerationConfig(source);
-      },
+      try: () => buildCodexTextGenerationConfig(sourceConfigSnapshot),
       catch: (cause) =>
         new TextGenerationError({
           operation,
           detail:
             cause instanceof CodexTextGenerationConfigError
               ? cause.message
-              : "Codex config.toml could not be read safely.",
+              : "The prepared Codex config.toml snapshot could not be parsed safely.",
           cause,
         }),
     });
@@ -581,9 +567,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
               cause,
             }),
         });
-        const isolatedConfig = yield* readSourceCodexConfig(
+        const isolatedConfig = yield* parsePreparedCodexConfig(
           operation,
-          authTracking.sourceConfigPath,
+          authTracking.sourceConfigSnapshot,
         );
         const hydratedLaunchEnv = hydrateCodexProviderCredentialEnvironment({
           env: instanceLaunchEnv,
