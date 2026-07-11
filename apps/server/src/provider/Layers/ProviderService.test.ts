@@ -1362,6 +1362,71 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("reuses Codex continuation across account options sharing one session home", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-codex-shared-continuation-home");
+      const initial = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/codex-shared-home",
+            shadowHomePath: "/tmp/codex-personal-auth",
+            accountId: "personal",
+          },
+        },
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/codex-shared-home",
+            shadowHomePath: "/tmp/codex-work-auth",
+            accountId: "work",
+          },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(
+        routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
+        initial.resumeCursor,
+      );
+    }),
+  );
+
+  it.effect("rejects incompatible stopped Claude home changes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-claude-stopped-home-boundary");
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        providerOptions: { claudeAgent: { homePath: "/tmp/claude-stopped-home-a" } },
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopRuntimeSession!({ threadId });
+      routing.claude.startSession.mockClear();
+
+      const result = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          providerOptions: { claudeAgent: { homePath: "/tmp/claude-stopped-home-b" } },
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -4794,7 +4859,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.deepEqual(startPayload.providerOptions, {
           codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
         });
-        assert.equal(startPayload.resumeCursor, undefined);
+        assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
       }
 
       fs.rmSync(tempDir, { recursive: true, force: true });
