@@ -1,4 +1,5 @@
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -26,6 +27,7 @@ import {
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
   readCodexSharedContinuationGeneration,
+  type CodexOverlayEntryLinker,
   writeCodexOverlayConfigAtomically,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
@@ -879,6 +881,54 @@ describe("buildCodexProcessEnv account overlays", () => {
           path.resolve(path.join(fixture.homePath, entry)),
         );
       }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a forced-copy launch when authoritative auth changes after the copy", async () => {
+    const fixture = makeAccountFixture();
+    const sourceAuthPath = path.join(fixture.homePath, "auth.json");
+    const firstAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-first", access_token: "first" },
+    });
+    const secondAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-second", access_token: "second" },
+    });
+    writeFileSync(sourceAuthPath, firstAuth, "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+    });
+    const overlayAuthPath = path.join(overlayHomePath, "auth.json");
+    const raceAfterAuthCopy: CodexOverlayEntryLinker = {
+      symlink: vi.fn(async (sourcePath, targetPath, type) => {
+        if (path.basename(String(targetPath)) === "auth.json") {
+          throw new Error("auth symlinks unavailable");
+        }
+        symlinkSync(sourcePath, targetPath, type);
+      }),
+      copyFile: vi.fn(async (sourcePath, targetPath) => {
+        copyFileSync(sourcePath, targetPath);
+        if (path.basename(String(targetPath)) === "auth.json") {
+          writeFileSync(sourcePath, secondAuth, "utf8");
+        }
+      }),
+    };
+
+    try {
+      await expect(
+        buildCodexProcessLaunchContext({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          platform: "win32",
+          overlayEntryLinker: raceAfterAuthCopy,
+        }),
+      ).rejects.toThrow(/authentication changed during app-server launch preparation/);
+      expect(readFileSync(overlayAuthPath, "utf8")).toBe(firstAuth);
+      expect(readFileSync(sourceAuthPath, "utf8")).toBe(secondAuth);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
