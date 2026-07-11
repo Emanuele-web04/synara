@@ -1139,12 +1139,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start Codex session.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/startFailed", message);
-        this.stopSession(threadId);
+        if (!context.stopping) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/startFailed", message);
+        }
+        this.stopSessionContext(context);
       } else {
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
@@ -1723,12 +1725,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
       if (context) {
-        this.updateSession(context, {
-          status: "error",
-          lastError: message,
-        });
-        this.emitErrorEvent(context, "session/threadForkFailed", message);
-        this.stopSession(threadId);
+        if (!context.stopping) {
+          this.updateSession(context, {
+            status: "error",
+            lastError: message,
+          });
+          this.emitErrorEvent(context, "session/threadForkFailed", message);
+        }
+        this.stopSessionContext(context);
       }
       throw new Error(message, { cause: error });
     }
@@ -1915,15 +1919,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   stopSession(threadId: ThreadId): void {
     const context = this.sessions.get(threadId);
-    if (!context || context.stopping) {
+    if (!context) {
+      return;
+    }
+
+    this.stopSessionContext(context);
+  }
+
+  private stopSessionContext(context: CodexSessionContext): void {
+    if (context.stopping) {
       return;
     }
 
     context.stopping = true;
+    const threadId = context.session.threadId;
     // Claim the entry before cleanup or lifecycle emission. EventEmitter
     // listeners run synchronously and the Codex adapter inspects sessions while
     // stamping events; leaving this context visible would re-enter stopSession.
-    this.sessions.delete(threadId);
+    if (this.sessions.get(threadId) === context) {
+      this.sessions.delete(threadId);
+    }
 
     for (const pending of context.pending.values()) {
       clearTimeout(pending.timeout);
@@ -2965,6 +2980,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       method,
       message,
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
     });
   }
 
@@ -2980,6 +2998,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       createdAt: new Date().toISOString(),
       method,
       message,
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
     });
   }
 

@@ -61,6 +61,19 @@ function readFakeCodexMethods(messagesPath: string): string[] {
     : [];
 }
 
+async function settle<T>(
+  promise: Promise<T>,
+): Promise<
+  | { readonly status: "fulfilled"; readonly value: T }
+  | { readonly status: "rejected"; readonly reason: unknown }
+> {
+  try {
+    return { status: "fulfilled", value: await promise };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
 function writeFakeCodexExecutable(root: string): string {
   const binaryPath = path.join(root, "fake-codex.mjs");
   writeFileSync(
@@ -115,7 +128,21 @@ lines.on("line", (line) => {
   if (message.method === "model/list") result = { data: [] };
   if (message.method === "thread/start") result = { thread: { id: "fake-provider-thread" } };
   if (message.method === "thread/fork") result = { thread: { id: "fake-forked-thread" } };
-  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  const respond = () => {
+    process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  };
+  if (
+    message.method === "initialize" &&
+    process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH
+  ) {
+    const timer = setInterval(() => {
+      if (!fs.existsSync(process.env.SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH)) return;
+      clearInterval(timer);
+      respond();
+    }, 5);
+    return;
+  }
+  respond();
 });
 `,
     "utf8",
@@ -1185,6 +1212,78 @@ describe("startSession", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "does not let a superseded start failure stop its replacement session",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-start-replacement-"));
+      const sourceHome = path.join(root, "codex-home");
+      const projectPath = path.join(root, "project");
+      const firstMessagesPath = path.join(root, "first-messages.txt");
+      const secondMessagesPath = path.join(root, "second-messages.txt");
+      const initializeGatePath = path.join(root, "release-first-initialize");
+      mkdirSync(sourceHome, { recursive: true });
+      mkdirSync(projectPath, { recursive: true });
+      writeFileSync(path.join(sourceHome, "config.toml"), "", "utf8");
+      writeFileSync(path.join(sourceHome, "auth.json"), codexAuth("workspace-stable", "1"), "utf8");
+      const binaryPath = writeFakeCodexExecutable(root);
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-start-replacement");
+
+      try {
+        const firstOutcome = settle(
+          manager.startSession({
+            threadId,
+            provider: "codex",
+            cwd: projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath,
+                homePath: sourceHome,
+                environment: {
+                  HOME: root,
+                  SYNARA_HOME: path.join(root, "runtime"),
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.startSession({
+          threadId,
+          provider: "codex",
+          cwd: projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath,
+              homePath: sourceHome,
+              environment: {
+                HOME: root,
+                SYNARA_HOME: path.join(root, "runtime"),
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement.status).toBe("ready");
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toEqual([replacement]);
+      } finally {
+        manager.stopAll();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "fails closed before native fork when the selected account changes during initialization",
     async () => {
       const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-auth-swap-"));
@@ -1233,6 +1332,97 @@ describe("startSession", () => {
 
         expect(readFakeCodexMethods(messagesPath)).toEqual(["initialize"]);
         expect(manager.listSessions()).toEqual([]);
+      } finally {
+        manager.stopAll();
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not let a superseded fork failure stop its replacement session",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-replacement-"));
+      const sourceHome = path.join(root, "codex-home");
+      const projectPath = path.join(root, "project");
+      const runtimeHome = path.join(root, "runtime");
+      const firstMessagesPath = path.join(root, "first-messages.txt");
+      const secondMessagesPath = path.join(root, "second-messages.txt");
+      const initializeGatePath = path.join(root, "release-first-initialize");
+      const environment = { HOME: root, SYNARA_HOME: runtimeHome };
+      mkdirSync(sourceHome, { recursive: true });
+      mkdirSync(projectPath, { recursive: true });
+      writeFileSync(path.join(sourceHome, "config.toml"), "", "utf8");
+      writeFileSync(path.join(sourceHome, "auth.json"), codexAuth("workspace-stable", "1"), "utf8");
+      buildCodexProcessEnv({ env: environment, homePath: sourceHome });
+      const generation = readCodexSharedContinuationGeneration({
+        env: environment,
+        homePath: sourceHome,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+      const binaryPath = writeFakeCodexExecutable(root);
+      const manager = new CodexAppServerManager();
+      const threadId = asThreadId("thread-fork-replacement");
+
+      try {
+        const firstOutcome = settle(
+          manager.forkThread({
+            sourceThreadId: asThreadId("source-first-fork"),
+            sourceResumeCursor: { threadId: "provider-source-first" },
+            threadId,
+            cwd: projectPath,
+            runtimeMode: "full-access",
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath,
+                homePath: sourceHome,
+                environment: {
+                  ...environment,
+                  SYNARA_FAKE_CODEX_MESSAGES_PATH: firstMessagesPath,
+                  SYNARA_FAKE_CODEX_HOLD_INITIALIZE_PATH: initializeGatePath,
+                },
+              },
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(readFakeCodexMethods(firstMessagesPath)).toContain("initialize");
+        });
+
+        const replacement = await manager.forkThread({
+          sourceThreadId: asThreadId("source-second-fork"),
+          sourceResumeCursor: { threadId: "provider-source-second" },
+          threadId,
+          cwd: projectPath,
+          runtimeMode: "full-access",
+          expectedCodexContinuationGeneration: generation!,
+          providerOptions: {
+            codex: {
+              binaryPath,
+              homePath: sourceHome,
+              environment: {
+                ...environment,
+                SYNARA_FAKE_CODEX_MESSAGES_PATH: secondMessagesPath,
+              },
+            },
+          },
+        });
+        const superseded = await firstOutcome;
+
+        expect(superseded.status).toBe("rejected");
+        expect(replacement).toEqual({
+          threadId,
+          resumeCursor: { threadId: "fake-forked-thread" },
+        });
+        expect(readFakeCodexMethods(secondMessagesPath)).toContain("thread/fork");
+        expect(manager.listSessions()).toEqual([
+          expect.objectContaining({
+            threadId,
+            status: "ready",
+            resumeCursor: { threadId: "fake-forked-thread" },
+          }),
+        ]);
       } finally {
         manager.stopAll();
         rmSync(root, { recursive: true, force: true });
