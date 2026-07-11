@@ -506,7 +506,14 @@ function persistedContinuationMatchesLaunch(input: {
   }
   const persistedIdentity = readPersistedContinuationIdentity(input.binding.runtimePayload);
   if (persistedIdentity !== undefined) {
-    return persistedIdentity === providerContinuationIdentity(input.provider, input.providerOptions);
+    const currentIdentity = providerContinuationIdentity(input.provider, input.providerOptions);
+    if (persistedIdentity === currentIdentity) {
+      return true;
+    }
+    // Preparation markers can upgrade independently of launch settings. An
+    // exact Codex launch may adopt that upgrade; a different account must
+    // establish a genuinely shared identity first.
+    return input.provider === "codex" && persistedLaunchMatchesExactly(input);
   }
   return persistedLaunchMatchesExactly(input);
 }
@@ -3019,11 +3026,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
         const effectiveProviderOptions = resolvedSource.providerOptions;
-        const effectiveProviderCredentialsFingerprint = credentialsFingerprintForProvider(
-          resolvedSource.instance.driver,
-          effectiveProviderOptions,
-          credentialsFingerprintKey,
-        );
         const hasSourceResumeCursor = hasResumeCursor(sourceBinding.resumeCursor);
         const canReuseSourceResumeCursor =
           hasSourceResumeCursor &&
@@ -3138,33 +3140,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 launchOptionsAuthoritative: true,
               });
             } else {
-              yield* directory.upsert({
+              const forkedAt = new Date().toISOString();
+              const stoppedForkSession: ProviderSession = {
                 threadId: input.threadId,
                 provider: adapter.provider,
                 providerInstanceId: resolvedSource.instance.instanceId,
                 runtimeMode: input.runtimeMode,
-                status: "stopped",
-                lifecycleGeneration: lease.generation,
+                status: "closed",
+                ...(targetCwd ? { cwd: targetCwd } : {}),
+                ...(resolvedSource.modelSelection?.model
+                  ? { model: resolvedSource.modelSelection.model }
+                  : {}),
                 ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
-                runtimePayload: {
-                  cwd: targetCwd ?? null,
-                  model: resolvedSource.modelSelection?.model ?? null,
-                  activeTurnId: null,
-                  lastError: null,
-                  ...(resolvedSource.modelSelection !== undefined
-                    ? { modelSelection: resolvedSource.modelSelection }
-                    : {}),
-                  ...(effectiveProviderOptions !== undefined
-                    ? {
-                        providerOptions:
-                          redactProviderOptionsForPersistence(effectiveProviderOptions),
-                      }
-                    : { providerOptions: null }),
-                  providerOptionsCredentialsFingerprint:
-                    effectiveProviderCredentialsFingerprint ?? null,
-                  lastRuntimeEvent: "provider.thread.forked",
-                  lastRuntimeEventAt: new Date().toISOString(),
-                },
+                createdAt: forkedAt,
+                updatedAt: forkedAt,
+              };
+              yield* upsertSessionBinding(stoppedForkSession, input.threadId, {
+                lifecycleGeneration: lease.generation,
+                providerInstanceId: resolvedSource.instance.instanceId,
+                ...(resolvedSource.modelSelection !== undefined
+                  ? { modelSelection: resolvedSource.modelSelection }
+                  : {}),
+                ...(effectiveProviderOptions !== undefined
+                  ? { providerOptions: effectiveProviderOptions }
+                  : {}),
+                lastRuntimeEvent: "provider.thread.forked",
+                lastRuntimeEventAt: forkedAt,
+                launchOptionsAuthoritative: true,
               });
             }
             lease.commit();
