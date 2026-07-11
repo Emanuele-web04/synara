@@ -80,7 +80,8 @@ export type AutomationProviderIdentityResolution =
  *
  * Migrations cannot read settings.json, so arbitrary home/env/server overrides
  * are intentionally not guessed. Legacy Codex account ids are the one exception:
- * their provider-instance ids are derived deterministically by shared runtime code.
+ * their provider-instance ids are derived deterministically by shared runtime code,
+ * whose resolver quarantines explicit entries that conflict with that account identity.
  */
 export function resolveAutomationProviderIdentity(
   modelSelectionValue: unknown,
