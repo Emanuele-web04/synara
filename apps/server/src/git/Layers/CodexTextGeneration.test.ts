@@ -2,7 +2,14 @@
 // Purpose: Verifies isolated Codex text generation, account auth selection, and CLI safety.
 // Layer: Server text-generation integration tests.
 
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -15,7 +22,13 @@ import {
   resolveSynaraCodexHomeOverlayPath,
 } from "../../codexHomePaths.ts";
 import { ServerConfig } from "../../config.ts";
-import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
+import {
+  CodexTextGenerationAuthConflictError,
+  CodexTextGenerationLive,
+  prepareCodexTextGenerationAuthMirror,
+  reconcileCodexTextGenerationAuthMirror,
+  sanitizeCodexConfigForTextGeneration,
+} from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 
@@ -95,8 +108,8 @@ function makeFakeCodexBinary(dir: string) {
         '  printf "%s\\n" "missing approval_policy=never" >&2',
         "  exit 10",
         "fi",
-        'if [ "$SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG" = "1" ] && [ "$seen_ignore_user_config" != "1" ]; then',
-        '  printf "%s\\n" "missing --ignore-user-config" >&2',
+        'if [ "$SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG" = "1" ] && [ "$seen_ignore_user_config" = "1" ]; then',
+        '  printf "%s\\n" "error: unexpected argument --ignore-user-config" >&2',
         "  exit 12",
         "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_STDIN_MUST_CONTAIN" ]; then',
@@ -135,6 +148,23 @@ function makeFakeCodexBinary(dir: string) {
         "    exit 8",
         "  fi",
         "fi",
+        'if [ "$SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING" = "1" ]; then',
+        '  grep -F -- \"model_provider = \\\"azure\\\"\" "$CODEX_HOME/config.toml" >/dev/null || exit 13',
+        '  grep -F -- "[model_providers.azure]" "$CODEX_HOME/config.toml" >/dev/null || exit 14',
+        '  grep -F -- \"env_key = \\\"AZURE_OPENAI_API_KEY\\\"\" "$CODEX_HOME/config.toml" >/dev/null || exit 15',
+        '  grep -F -- \"base_url = \\\"https://example.openai.azure.com/openai\\\"\" "$CODEX_HOME/config.toml" >/dev/null || exit 19',
+        '  [ "$AZURE_OPENAI_API_KEY" = "test-key" ] || exit 16',
+        "fi",
+        'if [ "$SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS" = "1" ]; then',
+        '  if grep -F -- "[[skills.config]]" "$CODEX_HOME/config.toml" >/dev/null || grep -F -- "[plugins." "$CODEX_HOME/config.toml" >/dev/null; then',
+        '    printf "%s\\n" "user extension config leaked into CODEX_HOME" >&2',
+        "    exit 17",
+        "  fi",
+        '  if [ -e "$CODEX_HOME/skills" ] || [ -e "$CODEX_HOME/plugins" ]; then',
+        '    printf "%s\\n" "user extension assets leaked into CODEX_HOME" >&2',
+        "    exit 18",
+        "  fi",
+        "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_STDERR" ]; then',
         '  printf "%s\\n" "$SYNARA_FAKE_CODEX_STDERR" >&2',
         "fi",
@@ -166,7 +196,9 @@ function withFakeCodexEnv<A, E, R>(
     forbidAuthJson?: boolean;
     requireSkipGitRepoCheck?: boolean;
     requireApprovalNever?: boolean;
-    requireIgnoreUserConfig?: boolean;
+    forbidIgnoreUserConfig?: boolean;
+    requireAzureProviderRouting?: boolean;
+    requireNoUserExtensions?: boolean;
     rotatedAuth?: string;
     codexHomeConfigMustContain?: string;
     codexHomeConfigMustNotContain?: string;
@@ -192,8 +224,12 @@ function withFakeCodexEnv<A, E, R>(
       const previousRequireSkipGitRepoCheck =
         process.env.SYNARA_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK;
       const previousRequireApprovalNever = process.env.SYNARA_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
-      const previousRequireIgnoreUserConfig =
-        process.env.SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG;
+      const previousForbidIgnoreUserConfig =
+        process.env.SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG;
+      const previousRequireAzureProviderRouting =
+        process.env.SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING;
+      const previousRequireNoUserExtensions =
+        process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS;
       const previousRotatedAuth = process.env.SYNARA_FAKE_CODEX_ROTATED_AUTH;
       const previousForbidAuthJson = process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON;
       const previousCodexHomeConfigMustContain =
@@ -267,10 +303,20 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.SYNARA_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
         }
 
-        if (input.requireIgnoreUserConfig) {
-          process.env.SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG = "1";
+        if (input.forbidIgnoreUserConfig) {
+          process.env.SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG = "1";
         } else {
-          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG;
+          delete process.env.SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG;
+        }
+        if (input.requireAzureProviderRouting) {
+          process.env.SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING = "1";
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING;
+        }
+        if (input.requireNoUserExtensions) {
+          process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS = "1";
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS;
         }
         if (input.rotatedAuth !== undefined) {
           process.env.SYNARA_FAKE_CODEX_ROTATED_AUTH = input.rotatedAuth;
@@ -307,7 +353,9 @@ function withFakeCodexEnv<A, E, R>(
         previousForbidAuthJson,
         previousRequireSkipGitRepoCheck,
         previousRequireApprovalNever,
-        previousRequireIgnoreUserConfig,
+        previousForbidIgnoreUserConfig,
+        previousRequireAzureProviderRouting,
+        previousRequireNoUserExtensions,
         previousRotatedAuth,
         previousCodexHomeConfigMustContain,
         previousCodexHomeConfigMustNotContain,
@@ -392,11 +440,23 @@ function withFakeCodexEnv<A, E, R>(
             previous.previousRequireApprovalNever;
         }
 
-        if (previous.previousRequireIgnoreUserConfig === undefined) {
-          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG;
+        if (previous.previousForbidIgnoreUserConfig === undefined) {
+          delete process.env.SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG;
         } else {
-          process.env.SYNARA_FAKE_CODEX_REQUIRE_IGNORE_USER_CONFIG =
-            previous.previousRequireIgnoreUserConfig;
+          process.env.SYNARA_FAKE_CODEX_FORBID_IGNORE_USER_CONFIG =
+            previous.previousForbidIgnoreUserConfig;
+        }
+        if (previous.previousRequireAzureProviderRouting === undefined) {
+          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING;
+        } else {
+          process.env.SYNARA_FAKE_CODEX_REQUIRE_AZURE_PROVIDER_ROUTING =
+            previous.previousRequireAzureProviderRouting;
+        }
+        if (previous.previousRequireNoUserExtensions === undefined) {
+          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS;
+        } else {
+          process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS =
+            previous.previousRequireNoUserExtensions;
         }
         if (previous.previousRotatedAuth === undefined) {
           delete process.env.SYNARA_FAKE_CODEX_ROTATED_AUTH;
@@ -424,6 +484,95 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
+  it.effect("copies rotated auth back when auth symlinks are unavailable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const accountHome = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-codex-auth-copy-source-",
+      });
+      const isolatedHome = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-codex-auth-copy-target-",
+      });
+      const authPath = path.join(accountHome, "auth.json");
+      const initialAuth = '{"access_token":"before"}';
+      const rotatedAuth = '{"access_token":"after"}';
+      yield* fs.writeFileString(authPath, initialAuth);
+
+      const mirror = prepareCodexTextGenerationAuthMirror(authPath, isolatedHome, {
+        symlink: (() => {
+          throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
+        }) as typeof symlinkSync,
+        copyFile: copyFileSync,
+      });
+      expect(mirror?.mode).toBe("copy");
+      writeFileSync(path.join(isolatedHome, "auth.json"), rotatedAuth);
+
+      reconcileCodexTextGenerationAuthMirror(mirror);
+
+      expect(readFileSync(authPath, "utf8")).toBe(rotatedAuth);
+    }),
+  );
+
+  it.effect("preserves concurrently changed auth when fallback rotation conflicts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const accountHome = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-codex-auth-conflict-source-",
+      });
+      const isolatedHome = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-codex-auth-conflict-target-",
+      });
+      const authPath = path.join(accountHome, "auth.json");
+      const concurrentAuth = '{"access_token":"newer-authoritative"}';
+      yield* fs.writeFileString(authPath, '{"access_token":"before"}');
+
+      const mirror = prepareCodexTextGenerationAuthMirror(authPath, isolatedHome, {
+        symlink: (() => {
+          throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
+        }) as typeof symlinkSync,
+        copyFile: copyFileSync,
+      });
+      writeFileSync(path.join(isolatedHome, "auth.json"), '{"access_token":"rotated"}');
+      writeFileSync(authPath, concurrentAuth);
+
+      expect(() => reconcileCodexTextGenerationAuthMirror(mirror)).toThrowError(
+        CodexTextGenerationAuthConflictError,
+      );
+      expect(readFileSync(authPath, "utf8")).toBe(concurrentAuth);
+    }),
+  );
+
+  it.effect("keeps provider routing while removing skills and plugin config", () =>
+    Effect.sync(() => {
+      const sanitized = sanitizeCodexConfigForTextGeneration(
+        [
+          'model_provider = "azure"',
+          'cli_auth_credentials_store = "ephemeral"',
+          'plugins = { "inline@local" = { enabled = true } }',
+          "[model_providers.azure]",
+          'env_key = "AZURE_OPENAI_API_KEY"',
+          "[[skills.config]]",
+          'path = "/unsafe/SKILL.md"',
+          '[plugins."unsafe@local"]',
+          "enabled = true",
+          "[features]",
+          "fast_mode = true",
+        ].join("\n"),
+      );
+
+      expect(sanitized).toContain('model_provider = "azure"');
+      expect(sanitized).toContain('cli_auth_credentials_store = "file"');
+      expect(sanitized).not.toContain('cli_auth_credentials_store = "ephemeral"');
+      expect(sanitized).toContain("[model_providers.azure]");
+      expect(sanitized).toContain("[features]");
+      expect(sanitized).not.toContain("skills.config");
+      expect(sanitized).not.toContain("plugins.");
+      expect(sanitized).not.toContain("plugins =");
+    }),
+  );
+
   it.effect("generates and sanitizes commit messages without branch by default", () =>
     withFakeCodexEnv(
       {
@@ -772,7 +921,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("uses account-owned auth while ignoring user config", () =>
+  it.effect("omits the newer config flag while preserving custom provider routing", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({
@@ -781,7 +930,9 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         }),
         requireCodexHome: true,
         requireAuthJson: true,
-        requireIgnoreUserConfig: true,
+        forbidIgnoreUserConfig: true,
+        requireAzureProviderRouting: true,
+        requireNoUserExtensions: true,
       },
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -791,7 +942,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           prefix: "synara-custom-codex-",
         });
         const previousCodexHome = process.env.CODEX_HOME;
-        const previousAzureApiKey = process.env.AZURE_OPENAI_API_KEY;
 
         yield* fs.writeFileString(
           path.join(customCodexHome, "config.toml"),
@@ -799,10 +949,15 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
             'model_provider = "azure"',
             "",
             "[model_providers.azure]",
+            'base_url = "https://example.openai.azure.com/openai"',
             'env_key = "AZURE_OPENAI_API_KEY"',
+            'wire_api = "responses"',
             "",
             "[[skills.config]]",
             'path = "/broken/skill/SKILL.md"',
+            "enabled = true",
+            "",
+            '[plugins."custom-tools@local"]',
             "enabled = true",
             "",
             "[features]",
@@ -814,11 +969,16 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           path.join(customCodexHome, "auth.json"),
           '{"access_token":"test"}',
         );
+        yield* fs.makeDirectory(path.join(customCodexHome, "skills", "unsafe"), {
+          recursive: true,
+        });
+        yield* fs.makeDirectory(path.join(customCodexHome, "plugins", "unsafe"), {
+          recursive: true,
+        });
         yield* fs.writeFileString(path.join(wrongCodexHome, "config.toml"), 'model = "gpt-5.4"');
 
         yield* Effect.sync(() => {
           process.env.CODEX_HOME = wrongCodexHome;
-          process.env.AZURE_OPENAI_API_KEY = "test-key";
         });
 
         const textGeneration = yield* TextGeneration;
@@ -829,7 +989,13 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
             branch: "feature/codex-effect",
             stagedSummary: "M README.md",
             stagedPatch: "diff --git a/README.md b/README.md",
-            codexHomePath: customCodexHome,
+            codexHomePath: wrongCodexHome,
+            providerOptions: {
+              codex: {
+                homePath: customCodexHome,
+                environment: { AZURE_OPENAI_API_KEY: "test-key" },
+              },
+            },
           })
           .pipe(
             Effect.ensuring(
@@ -838,12 +1004,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
                   delete process.env.CODEX_HOME;
                 } else {
                   process.env.CODEX_HOME = previousCodexHome;
-                }
-
-                if (previousAzureApiKey === undefined) {
-                  delete process.env.AZURE_OPENAI_API_KEY;
-                } else {
-                  process.env.AZURE_OPENAI_API_KEY = previousAzureApiKey;
                 }
               }),
             ),
@@ -854,7 +1014,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("persists Codex auth rotation in the authoritative account home", () => {
+  it.effect("persists auth rotation in the selected shadow account home", () => {
     const rotatedAuth = JSON.stringify({
       auth_mode: "chatgpt",
       tokens: {
@@ -867,16 +1027,22 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
       {
         output: JSON.stringify({ subject: "Add important change", body: "" }),
         requireAuthJson: true,
-        requireIgnoreUserConfig: true,
+        forbidIgnoreUserConfig: true,
         rotatedAuth,
       },
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
+        const configHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "synara-config-codex-",
+        });
         const accountHome = yield* fs.makeTempDirectoryScoped({
           prefix: "synara-authoritative-codex-",
         });
+        const defaultAuth = '{"access_token":"default-account"}';
+        const defaultAuthPath = path.join(configHome, "auth.json");
         const authPath = path.join(accountHome, "auth.json");
+        yield* fs.writeFileString(defaultAuthPath, defaultAuth);
         yield* fs.writeFileString(
           authPath,
           JSON.stringify({
@@ -895,10 +1061,13 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           branch: "feature/codex-auth-rotation",
           stagedSummary: "M README.md",
           stagedPatch: "diff --git a/README.md b/README.md",
-          providerOptions: { codex: { homePath: accountHome } },
+          providerOptions: {
+            codex: { homePath: configHome, shadowHomePath: accountHome, accountId: "work" },
+          },
         });
 
         expect(yield* fs.readFileString(authPath)).toBe(rotatedAuth);
+        expect(yield* fs.readFileString(defaultAuthPath)).toBe(defaultAuth);
       }),
     );
   });
