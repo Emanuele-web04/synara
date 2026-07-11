@@ -1,7 +1,4 @@
-import {
-  codexAccountInstanceId,
-  unresolvedAutomationInstanceId,
-} from "@synara/shared/providerInstances";
+import { unresolvedAutomationInstanceId } from "@synara/shared/providerInstances";
 
 const PROVIDERS = [
   "codex",
@@ -79,9 +76,9 @@ export type AutomationProviderIdentityResolution =
  * Resolves the account identity carried by a pre-instance automation snapshot.
  *
  * Migrations cannot read settings.json, so arbitrary home/env/server overrides
- * are intentionally not guessed. Legacy Codex account ids are the one exception:
- * their provider-instance ids are derived deterministically by shared runtime code,
- * whose resolver quarantines explicit entries that conflict with that account identity.
+ * are intentionally not guessed. An explicit legacy Codex account id is also
+ * tombstoned: its deterministic `codex_*` key cannot prove ownership if the
+ * legacy account row was removed and an unrelated explicit instance reused it.
  */
 export function resolveAutomationProviderIdentity(
   modelSelectionValue: unknown,
@@ -153,16 +150,17 @@ export function resolveAutomationProviderIdentity(
       const hasMalformedCompanionIdentity = IDENTITY_KEYS.codex.some(
         (key) => identityFieldState(selectedOptions, key) === "invalid",
       );
-      if (accountId === null || hasMalformedCompanionIdentity) {
+      const hasIdentityChangingEnvironment =
+        identityFieldState(selectedOptions, "environment") === "present";
+      if (accountId === null || hasMalformedCompanionIdentity || hasIdentityChangingEnvironment) {
         return { safe: false };
       }
-      return {
-        safe: true,
-        modelSelection: canonicalSelection(
-          modelSelectionValue,
-          accountId === "default" ? "codex" : codexAccountInstanceId(accountId),
-        ),
-      };
+
+      // Even a well-formed account id is not enough to keep an enabled row safe:
+      // settings may have removed that legacy account and reused its derived id
+      // for a different explicit account. Keep a reserved tombstone until the
+      // user selects a currently configured provider instance.
+      return { safe: false };
     }
   }
 

@@ -18,7 +18,7 @@ const layer = it.layer(
 );
 
 layer("108_ClearAutomationRunProviderOptions", (it) => {
-  it.effect("maps a legacy queued Codex account before removing launch options", () =>
+  it.effect("tombstones a legacy queued Codex account before removing launch options", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -104,7 +104,9 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         FROM automation_runs
         WHERE run_id = 'run-legacy-options'
       `;
-      assert.deepStrictEqual(rows, [{ instanceId: "codex_work", providerOptions: null }]);
+      assert.deepStrictEqual(rows, [
+        { instanceId: "synara_unresolved_automation_codex", providerOptions: null },
+      ]);
     }),
   );
 
