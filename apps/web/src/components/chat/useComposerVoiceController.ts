@@ -125,6 +125,8 @@ export function useComposerVoiceController(
 
   const voiceRecordingDurationLabel = formatVoiceRecordingDuration(voiceRecordingDurationMs);
   const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
+    enabled: activeProviderStatus?.enabled,
+    available: activeProviderStatus?.available === true,
     authStatus: activeProviderStatus?.authStatus,
     voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
     isRecording: isVoiceRecording,
