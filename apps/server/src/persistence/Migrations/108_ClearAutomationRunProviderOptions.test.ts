@@ -1,5 +1,5 @@
 // FILE: 108_ClearAutomationRunProviderOptions.test.ts
-// Purpose: Verifies historical run snapshots are stripped of provider launch options.
+// Purpose: Verifies queued-run identities are migrated or stopped before snapshots are stripped.
 // Layer: Persistence migration test.
 
 import { assert, it } from "@effect/vitest";
@@ -8,11 +8,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import ClearAutomationRunProviderOptions from "./108_ClearAutomationRunProviderOptions.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 layer("108_ClearAutomationRunProviderOptions", (it) => {
-  it.effect("removes launch options while preserving the run's selected instance", () =>
+  it.effect("maps a legacy queued Codex account before removing launch options", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -46,7 +47,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
           'Run safely',
           '{"type":"manual"}',
           1,
-          '{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex"}',
+          '{"instanceId":"codex_work","model":"gpt-5-codex"}',
           'approval-required',
           'default',
           'auto',
@@ -80,7 +81,7 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
           'manual',
           'succeeded',
           '2026-07-08T10:00:00.000Z',
-          '{"provider":"codex","modelSelection":{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex"},"providerOptions":{"codex":{"environment":{"CODEX_SECRET":"must-be-removed"}}},"runtimeMode":"approval-required","interactionMode":"default","worktreeMode":"auto","allowedCapabilities":["send-turn"],"createdAt":"2026-07-08T10:00:00.000Z"}',
+          '{"provider":"codex","modelSelection":{"provider":"codex","model":"gpt-5-codex"},"providerOptions":{"codex":{"accountId":"work","environment":{"CODEX_SECRET":"must-be-removed"}}},"runtimeMode":"approval-required","interactionMode":"default","worktreeMode":"auto","allowedCapabilities":["send-turn"],"createdAt":"2026-07-08T10:00:00.000Z"}',
           '2026-07-08T10:00:00.000Z',
           '2026-07-08T10:00:00.000Z'
         )
@@ -99,6 +100,139 @@ layer("108_ClearAutomationRunProviderOptions", (it) => {
         WHERE run_id = 'run-legacy-options'
       `;
       assert.deepStrictEqual(rows, [{ instanceId: "codex_work", providerOptions: null }]);
+    }),
+  );
+
+  it.effect("interrupts ambiguous active runs but only scrubs completed history", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations({ toMigrationInclusive: 107 });
+      yield* sql`
+        INSERT INTO automation_definitions (
+          automation_id, project_id, name, prompt, schedule_json, enabled,
+          model_selection_json, runtime_mode, interaction_mode, worktree_mode, mode,
+          stop_on_error, minimum_interval_seconds, retry_policy_json, misfire_policy,
+          acknowledged_risks_json, iteration_count, created_at, updated_at
+        ) VALUES (
+          'automation-run-ambiguity', 'project-run-ambiguity', 'Run ambiguity', 'Run safely',
+          '{"type":"manual"}', 0, '{"instanceId":"claudeAgent","model":"claude-opus-4-1"}',
+          'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+          'coalesce', '[]', 2, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+        )
+      `;
+      const snapshot = JSON.stringify({
+        provider: "claudeAgent",
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-1" },
+        providerOptions: { claudeAgent: { homePath: "/tmp/claude-work" } },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        worktreeMode: "auto",
+        allowedCapabilities: ["send-turn"],
+        createdAt: "2026-07-08T10:00:00.000Z",
+      });
+      yield* sql`
+        INSERT INTO automation_runs (
+          run_id, automation_id, project_id, trigger_type, status, scheduled_for,
+          claimed_by, lease_expires_at, permission_snapshot_json, created_at, updated_at
+        ) VALUES
+          (
+            'run-ambiguous-active', 'automation-run-ambiguity', 'project-run-ambiguity',
+            'scheduled', 'claimed', '2026-07-12T10:00:00.000Z', 'scheduler-1',
+            '2026-07-12T10:05:00.000Z', ${snapshot},
+            '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
+          (
+            'run-ambiguous-complete', 'automation-run-ambiguity', 'project-run-ambiguity',
+            'manual', 'succeeded', '2026-07-08T10:00:00.000Z', NULL, NULL, ${snapshot},
+            '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          )
+      `;
+
+      yield* ClearAutomationRunProviderOptions;
+      yield* ClearAutomationRunProviderOptions;
+
+      const rows = yield* sql<{
+        readonly runId: string;
+        readonly status: string;
+        readonly providerOptions: string | null;
+        readonly claimedBy: string | null;
+        readonly leaseExpiresAt: string | null;
+      }>`
+        SELECT run_id AS runId, status,
+          json_extract(permission_snapshot_json, '$.providerOptions') AS providerOptions,
+          claimed_by AS claimedBy, lease_expires_at AS leaseExpiresAt
+        FROM automation_runs
+        WHERE automation_id = 'automation-run-ambiguity'
+        ORDER BY run_id ASC
+      `;
+      assert.deepStrictEqual(rows, [
+        {
+          runId: "run-ambiguous-active",
+          status: "interrupted",
+          providerOptions: null,
+          claimedBy: null,
+          leaseExpiresAt: null,
+        },
+        {
+          runId: "run-ambiguous-complete",
+          status: "succeeded",
+          providerOptions: null,
+          claimedBy: null,
+          leaseExpiresAt: null,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("preserves malformed snapshots while retiring them from recovery idempotently", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations({ toMigrationInclusive: 107 });
+      yield* sql`
+        INSERT INTO automation_definitions (
+          automation_id, project_id, name, prompt, schedule_json, enabled,
+          model_selection_json, runtime_mode, interaction_mode, worktree_mode, mode,
+          stop_on_error, minimum_interval_seconds, retry_policy_json, misfire_policy,
+          acknowledged_risks_json, iteration_count, created_at, updated_at
+        ) VALUES (
+          'automation-malformed-run', 'project-malformed-run', 'Malformed run', 'Run safely',
+          '{"type":"manual"}', 0, '{"instanceId":"codex","model":"gpt-5-codex"}',
+          'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+          'coalesce', '[]', 1, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO automation_runs (
+          run_id, automation_id, project_id, trigger_type, status, scheduled_for,
+          permission_snapshot_json, created_at, updated_at
+        ) VALUES (
+          'run-malformed-snapshot', 'automation-malformed-run', 'project-malformed-run',
+          'scheduled', 'pending', '2026-07-12T10:00:00.000Z',
+          '{"providerOptions":{"codex":{"environment":{"TOKEN":"secret"}}}',
+          '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+        )
+      `;
+
+      yield* ClearAutomationRunProviderOptions;
+      yield* ClearAutomationRunProviderOptions;
+
+      const rows = yield* sql<{
+        readonly status: string;
+        readonly snapshot: string;
+        readonly finishedAt: string | null;
+      }>`
+        SELECT status, permission_snapshot_json AS snapshot, finished_at AS finishedAt
+        FROM automation_runs
+        WHERE run_id = 'run-malformed-snapshot'
+      `;
+      assert.strictEqual(rows[0]?.status, "interrupted");
+      assert.strictEqual(
+        rows[0]?.snapshot,
+        '{"providerOptions":{"codex":{"environment":{"TOKEN":"secret"}}}',
+      );
+      assert.isNotNull(rows[0]?.finishedAt ?? null);
     }),
   );
 });
