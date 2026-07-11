@@ -1374,8 +1374,7 @@ describe("ProviderRuntimeIngestion", () => {
       summary: "Reasoning trace",
       payload: {
         status: "completed",
-        detail:
-          "**Inspect the protocol**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->",
+        detail: "**Inspect the protocol**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->",
         data: { toolCallId: "reasoning-buffered-1" },
       },
     });

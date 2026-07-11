@@ -310,10 +310,7 @@ function reasoningSummaryBufferKey(
   if (event.provider !== "codex" || !event.itemId) {
     return null;
   }
-  if (
-    event.type === "content.delta" &&
-    event.payload.streamKind === "reasoning_summary_text"
-  ) {
+  if (event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text") {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
   }
   if (
@@ -350,9 +347,7 @@ function joinedBufferedReasoningSummary(
   );
 }
 
-function bufferedReasoningTerminalStatus(
-  event: ProviderRuntimeEvent,
-): "completed" | "failed" {
+function bufferedReasoningTerminalStatus(event: ProviderRuntimeEvent): "completed" | "failed" {
   if (event.type === "runtime.error" || event.type === "turn.aborted") {
     return "failed";
   }
@@ -1940,10 +1935,7 @@ const make = Effect.gen(function* () {
         if (partLimit === 0) {
           return Effect.void;
         }
-        parts.set(
-          summaryIndex,
-          appendCappedBufferedText(existingPart, delta, partLimit),
-        );
+        parts.set(summaryIndex, appendCappedBufferedText(existingPart, delta, partLimit));
         return Cache.set(bufferedReasoningSummaryByKey, key, {
           parts,
           sourceEvent: event,
@@ -3270,11 +3262,7 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
 
       if (event.type === "turn.completed" || event.type === "turn.aborted") {
-        yield* settleBufferedReasoningSummaries(
-          thread.id,
-          event,
-          toTurnId(event.turnId),
-        );
+        yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
       } else if (event.type === "session.exited") {
         yield* settleBufferedReasoningSummaries(thread.id, event);
       } else if (event.type === "runtime.error") {

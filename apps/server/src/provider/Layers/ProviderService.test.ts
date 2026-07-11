@@ -1088,11 +1088,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             Effect.map(
               Option.exists((runtime) => {
                 const cursor = runtime.resumeCursor;
-                return (
-                  cursor !== null &&
-                  typeof cursor === "object" &&
-                  "trackedTasks" in cursor
-                );
+                return cursor !== null && typeof cursor === "object" && "trackedTasks" in cursor;
               }),
             ),
           ),
