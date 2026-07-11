@@ -336,7 +336,7 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
   );
 
   it.effect(
-    "fails closed on account environments and invalid scalar identities but accepts empty environment",
+    "tombstones every explicitly present environment across provider and account identity migration branches",
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -349,6 +349,14 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
           worktree_mode, mode, stop_on_error, minimum_interval_seconds, retry_policy_json,
           misfire_policy, acknowledged_risks_json, iteration_count, created_at, updated_at
         ) VALUES
+          (
+            'automation-account-with-empty-environment', 'project-identity-shapes',
+            'Account with empty environment', 'Run safely', '{"type":"manual"}', 1,
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            '{"codex":{"accountId":"work","environment":{}}}',
+            'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
+            'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
+          ),
           (
             'automation-account-with-environment', 'project-identity-shapes',
             'Account with environment', 'Run safely', '{"type":"manual"}', 1,
@@ -376,8 +384,8 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
           (
             'automation-empty-environment', 'project-identity-shapes', 'Empty environment',
             'Run safely', '{"type":"manual"}', 1,
-            '{"provider":"gemini","model":"gemini-2.5-pro"}',
-            '{"gemini":{"environment":{}}}',
+            '{"provider":"claudeAgent","model":"claude-opus-4-1"}',
+            '{"claudeAgent":{"environment":{}}}',
             'approval-required', 'default', 'auto', 'standalone', 1, 60, '{"type":"none"}',
             'coalesce', '[]', 0, '2026-07-08T10:00:00.000Z', '2026-07-08T10:00:00.000Z'
           ),
@@ -406,6 +414,11 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
       `;
         assert.deepStrictEqual(rows, [
           {
+            automationId: "automation-account-with-empty-environment",
+            enabled: 0,
+            instanceId: "synara_unresolved_automation_codex",
+          },
+          {
             automationId: "automation-account-with-environment",
             enabled: 0,
             instanceId: "synara_unresolved_automation_codex",
@@ -422,8 +435,8 @@ layer("121_ClearAutomationDefinitionProviderOptions", (it) => {
           },
           {
             automationId: "automation-empty-environment",
-            enabled: 1,
-            instanceId: "gemini",
+            enabled: 0,
+            instanceId: "synara_unresolved_automation_claudeAgent",
           },
           {
             automationId: "automation-empty-home",

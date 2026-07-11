@@ -45,16 +45,13 @@ function isProvider(value: unknown): value is Provider {
 function identityFieldState(
   options: Record<string, unknown>,
   key: string,
-): "absent" | "empty-environment" | "present" | "invalid" {
+): "absent" | "present" | "invalid" {
   if (!Object.hasOwn(options, key)) {
     return "absent";
   }
   const value = options[key];
   if (key === "environment") {
-    if (!isRecord(value)) {
-      return "invalid";
-    }
-    return Object.keys(value).length === 0 ? "empty-environment" : "present";
+    return isRecord(value) ? "present" : "invalid";
   }
   return nonEmptyString(value) === null ? "invalid" : "present";
 }
@@ -164,9 +161,10 @@ export function resolveAutomationProviderIdentity(
     }
   }
 
-  // An explicitly empty environment is the only identity-bearing field with
-  // a legitimate empty value. Empty/mistyped scalar fields are malformed,
-  // not evidence that the default account was intended.
+  // Environment presence is identity-bearing even when the object is empty:
+  // providers use `{}` as an isolation boundary that suppresses ambient
+  // credentials. Clearing it could silently retarget the automation. Empty or
+  // mistyped scalar fields are likewise not evidence of a default identity.
   const carriesAmbiguousIdentity = IDENTITY_KEYS[provider].some((key) => {
     const state = identityFieldState(selectedOptions, key);
     return state === "present" || state === "invalid";
