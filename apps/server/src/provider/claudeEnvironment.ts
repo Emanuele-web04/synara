@@ -24,6 +24,20 @@ const WINDOWS_PROFILE_ENV_KEYS = [
   "HOMEPATH",
 ] as const;
 
+function normalizeEnvironmentKeys(
+  environment: Readonly<NodeJS.ProcessEnv>,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") {
+    return { ...environment };
+  }
+  const normalized: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(environment)) {
+    normalized[name.toUpperCase()] = value;
+  }
+  return normalized;
+}
+
 function claudeInstanceHomeScope(providerInstanceId: string | undefined): string {
   const normalizedInstanceId = providerInstanceId?.trim();
   return normalizedInstanceId
@@ -82,16 +96,21 @@ export function buildClaudeInstanceProcessEnv(
     readonly isolationRootDir?: string;
     readonly providerInstanceId?: string;
     readonly platform?: NodeJS.Platform;
+    /** Deterministic test seam; production callers inherit process.env. */
+    readonly baseEnvironment?: NodeJS.ProcessEnv;
   },
 ): NodeJS.ProcessEnv {
   const platform = options?.platform ?? process.platform;
+  const selectedEnvironment =
+    environment === undefined ? undefined : normalizeEnvironmentKeys(environment, platform);
+  const env = normalizeEnvironmentKeys(options?.baseEnvironment ?? process.env, platform);
   const trimmedHomePath = homePath?.trim();
   const resolvedHomePath = trimmedHomePath
     ? expandProviderAccountHomePath(trimmedHomePath, options?.homeDir ?? homedir())
     : undefined;
   const explicitEnvironmentHome =
-    environment?.HOME?.trim() ||
-    (platform === "win32" ? environment?.USERPROFILE?.trim() : undefined);
+    selectedEnvironment?.HOME?.trim() ||
+    (platform === "win32" ? selectedEnvironment?.USERPROFILE?.trim() : undefined);
   const resolvedEnvironmentHomePath = explicitEnvironmentHome
     ? expandProviderAccountHomePath(explicitEnvironmentHome, options?.homeDir ?? homedir())
     : undefined;
@@ -99,7 +118,7 @@ export function buildClaudeInstanceProcessEnv(
   const needsIsolatedInstanceHome =
     resolvedHomePath === undefined &&
     resolvedEnvironmentHomePath === undefined &&
-    (environment !== undefined ||
+    (selectedEnvironment !== undefined ||
       (providerInstanceId !== undefined && providerInstanceId !== DEFAULT_CLAUDE_INSTANCE_ID));
   const effectiveHomePath =
     resolvedHomePath ??
@@ -111,46 +130,46 @@ export function buildClaudeInstanceProcessEnv(
           ...(providerInstanceId ? { providerInstanceId } : {}),
         })
       : undefined);
-  const env: NodeJS.ProcessEnv = { ...process.env };
   if (!effectiveHomePath && options?.homeDir) {
     env.HOME = options.homeDir;
   }
   // An explicit provider home or environment selects a distinct account
   // boundary. Remove account-scoped ambient values first, then overlay only
   // values deliberately supplied by the selected instance.
-  if (effectiveHomePath || environment !== undefined) {
+  if (effectiveHomePath || selectedEnvironment !== undefined) {
     for (const key of Object.keys(env)) {
       if (isClaudeAccountIsolationEnvKey(key)) {
         delete env[key];
       }
     }
   }
-  if (environment) {
-    Object.assign(env, environment);
+  if (selectedEnvironment) {
+    Object.assign(env, selectedEnvironment);
   }
   if (effectiveHomePath) {
     Object.assign(env, claudeHomeEnvironment(effectiveHomePath, platform));
-    if (!resolvedHomePath && environment) {
-      if (environment.HOME?.trim()) {
+    if (!resolvedHomePath && selectedEnvironment) {
+      if (selectedEnvironment.HOME?.trim()) {
         env.HOME = resolvedEnvironmentHomePath;
       }
       if (platform === "win32") {
         for (const key of WINDOWS_PROFILE_ENV_KEYS) {
-          if (!(key in environment)) continue;
-          if (key === "USERPROFILE" && environment[key]?.trim()) {
+          if (!(key in selectedEnvironment)) continue;
+          const profileValue = selectedEnvironment[key];
+          if (key === "USERPROFILE" && profileValue?.trim()) {
             env[key] = expandProviderAccountHomePath(
-              environment[key],
+              profileValue,
               options?.homeDir ?? homedir(),
             );
           } else {
-            env[key] = environment[key];
+            env[key] = profileValue;
           }
         }
       }
     }
   }
   if (effectiveHomePath) {
-    if (!environment || !("CLAUDE_CONFIG_DIR" in environment)) {
+    if (!selectedEnvironment || !("CLAUDE_CONFIG_DIR" in selectedEnvironment)) {
       delete env.CLAUDE_CONFIG_DIR;
     }
   }
@@ -161,6 +180,6 @@ export function buildClaudeInstanceProcessEnv(
       : options?.homeDir
         ? { homeDir: options.homeDir }
         : {}),
-    preserveDirectCredentialKeys: new Set(Object.keys(environment ?? {})),
+    preserveDirectCredentialKeys: new Set(Object.keys(selectedEnvironment ?? {})),
   });
 }

@@ -298,6 +298,145 @@ describe("claudeProcessEnv", () => {
     assert.equal(result.LOCALAPPDATA, "C:\\Accounts\\work\\AppData\\Local");
   });
 
+  it("removes mixed-case ambient Windows account and config aliases", () => {
+    const result = buildClaudeInstanceProcessEnv(
+      undefined,
+      { Synara_Test_Instance: "work" },
+      {
+        homeDir: "C:\\Users\\server",
+        isolationRootDir: "C:\\Synara\\userdata",
+        providerInstanceId: "claude_work",
+        platform: "win32",
+        baseEnvironment: {
+          Path: "C:\\Windows\\System32",
+          Home: "C:\\Users\\server-alias",
+          HOME: "C:\\Users\\server",
+          Claude_Config_Dir: "C:\\Users\\server\\.claude",
+          Anthropic_Api_Key: "ambient-key",
+          Aws_Profile: "ambient-aws-profile",
+          Google_Application_Credentials: "C:\\ambient\\google.json",
+          Azure_Client_Secret: "ambient-azure-secret",
+          Aws_Endpoint_Url_Future_Service: "https://ambient.aws.example.test",
+          Vertex_Region_Claude_Future_Model: "ambient-vertex-region",
+          Https_Proxy: "https://shared-proxy.example.test",
+        },
+      },
+    );
+
+    assert.equal(result.PATH, "C:\\Windows\\System32");
+    assert.equal(result.SYNARA_TEST_INSTANCE, "work");
+    assert.equal(result.HTTPS_PROXY, "https://shared-proxy.example.test");
+    for (const key of [
+      "CLAUDE_CONFIG_DIR",
+      "ANTHROPIC_API_KEY",
+      "AWS_PROFILE",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+      "AZURE_CLIENT_SECRET",
+      "AWS_ENDPOINT_URL_FUTURE_SERVICE",
+      "VERTEX_REGION_CLAUDE_FUTURE_MODEL",
+    ]) {
+      assert.equal(result[key], undefined);
+      assert.equal(Object.keys(result).some((candidate) => candidate.toUpperCase() === key), false);
+    }
+  });
+
+  it("canonicalizes selected mixed-case Windows overrides with deterministic last wins", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "synara-claude-windows-env-case-"));
+    const selectedConfigDir = path.join(root, "selected-config");
+    try {
+      mkdirSync(selectedConfigDir, { recursive: true });
+      writeFileSync(
+        path.join(selectedConfigDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "selected-local-token", expiresAt: Date.now() + 60_000 },
+        }),
+      );
+      const result = buildClaudeInstanceProcessEnv(
+        undefined,
+        {
+          HOME: "C:\\Accounts\\first",
+          Home: "C:\\Accounts\\selected-last",
+          UserProfile: "D:\\Profiles\\work",
+          CLAUDE_CONFIG_DIR: path.join(root, "first-config"),
+          Claude_Config_Dir: selectedConfigDir,
+          ANTHROPIC_API_KEY: "selected-first-key",
+          Anthropic_Api_Key: "selected-last-key",
+          Claude_Code_Use_Bedrock: "1",
+          Aws_Profile: "selected-aws-profile",
+        },
+        {
+          isolationRootDir: "C:\\Synara\\userdata",
+          providerInstanceId: "claude_work",
+          platform: "win32",
+          baseEnvironment: {
+            HOME: "C:\\Users\\server",
+            Anthropic_Api_Key: "ambient-key",
+            Aws_Profile: "ambient-profile",
+          },
+        },
+      );
+
+      assert.equal(result.HOME, "C:\\Accounts\\selected-last");
+      assert.equal(result.USERPROFILE, "D:\\Profiles\\work");
+      assert.equal(result.CLAUDE_CONFIG_DIR, selectedConfigDir);
+      assert.equal(result.ANTHROPIC_API_KEY, "selected-last-key");
+      assert.equal(result.CLAUDE_CODE_USE_BEDROCK, "1");
+      assert.equal(result.AWS_PROFILE, "selected-aws-profile");
+      assert.equal(Object.keys(result).every((key) => key === key.toUpperCase()), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recognizes mixed-case Windows external auth during credential cleanup", () => {
+    const result = buildClaudeInstanceProcessEnv(undefined, undefined, {
+      platform: "win32",
+      baseEnvironment: {
+        Anthropic_Api_Key: "proxy-api-key",
+        Claude_Code_Use_Bedrock: "1",
+      },
+    });
+
+    assert.equal(result.ANTHROPIC_API_KEY, "proxy-api-key");
+    assert.equal(result.CLAUDE_CODE_USE_BEDROCK, "1");
+    assert.equal(result.Anthropic_Api_Key, undefined);
+  });
+
+  it("keeps non-Windows environment names case-sensitive", () => {
+    const result = buildClaudeInstanceProcessEnv(
+      undefined,
+      {
+        Home: "/home/selected-case-distinct",
+        Anthropic_Api_Key: "selected-case-distinct-key",
+      },
+      {
+        homeDir: "/home/server",
+        isolationRootDir: "/synara/state",
+        providerInstanceId: "claude_work",
+        platform: "linux",
+        baseEnvironment: {
+          HOME: "/home/server",
+          Home: "/home/ambient-alias",
+          ANTHROPIC_API_KEY: "ambient-canonical-key",
+          Anthropic_Api_Key: "ambient-case-distinct-key",
+          Claude_Config_Dir: "/home/ambient-case-distinct-config",
+        },
+      },
+    );
+
+    assert.equal(
+      result.HOME,
+      claudeIsolatedHomePath({
+        isolationRootDir: "/synara/state",
+        providerInstanceId: "claude_work",
+      }),
+    );
+    assert.equal(result.Home, "/home/selected-case-distinct");
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.Anthropic_Api_Key, "selected-case-distinct-key");
+    assert.equal(result.Claude_Config_Dir, "/home/ambient-case-distinct-config");
+  });
+
   it("overlays the provider instance home", () => {
     const result = buildClaudeInstanceProcessEnv("/home/work-account");
 
