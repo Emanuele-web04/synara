@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -29,6 +30,7 @@ import {
   disableCodexConfigSections,
   prepareCodexAuthTracking,
   readCodexPreparedAuthTrackingFingerprint,
+  readCodexSharedContinuationGeneration,
   SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
@@ -63,6 +65,97 @@ import {
 } from "./provider/codexCliVersion.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+
+function codexAuth(accountId: string, tokenVersion: string): string {
+  return JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      account_id: accountId,
+      access_token: `access-${tokenVersion}`,
+      refresh_token: `refresh-${tokenVersion}`,
+    },
+  });
+}
+
+function readFakeCodexMethods(messagesPath: string): string[] {
+  if (!existsSync(messagesPath)) return [];
+  return readFileSync(messagesPath, "utf8").trim().split("\n").filter(Boolean);
+}
+
+function writeAuthMutationFakeCodexExecutable(root: string): string {
+  const binaryPath = path.join(root, "fake-codex.mjs");
+  writeFileSync(
+    binaryPath,
+    `#!/usr/bin/env node
+import fs from "node:fs";
+import readline from "node:readline";
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("codex 0.105.0\\n");
+  process.exit(0);
+}
+if (args[0] !== "app-server") process.exit(2);
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (process.env.SYNARA_FAKE_CODEX_MESSAGES_PATH && message.method) {
+    fs.appendFileSync(process.env.SYNARA_FAKE_CODEX_MESSAGES_PATH, message.method + "\\n", "utf8");
+  }
+  if (message.id === undefined) return;
+  if (
+    message.method === "initialize" &&
+    process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH &&
+    process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT
+  ) {
+    fs.writeFileSync(
+      process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH,
+      process.env.SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT,
+      "utf8",
+    );
+  }
+  let result = {};
+  if (message.method === "thread/start") result = { thread: { id: "fake-provider-thread" } };
+  if (message.method === "thread/fork") result = { thread: { id: "fake-forked-thread" } };
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+});
+`,
+    "utf8",
+  );
+  chmodSync(binaryPath, 0o755);
+  return binaryPath;
+}
+
+function makeAuthMutationFixture(prefix: string, accountId: string, nextAccountId: string) {
+  const root = mkdtempSync(path.join(os.tmpdir(), prefix));
+  const sourceHome = path.join(root, "codex-home");
+  const projectPath = path.join(root, "project");
+  const runtimeHome = path.join(root, "runtime");
+  const authPath = path.join(sourceHome, "auth.json");
+  const messagesPath = path.join(root, "messages.txt");
+  mkdirSync(sourceHome, { recursive: true });
+  mkdirSync(projectPath, { recursive: true });
+  writeFileSync(path.join(sourceHome, "config.toml"), "", "utf8");
+  writeFileSync(authPath, codexAuth(accountId, "1"), "utf8");
+  const binaryPath = writeAuthMutationFakeCodexExecutable(root);
+  const environment = {
+    HOME: root,
+    SYNARA_HOME: runtimeHome,
+    SYNARA_FAKE_CODEX_MESSAGES_PATH: messagesPath,
+    SYNARA_FAKE_CODEX_MUTATE_AUTH_PATH: authPath,
+    SYNARA_FAKE_CODEX_MUTATE_AUTH_CONTENT: codexAuth(nextAccountId, "2"),
+  };
+  return {
+    root,
+    sourceHome,
+    projectPath,
+    runtimeHome,
+    authPath,
+    messagesPath,
+    binaryPath,
+    environment,
+  };
+}
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",
   approvalsReviewer: "user",
@@ -486,6 +579,65 @@ function createProcessOutputHarness() {
 }
 
 describe("Codex app-server teardown", () => {
+  it("does not re-enter teardown during synchronous session-closed inspection", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5040;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      killed = false;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: true,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-stop-listener-reentry");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, context);
+    const closedEvents: string[] = [];
+    manager.on("event", (event) => {
+      if (event.method !== "session/closed") return;
+      closedEvents.push(event.method);
+      void manager.stopSession(threadId);
+      expect(manager.listSessions()).toEqual([]);
+    });
+
+    await manager.stopSession(threadId);
+
+    expect(closedEvents).toEqual(["session/closed"]);
+    expect(teardownProcessTree).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a live process routable when only the last turn status is error", () => {
     class FakeCodexChild extends EventEmitter {
       readonly pid = 5050;
@@ -1786,6 +1938,118 @@ describe("startSession", () => {
     expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the selected account changes while a new session initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-launch-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await expect(
+          manager.startSession({
+            threadId: asThreadId("thread-launch-auth-swap"),
+            provider: "codex",
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: fixture.environment,
+              },
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(manager.listSessions()).toEqual([]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows same-account token rotation while a new session initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-launch-token-rotation-",
+        "workspace-stable",
+        "workspace-stable",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        const session = await manager.startSession({
+          threadId: asThreadId("thread-launch-token-rotation"),
+          provider: "codex",
+          cwd: fixture.projectPath,
+          runtimeMode: "full-access",
+          providerOptions: {
+            codex: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: fixture.environment,
+            },
+          },
+        });
+        expect(session.status).toBe("ready");
+        expect(readFakeCodexMethods(fixture.messagesPath)).toContain("thread/start");
+        expect(manager.listSessions()).toHaveLength(1);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed before native fork when the selected account changes during initialization",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-fork-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await buildCodexProcessEnv({
+          env: fixture.environment,
+          homePath: fixture.sourceHome,
+        });
+        const generation = readCodexSharedContinuationGeneration({
+          env: fixture.environment,
+          homePath: fixture.sourceHome,
+        });
+        expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+        await expect(
+          manager.forkThread({
+            sourceThreadId: asThreadId("source-auth-swap"),
+            sourceResumeCursor: { threadId: "provider-source-thread" },
+            threadId: asThreadId("fork-auth-swap"),
+            cwd: fixture.projectPath,
+            runtimeMode: "full-access",
+            expectedCodexContinuationGeneration: generation!,
+            providerOptions: {
+              codex: {
+                binaryPath: fixture.binaryPath,
+                homePath: fixture.sourceHome,
+                environment: fixture.environment,
+              },
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(manager.listSessions()).toEqual([]);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reports a missing project working directory instead of a missing Codex CLI", () => {
     const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
     expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
@@ -2453,6 +2717,41 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it.runIf(process.platform !== "win32")(
+    "fails closed when the selected account changes while discovery initializes",
+    async () => {
+      const fixture = makeAuthMutationFixture(
+        "synara-codex-discovery-auth-swap-",
+        "workspace-first",
+        "workspace-second",
+      );
+      const manager = new CodexAppServerManager();
+      try {
+        await expect(
+          manager.listModels({
+            cwd: fixture.projectPath,
+            codexOptions: {
+              binaryPath: fixture.binaryPath,
+              homePath: fixture.sourceHome,
+              environment: fixture.environment,
+            },
+          }),
+        ).rejects.toThrow(/authentication changed on disk/);
+        expect(readFakeCodexMethods(fixture.messagesPath)).toEqual(["initialize"]);
+        expect(
+          (
+            manager as unknown as {
+              discoverySessions: Map<string, unknown>;
+            }
+          ).discoverySessions.size,
+        ).toBe(0);
+      } finally {
+        await manager.stopAll();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("restarts the idle grace period after a discovery request settles", async () => {
     vi.useFakeTimers();
     try {
