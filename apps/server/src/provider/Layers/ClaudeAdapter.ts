@@ -88,6 +88,15 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
+import {
+  applyClaudeTaskToolResult,
+  claudeTrackedTasksPayload,
+  hasOnlyCompletedClaudeTasks,
+  hasUnfinishedClaudeTasks,
+  normalizeClaudeTodoTasks,
+  parseClaudeTrackedTasks,
+  type ClaudeTrackedTask,
+} from "../claudeTaskTracker.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
@@ -124,6 +133,7 @@ interface ClaudeResumeState {
   readonly turnCount?: number;
   readonly rerouteOriginalApiModelId?: string;
   readonly rerouteFallbackApiModelId?: string;
+  readonly trackedTasks?: ReadonlyArray<ClaudeTrackedTask>;
 }
 
 interface ClaudeTurnState {
@@ -219,6 +229,7 @@ interface ClaudeSessionContext {
     items: Array<unknown>;
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
+  readonly trackedTasks: Map<string, ClaudeTrackedTask>;
   turnState: ClaudeTurnState | undefined;
   interruptRequestedTurnId: TurnId | undefined;
   lastKnownContextWindow: number | undefined;
@@ -246,9 +257,9 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
-  readonly applyFlagSettings: (
-    settings: { [K in keyof Settings]?: Settings[K] | null },
-  ) => Promise<void>;
+  readonly applyFlagSettings: (settings: {
+    [K in keyof Settings]?: Settings[K] | null;
+  }) => Promise<void>;
   readonly getContextUsage: () => Promise<SDKControlGetContextUsageResponse>;
   readonly supportedCommands: () => Promise<SlashCommand[]>;
   readonly supportedModels: () => Promise<ModelInfo[]>;
@@ -675,6 +686,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     turnCount?: unknown;
     rerouteOriginalApiModelId?: unknown;
     rerouteFallbackApiModelId?: unknown;
+    trackedTasks?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -696,6 +708,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
   const rerouteFallbackApiModelId = readNonEmptyString(cursor.rerouteFallbackApiModelId);
   const hasCompleteReroute =
     rerouteOriginalApiModelId !== undefined && rerouteFallbackApiModelId !== undefined;
+  const trackedTasks = parseClaudeTrackedTasks(cursor.trackedTasks);
 
   return {
     ...(threadId ? { threadId } : {}),
@@ -705,12 +718,20 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
       ? { turnCount: turnCountValue }
       : {}),
     ...(hasCompleteReroute ? { rerouteOriginalApiModelId, rerouteFallbackApiModelId } : {}),
+    ...(trackedTasks.length > 0 ? { trackedTasks } : {}),
   };
 }
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
-  if (normalized === "todowrite" || normalized.includes("todo")) {
+  if (
+    normalized === "todowrite" ||
+    normalized.includes("todo") ||
+    normalized === "taskcreate" ||
+    normalized === "taskupdate" ||
+    normalized === "taskget" ||
+    normalized === "tasklist"
+  ) {
     return "plan";
   }
   if (normalized.includes("agent")) {
@@ -815,57 +836,6 @@ function toolLifecycleEventData(
     input: tool.input,
     ...extra,
   };
-}
-
-function normalizeClaudeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
-  if (value === "completed") {
-    return "completed";
-  }
-  if (value === "in_progress") {
-    return "inProgress";
-  }
-  return "pending";
-}
-
-function normalizeClaudeTodoTasks(input: Record<string, unknown>): {
-  readonly tasks: ReadonlyArray<{
-    readonly task: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-} | null {
-  const todos = Array.isArray(input.todos) ? input.todos : null;
-  if (!todos) {
-    return null;
-  }
-
-  const tasks = todos
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const todo = entry as Record<string, unknown>;
-      const status = normalizeClaudeTodoStatus(todo.status);
-      const content = trimOrNull(typeof todo.content === "string" ? todo.content : null);
-      const activeForm = trimOrNull(typeof todo.activeForm === "string" ? todo.activeForm : null);
-      const task = status === "inProgress" ? (activeForm ?? content) : (content ?? activeForm);
-      if (!task) {
-        return null;
-      }
-      return {
-        task,
-        status,
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        readonly task: string;
-        readonly status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
-
-  return tasks.length > 0 ? { tasks } : null;
 }
 
 function titleForTool(itemType: CanonicalItemType): string {
@@ -1254,6 +1224,7 @@ function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
   readonly block: Record<string, unknown>;
   readonly text: string;
   readonly isError: boolean;
+  readonly structuredResult: unknown;
 }> {
   if (message.type !== "user") {
     return [];
@@ -1269,6 +1240,7 @@ function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
     readonly block: Record<string, unknown>;
     readonly text: string;
     readonly isError: boolean;
+    readonly structuredResult: unknown;
   }> = [];
 
   for (const entry of content) {
@@ -1291,6 +1263,7 @@ function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
       block,
       text: extractTextContent(block.content),
       isError: block.is_error === true,
+      structuredResult: message.tool_use_result,
     });
   }
 
@@ -1524,6 +1497,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 rerouteOriginalApiModelId: context.rerouteOriginalApiModelId,
                 rerouteFallbackApiModelId: context.currentApiModelId,
               }
+            : {}),
+          ...(context.trackedTasks.size > 0
+            ? { trackedTasks: Array.from(context.trackedTasks.values()) }
             : {}),
         };
 
@@ -2039,6 +2015,39 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    const emitTrackedTasksUpdated = (
+      context: ClaudeSessionContext,
+      input: {
+        readonly toolUseId?: string | undefined;
+        readonly rawPayload: unknown;
+      },
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turnState = context.turnState;
+        if (!turnState) {
+          return;
+        }
+
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "turn.tasks.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: turnState.turnId,
+          payload: claudeTrackedTasksPayload(context.trackedTasks),
+          providerRefs: nativeProviderRefs(context, {
+            providerItemId: input.toolUseId,
+          }),
+          raw: {
+            source: "claude.sdk.message",
+            method: "claude/user/task-result",
+            payload: input.rawPayload,
+          },
+        });
+      });
+
     const completeTurn = (
       context: ClaudeSessionContext,
       status: ProviderRuntimeTurnStatus,
@@ -2548,6 +2557,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 method: "claude/user",
                 payload: message,
               },
+            });
+          }
+
+          if (
+            applyClaudeTaskToolResult(
+              context.trackedTasks,
+              tool,
+              toolResult.block,
+              toolResult.structuredResult,
+              toolResult.isError,
+            )
+          ) {
+            yield* updateResumeCursor(context);
+            yield* emitTrackedTasksUpdated(context, {
+              toolUseId: tool.itemId,
+              rawPayload: message,
             });
           }
 
@@ -3274,6 +3299,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
         const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
         const inFlightTools = new Map<number, ToolInFlight>();
+        const trackedTasks = new Map<string, ClaudeTrackedTask>(
+          (resumeState?.trackedTasks ?? []).map((task) => [task.id, task]),
+        );
 
         const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -3730,6 +3758,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                     rerouteFallbackApiModelId: resumedRerouteFallbackApiModelId,
                   }
                 : {}),
+              ...(trackedTasks.size > 0 ? { trackedTasks: Array.from(trackedTasks.values()) } : {}),
             },
             createdAt: startedAt,
             updatedAt: startedAt,
@@ -3749,6 +3778,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingUserInputs,
             turns: [],
             inFlightTools,
+            trackedTasks,
             turnState: undefined,
             interruptRequestedTurnId: undefined,
             lastKnownContextWindow: resolveClaudeApiModelIdContextWindowMaxTokens(
@@ -3830,9 +3860,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 providerRefs: {},
               });
 
-              if (
-                context.currentAutoCompactWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]
-              ) {
+              if (context.currentAutoCompactWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
                 context.emittedContextUsageWarnings.add("one-million-window");
                 yield* emitRuntimeWarning(
                   context,
@@ -3896,6 +3924,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Auto-close a stale synthetic turn (from background agent responses
           // between user prompts) to prevent blocking the user's next turn.
           yield* completeTurn(context, "completed");
+        }
+
+        if (hasOnlyCompletedClaudeTasks(context.trackedTasks)) {
+          context.trackedTasks.clear();
+          yield* updateResumeCursor(context);
         }
 
         if (modelSelection?.model) {
@@ -4004,6 +4037,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {},
           providerRefs: {},
         });
+
+        if (hasUnfinishedClaudeTasks(context.trackedTasks)) {
+          yield* emitTrackedTasksUpdated(context, {
+            rawPayload: {
+              source: "claude.resume-cursor",
+              trackedTaskCount: context.trackedTasks.size,
+            },
+          });
+        }
 
         const message = yield* buildUserMessageEffect(input, {
           fileSystem,

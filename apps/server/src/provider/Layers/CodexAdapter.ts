@@ -53,6 +53,7 @@ import {
 } from "../../codexGeneratedImages.ts";
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
+import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
@@ -787,9 +788,7 @@ function mapItemLifecycle(
   // Only the provider-authored summary is user-visible reasoning. Raw content
   // may contain model trace data and must not leak into transcript activities.
   const detail =
-    itemType === "reasoning"
-      ? reasoningSummaryDetail(source)
-      : itemDetail(source, payload ?? {});
+    itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
 
   return {
@@ -1100,16 +1099,17 @@ function mapToRuntimeEvents(
           ...(asString(payload?.explanation)
             ? { explanation: asString(payload?.explanation) }
             : {}),
-          tasks: steps
-            .map((entry) => asObject(entry))
-            .filter((entry): entry is Record<string, unknown> => entry !== undefined)
-            .map((entry) => ({
-              task: asString(entry.step) ?? "task",
-              status:
-                entry.status === "completed" || entry.status === "inProgress"
-                  ? entry.status
-                  : "pending",
-            })),
+          tasks: steps.flatMap((entry) => {
+            const taskEntry = asObject(entry);
+            if (!taskEntry) {
+              return [];
+            }
+            const item = makeRuntimeTaskListItem(
+              asString(taskEntry.step) ?? "task",
+              taskEntry.status,
+            );
+            return item ? [item] : [];
+          }),
         },
       },
     ];
