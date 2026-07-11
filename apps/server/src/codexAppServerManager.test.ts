@@ -1308,6 +1308,62 @@ describe("startSession", () => {
     }
   });
 
+  it("evicts a live session when malformed config prevents safe auth revalidation", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auth-config-malformed-"));
+    const sourceHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(sourceHome, { recursive: true });
+    const configPath = path.join(sourceHome, "config.toml");
+    writeFileSync(configPath, 'cli_auth_credentials_store = "file"\n', "utf8");
+    writeFileSync(path.join(sourceHome, "auth.json"), '{"account":"first"}', "utf8");
+    const launch = buildCodexProcessLaunchContext({
+      env: { HOME: root, SYNARA_HOME: runtimeHome, CODEX_HOME: sourceHome },
+      platform: "win32",
+    });
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-auth-config-malformed");
+    const kill = vi.fn();
+    const close = vi.fn();
+    (
+      manager as unknown as {
+        sessions: Map<ThreadId, unknown>;
+      }
+    ).sessions.set(threadId, {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        createdAt: "2026-07-11T00:00:00.000Z",
+        updatedAt: "2026-07-11T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child: { killed: false, kill },
+      output: { close },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+      authTracking: launch.authTracking,
+      authFingerprint: readCodexAuthTrackingFingerprint(launch.authTracking),
+    });
+
+    try {
+      writeFileSync(configPath, 'cli_auth_credentials_store = ["file"\n', "utf8");
+      expect(manager.listSessions()).toEqual([]);
+      expect(kill).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "passes enforced config flags to the app-server after project override attempts",
     async () => {

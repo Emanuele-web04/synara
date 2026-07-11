@@ -38,24 +38,30 @@ import {
 import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
 
 describe("readEffectiveCodexAuthCredentialsStoreMode", () => {
-  it("uses the selected profile override", () => {
+  it("uses only the root auth store and ignores profile lookalikes", () => {
     assert.strictEqual(
       readEffectiveCodexAuthCredentialsStoreMode(
         'profile = "work"\ncli_auth_credentials_store = "file"\n\n[profiles.work]\ncli_auth_credentials_store = "auto"\n',
       ),
-      "auto",
+      "file",
     );
     assert.strictEqual(
       readEffectiveCodexAuthCredentialsStoreMode(
         '"profile" = "work"\n"cli_auth_credentials_store" = "file"\nprofiles."work"."cli_auth_credentials_store" = "keyring"\n',
       ),
-      "keyring",
+      "file",
     );
     assert.strictEqual(
       readEffectiveCodexAuthCredentialsStoreMode(
         'profile = "work"\nprofiles = { work = { cli_auth_credentials_store = "auto" } }\n',
       ),
-      "auto",
+      "file",
+    );
+    assert.strictEqual(
+      readEffectiveCodexAuthCredentialsStoreMode(
+        'profile = "work"\ncli_auth_credentials_store = "keyring"\n\n[profiles.work]\ncli_auth_credentials_store = "file"\n',
+      ),
+      "keyring",
     );
   });
 
@@ -446,21 +452,6 @@ describe("buildCodexProcessEnv account overlays", () => {
         label: "multiline string",
         render: (foreignPath: string) => `sqlite_home = """${foreignPath}"""\n`,
       },
-      {
-        label: "profile table",
-        render: (foreignPath: string) =>
-          `profile = "work"\n[profiles.work]\nsqlite_home = ${JSON.stringify(foreignPath)}\n`,
-      },
-      {
-        label: "dotted quoted profile",
-        render: (foreignPath: string) =>
-          `profile = "work"\nprofiles."work"."sqlite_home" = ${JSON.stringify(foreignPath)}\n`,
-      },
-      {
-        label: "inline profile",
-        render: (foreignPath: string) =>
-          `profile = "work"\nprofiles = { work = { sqlite_home = ${JSON.stringify(foreignPath)} } }\n`,
-      },
     ] as const;
 
     for (const configCase of configCases) {
@@ -490,6 +481,57 @@ describe("buildCodexProcessEnv account overlays", () => {
         configCase.label,
       );
       assert.strictEqual(existsSync(overlayHomePath), false, configCase.label);
+    }
+  });
+
+  it("rejects root sqlite_home despite a misleading selected-profile source path", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const foreignPath = path.join(path.dirname(fixture.homePath), "foreign-root-sqlite-home");
+    writeFileSync(
+      path.join(fixture.homePath, "config.toml"),
+      [
+        'profile = "work"',
+        `sqlite_home = ${JSON.stringify(foreignPath)}`,
+        "",
+        "[profiles.work]",
+        `sqlite_home = ${JSON.stringify(fixture.homePath)}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    assert.throws(
+      () =>
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          platform: "win32",
+        }),
+      /sqlite_home.*must resolve to the source CODEX_HOME/,
+    );
+  });
+
+  it("ignores profile sqlite_home lookalikes that Codex does not apply", () => {
+    const configCases = [
+      (foreignPath: string) =>
+        `profile = "work"\n[profiles.work]\nsqlite_home = ${JSON.stringify(foreignPath)}\n`,
+      (foreignPath: string) =>
+        `profile = "work"\nprofiles."work"."sqlite_home" = ${JSON.stringify(foreignPath)}\n`,
+      (foreignPath: string) =>
+        `profile = "work"\nprofiles = { work = { sqlite_home = ${JSON.stringify(foreignPath)} } }\n`,
+    ] as const;
+
+    for (const [index, render] of configCases.entries()) {
+      const fixture = makeAccountFixture({ shadowAuth: "missing" });
+      const foreignPath = path.join(path.dirname(fixture.homePath), `ignored-profile-${index}`);
+      writeFileSync(path.join(fixture.homePath, "config.toml"), render(foreignPath), "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        platform: "win32",
+      });
+      assert.strictEqual(env.CODEX_SQLITE_HOME, path.resolve(fixture.homePath));
     }
   });
 
@@ -1027,11 +1069,11 @@ describe("buildCodexProcessEnv account overlays", () => {
     assert.throws(() => lstatSync(path.join(fixture.env.SYNARA_HOME!, "codex-home-overlay")));
   });
 
-  it("rejects keyring auth for the default account before creating its overlay", () => {
+  it("rejects root keyring auth despite a misleading selected-profile file mode", () => {
     const fixture = makeAccountFixture({ shadowAuth: "missing" });
     writeFileSync(
       path.join(fixture.homePath, "config.toml"),
-      'cli_auth_credentials_store = "keyring"\n',
+      'profile = "work"\ncli_auth_credentials_store = "keyring"\n\n[profiles.work]\ncli_auth_credentials_store = "file"\n',
       "utf8",
     );
 
@@ -1046,7 +1088,7 @@ describe("buildCodexProcessEnv account overlays", () => {
     assert.throws(() => lstatSync(path.join(fixture.env.SYNARA_HOME!, "codex-home-overlay")));
   });
 
-  it("rejects selected-profile auto auth for the default account before overlay mutation", () => {
+  it("ignores a profile-only auto auth lookalike", () => {
     const fixture = makeAccountFixture({ shadowAuth: "missing" });
     writeFileSync(
       path.join(fixture.homePath, "config.toml"),
@@ -1054,22 +1096,19 @@ describe("buildCodexProcessEnv account overlays", () => {
       "utf8",
     );
 
-    assert.throws(
-      () =>
-        buildCodexProcessEnv({
-          env: { ...fixture.env, CODEX_HOME: fixture.homePath },
-          platform: "win32",
-        }),
-      /cli_auth_credentials_store = "auto"/,
-    );
-    assert.throws(() => lstatSync(path.join(fixture.env.SYNARA_HOME!, "codex-home-overlay")));
+    const env = buildCodexProcessEnv({
+      env: { ...fixture.env, CODEX_HOME: fixture.homePath },
+      platform: "win32",
+    });
+    assert.ok(env.CODEX_HOME);
+    assert.ok(existsSync(path.join(fixture.env.SYNARA_HOME!, "codex-home-overlay")));
   });
 
-  it("rejects auto auth with a shadow account before mutating the overlay", () => {
+  it("rejects root auto auth despite a misleading selected-profile file mode", () => {
     const fixture = makeAccountFixture({ shadowAuth: "real" });
     writeFileSync(
       path.join(fixture.homePath, "config.toml"),
-      'profile = "work"\n\n[profiles.work]\ncli_auth_credentials_store = "auto"\n',
+      'profile = "work"\ncli_auth_credentials_store = "auto"\n\n[profiles.work]\ncli_auth_credentials_store = "file"\n',
       "utf8",
     );
 

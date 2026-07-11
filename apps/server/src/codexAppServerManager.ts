@@ -2116,17 +2116,30 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
-  private isContextAuthCurrent(context: CodexSessionContext): boolean {
+  private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
     if (context.authFingerprint === undefined) {
-      return true;
+      return undefined;
     }
-    if (context.authTracking) {
-      return readCodexAuthTrackingFingerprint(context.authTracking) === context.authFingerprint;
+    try {
+      const currentFingerprint = context.authTracking
+        ? readCodexAuthTrackingFingerprint(context.authTracking)
+        : context.authHomePath
+          ? readCodexAuthFileFingerprint(context.authHomePath)
+          : context.authFingerprint;
+      return currentFingerprint === context.authFingerprint
+        ? undefined
+        : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
+    } catch (error) {
+      log.warn("codex session auth freshness revalidation failed", {
+        threadId: context.session.threadId,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+      return "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.";
     }
-    if (!context.authHomePath) {
-      return true;
-    }
-    return readCodexAuthFileFingerprint(context.authHomePath) === context.authFingerprint;
+  }
+
+  private isContextAuthCurrent(context: CodexSessionContext): boolean {
+    return this.contextAuthStalenessMessage(context) === undefined;
   }
 
   private pruneStaleAuthSessions(): void {
@@ -2146,11 +2159,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.session.status === "closed") {
       throw new Error(`Session is closed for thread: ${threadId}`);
     }
-    if (!this.isContextAuthCurrent(context)) {
+    const stalenessMessage = this.contextAuthStalenessMessage(context);
+    if (stalenessMessage) {
       this.stopSession(threadId);
-      throw new Error(
-        "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.",
-      );
+      throw new Error(stalenessMessage);
     }
 
     return context;

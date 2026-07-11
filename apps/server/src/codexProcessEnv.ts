@@ -244,8 +244,10 @@ function parseManagedCodexConfig(config: string): {
 }
 
 function readEffectiveCodexSqliteHome(config: string): string | undefined {
-  const { root, activeProfile } = parseManagedCodexConfig(config);
-  const configured = activeProfile?.sqlite_home ?? root.sqlite_home;
+  // Codex 0.105+ defines sqlite_home only on the root Config schema. A
+  // same-named profile key is ignored by Codex and must not override the root
+  // value in Synara's safety checks.
+  const configured = parseManagedCodexConfig(config).root.sqlite_home;
   if (configured === undefined) {
     return undefined;
   }
@@ -278,8 +280,10 @@ function assertCodexSqliteHomeMatchesSource(input: {
 export function readEffectiveCodexAuthCredentialsStoreMode(
   config: string,
 ): CodexAuthCredentialsStoreMode {
-  const { root, activeProfile } = parseManagedCodexConfig(config);
-  const mode = activeProfile?.cli_auth_credentials_store ?? root.cli_auth_credentials_store;
+  // cli_auth_credentials_store is also root-only in the supported Codex
+  // schema. Treating a profile lookalike as effective can mask a root keyring
+  // setting and leave an app-server's account identity unobservable.
+  const mode = parseManagedCodexConfig(config).root.cli_auth_credentials_store;
   if (mode === undefined) {
     return "file";
   }
@@ -301,7 +305,7 @@ function assertManagedCodexHomeUsesObservableAuth(input: {
   }
   const accountLabel = input.accountId?.trim() || "default";
   throw new Error(
-    `Codex account '${accountLabel}' uses cli_auth_credentials_store = "${mode}". Synara-managed Codex homes require file-backed Codex auth so account changes can invalidate long-lived app-server sessions; set cli_auth_credentials_store = "file" for the active Codex profile before starting this account.`,
+    `Codex account '${accountLabel}' uses cli_auth_credentials_store = "${mode}". Synara-managed Codex homes require file-backed Codex auth so account changes can invalidate long-lived app-server sessions; set the root cli_auth_credentials_store = "file" before starting this account.`,
   );
 }
 
@@ -1321,6 +1325,27 @@ function prepareSynaraCodexHomeOverlay(input: {
   return overlayHomePath;
 }
 
+/**
+ * Materializes and validates the same managed Codex home overlay used for a
+ * real process launch. Continuation compatibility checks call this before
+ * trusting a newly selected account to share the source session store.
+ */
+export function prepareCodexHomeOverlay(
+  input: Pick<
+    CodexProcessEnvInput,
+    "env" | "homePath" | "shadowHomePath" | "accountId" | "overlayEntryLinker"
+  > = {},
+): string | undefined {
+  const env = { ...(input.env ?? process.env) };
+  return prepareSynaraCodexHomeOverlay({
+    env,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
+  });
+}
+
 // Earlier builds symlinked shared private state (auth) into account homes;
 // drop the stale alias so the account's own login (a real file) takes its
 // place instead of silently aliasing the default account's credentials.
@@ -1348,7 +1373,7 @@ export function buildCodexProcessLaunchContext(
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
   });
-  const overlayHomePath = prepareSynaraCodexHomeOverlay({
+  const overlayHomePath = prepareCodexHomeOverlay({
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),

@@ -9,11 +9,60 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 
 import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
-import { isCodexSharedContinuationStatePrepared } from "../codexProcessEnv.ts";
+import {
+  isCodexSharedContinuationStatePrepared,
+  prepareCodexHomeOverlay,
+  type CodexProcessEnvInput,
+} from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
 
 function canonicalStoragePath(value: string): string {
   return resolveCodexPathIdentity(value);
+}
+
+function codexContinuationInput(options: ProviderStartOptions | undefined): Pick<
+  CodexProcessEnvInput,
+  "homePath" | "shadowHomePath" | "accountId"
+> & {
+  readonly env: NodeJS.ProcessEnv;
+} {
+  const codex = options?.codex;
+  return {
+    env: { ...process.env, ...codex?.environment },
+    ...(codex?.homePath ? { homePath: codex.homePath } : {}),
+    ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
+    ...(codex?.accountId ? { accountId: codex.accountId } : {}),
+  };
+}
+
+function sharedCodexContinuationIdentity(input: ReturnType<typeof codexContinuationInput>): string {
+  return `codex:shared-v1:${canonicalStoragePath(
+    resolveBaseCodexHomePath(input.env, input.homePath),
+  )}`;
+}
+
+/**
+ * Prepares provider-native storage before evaluating whether an existing
+ * resume cursor can be reused. Codex account overlays must be materialized
+ * first; otherwise a new account temporarily reports its overlay identity
+ * even when it safely shares the existing source store.
+ */
+export function prepareProviderContinuationIdentity(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+  persistedIdentity: string | undefined,
+): string | undefined {
+  if (provider === "codex") {
+    const continuationInput = codexContinuationInput(options);
+    const candidateSharedIdentity = sharedCodexContinuationIdentity(continuationInput);
+    // Only materialize a target overlay when it could satisfy an existing
+    // shared-source identity. Different homes and legacy overlay identities
+    // are already incompatible without creating any new filesystem state.
+    if (persistedIdentity === candidateSharedIdentity) {
+      prepareCodexHomeOverlay(continuationInput);
+    }
+  }
+  return providerContinuationIdentity(provider, options);
 }
 
 /**
@@ -28,29 +77,15 @@ export function providerContinuationIdentity(
 ): string | undefined {
   switch (provider) {
     case "codex": {
-      const codex = options?.codex;
-      const env = { ...process.env, ...codex?.environment };
-      const sourceHome = resolveBaseCodexHomePath(env, codex?.homePath);
-      if (
-        isCodexSharedContinuationStatePrepared({
-          env,
-          ...(codex?.homePath ? { homePath: codex.homePath } : {}),
-          ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
-          ...(codex?.accountId ? { accountId: codex.accountId } : {}),
-        })
-      ) {
-        return `codex:shared-v1:${canonicalStoragePath(sourceHome)}`;
+      const continuationInput = codexContinuationInput(options);
+      if (isCodexSharedContinuationStatePrepared(continuationInput)) {
+        return sharedCodexContinuationIdentity(continuationInput);
       }
       // Before shared-state preparation succeeds, bind continuation to the
       // effective overlay. This lets the same account recover exactly while
       // preventing another account overlay from claiming access to state it
       // may not actually share yet.
-      const overlayHome = resolveActiveCodexHomeWritePath({
-        env,
-        ...(codex?.homePath ? { homePath: codex.homePath } : {}),
-        ...(codex?.shadowHomePath ? { shadowHomePath: codex.shadowHomePath } : {}),
-        ...(codex?.accountId ? { accountId: codex.accountId } : {}),
-      });
+      const overlayHome = resolveActiveCodexHomeWritePath(continuationInput);
       return `codex:overlay-v1:${canonicalStoragePath(overlayHome)}`;
     }
     case "claudeAgent": {
