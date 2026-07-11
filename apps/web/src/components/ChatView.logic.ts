@@ -145,6 +145,28 @@ export function shouldShowComposerProviderInstancePicker(input: {
   );
 }
 
+export function buildCollapsedCursorModelOptionsReset(input: {
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+  model: ModelSlug;
+  showExpandedCursorModelVariants: boolean;
+}):
+  | {
+      readonly persistSticky: true;
+      readonly instanceId: ProviderInstanceId;
+      readonly model: ModelSlug;
+    }
+  | undefined {
+  if (input.provider !== "cursor" || input.showExpandedCursorModelVariants) {
+    return undefined;
+  }
+  return {
+    persistSticky: true,
+    instanceId: input.instanceId,
+    model: input.model,
+  };
+}
+
 export interface PromptHistoryNavigationState {
   index: number;
   draft: string;

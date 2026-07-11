@@ -166,6 +166,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
+  buildCollapsedCursorModelOptionsReset,
   buildThreadBreadcrumbs,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
@@ -9034,11 +9035,19 @@ export default function ChatView({
         },
       );
       setComposerDraftModelSelection(activeThread.id, nextModelSelection);
-      if (provider === "cursor" && !showExpandedCursorModelVariants) {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
+      const collapsedCursorOptionsReset = buildCollapsedCursorModelOptionsReset({
+        provider,
+        instanceId: resolvedInstanceId,
+        model: resolvedModel,
+        showExpandedCursorModelVariants,
+      });
+      if (collapsedCursorOptionsReset) {
+        setComposerDraftProviderModelOptions(
+          activeThread.id,
+          provider,
+          undefined,
+          collapsedCursorOptionsReset,
+        );
       }
       setStickyComposerModelSelection(nextModelSelection);
       scheduleComposerFocus();

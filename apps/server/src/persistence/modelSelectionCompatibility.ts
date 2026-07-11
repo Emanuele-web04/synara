@@ -145,6 +145,9 @@ function normalizeModelOptions(input: unknown): unknown {
     return input;
   }
 
+  if (Object.keys(input).length === 0) {
+    return [];
+  }
   const selections: Array<{ id: string; value: string | boolean }> = [];
   for (const [id, value] of Object.entries(input)) {
     if (typeof value === "string" || typeof value === "boolean") {

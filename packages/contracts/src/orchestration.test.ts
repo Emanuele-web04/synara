@@ -219,6 +219,22 @@ it.effect("normalizes mixed legacy option payloads when decoding model selection
   }),
 );
 
+it.effect("normalizes explicit empty legacy options when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "codex",
+      model: "gpt-5",
+      options: {},
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "codex",
+      model: "gpt-5",
+      options: [],
+    });
+  }),
+);
+
 it.effect("decodes providerless instance-id model selections from newer Synara payloads", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeModelSelection({

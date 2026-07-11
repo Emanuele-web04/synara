@@ -39,6 +39,21 @@ it("preserves provider instance ids from providerless persisted selections", () 
   );
 });
 
+it("normalizes explicit empty legacy model options", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "codex",
+      model: "gpt-5",
+      options: {},
+    }),
+    {
+      instanceId: "codex",
+      model: "gpt-5",
+      options: [],
+    },
+  );
+});
+
 it("infers Claude from providerless Sonnet instance selections", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

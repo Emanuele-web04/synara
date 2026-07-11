@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildCollapsedCursorModelOptionsReset,
   buildComposerMenuSelectionKey,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
@@ -113,6 +114,29 @@ describe("draft provider instance selection", () => {
         providerInstances: [{ instanceId: "codex" }],
       }),
     ).toBe(true);
+  });
+
+  it("targets collapsed Cursor option resets at the selected non-default instance", () => {
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: false,
+      }),
+    ).toEqual({
+      persistSticky: true,
+      instanceId: "cursor_work",
+      model: "cursor/auto",
+    });
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: true,
+      }),
+    ).toBeUndefined();
   });
 });
 

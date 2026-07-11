@@ -95,6 +95,9 @@ function normalizeModelSelectionOptions(input: unknown): unknown {
   }
 
   const record = input as Record<string, unknown>;
+  if (Object.keys(record).length === 0) {
+    return [];
+  }
   const selections: Array<{ id: string; value: string | boolean }> = [];
   for (const [id, value] of Object.entries(record)) {
     if (typeof value === "string" || typeof value === "boolean") {
