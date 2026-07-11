@@ -170,7 +170,7 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("keeps a user-provided CODEX_SQLITE_HOME for the session overlay", async () => {
+  it("pins CODEX_SQLITE_HOME to the source home for the session overlay", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-home-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     const sqliteHome = mkdtempSync(path.join(os.tmpdir(), "synara-user-sqlite-home-"));
@@ -184,11 +184,30 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
-      expect(env.CODEX_SQLITE_HOME).toBe(sqliteHome);
+      expect(env.CODEX_SQLITE_HOME).toBe(codexHome);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
       rmSync(sqliteHome, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a config sqlite_home that escapes the source Codex home", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-config-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(path.join(codexHome, "config.toml"), 'sqlite_home = "/tmp/other-codex"', "utf8");
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: { SYNARA_HOME: runtimeHome },
+          homePath: codexHome,
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/sqlite_home.*source CODEX_HOME/);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 
