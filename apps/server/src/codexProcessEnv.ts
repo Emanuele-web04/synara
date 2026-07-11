@@ -198,6 +198,8 @@ export interface CodexOverlayEntryLinker {
 export interface CodexOverlayConfigPublicationHooks {
   /** Deterministic test seam. Production callers must omit this hook. */
   readonly beforeRename?: (temporaryPath: string, targetPath: string) => void | Promise<void>;
+  /** Deterministic cleanup-failure seam. Production callers must omit this hook. */
+  readonly removeTemporaryFile?: (temporaryPath: string) => void | Promise<void>;
 }
 
 export async function writeCodexOverlayConfigAtomically(
@@ -214,8 +216,21 @@ export async function writeCodexOverlayConfigAtomically(
     });
     await hooks.beforeRename?.(temporaryPath, targetPath);
     await fs.rename(temporaryPath, targetPath);
-  } finally {
-    await fs.rm(temporaryPath, { force: true });
+  } catch (publicationError) {
+    try {
+      if (hooks.removeTemporaryFile) {
+        await hooks.removeTemporaryFile(temporaryPath);
+      } else {
+        await fs.rm(temporaryPath, { force: true });
+      }
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [publicationError, cleanupError],
+        "Codex overlay config publication and temporary-file cleanup both failed.",
+        { cause: publicationError },
+      );
+    }
+    throw publicationError;
   }
 }
 
