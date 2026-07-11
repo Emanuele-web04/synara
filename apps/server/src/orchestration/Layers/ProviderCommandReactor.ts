@@ -431,6 +431,12 @@ function providerContextLifecycleSummary(evidence: ProviderContextLifecycleEvide
     : "The session's history was unavailable for this turn.";
 }
 
+export function hasBoundProviderSession(
+  session: Pick<OrchestrationSession, "status"> | null,
+): boolean {
+  return session !== null && session.status !== "stopped" && session.status !== "error";
+}
+
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
 
@@ -1820,10 +1826,9 @@ const make = Effect.gen(function* () {
     // the binding decision when a session row exists but no turn has run yet
     // (an optimistic placeholder) AND the turn contests the row's provider.
     // Every other case resolves identically without it, so skip the lookup.
-    const hasTerminalProviderSession =
-      thread.session?.status === "stopped" || thread.session?.status === "error";
+    const isBoundProviderSession = hasBoundProviderSession(thread.session);
     const activeSession =
-      !hasTerminalProviderSession &&
+      isBoundProviderSession &&
       currentProvider !== undefined &&
       thread.latestTurn === null &&
       requestedModelSelection !== undefined &&
@@ -1834,7 +1839,7 @@ const make = Effect.gen(function* () {
     // first turn; only treat the provider as an immutable binding when a real
     // runtime session exists or the thread has actually run a turn.
     const establishedProvider =
-      !hasTerminalProviderSession &&
+      isBoundProviderSession &&
       currentProvider !== undefined &&
       (activeSession !== undefined || thread.latestTurn !== null)
         ? currentProvider

@@ -89,6 +89,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   awaitInflightClaimSettlement,
   classifyProviderAttemptOutcome,
+  hasBoundProviderSession,
   isSafeLegacyProviderBlocker,
   makeProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
@@ -206,6 +207,21 @@ describe("legacy provider blocker recovery", () => {
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
+
+describe("hasBoundProviderSession", () => {
+  it.each([
+    [null, false],
+    ["stopped", false],
+    ["error", false],
+    ["starting", true],
+    ["running", true],
+    ["idle", true],
+    ["ready", true],
+    ["interrupted", true],
+  ] as const)("treats %s status as bound=%s", (status, expected) => {
+    expect(hasBoundProviderSession(status === null ? null : { status })).toBe(expected);
+  });
+});
 
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
