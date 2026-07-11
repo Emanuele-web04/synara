@@ -10,8 +10,8 @@ import type { ProviderKind, ProviderStartOptions } from "@synara/contracts";
 import { resolveActiveCodexHomeWritePath, resolveBaseCodexHomePath } from "../codexHomePaths.ts";
 import { resolveCodexPathIdentity } from "../codexPathIdentity.ts";
 import {
-  isCodexSharedContinuationStatePrepared,
   prepareCodexHomeOverlayFromPreparedContinuationSource,
+  readCodexSharedContinuationGeneration,
   type CodexProcessEnvInput,
 } from "../codexProcessEnv.ts";
 import { expandProviderAccountHomePath } from "../providerAccountHomePath.ts";
@@ -35,8 +35,60 @@ function codexContinuationInput(options: ProviderStartOptions | undefined): Pick
   };
 }
 
-function sharedCodexContinuationIdentity(input: ReturnType<typeof codexContinuationInput>): string {
-  return `codex:shared-v1:${canonicalStoragePath(
+const CODEX_SHARED_CONTINUATION_V1_PREFIX = "codex:shared-v1:";
+const CODEX_SHARED_CONTINUATION_V2_PREFIX = "codex:shared-v2:";
+const CODEX_SHARED_CONTINUATION_GENERATION_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type ParsedCodexSharedContinuationIdentity =
+  | { readonly version: 1; readonly sourceIdentity: string }
+  | { readonly version: 2; readonly generation: string; readonly sourceIdentity: string };
+
+export function parseCodexSharedContinuationIdentity(
+  value: string | undefined,
+): ParsedCodexSharedContinuationIdentity | undefined {
+  if (!value) return undefined;
+  if (value.startsWith(CODEX_SHARED_CONTINUATION_V1_PREFIX)) {
+    const sourceIdentity = value.slice(CODEX_SHARED_CONTINUATION_V1_PREFIX.length);
+    return sourceIdentity ? { version: 1, sourceIdentity } : undefined;
+  }
+  if (!value.startsWith(CODEX_SHARED_CONTINUATION_V2_PREFIX)) return undefined;
+  const generationStart = CODEX_SHARED_CONTINUATION_V2_PREFIX.length;
+  const generationEnd = value.indexOf(":", generationStart);
+  if (generationEnd < 0) return undefined;
+  const generation = value.slice(generationStart, generationEnd);
+  const sourceIdentity = value.slice(generationEnd + 1);
+  if (!CODEX_SHARED_CONTINUATION_GENERATION_PATTERN.test(generation) || !sourceIdentity) {
+    return undefined;
+  }
+  return { version: 2, generation: generation.toLowerCase(), sourceIdentity };
+}
+
+export function codexSharedContinuationGeneration(
+  identity: string | undefined,
+): string | undefined {
+  const parsed = parseCodexSharedContinuationIdentity(identity);
+  return parsed?.version === 2 ? parsed.generation : undefined;
+}
+
+export function codexSharedContinuationIdentityIsSafeMigration(input: {
+  readonly persistedIdentity: string;
+  readonly currentIdentity: string | undefined;
+}): boolean {
+  const persisted = parseCodexSharedContinuationIdentity(input.persistedIdentity);
+  const current = parseCodexSharedContinuationIdentity(input.currentIdentity);
+  return (
+    persisted?.version === 1 &&
+    current?.version === 2 &&
+    persisted.sourceIdentity === current.sourceIdentity
+  );
+}
+
+function sharedCodexContinuationIdentity(
+  input: ReturnType<typeof codexContinuationInput>,
+  generation: string,
+): string {
+  return `codex:shared-v2:${generation}:${canonicalStoragePath(
     resolveBaseCodexHomePath(input.env, input.homePath),
   )}`;
 }
@@ -54,13 +106,31 @@ export async function prepareProviderContinuationIdentity(
 ): Promise<string | undefined> {
   if (provider === "codex") {
     const continuationInput = codexContinuationInput(options);
-    const candidateSharedIdentity = sharedCodexContinuationIdentity(continuationInput);
+    const persistedSharedIdentity = parseCodexSharedContinuationIdentity(persistedIdentity);
+    const candidateSourceIdentity = canonicalStoragePath(
+      resolveBaseCodexHomePath(continuationInput.env, continuationInput.homePath),
+    );
     // Only materialize a target overlay when it could satisfy an existing
     // shared-source identity. Different homes and legacy overlay identities
     // are already incompatible without creating any new filesystem state.
-    if (persistedIdentity === candidateSharedIdentity) {
-      await prepareCodexHomeOverlayFromPreparedContinuationSource(continuationInput);
+    if (persistedSharedIdentity?.sourceIdentity === candidateSourceIdentity) {
+      await prepareCodexHomeOverlayFromPreparedContinuationSource({
+        ...continuationInput,
+        ...(persistedSharedIdentity.version === 2
+          ? { expectedSharedContinuationGeneration: persistedSharedIdentity.generation }
+          : { allowLegacySharedContinuationMigration: true }),
+      });
     }
+  }
+  return providerContinuationIdentity(provider, options);
+}
+
+export async function prepareProviderContinuationIdentityForExplicitResume(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): Promise<string | undefined> {
+  if (provider === "codex") {
+    await prepareCodexHomeOverlayFromPreparedContinuationSource(codexContinuationInput(options));
   }
   return providerContinuationIdentity(provider, options);
 }
@@ -78,8 +148,9 @@ export function providerContinuationIdentity(
   switch (provider) {
     case "codex": {
       const continuationInput = codexContinuationInput(options);
-      if (isCodexSharedContinuationStatePrepared(continuationInput)) {
-        return sharedCodexContinuationIdentity(continuationInput);
+      const generation = readCodexSharedContinuationGeneration(continuationInput);
+      if (generation) {
+        return sharedCodexContinuationIdentity(continuationInput, generation);
       }
       // Before shared-state preparation succeeds, bind continuation to the
       // effective overlay. This lets the same account recover exactly while

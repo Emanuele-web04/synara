@@ -691,6 +691,10 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.equal(routing.codex.forkThread.mock.calls.length, 1);
       const forkInput = routing.codex.forkThread.mock.calls[0]?.[0];
       assert.deepEqual(forkInput?.sourceResumeCursor, source.resumeCursor);
+      assert.match(
+        forkInput?.expectedCodexContinuationGeneration ?? "",
+        /^[0-9a-f-]{36}$/,
+      );
       assert.equal(forkInput?.modelSelection?.instanceId, "codex_work");
       assert.deepEqual(forkInput?.providerOptions, {
         codex: {
@@ -1567,6 +1571,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(
         routing.codex.startSession.mock.calls[0]?.[0].resumeCursor,
         initial.resumeCursor,
+      );
+      assert.match(
+        routing.codex.startSession.mock.calls[0]?.[0].expectedCodexContinuationGeneration ?? "",
+        /^[0-9a-f-]{36}$/,
       );
       assert.equal(
         isCodexSharedContinuationStatePrepared({

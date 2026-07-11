@@ -41,8 +41,11 @@ const CODEX_ACCOUNT_PRIVATE_STATE_FILES = new Set(["auth.json", "models_cache.js
 // the same files through the same path.
 const CODEX_SQLITE_STATE_ENTRY_PATTERN = /^.+\.sqlite(?:-(?:wal|shm|journal))?$/;
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
-const SYNARA_SHARED_CONTINUATION_MARKER_FILE = "synara-shared-continuation-v1.json";
-const SYNARA_SHARED_CONTINUATION_MARKER_VERSION = 1;
+const LEGACY_SYNARA_SHARED_CONTINUATION_MARKER_FILE = "synara-shared-continuation-v1.json";
+const SYNARA_SHARED_CONTINUATION_MARKER_FILE = "synara-shared-continuation-v2.json";
+const SYNARA_SHARED_CONTINUATION_MARKER_VERSION = 2;
+const SHARED_CONTINUATION_GENERATION_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY = ".synara-shared-continuation-v1.lock";
 const SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE = "owner.json";
 const SYNARA_SHARED_CONTINUATION_LOCK_QUARANTINE_INFIX = ".quarantine-";
@@ -80,6 +83,8 @@ export interface CodexProcessEnvInput {
   readonly appendConfigToml?: string;
   readonly skipHomeOverlay?: boolean;
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
+  readonly expectedSharedContinuationGeneration?: string;
+  readonly allowLegacySharedContinuationMigration?: boolean;
 }
 
 export function buildCodexAppServerArgs(sourceHomePath: string): readonly string[] {
@@ -355,6 +360,21 @@ function isCodexSqliteStateEntry(entryName: string): boolean {
 type SharedContinuationEntryKind = "dir" | "file";
 type SharedContinuationSourcePolicy = "create-if-missing" | "require-prepared";
 
+interface SharedContinuationSourceRequirements {
+  readonly expectedGeneration?: string;
+  readonly allowLegacyMigration?: boolean;
+}
+
+interface SharedContinuationGenerationMetadata {
+  readonly generation: string;
+  readonly migratedFromVersion?: 1;
+}
+
+type SharedContinuationGenerationState =
+  | { readonly kind: "absent" }
+  | { readonly kind: "legacy" }
+  | ({ readonly kind: "v2" } & SharedContinuationGenerationMetadata);
+
 interface SharedContinuationMigration {
   readonly entryName: string;
   readonly kind: SharedContinuationEntryKind;
@@ -365,6 +385,10 @@ interface SharedContinuationMigration {
 
 function sharedContinuationMarkerPath(sourceHomePath: string): string {
   return path.join(sourceHomePath, SYNARA_SHARED_CONTINUATION_MARKER_FILE);
+}
+
+function legacySharedContinuationMarkerPath(sourceHomePath: string): string {
+  return path.join(sourceHomePath, LEGACY_SYNARA_SHARED_CONTINUATION_MARKER_FILE);
 }
 
 function sharedContinuationLockPath(sourceHomePath: string): string {
@@ -844,15 +868,32 @@ async function prepareSharedCodexContinuationState(input: {
   readonly overlayHomePath: string;
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
   readonly sourcePolicy?: SharedContinuationSourcePolicy;
-}): Promise<void> {
+  readonly sourceRequirements?: SharedContinuationSourceRequirements;
+}): Promise<SharedContinuationGenerationMetadata> {
   const sourcePolicy = input.sourcePolicy ?? "create-if-missing";
-  if (sourcePolicy === "require-prepared") {
-    assertSharedCodexContinuationSourcePrepared(input.sourceHomePath);
+  if (
+    sourcePolicy === "require-prepared" &&
+    readSharedContinuationGenerationState(input.sourceHomePath).kind === "absent"
+  ) {
+    throw new Error(
+      `Codex shared continuation source at ${input.sourceHomePath} is missing or damaged; refusing to recreate persisted session state. Restore the original source home before resuming this thread.`,
+    );
   }
+  let preparedMetadata: SharedContinuationGenerationMetadata | undefined;
   await withSharedContinuationLock(input.sourceHomePath, async () => {
-    if (sourcePolicy === "require-prepared") {
-      assertSharedCodexContinuationSourcePrepared(input.sourceHomePath);
+    const initialState = readSharedContinuationGenerationState(input.sourceHomePath);
+    const mayCreateSourceEntries =
+      sourcePolicy === "create-if-missing" && initialState.kind === "absent";
+    if (!mayCreateSourceEntries) {
+      assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
     }
+    if (sourcePolicy === "require-prepared") {
+      preparedMetadata = await requireSharedContinuationGenerationMetadata(
+        input.sourceHomePath,
+        input.sourceRequirements,
+      );
+    }
+    await fs.mkdir(input.overlayHomePath, { recursive: true });
     const [sourceEntries, overlayEntries] = await Promise.all([
       readDirectoryEntries(input.sourceHomePath),
       readDirectoryEntries(input.overlayHomePath),
@@ -876,16 +917,19 @@ async function prepareSharedCodexContinuationState(input: {
     ).filter((migration): migration is SharedContinuationMigration => migration !== undefined);
 
     for (const migration of migrations) {
-      if (sourcePolicy === "require-prepared" && migration.action === "create-source") {
+      if (!mayCreateSourceEntries && migration.action === "create-source") {
         throw new Error(
           `Codex shared continuation source at ${input.sourceHomePath} became incomplete while preparing '${migration.entryName}'; refusing to recreate persisted session state.`,
         );
       }
       await executeSharedContinuationMigration(migration, input.overlayEntryLinker);
     }
-    if (sourcePolicy === "require-prepared") {
-      assertSharedCodexContinuationSourcePrepared(input.sourceHomePath);
-    }
+    assertRequiredSharedContinuationEntriesPrepared(input.sourceHomePath);
+    preparedMetadata ??= await ensureSharedContinuationGenerationMetadata(input.sourceHomePath);
+    assertSharedCodexContinuationGenerationPrepared(
+      input.sourceHomePath,
+      preparedMetadata.generation,
+    );
     if (
       !selectedCodexOverlaySharesContinuationState({
         sourceHomePath: input.sourceHomePath,
@@ -896,24 +940,11 @@ async function prepareSharedCodexContinuationState(input: {
         `Codex continuation state at ${input.overlayHomePath} is not fully linked to ${input.sourceHomePath}.`,
       );
     }
-    if (sourcePolicy === "create-if-missing") {
-      await writeSharedCodexContinuationMarker(input.sourceHomePath);
-    }
   }, { createSourceHome: sourcePolicy === "create-if-missing" });
-}
-
-async function writeSharedCodexContinuationMarker(sourceHomePath: string): Promise<void> {
-  const markerPath = sharedContinuationMarkerPath(sourceHomePath);
-  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
-  await fs.writeFile(
-    temporaryPath,
-    `${JSON.stringify({
-      version: SYNARA_SHARED_CONTINUATION_MARKER_VERSION,
-      sourceHomeIdentity: resolveCodexPathIdentity(sourceHomePath),
-    })}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
-  await fs.rename(temporaryPath, markerPath);
+  if (!preparedMetadata) {
+    throw new Error(`Codex shared continuation generation was not prepared safely.`);
+  }
+  return preparedMetadata;
 }
 
 function lstatSyncIfExists(entryPath: string): ReturnType<typeof lstatSync> | undefined {
@@ -936,38 +967,247 @@ function sharedContinuationIdentityEntryNames(): readonly string[] {
   return [...REQUIRED_SHARED_CONTINUATION_DIRECTORIES, ...REQUIRED_SHARED_CONTINUATION_FILES];
 }
 
-function sharedCodexContinuationSourcePrepared(sourceHomePath: string): boolean {
+function readRegularSharedContinuationFile(filePath: string, label: string): string | undefined {
+  const stat = lstatSyncIfExists(filePath);
+  if (!stat) return undefined;
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`Codex shared continuation ${label} at ${filePath} is not a regular file.`);
+  }
   try {
-    const markerStat = lstatSync(sharedContinuationMarkerPath(sourceHomePath));
-    if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
-      return false;
-    }
-    const marker = JSON.parse(
-      readFileSync(sharedContinuationMarkerPath(sourceHomePath), "utf8"),
-    ) as { readonly version?: unknown; readonly sourceHomeIdentity?: unknown };
-    if (
-      marker.version !== SYNARA_SHARED_CONTINUATION_MARKER_VERSION ||
-      marker.sourceHomeIdentity !== resolveCodexPathIdentity(sourceHomePath)
-    ) {
-      return false;
-    }
-    return sharedContinuationIdentityEntryNames().every((entryName) => {
-      const stat = lstatSync(path.join(sourceHomePath, entryName));
-      const kind = sharedContinuationEntryKind(entryName);
-      return kind === "dir" ? stat.isDirectory() : stat.isFile();
-    });
-  } catch {
-    return false;
+    return readFileSync(filePath, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
   }
 }
 
-function assertSharedCodexContinuationSourcePrepared(sourceHomePath: string): void {
-  if (sharedCodexContinuationSourcePrepared(sourceHomePath)) {
-    return;
+function readLegacySharedContinuationMarker(sourceHomePath: string): boolean {
+  const markerPath = legacySharedContinuationMarkerPath(sourceHomePath);
+  const content = readRegularSharedContinuationFile(markerPath, "legacy marker");
+  if (content === undefined) return false;
+  try {
+    const marker = JSON.parse(content) as {
+      readonly version?: unknown;
+      readonly sourceHomeIdentity?: unknown;
+    };
+    if (
+      marker.version === 1 &&
+      marker.sourceHomeIdentity === resolveCodexPathIdentity(sourceHomePath)
+    ) {
+      return true;
+    }
+  } catch {
+    // Report one fail-closed error for malformed and mismatched markers.
   }
   throw new Error(
-    `Codex shared continuation source at ${sourceHomePath} is missing or damaged; refusing to recreate persisted session state. Restore the original source home before resuming this thread.`,
+    `Codex shared continuation legacy marker at ${markerPath} is malformed or belongs to another source home.`,
   );
+}
+
+function readSharedContinuationV2Marker(
+  sourceHomePath: string,
+): SharedContinuationGenerationMetadata | undefined {
+  const markerPath = sharedContinuationMarkerPath(sourceHomePath);
+  const content = readRegularSharedContinuationFile(markerPath, "v2 marker");
+  if (content === undefined) return undefined;
+  try {
+    const marker = JSON.parse(content) as {
+      readonly version?: unknown;
+      readonly sourceHomeIdentity?: unknown;
+      readonly generation?: unknown;
+      readonly migratedFromVersion?: unknown;
+    };
+    if (
+      marker.version === SYNARA_SHARED_CONTINUATION_MARKER_VERSION &&
+      marker.sourceHomeIdentity === resolveCodexPathIdentity(sourceHomePath) &&
+      typeof marker.generation === "string" &&
+      SHARED_CONTINUATION_GENERATION_PATTERN.test(marker.generation) &&
+      (marker.migratedFromVersion === undefined || marker.migratedFromVersion === 1)
+    ) {
+      return {
+        generation: marker.generation.toLowerCase(),
+        ...(marker.migratedFromVersion === 1 ? { migratedFromVersion: 1 as const } : {}),
+      };
+    }
+  } catch {
+    // Report one fail-closed error for malformed and mismatched markers.
+  }
+  throw new Error(
+    `Codex shared continuation v2 marker at ${markerPath} is malformed or belongs to another source home.`,
+  );
+}
+
+function readSharedContinuationGenerationState(
+  sourceHomePath: string,
+): SharedContinuationGenerationState {
+  const marker = readSharedContinuationV2Marker(sourceHomePath);
+  if (marker) return { kind: "v2", ...marker };
+  if (readLegacySharedContinuationMarker(sourceHomePath)) return { kind: "legacy" };
+  const migratedMarker = readSharedContinuationV2Marker(sourceHomePath);
+  return migratedMarker ? { kind: "v2", ...migratedMarker } : { kind: "absent" };
+}
+
+function sharedContinuationMarkerContent(
+  sourceHomePath: string,
+  metadata: SharedContinuationGenerationMetadata,
+): string {
+  return `${JSON.stringify({
+    version: SYNARA_SHARED_CONTINUATION_MARKER_VERSION,
+    sourceHomeIdentity: resolveCodexPathIdentity(sourceHomePath),
+    generation: metadata.generation,
+    ...(metadata.migratedFromVersion === 1 ? { migratedFromVersion: 1 } : {}),
+  })}\n`;
+}
+
+async function writeSharedContinuationV2Marker(
+  sourceHomePath: string,
+  metadata: SharedContinuationGenerationMetadata,
+): Promise<boolean> {
+  const markerPath = sharedContinuationMarkerPath(sourceHomePath);
+  const temporaryPath = path.join(
+    sourceHomePath,
+    `.synara-shared-continuation-v2.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await fs.writeFile(temporaryPath, sharedContinuationMarkerContent(sourceHomePath, metadata), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    try {
+      await fs.link(temporaryPath, markerPath);
+      return true;
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    await fs.rm(temporaryPath, { force: true });
+  }
+}
+
+async function ensureSharedContinuationGenerationMetadata(
+  sourceHomePath: string,
+): Promise<SharedContinuationGenerationMetadata> {
+  const existing = readSharedContinuationGenerationState(sourceHomePath);
+  if (existing.kind === "v2") return existing;
+  if (existing.kind === "legacy") {
+    assertRequiredSharedContinuationEntriesPrepared(sourceHomePath);
+  }
+  const candidate: SharedContinuationGenerationMetadata = {
+    generation: randomUUID().toLowerCase(),
+    ...(existing.kind === "legacy" ? { migratedFromVersion: 1 as const } : {}),
+  };
+  if (!(await writeSharedContinuationV2Marker(sourceHomePath, candidate))) {
+    const raced = readSharedContinuationGenerationState(sourceHomePath);
+    if (raced.kind !== "v2") {
+      throw new Error(
+        `Codex shared continuation generation at ${sourceHomePath} did not converge after a concurrent writer.`,
+      );
+    }
+    if (existing.kind === "legacy" && raced.migratedFromVersion !== 1) {
+      throw new Error(
+        `Codex shared continuation generation at ${sourceHomePath} raced with a non-migration marker.`,
+      );
+    }
+    return raced;
+  }
+  const committed = readSharedContinuationGenerationState(sourceHomePath);
+  if (committed.kind !== "v2") {
+    throw new Error(
+      `Codex shared continuation generation at ${sourceHomePath} was not committed safely.`,
+    );
+  }
+  if (committed.migratedFromVersion === 1) {
+    await fs.rm(legacySharedContinuationMarkerPath(sourceHomePath), { force: true });
+  }
+  return committed;
+}
+
+function assertRequiredSharedContinuationEntriesPrepared(sourceHomePath: string): void {
+  for (const entryName of sharedContinuationIdentityEntryNames()) {
+    const entryPath = path.join(sourceHomePath, entryName);
+    const stat = lstatSyncIfExists(entryPath);
+    if (!stat) {
+      throw new Error(
+        `Codex shared continuation source at ${sourceHomePath} is missing '${entryName}'; refusing to recreate persisted session state.`,
+      );
+    }
+    assertSharedContinuationEntryType({
+      entryName,
+      entryPath,
+      kind: sharedContinuationEntryKind(entryName),
+      stat,
+    });
+  }
+}
+
+async function requireSharedContinuationGenerationMetadata(
+  sourceHomePath: string,
+  requirements: SharedContinuationSourceRequirements = {},
+): Promise<SharedContinuationGenerationMetadata> {
+  const expectedGeneration = requirements.expectedGeneration?.toLowerCase();
+  if (
+    expectedGeneration !== undefined &&
+    !SHARED_CONTINUATION_GENERATION_PATTERN.test(expectedGeneration)
+  ) {
+    throw new Error("Invalid expected Codex shared continuation generation.");
+  }
+  let state = readSharedContinuationGenerationState(sourceHomePath);
+  if (state.kind === "legacy") {
+    if (!requirements.allowLegacyMigration) {
+      throw new Error(
+        `Codex shared continuation source at ${sourceHomePath} still uses a legacy marker and cannot satisfy a generation-pinned launch.`,
+      );
+    }
+    assertRequiredSharedContinuationEntriesPrepared(sourceHomePath);
+    state = { kind: "v2", ...(await ensureSharedContinuationGenerationMetadata(sourceHomePath)) };
+  }
+  if (state.kind !== "v2") {
+    throw new Error(
+      `Codex shared continuation source at ${sourceHomePath} is missing or damaged; refusing to recreate persisted session state. Restore the original source home before resuming this thread.`,
+    );
+  }
+  if (expectedGeneration !== undefined && state.generation !== expectedGeneration) {
+    throw new Error(
+      `Codex shared continuation source at ${sourceHomePath} has generation '${state.generation}', expected '${expectedGeneration}'; refusing to launch a persisted cursor against replacement state.`,
+    );
+  }
+  if (
+    requirements.allowLegacyMigration &&
+    expectedGeneration === undefined &&
+    state.migratedFromVersion !== 1
+  ) {
+    throw new Error(
+      `Codex shared continuation source at ${sourceHomePath} is a new generation, not a verified migration of the persisted legacy identity.`,
+    );
+  }
+  assertRequiredSharedContinuationEntriesPrepared(sourceHomePath);
+  return state;
+}
+
+function assertSharedCodexContinuationGenerationPrepared(
+  sourceHomePath: string,
+  expectedGeneration: string,
+): void {
+  const state = readSharedContinuationGenerationState(sourceHomePath);
+  if (state.kind !== "v2" || state.generation !== expectedGeneration.toLowerCase()) {
+    throw new Error(
+      `Codex shared continuation source at ${sourceHomePath} changed generations during preparation; refusing to launch persisted session state.`,
+    );
+  }
+  assertRequiredSharedContinuationEntriesPrepared(sourceHomePath);
+}
+
+function readPreparedSharedCodexContinuationGeneration(sourceHomePath: string): string | undefined {
+  try {
+    const state = readSharedContinuationGenerationState(sourceHomePath);
+    if (state.kind !== "v2") return undefined;
+    assertRequiredSharedContinuationEntriesPrepared(sourceHomePath);
+    return state.generation;
+  } catch {
+    return undefined;
+  }
 }
 
 function selectedCodexOverlaySharesContinuationState(input: {
@@ -996,12 +1236,12 @@ function selectedCodexOverlaySharesContinuationState(input: {
   });
 }
 
-export function isCodexSharedContinuationStatePrepared(input: {
+export function readCodexSharedContinuationGeneration(input: {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
   readonly shadowHomePath?: string;
   readonly accountId?: string;
-} = {}): boolean {
+} = {}): string | undefined {
   const env = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
   const shadowHomePath = input.shadowHomePath
@@ -1027,13 +1267,23 @@ export function isCodexSharedContinuationStatePrepared(input: {
       }
     }
     assertCodexSqliteHomeMatchesSource({ sourceConfig, sourceHomePath });
-    return (
-      sharedCodexContinuationSourcePrepared(sourceHomePath) &&
+    const generation = readPreparedSharedCodexContinuationGeneration(sourceHomePath);
+    return generation !== undefined &&
       selectedCodexOverlaySharesContinuationState({ sourceHomePath, overlayHomePath })
-    );
+      ? generation
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+export function isCodexSharedContinuationStatePrepared(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+} = {}): boolean {
+  return readCodexSharedContinuationGeneration(input) !== undefined;
 }
 
 /**
@@ -1454,6 +1704,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly appendConfigToml?: string;
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
   readonly continuationSourcePolicy?: SharedContinuationSourcePolicy;
+  readonly continuationSourceRequirements?: SharedContinuationSourceRequirements;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
@@ -1519,26 +1770,33 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     if (input.continuationSourcePolicy === "require-prepared") {
-      assertSharedCodexContinuationSourcePrepared(sourceHomePath);
+      await withSharedContinuationLock(
+        sourceHomePath,
+        () =>
+          requireSharedContinuationGenerationMetadata(
+            sourceHomePath,
+            input.continuationSourceRequirements,
+          ),
+        { createSourceHome: false },
+      );
     }
     return undefined;
   }
 
-  if (input.continuationSourcePolicy === "require-prepared") {
-    assertSharedCodexContinuationSourcePrepared(sourceHomePath);
-  }
-  await fs.mkdir(overlayHomePath, { recursive: true });
-  await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
   // Continuation preparation is all-or-nothing for default and account
   // overlays. A host that cannot create the required links fails closed.
-  await prepareSharedCodexContinuationState({
+  const continuationMetadata = await prepareSharedCodexContinuationState({
     sourceHomePath,
     overlayHomePath,
     ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
     ...(input.continuationSourcePolicy
       ? { sourcePolicy: input.continuationSourcePolicy }
       : {}),
+    ...(input.continuationSourceRequirements
+      ? { sourceRequirements: input.continuationSourceRequirements }
+      : {}),
   });
+  await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
 
   try {
     // Auth must get a best-effort link/copy before optional entries whose
@@ -1546,6 +1804,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (
         entry === "config.toml" ||
+        entry === LEGACY_SYNARA_SHARED_CONTINUATION_MARKER_FILE ||
         entry === SYNARA_SHARED_CONTINUATION_MARKER_FILE ||
         isSharedContinuationLockEntry(entry) ||
         isCodexSqliteStateEntry(entry) ||
@@ -1655,9 +1914,10 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   await fs.writeFile(overlayConfigPath, overlayConfig, "utf8");
   await writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
-  if (input.continuationSourcePolicy === "require-prepared") {
-    assertSharedCodexContinuationSourcePrepared(sourceHomePath);
-  }
+  assertSharedCodexContinuationGenerationPrepared(
+    sourceHomePath,
+    continuationMetadata.generation,
+  );
 
   return overlayHomePath;
 }
@@ -1670,6 +1930,7 @@ async function prepareSynaraCodexHomeOverlay(input: {
   readonly appendConfigToml?: string;
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
   readonly continuationSourcePolicy?: SharedContinuationSourcePolicy;
+  readonly continuationSourceRequirements?: SharedContinuationSourceRequirements;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const shadowHomePath = input.shadowHomePath
@@ -1686,7 +1947,15 @@ async function prepareSynaraCodexHomeOverlay(input: {
   );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     if (input.continuationSourcePolicy === "require-prepared") {
-      assertSharedCodexContinuationSourcePrepared(sourceHomePath);
+      await withSharedContinuationLock(
+        sourceHomePath,
+        () =>
+          requireSharedContinuationGenerationMetadata(
+            sourceHomePath,
+            input.continuationSourceRequirements,
+          ),
+        { createSourceHome: false },
+      );
     }
     return undefined;
   }
@@ -1703,6 +1972,8 @@ type CodexHomeOverlayPreparationInput = Pick<
   | "accountId"
   | "appendConfigToml"
   | "overlayEntryLinker"
+  | "expectedSharedContinuationGeneration"
+  | "allowLegacySharedContinuationMigration"
 >;
 
 async function prepareCodexHomeOverlayWithSourcePolicy(
@@ -1718,6 +1989,19 @@ async function prepareCodexHomeOverlayWithSourcePolicy(
     ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
     ...(input.overlayEntryLinker ? { overlayEntryLinker: input.overlayEntryLinker } : {}),
     continuationSourcePolicy,
+    ...(input.expectedSharedContinuationGeneration ||
+    input.allowLegacySharedContinuationMigration === true
+      ? {
+          continuationSourceRequirements: {
+            ...(input.expectedSharedContinuationGeneration
+              ? { expectedGeneration: input.expectedSharedContinuationGeneration }
+              : {}),
+            ...(input.allowLegacySharedContinuationMigration === true
+              ? { allowLegacyMigration: true }
+              : {}),
+          },
+        }
+      : {}),
   });
 }
 
@@ -1743,9 +2027,7 @@ export async function buildCodexProcessEnv(
 ): Promise<NodeJS.ProcessEnv> {
   const baseEnv = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
-  const overlayHomePath = input.skipHomeOverlay
-    ? undefined
-    : await prepareCodexHomeOverlay({
+  const overlayPreparationInput: CodexHomeOverlayPreparationInput = {
         env: baseEnv,
         ...(input.homePath ? { homePath: input.homePath } : {}),
         ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
@@ -1754,7 +2036,18 @@ export async function buildCodexProcessEnv(
         ...(input.overlayEntryLinker
           ? { overlayEntryLinker: input.overlayEntryLinker }
           : {}),
-      });
+        ...(input.expectedSharedContinuationGeneration
+          ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
+          : {}),
+        ...(input.allowLegacySharedContinuationMigration
+          ? { allowLegacySharedContinuationMigration: true }
+          : {}),
+      };
+  const overlayHomePath = input.skipHomeOverlay
+    ? undefined
+    : input.expectedSharedContinuationGeneration || input.allowLegacySharedContinuationMigration
+      ? await prepareCodexHomeOverlayFromPreparedContinuationSource(overlayPreparationInput)
+      : await prepareCodexHomeOverlay(overlayPreparationInput);
   const directAccountHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(baseEnv, input.shadowHomePath)
     : input.homePath
@@ -1801,6 +2094,13 @@ export async function buildCodexProcessEnv(
     } catch {
       // Keep inherited environment if shell lookup fails.
     }
+  }
+
+  if (input.expectedSharedContinuationGeneration) {
+    assertSharedCodexContinuationGenerationPrepared(
+      sourceHomePath,
+      input.expectedSharedContinuationGeneration,
+    );
   }
 
   return effectiveEnv;

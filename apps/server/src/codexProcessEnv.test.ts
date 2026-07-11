@@ -1,4 +1,5 @@
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -23,6 +24,7 @@ import {
   isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
+  readCodexSharedContinuationGeneration,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
@@ -148,6 +150,65 @@ describe("buildCodexProcessEnv", () => {
     } finally {
       rmSync(sourceHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("pins a fresh shared continuation source to one durable generation", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-"));
+    const codexHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      await buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+        platform: "win32",
+      });
+      const generation = readCodexSharedContinuationGeneration({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: codexHome,
+      });
+      expect(generation).toMatch(/^[0-9a-f-]{36}$/);
+      const marker = JSON.parse(
+        readFileSync(path.join(codexHome, "synara-shared-continuation-v2.json"), "utf8"),
+      ) as { generation?: unknown; version?: unknown };
+      expect(marker).toMatchObject({ version: 2, generation });
+      expect(existsSync(path.join(codexHome, "synara-shared-continuation-v1.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects replacement or damaged state under a persisted continuation generation", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-generation-replaced-"));
+    const codexHome = path.join(root, "codex-home");
+    const runtimeHome = path.join(root, "runtime");
+    const env = { SYNARA_HOME: runtimeHome };
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      await buildCodexProcessEnv({ env, homePath: codexHome, platform: "win32" });
+      const generation = readCodexSharedContinuationGeneration({ env, homePath: codexHome });
+      expect(generation).toBeDefined();
+      await expect(
+        buildCodexProcessEnv({
+          env,
+          homePath: codexHome,
+          platform: "win32",
+          expectedSharedContinuationGeneration: "123e4567-e89b-42d3-a456-426614174000",
+        }),
+      ).rejects.toThrow(/has generation.*expected/);
+
+      rmSync(path.join(codexHome, "sessions"), { recursive: true, force: true });
+      await expect(
+        buildCodexProcessEnv({ env, homePath: codexHome, platform: "win32" }),
+      ).rejects.toThrow(/missing 'sessions'|refusing to recreate/);
+      expect(existsSync(path.join(codexHome, "sessions"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

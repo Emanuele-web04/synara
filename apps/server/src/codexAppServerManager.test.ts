@@ -1701,6 +1701,34 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it("rejects native resume and fork calls without a pinned continuation generation", async () => {
+    const manager = new CodexAppServerManager();
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-unpinned-resume-"));
+    try {
+      await expect(
+        manager.startSession({
+          threadId: asThreadId("thread-unpinned-resume"),
+          provider: "codex",
+          cwd: root,
+          runtimeMode: "full-access",
+          resumeCursor: { threadId: "provider-thread" },
+        }),
+      ).rejects.toThrow(/requires a verified continuation source generation/);
+      await expect(
+        manager.forkThread({
+          sourceThreadId: asThreadId("source-unpinned-fork"),
+          sourceResumeCursor: { threadId: "provider-source-thread" },
+          threadId: asThreadId("target-unpinned-fork"),
+          cwd: root,
+          runtimeMode: "full-access",
+        }),
+      ).rejects.toThrow(/fork requires a verified continuation source generation/);
+    } finally {
+      await manager.stopAll();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("emits session/started after any successful thread open", () => {
     const manager = new CodexAppServerManager();
     const methods: string[] = [];

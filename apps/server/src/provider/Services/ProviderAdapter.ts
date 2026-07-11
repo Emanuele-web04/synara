@@ -102,6 +102,16 @@ export interface ProviderGeneratedImageHomePathsInput {
   readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
 }
 
+/** Server-internal launch guard; deliberately not part of the public contracts schema. */
+export interface ProviderContinuationLaunchRequirements {
+  readonly expectedCodexContinuationGeneration?: string;
+}
+
+export type ProviderAdapterSessionStartInput = ProviderSessionStartInput &
+  ProviderContinuationLaunchRequirements;
+export type ProviderAdapterForkThreadInput = ProviderForkThreadInput &
+  ProviderContinuationLaunchRequirements;
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -113,7 +123,7 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
@@ -256,7 +266,7 @@ export interface ProviderAdapterShape<TError> {
    * conversation-history-only forking.
    */
   readonly forkThread?: (
-    input: ProviderForkThreadInput,
+    input: ProviderAdapterForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult, TError>;
 
   /**

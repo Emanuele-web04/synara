@@ -12,7 +12,6 @@ import {
   type ProviderListModelsResult,
   type ProviderListPluginsResult,
   type ProviderMentionReference,
-  type ProviderForkThreadInput,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
   type ProviderListSkillsResult,
@@ -65,6 +64,7 @@ import {
 } from "./agentGateway/sessionLease.ts";
 import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexAppServerArgs, buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -292,6 +292,7 @@ export interface CodexAppServerStartSessionInput {
   readonly model?: string;
   readonly serviceTier?: string;
   readonly resumeCursor?: unknown;
+  readonly expectedCodexContinuationGeneration?: string;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
@@ -1102,6 +1103,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async buildSessionProcessEnv(
     codexOptions: CodexDiscoveryOptions | undefined,
     gatewayBearerToken: string | undefined,
+    expectedCodexContinuationGeneration?: string,
   ) {
     const env = await buildCodexProcessEnv({
       ...(codexOptions?.environment
@@ -1110,6 +1112,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(codexOptions?.homePath ? { homePath: codexOptions.homePath } : {}),
       ...(codexOptions?.shadowHomePath ? { shadowHomePath: codexOptions.shadowHomePath } : {}),
       ...(codexOptions?.accountId ? { accountId: codexOptions.accountId } : {}),
+      ...(expectedCodexContinuationGeneration
+        ? { expectedSharedContinuationGeneration: expectedCodexContinuationGeneration }
+        : {}),
       ...(this.agentGatewayMcp
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
@@ -1146,6 +1151,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
     let previousSessionStopped = false;
+
+    if (input.resumeCursor !== undefined && !input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native resume requires a verified continuation source generation.");
+    }
 
     try {
       const existing = this.sessions.get(threadId);
@@ -1185,6 +1194,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? { expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration }
+          : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
@@ -1193,6 +1205,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         env: await this.buildSessionProcessEnv(
           normalizedCodexOptions,
           gatewaySessionLease?.connection.bearerToken,
+          input.expectedCodexContinuationGeneration,
         ),
       });
 
@@ -1951,11 +1964,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.parseThreadSnapshot("thread/read", response);
   }
 
-  async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
+  async forkThread(input: ProviderAdapterForkThreadInput): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
+
+    if (!input.expectedCodexContinuationGeneration) {
+      throw new Error("Codex native fork requires a verified continuation source generation.");
+    }
 
     try {
       const existing = this.sessions.get(threadId);
@@ -2010,6 +2027,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
         ...(codexAccountId ? { accountId: codexAccountId } : {}),
         ...(codexEnvironment ? { environment: codexEnvironment } : {}),
+        expectedSharedContinuationGeneration: input.expectedCodexContinuationGeneration,
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
@@ -2018,6 +2036,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         env: await this.buildSessionProcessEnv(
           normalizedCodexOptions,
           gatewaySessionLease?.connection.bearerToken,
+          input.expectedCodexContinuationGeneration,
         ),
       });
 
@@ -3922,6 +3941,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly accountId?: string;
     readonly environment?: Readonly<Record<string, string>>;
     readonly minimumVersion?: string;
+    readonly expectedSharedContinuationGeneration?: string;
   }): Promise<void> {
     await assertSupportedCodexCliVersion(input);
   }
@@ -4440,12 +4460,16 @@ async function runCodexCliVersionGate(input: {
   readonly accountId?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly minimumVersion?: string;
+  readonly expectedSharedContinuationGeneration?: string;
 }): Promise<CodexCliBinaryFingerprint | null> {
   const env = await buildCodexProcessEnv({
     ...(input.environment ? { env: { ...process.env, ...input.environment } } : {}),
     ...(input.homePath ? { homePath: input.homePath } : {}),
     ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
     ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.expectedSharedContinuationGeneration
+      ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
+      : {}),
   });
   // Resolved against the env the spawn below uses, never `process.env`. On macOS and Linux
   // `buildCodexProcessEnv` can replace PATH with the login shell's, so resolving through the
@@ -4517,6 +4541,7 @@ function codexCliVersionGateKey(
   accountId: string | undefined,
   environment: Readonly<Record<string, string>> | undefined,
   minimumVersion: string | undefined,
+  expectedSharedContinuationGeneration: string | undefined,
 ): string {
   // The installed version depends on the selected binary and provider-instance
   // environment (especially PATH and CODEX_HOME). Hash environment values so
@@ -4537,6 +4562,7 @@ function codexCliVersionGateKey(
         )
       : "",
     minimumVersion ?? "",
+    expectedSharedContinuationGeneration ?? "",
   ]);
 }
 
@@ -4558,6 +4584,7 @@ async function assertSupportedCodexCliVersion(input: {
   readonly accountId?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly minimumVersion?: string;
+  readonly expectedSharedContinuationGeneration?: string;
 }): Promise<void> {
   // Prefer an explicit cwd check before spawning. A missing working directory
   // produces ENOENT that is otherwise misreported as a missing Codex binary. This
@@ -4571,6 +4598,7 @@ async function assertSupportedCodexCliVersion(input: {
     input.accountId,
     input.environment,
     input.minimumVersion,
+    input.expectedSharedContinuationGeneration,
   );
   const now = Date.now();
   const existing = codexCliVersionGates.get(key);

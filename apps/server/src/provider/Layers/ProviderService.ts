@@ -109,7 +109,11 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import {
+  codexSharedContinuationGeneration,
+  codexSharedContinuationIdentityIsSafeMigration,
+  parseCodexSharedContinuationIdentity,
   prepareProviderContinuationIdentity,
+  prepareProviderContinuationIdentityForExplicitResume,
   providerContinuationIdentity,
 } from "../continuationIdentity.ts";
 
@@ -513,14 +517,19 @@ function persistedContinuationMatchesLaunch(input: {
     if (persistedIdentity === input.currentIdentity) {
       return true;
     }
-    // Exact launch equivalence may adopt an upgraded shared identity, but it
-    // must never downgrade a persisted shared identity to an unprepared or
-    // broken account overlay.
     return (
       input.provider === "codex" &&
-      input.currentIdentity?.startsWith("codex:shared-v1:") === true &&
-      persistedLaunchMatchesExactly(input)
+      codexSharedContinuationIdentityIsSafeMigration({
+        persistedIdentity,
+        currentIdentity: input.currentIdentity,
+      })
     );
+  }
+  if (
+    input.provider === "codex" &&
+    parseCodexSharedContinuationIdentity(input.currentIdentity) !== undefined
+  ) {
+    return false;
   }
   return persistedLaunchMatchesExactly(input);
 }
@@ -530,14 +539,20 @@ function prepareContinuationIdentityForCompatibility(input: {
   readonly provider: ProviderKind;
   readonly providerOptions: ProviderStartOptions | undefined;
   readonly persistedIdentity: string | undefined;
+  readonly explicitResume?: boolean;
 }) {
   return Effect.tryPromise({
     try: () =>
-      prepareProviderContinuationIdentity(
-        input.provider,
-        input.providerOptions,
-        input.persistedIdentity,
-      ),
+      input.explicitResume
+        ? prepareProviderContinuationIdentityForExplicitResume(
+            input.provider,
+            input.providerOptions,
+          )
+        : prepareProviderContinuationIdentity(
+            input.provider,
+            input.providerOptions,
+            input.persistedIdentity,
+          ),
     catch: (cause) =>
       toValidationError(
         input.operation,
@@ -2136,6 +2151,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 credentialsFingerprintKey,
                 currentIdentity: currentContinuationIdentity,
               });
+            const expectedCodexContinuationGeneration = canReusePersistedResumeCursor
+              ? codexSharedContinuationGeneration(currentContinuationIdentity)
+              : undefined;
+            if (
+              canReusePersistedResumeCursor &&
+              resolved.instance.driver === "codex" &&
+              expectedCodexContinuationGeneration === undefined
+            ) {
+              return yield* toValidationError(
+                input.operation,
+                "Cannot recover a Codex native thread because the persisted continuation source has no verified generation.",
+              );
+            }
             if (
               hasPersistedResumeCursor &&
               providerUsesProtectedNativeContinuation(resolved.instance.driver) &&
@@ -2224,6 +2252,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
               ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
               ...(canReusePersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
+              ...(expectedCodexContinuationGeneration
+                ? { expectedCodexContinuationGeneration }
+                : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
             // Prompt construction has already happened here. Only explicit startup
@@ -2661,16 +2692,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? { providerOptions: input.providerOptions ?? persistedProviderOptions }
                 : {}),
             });
+            const hasExplicitResumeCursor = input.resumeCursor !== undefined;
             const currentContinuationIdentity =
-              persistedBinding !== undefined &&
-              persistedBinding.provider === resolved.instance.driver
+              (hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
+              (persistedBinding !== undefined &&
+                persistedBinding.provider === resolved.instance.driver)
                 ? yield* prepareContinuationIdentityForCompatibility({
                     operation: "ProviderService.startSession",
                     provider: resolved.instance.driver,
                     providerOptions: resolved.providerOptions,
                     persistedIdentity: readPersistedContinuationIdentity(
-                      persistedBinding.runtimePayload,
+                      persistedBinding?.runtimePayload,
                     ),
+                    ...(hasExplicitResumeCursor && resolved.instance.driver === "codex"
+                      ? { explicitResume: true }
+                      : {}),
                   })
                 : undefined;
             const bindingMatchesResolvedInstance =
@@ -2684,7 +2720,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInstanceId: resolved.instance.instanceId,
                 providerOptions: resolved.providerOptions,
                 credentialsFingerprintKey,
-                currentIdentity: currentContinuationIdentity,
               });
             const continuationCompatible =
               persistedBinding !== undefined &&
@@ -2694,6 +2729,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInstanceId: resolved.instance.instanceId,
                 providerOptions: resolved.providerOptions,
                 credentialsFingerprintKey,
+                currentIdentity: currentContinuationIdentity,
               });
             const hasAvailableResumeCursor =
               input.resumeCursor !== undefined || hasResumeCursor(persistedBinding?.resumeCursor);
@@ -2731,6 +2767,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   (persistedBinding && canReusePersistedResumeCursor
                     ? persistedBinding.resumeCursor
                     : undefined));
+            const expectedCodexContinuationGeneration =
+              hasResumeCursor(effectiveResumeCursor) && resolved.instance.driver === "codex"
+                ? codexSharedContinuationGeneration(currentContinuationIdentity)
+                : undefined;
+            if (
+              hasResumeCursor(effectiveResumeCursor) &&
+              resolved.instance.driver === "codex" &&
+              expectedCodexContinuationGeneration === undefined
+            ) {
+              yield* Effect.sync(() => scheduleRuntimeIdleStop(threadId));
+              return yield* toValidationError(
+                "ProviderService.startSession",
+                "Cannot resume a Codex native thread because the selected continuation source has no verified generation.",
+              );
+            }
             const persistedPriorTranscriptBootstrapPending =
               persistedBinding !== undefined &&
               bindingMatchesResolvedInstance &&
@@ -2767,6 +2818,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : {}),
                 ...(hasResumeCursor(effectiveResumeCursor)
                   ? { resumeCursor: effectiveResumeCursor }
+                  : {}),
+                ...(expectedCodexContinuationGeneration
+                  ? { expectedCodexContinuationGeneration }
                   : {}),
               };
               // A provider start that never returns holds this thread's
@@ -3099,6 +3153,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             credentialsFingerprintKey,
             currentIdentity: currentContinuationIdentity,
           });
+        const expectedCodexContinuationGeneration = canReuseSourceResumeCursor
+          ? codexSharedContinuationGeneration(currentContinuationIdentity)
+          : undefined;
+        if (
+          canReuseSourceResumeCursor &&
+          resolvedSource.instance.driver === "codex" &&
+          expectedCodexContinuationGeneration === undefined
+        ) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because source continuation has no verified generation",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              sourceProviderInstanceId: sourceBoundProviderInstanceId,
+              requestedProviderInstanceId: resolvedSource.instance.instanceId,
+            },
+          );
+          return null;
+        }
         if (
           resolvedSource.instance.instanceId !== sourceBoundProviderInstanceId &&
           !canReuseSourceResumeCursor
@@ -3156,6 +3229,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               : {}),
             ...(canReuseSourceResumeCursor
               ? { sourceResumeCursor: sourceBinding.resumeCursor }
+              : {}),
+            ...(expectedCodexContinuationGeneration
+              ? { expectedCodexContinuationGeneration }
               : {}),
             ...(sourceCwd ? { sourceCwd } : {}),
             runtimeMode: input.runtimeMode,

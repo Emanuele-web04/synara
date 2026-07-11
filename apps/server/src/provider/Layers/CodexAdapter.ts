@@ -2079,6 +2079,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input.expectedCodexContinuationGeneration
+          ? { expectedCodexContinuationGeneration: input.expectedCodexContinuationGeneration }
+          : {}),
         ...(input.forkSourceResumeCursor !== undefined
           ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
           : {}),
