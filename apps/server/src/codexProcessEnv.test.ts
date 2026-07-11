@@ -16,6 +16,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildCodexAppServerArgs,
+  buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
   disableCodexConfigSections,
   isCodexSharedContinuationStatePrepared,
@@ -145,6 +147,36 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(sourceConfigPath, "utf8")).toBe(sourceConfig);
     } finally {
       rmSync(sourceHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("pins app-server continuation and credential-store config at CLI precedence", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), 'synara-codex-home-"quoted"-'));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+
+    try {
+      const launch = await buildCodexProcessLaunchContext({
+        env: {
+          SYNARA_HOME: runtimeHome,
+          CODEX_SQLITE_HOME: path.join(runtimeHome, "inherited-wrong-home"),
+        },
+        homePath: codexHome,
+        platform: "win32",
+      });
+
+      expect(launch.env.CODEX_SQLITE_HOME).toBe(codexHome);
+      expect(launch.appServerArgs).toEqual([
+        "app-server",
+        "--config",
+        `sqlite_home=${JSON.stringify(codexHome)}`,
+        "--config",
+        'cli_auth_credentials_store="file"',
+      ]);
+      expect(launch.appServerArgs).toEqual(buildCodexAppServerArgs(codexHome));
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });

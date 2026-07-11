@@ -8,9 +8,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
   MINIMUM_CODEX_CLI_VERSION,
+  parseCodexCliVersion,
 } from "./codexCliVersion.ts";
 
 describe("codexCliVersion", () => {
@@ -26,6 +28,14 @@ describe("codexCliVersion", () => {
     assert.equal(
       formatCodexCliUpgradeMessage("0.104.0"),
       "Codex CLI v0.104.0 is too old for Synara. Upgrade to v0.105.0 or newer and restart Synara.",
+    );
+  });
+
+  it("provides fail-closed guidance when successful output has no verifiable version", () => {
+    assert.equal(parseCodexCliVersion("Codex development build"), null);
+    assert.equal(
+      CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
+      "Codex CLI version check succeeded but returned an unrecognized version. Synara requires a verifiable v0.105.0 or newer installation; upgrade or reinstall Codex and restart Synara.",
     );
   });
 });

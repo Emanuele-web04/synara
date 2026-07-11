@@ -52,6 +52,7 @@ import { spawnProcess } from "@synara/shared/processRuntime";
 import { Effect, ServiceMap } from "effect";
 
 import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
   compareCodexCliVersions,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
@@ -75,7 +76,7 @@ import {
   type AgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
 import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
-import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { buildCodexAppServerArgs, buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
@@ -813,7 +814,11 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  return spawnProcess(input.binaryPath, ["app-server"], {
+  const sourceHomePath = input.env.CODEX_SQLITE_HOME?.trim();
+  if (!sourceHomePath) {
+    throw new Error("Codex app-server requires a verified shared continuation home.");
+  }
+  return spawnProcess(input.binaryPath, buildCodexAppServerArgs(sourceHomePath), {
     requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
@@ -4861,16 +4866,17 @@ async function runCodexCliVersionGate(input: {
 
   const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
   const minimumVersion = input.minimumVersion;
-  if (minimumVersion && !parsedVersion) {
+  if (!parsedVersion) {
     throw new Error(
-      `Could not determine the installed Codex CLI version. ${input.minimumVersionRequirement ?? "Auto mode"} requires v${minimumVersion} or newer.`,
+      minimumVersion
+        ? `Could not determine the installed Codex CLI version. ${input.minimumVersionRequirement ?? "Auto mode"} requires v${minimumVersion} or newer.`
+        : CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
     );
   }
   if (
-    parsedVersion &&
-    (minimumVersion
+    minimumVersion
       ? compareCodexCliVersions(parsedVersion, minimumVersion) < 0
-      : !isCodexCliVersionSupported(parsedVersion))
+      : !isCodexCliVersionSupported(parsedVersion)
   ) {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion, minimumVersion));
   }
