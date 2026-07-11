@@ -2,7 +2,7 @@
 // Purpose: Runs schema-constrained Codex CLI text generation against account-owned auth.
 // Layer: Git and orchestration text-generation service.
 
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 import {
   Effect,
@@ -27,10 +27,10 @@ import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import {
-  resolveBaseCodexHomePath,
-  resolveCodexHomeOverlayAccountSegment,
-  resolveSynaraCodexHomeOverlayPath,
-} from "../../codexHomePaths.ts";
+  hydrateCodexProviderCredentialEnvironment,
+  prepareCodexAuthTracking,
+  type CodexPreparedAuthSource,
+} from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import { compareCodexCliVersions, parseCodexCliVersion } from "../../provider/codexCliVersion.ts";
@@ -400,67 +400,10 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         }),
     });
 
-  const resolveCodexTextGenerationAccountPaths = (input: {
-    readonly env: NodeJS.ProcessEnv;
-    readonly homePath?: string;
-    readonly shadowHomePath?: string;
-    readonly accountId?: string;
-  }): { readonly sourceConfigPath: string; readonly authoritativeAuthFilePath: string } => {
-    const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-    const ambientHomePath = resolveBaseCodexHomePath(input.env);
-    const hasDedicatedAccountHome =
-      Boolean(input.homePath?.trim()) && path.resolve(sourceHomePath) !== path.resolve(ambientHomePath);
-    const shadowHomePath = input.shadowHomePath
-      ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
-      : undefined;
-    if (shadowHomePath) {
-      if (path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
-        throw new Error("Codex account shadow home must be different from CODEX_HOME.");
-      }
-      let shadowStat: ReturnType<typeof lstatSync> | undefined;
-      try {
-        shadowStat = lstatSync(shadowHomePath);
-      } catch {
-        shadowStat = undefined;
-      }
-      if (shadowStat?.isSymbolicLink()) {
-        throw new Error(
-          `Codex account shadow home at ${shadowHomePath} is a symlink; it must be a real directory so accounts cannot alias each other's auth.`,
-        );
-      }
-      try {
-        if (path.resolve(realpathSync(shadowHomePath)) === path.resolve(realpathSync(sourceHomePath))) {
-          throw new Error("Codex account shadow home must be different from CODEX_HOME.");
-        }
-      } catch (cause) {
-        if (
-          cause instanceof Error &&
-          cause.message === "Codex account shadow home must be different from CODEX_HOME."
-        ) {
-          throw cause;
-        }
-      }
-    }
-    const accountSegment = resolveCodexHomeOverlayAccountSegment({
-      homePath: sourceHomePath,
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      ...(shadowHomePath ? { shadowHomePath } : {}),
-    });
-    const accountHomePath = shadowHomePath
-      ? shadowHomePath
-      : accountSegment && !hasDedicatedAccountHome
-        ? resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath, accountSegment)
-        : sourceHomePath;
-    return {
-      sourceConfigPath: path.join(sourceHomePath, "config.toml"),
-      authoritativeAuthFilePath: path.join(accountHomePath, "auth.json"),
-    };
-  };
-
   const prepareIsolatedCodexHome = (
     operation: TextGenerationOperation,
     config: CodexTextGenerationConfig,
-    authoritativeAuthFilePath: string,
+    authSource: CodexPreparedAuthSource,
     selectedModel: string,
   ): Effect.Effect<
     {
@@ -518,7 +461,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
       yield* Effect.try({
         try: () =>
-          prepareCodexTextGenerationAuthSnapshot(authoritativeAuthFilePath, homePath, {
+          prepareCodexTextGenerationAuthSnapshot(authSource, homePath, {
             minimumValidityMs: minimumCodexAuthValidityMs(timing),
           }),
         catch: (cause) =>
@@ -615,12 +558,14 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
         const resolvedCodexAuthHomePath = resolveCodexAuthHomePath(providerOptions);
         const resolvedCodexAccountId = resolveCodexAccountId(providerOptions);
-        const instanceLaunchEnv = providerOptions?.codex?.environment
-          ? { ...process.env, ...providerOptions.codex.environment }
-          : process.env;
-        const accountPaths = yield* Effect.try({
+        const trustedProcessEnv = { ...process.env };
+        const instanceLaunchEnv = {
+          ...trustedProcessEnv,
+          ...providerOptions?.codex?.environment,
+        };
+        const authTracking = yield* Effect.try({
           try: () =>
-            resolveCodexTextGenerationAccountPaths({
+            prepareCodexAuthTracking({
               env: instanceLaunchEnv,
               ...(resolvedCodexHomePath ? { homePath: resolvedCodexHomePath } : {}),
               ...(resolvedCodexAuthHomePath ? { shadowHomePath: resolvedCodexAuthHomePath } : {}),
@@ -636,7 +581,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
               cause,
             }),
         });
-        const isolatedConfig = yield* readSourceCodexConfig(operation, accountPaths.sourceConfigPath);
+        const isolatedConfig = yield* readSourceCodexConfig(
+          operation,
+          authTracking.sourceConfigPath,
+        );
+        const hydratedLaunchEnv = hydrateCodexProviderCredentialEnvironment({
+          env: instanceLaunchEnv,
+          credentialEnvNames: isolatedConfig.providerEnvKeys,
+          trustedEnv: trustedProcessEnv,
+        });
         const schemaPath = yield* acquireSecureTempFile({
           directory: tempDir(),
           prefix: "synara-codex-schema-",
@@ -670,7 +623,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         const isolatedCodexHome = yield* prepareIsolatedCodexHome(
           operation,
           isolatedConfig,
-          accountPaths.authoritativeAuthFilePath,
+          authTracking.authSource,
           selectedModel,
         );
 
@@ -681,8 +634,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           const env = yield* Effect.try({
             try: () =>
               buildCodexTextGenerationChildEnv({
-                sourceEnv: instanceLaunchEnv,
-                trustedPlatformEnv: process.env,
+                sourceEnv: hydratedLaunchEnv,
+                trustedPlatformEnv: trustedProcessEnv,
                 isolatedHomePath: isolatedCodexHome.homePath,
                 isolatedTempPath: isolatedCodexHome.tempDirectoryPath,
                 providerEnvKeys: isolatedConfig.providerEnvKeys,

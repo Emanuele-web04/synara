@@ -21,6 +21,7 @@ import {
   buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
   disableCodexConfigSections,
+  hydrateCodexProviderCredentialEnvironment,
   isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
@@ -29,6 +30,39 @@ import {
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
 import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
+
+describe("hydrateCodexProviderCredentialEnvironment", () => {
+  it("hydrates only missing provider credentials without trusting shell PATH", () => {
+    const readEnvironment = vi.fn(() => ({
+      AZURE_OPENAI_API_KEY: "shell-key",
+      PATH: "/untrusted/shell/bin",
+    }));
+    const hydrated = hydrateCodexProviderCredentialEnvironment({
+      env: { PATH: "/trusted/bin" },
+      credentialEnvNames: ["AZURE_OPENAI_API_KEY"],
+      trustedEnv: { SHELL: "/bin/zsh" },
+      platform: "darwin",
+      readEnvironment,
+    });
+    expect(hydrated).toEqual({
+      PATH: "/trusted/bin",
+      AZURE_OPENAI_API_KEY: "shell-key",
+    });
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", ["AZURE_OPENAI_API_KEY"]);
+  });
+
+  it("keeps an inherited provider credential and skips shell probing", () => {
+    const readEnvironment = vi.fn();
+    const hydrated = hydrateCodexProviderCredentialEnvironment({
+      env: { AZURE_OPENAI_API_KEY: "inherited-key" },
+      credentialEnvNames: ["AZURE_OPENAI_API_KEY"],
+      platform: "linux",
+      readEnvironment,
+    });
+    expect(hydrated.AZURE_OPENAI_API_KEY).toBe("inherited-key");
+    expect(readEnvironment).not.toHaveBeenCalled();
+  });
+});
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", async () => {

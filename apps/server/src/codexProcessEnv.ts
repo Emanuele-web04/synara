@@ -5,7 +5,15 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import * as fs from "node:fs/promises";
-import { lstatSync, readFileSync, readlinkSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  type BigIntStats,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -73,6 +81,21 @@ export interface CodexProcessLaunchContext {
   readonly appServerArgs: readonly string[];
 }
 
+export type CodexPreparedAuthSource =
+  | { readonly kind: "missing" }
+  | {
+      readonly kind: "bound";
+      readonly canonicalHomePath: string;
+      readonly device: bigint;
+      readonly inode: bigint;
+    };
+
+export interface PreparedCodexAuthTracking {
+  readonly sourceConfigPath: string;
+  readonly authoritativeAuthFilePath: string;
+  readonly authSource: CodexPreparedAuthSource;
+}
+
 export interface CodexProcessEnvInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
@@ -85,6 +108,36 @@ export interface CodexProcessEnvInput {
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
   readonly expectedSharedContinuationGeneration?: string;
   readonly allowLegacySharedContinuationMigration?: boolean;
+}
+
+export function hydrateCodexProviderCredentialEnvironment(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly credentialEnvNames: ReadonlyArray<string>;
+  readonly trustedEnv?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+  readonly readEnvironment?: ShellEnvironmentReader;
+}): NodeJS.ProcessEnv {
+  const env = { ...input.env };
+  const missingNames = [...new Set(input.credentialEnvNames)].filter((name) => !env[name]?.trim());
+  const platform = input.platform ?? process.platform;
+  if (missingNames.length === 0 || (platform !== "darwin" && platform !== "linux")) {
+    return env;
+  }
+  try {
+    const shell = resolveLoginShell(platform, (input.trustedEnv ?? process.env).SHELL);
+    if (!shell) return env;
+    const shellEnvironment = (input.readEnvironment ?? readEnvironmentFromLoginShell)(
+      shell,
+      missingNames,
+    );
+    for (const name of missingNames) {
+      const value = shellEnvironment[name];
+      if (value?.trim()) env[name] = value;
+    }
+  } catch {
+    // Login-shell probing is best effort; inherited provider credentials stay authoritative.
+  }
+  return env;
 }
 
 export function buildCodexAppServerArgs(sourceHomePath: string): readonly string[] {
@@ -158,6 +211,175 @@ function assertCodexSqliteHomeMatchesSource(input: {
       `Codex config sqlite_home at ${displayPath} must resolve to the source CODEX_HOME ${path.resolve(input.sourceHomePath)} so Synara account overlays share one continuation database.`,
     );
   }
+}
+
+type CodexAuthCredentialsStoreMode = "file" | "keyring" | "auto" | "ephemeral";
+
+export function readEffectiveCodexAuthCredentialsStoreMode(
+  config: string,
+): CodexAuthCredentialsStoreMode {
+  const mode = parseManagedCodexConfig(config).root.cli_auth_credentials_store;
+  if (mode === undefined) return "file";
+  if (mode === "file" || mode === "keyring" || mode === "auto" || mode === "ephemeral") {
+    return mode;
+  }
+  throw new Error(
+    "Codex cli_auth_credentials_store must be one of file, keyring, auto, or ephemeral.",
+  );
+}
+
+function assertManagedCodexHomeUsesObservableAuth(input: {
+  readonly sourceConfig: string;
+  readonly accountId?: string;
+}): void {
+  const mode = readEffectiveCodexAuthCredentialsStoreMode(input.sourceConfig);
+  if (mode !== "keyring" && mode !== "auto") return;
+  const accountLabel = input.accountId?.trim() || "default";
+  throw new Error(
+    `Codex account '${accountLabel}' uses cli_auth_credentials_store = "${mode}". Synara-managed Codex homes require file-backed Codex auth so account changes can invalidate long-lived app-server sessions; set the root cli_auth_credentials_store = "file" before starting this account.`,
+  );
+}
+
+function filesystemErrorCode(cause: unknown): string | undefined {
+  return typeof cause === "object" && cause !== null && "code" in cause
+    ? String((cause as { readonly code?: unknown }).code ?? "")
+    : undefined;
+}
+
+function validateCodexPrivateHomePath(
+  sourceHomePath: string,
+  privateHomePath: string,
+  label: "shadow home" | "overlay home",
+): void {
+  if (codexPathsReferenceSameLocation(sourceHomePath, privateHomePath)) {
+    throw new Error(`Codex account ${label} must be different from CODEX_HOME.`);
+  }
+  try {
+    if (lstatSync(privateHomePath).isSymbolicLink()) {
+      throw new Error(
+        `Codex account ${label} at ${privateHomePath} is a symlink; it must be a real directory so accounts cannot alias each other's auth.`,
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("must be a real directory")) throw cause;
+    if (filesystemErrorCode(cause) !== "ENOENT") throw cause;
+  }
+}
+
+function assertCodexPrivateAuthIsNotSymlink(privateHomePath: string): void {
+  const authPath = path.join(privateHomePath, "auth.json");
+  try {
+    if (lstatSync(authPath).isSymbolicLink()) {
+      throw new Error(
+        `Codex account private state at ${authPath} is a symlink; it must be a real file so accounts cannot alias each other's private state.`,
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof Error && cause.message.includes("private state")) throw cause;
+    if (filesystemErrorCode(cause) !== "ENOENT") throw cause;
+  }
+}
+
+function bindCodexPreparedAuthSource(
+  authoritativeAuthHomePath: string,
+  requireRealDirectory: boolean,
+): CodexPreparedAuthSource {
+  let initialLogicalStat: BigIntStats;
+  try {
+    initialLogicalStat = lstatSync(authoritativeAuthHomePath, { bigint: true });
+  } catch (cause) {
+    if (filesystemErrorCode(cause) === "ENOENT") return { kind: "missing" };
+    throw cause;
+  }
+  if (requireRealDirectory && initialLogicalStat.isSymbolicLink()) {
+    throw new Error(
+      `Codex account auth home at ${authoritativeAuthHomePath} is a symlink; it must remain bound to one account directory.`,
+    );
+  }
+  if (!initialLogicalStat.isDirectory() && !initialLogicalStat.isSymbolicLink()) {
+    throw new Error(`Codex account auth home at ${authoritativeAuthHomePath} is not a directory.`);
+  }
+  try {
+    const canonicalHomePath = realpathSync(authoritativeAuthHomePath);
+    const canonicalStat = lstatSync(canonicalHomePath, { bigint: true });
+    const finalLogicalStat = lstatSync(authoritativeAuthHomePath, { bigint: true });
+    const finalTargetStat = statSync(authoritativeAuthHomePath, { bigint: true });
+    const logicalEntryIsStable =
+      initialLogicalStat.dev === finalLogicalStat.dev &&
+      initialLogicalStat.ino === finalLogicalStat.ino &&
+      initialLogicalStat.mode === finalLogicalStat.mode;
+    const canonicalDirectoryIsStable =
+      canonicalStat.isDirectory() &&
+      !canonicalStat.isSymbolicLink() &&
+      canonicalStat.dev === finalTargetStat.dev &&
+      canonicalStat.ino === finalTargetStat.ino;
+    if (!logicalEntryIsStable || !canonicalDirectoryIsStable) {
+      throw new Error(
+        `Codex account auth home at ${authoritativeAuthHomePath} changed while its identity was being bound; retry the request.`,
+      );
+    }
+    return {
+      kind: "bound",
+      canonicalHomePath,
+      device: canonicalStat.dev,
+      inode: canonicalStat.ino,
+    };
+  } catch (cause) {
+    if (cause instanceof Error && /changed while its identity/.test(cause.message)) throw cause;
+    throw new Error(
+      `Codex account auth home at ${authoritativeAuthHomePath} could not be bound safely.`,
+      { cause },
+    );
+  }
+}
+
+export function prepareCodexAuthTracking(
+  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+): PreparedCodexAuthTracking {
+  const env = { ...(input.env ?? process.env) };
+  const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
+  const ambientHomePath = resolveBaseCodexHomePath(env);
+  const hasDedicatedAccountHome =
+    Boolean(input.homePath?.trim()) &&
+    !codexPathsReferenceSameLocation(sourceHomePath, ambientHomePath);
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(env, input.shadowHomePath)
+    : undefined;
+  const accountSegment = resolveCodexHomeOverlayAccountSegment({
+    homePath: sourceHomePath,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+  });
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(env, sourceHomePath, accountSegment);
+  if (shadowHomePath) {
+    validateCodexPrivateHomePath(sourceHomePath, shadowHomePath, "shadow home");
+    assertCodexPrivateAuthIsNotSymlink(shadowHomePath);
+  }
+  if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
+    validateCodexPrivateHomePath(sourceHomePath, overlayHomePath, "overlay home");
+    assertCodexPrivateAuthIsNotSymlink(overlayHomePath);
+  }
+  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  assertManagedCodexHomeUsesObservableAuth({
+    sourceConfig,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+  });
+  const authoritativeAuthHomePath =
+    shadowHomePath ??
+    (accountSegment && !hasDedicatedAccountHome ? overlayHomePath : sourceHomePath);
+  const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
+  const requiresRealPrivateHome = Boolean(
+    shadowHomePath || (accountSegment && !hasDedicatedAccountHome),
+  );
+  return {
+    sourceConfigPath,
+    authoritativeAuthFilePath,
+    authSource: bindCodexPreparedAuthSource(
+      authoritativeAuthHomePath,
+      requiresRealPrivateHome,
+    ),
+  };
 }
 
 function isSafePluginSectionHeader(value: unknown): value is string {

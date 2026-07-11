@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1354,6 +1354,16 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           );
 
         expect(generated.subject).toBe("Add important change");
+        for (const entry of [
+          "sessions",
+          "archived_sessions",
+          "history.jsonl",
+          "session_index.jsonl",
+          "synara-shared-continuation-v1.json",
+          "synara-shared-continuation-v2.json",
+        ]) {
+          expect(existsSync(path.join(customCodexHome, entry))).toBe(false);
+        }
       }),
     ),
   );
@@ -1828,7 +1838,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("does not copy symlinked account-overlay auth into text-generation homes", () =>
+  it.effect("rejects symlinked account-overlay auth without deleting it", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({
@@ -1878,19 +1888,78 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         );
 
         const textGeneration = yield* TextGeneration;
-        const generated = yield* textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/codex-account",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          providerOptions: {
-            codex: {
-              accountId: "work",
+        const error = yield* textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/codex-account",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            providerOptions: {
+              codex: {
+                accountId: "work",
+              },
             },
-          },
-        });
+          })
+          .pipe(Effect.flip);
 
-        expect(generated.subject).toBe("Add important change");
+        expect(error.message).toMatch(/private state.*symlink/i);
+        expect(lstatSync(path.join(accountOverlayHome, "auth.json")).isSymbolicLink()).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("rejects a symlinked account-overlay directory before reading auth", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "synara-shared-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"auth_mode":"apikey","OPENAI_API_KEY":"default-account"}',
+        );
+
+        const instanceEnv = { ...process.env, CODEX_HOME: sharedCodexHome };
+        const accountSegment = resolveCodexHomeOverlayAccountSegment({
+          homePath: sharedCodexHome,
+          accountId: "work",
+        });
+        expect(accountSegment).toBeDefined();
+        const accountOverlayHome = resolveSynaraCodexHomeOverlayPath(
+          instanceEnv,
+          sharedCodexHome,
+          accountSegment,
+        );
+        yield* fs.makeDirectory(path.dirname(accountOverlayHome), { recursive: true });
+        symlinkSync(sharedCodexHome, accountOverlayHome, "dir");
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => rmSync(accountOverlayHome, { recursive: true, force: true })),
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const error = yield* textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/codex-account",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            providerOptions: {
+              codex: {
+                accountId: "work",
+                environment: { CODEX_HOME: sharedCodexHome },
+              },
+            },
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toMatch(/account overlay home.*(different|symlink)/i);
       }),
     ),
   );

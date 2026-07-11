@@ -19,6 +19,8 @@ import { join } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
+import type { CodexPreparedAuthSource } from "../../codexProcessEnv.ts";
+
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const CODEX_SYSTEM_CONFIG_PATHS = [
@@ -632,6 +634,55 @@ function stableAuthStat(left: ReturnType<typeof fstatSync>, right: ReturnType<ty
   );
 }
 
+function filesystemErrorCode(cause: unknown): string | undefined {
+  return typeof cause === "object" && cause !== null && "code" in cause
+    ? String((cause as { readonly code?: unknown }).code ?? "")
+    : undefined;
+}
+
+function assertBoundAuthHome(source: Extract<CodexPreparedAuthSource, { kind: "bound" }>): void {
+  try {
+    const current = lstatSync(source.canonicalHomePath, { bigint: true });
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.dev !== source.device ||
+      current.ino !== source.inode
+    ) {
+      throw new CodexTextGenerationAuthError(
+        "The Codex account auth home changed after account selection; retry the request.",
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof CodexTextGenerationAuthError) throw cause;
+    throw new CodexTextGenerationAuthError(
+      "The selected Codex account auth home can no longer be verified safely; retry the request.",
+      { cause },
+    );
+  }
+}
+
+function readStableBoundAuthFile(
+  source: Extract<CodexPreparedAuthSource, { kind: "bound" }>,
+): Buffer | undefined {
+  assertBoundAuthHome(source);
+  const authFilePath = join(source.canonicalHomePath, "auth.json");
+  try {
+    lstatSync(authFilePath);
+  } catch (cause) {
+    assertBoundAuthHome(source);
+    if (filesystemErrorCode(cause) === "ENOENT") return undefined;
+    throw new CodexTextGenerationAuthError("Codex auth.json could not be checked safely.", {
+      cause,
+    });
+  }
+  const content = readStableRegularFile(authFilePath);
+  // A path-based open cannot pin parent components. Verify the canonical
+  // directory inode again before any captured credentials are published.
+  assertBoundAuthHome(source);
+  return content;
+}
+
 function readStableRegularFile(filePath: string): Buffer {
   const initial = lstatSync(filePath);
   if (initial.isSymbolicLink()) {
@@ -737,12 +788,13 @@ export type CodexTextGenerationAuthSnapshot = {
  * and the independent candidate is discarded with the scoped home.
  */
 export function prepareCodexTextGenerationAuthSnapshot(
-  authoritativeAuthFilePath: string,
+  authSource: CodexPreparedAuthSource,
   isolatedHomePath: string,
   options: { readonly nowMs?: number; readonly minimumValidityMs?: number } = {},
 ): CodexTextGenerationAuthSnapshot | undefined {
-  if (!existsSync(authoritativeAuthFilePath)) return undefined;
-  const content = readStableRegularFile(authoritativeAuthFilePath);
+  if (authSource.kind === "missing") return undefined;
+  const content = readStableBoundAuthFile(authSource);
+  if (!content) return undefined;
   let auth: UnknownRecord;
   try {
     const parsed = JSON.parse(content.toString("utf8"));
