@@ -23,6 +23,24 @@ describe("claudeProcessEnv", () => {
     VERTEX_REGION_CLAUDE_FUTURE_MODEL: "account-region",
   };
 
+  function withAmbientEnvironment<T>(
+    ambient: Readonly<Record<string, string>>,
+    run: () => T,
+  ): T {
+    const previous = Object.fromEntries(
+      Object.keys(ambient).map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, ambient);
+    try {
+      return run();
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+
   it("prefers local Claude CLI credentials over stale direct request credentials", () => {
     const env = {
       PATH: "/bin",
@@ -114,6 +132,60 @@ describe("claudeProcessEnv", () => {
     assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-auth-token");
   });
 
+  it("treats an instance-only environment as an account isolation boundary", () => {
+    const result = withAmbientEnvironment(
+      {
+        ANTHROPIC_API_KEY: "stale-inherited-key",
+        AWS_PROFILE: "account-a-profile",
+        GOOGLE_APPLICATION_CREDENTIALS: "/account-a/google.json",
+        AZURE_CLIENT_SECRET: "account-a-azure-secret",
+        HTTPS_PROXY: "https://shared-network-proxy.example.test",
+      },
+      () => buildClaudeInstanceProcessEnv(undefined, { ANTHROPIC_AUTH_TOKEN: "instance-token" }),
+    );
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-token");
+    assert.equal(result.AWS_PROFILE, undefined);
+    assert.equal(result.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+    assert.equal(result.AZURE_CLIENT_SECRET, undefined);
+    assert.equal(result.HTTPS_PROXY, "https://shared-network-proxy.example.test");
+  });
+
+  it("preserves cloud auth explicitly supplied by an environment-only instance", () => {
+    const result = withAmbientEnvironment(
+      {
+        ANTHROPIC_API_KEY: "account-a-key",
+        AWS_PROFILE: "account-a-profile",
+        GOOGLE_APPLICATION_CREDENTIALS: "/account-a/google.json",
+        AZURE_CLIENT_SECRET: "account-a-azure-secret",
+      },
+      () =>
+        buildClaudeInstanceProcessEnv(undefined, {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_PROFILE: "account-b-profile",
+          GOOGLE_APPLICATION_CREDENTIALS: "/account-b/google.json",
+          AZURE_CLIENT_SECRET: "account-b-azure-secret",
+        }),
+    );
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.CLAUDE_CODE_USE_BEDROCK, "1");
+    assert.equal(result.AWS_PROFILE, "account-b-profile");
+    assert.equal(result.GOOGLE_APPLICATION_CREDENTIALS, "/account-b/google.json");
+    assert.equal(result.AZURE_CLIENT_SECRET, "account-b-azure-secret");
+  });
+
+  it("treats an explicitly empty instance environment as an isolation boundary", () => {
+    const result = withAmbientEnvironment(
+      { ANTHROPIC_API_KEY: "account-a-key", AWS_PROFILE: "account-a-profile" },
+      () => buildClaudeInstanceProcessEnv(undefined, {}),
+    );
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.AWS_PROFILE, undefined);
+  });
+
   it("overlays the provider instance home", () => {
     const result = buildClaudeInstanceProcessEnv("/home/work-account");
 
@@ -131,11 +203,7 @@ describe("claudeProcessEnv", () => {
       HTTPS_PROXY: "https://shared-network-proxy.example.test",
       NODE_EXTRA_CA_CERTS: "/shared/network-ca.pem",
     } satisfies NodeJS.ProcessEnv;
-    const previous = Object.fromEntries(
-      Object.keys(inherited).map((key) => [key, process.env[key]]),
-    );
-    Object.assign(process.env, inherited);
-    try {
+    withAmbientEnvironment(inherited, () => {
       const result = buildClaudeInstanceProcessEnv("/home/account-b");
 
       assert.equal(result.HOME, "/home/account-b");
@@ -149,12 +217,7 @@ describe("claudeProcessEnv", () => {
       }
       assert.equal(result.HTTPS_PROXY, "https://shared-network-proxy.example.test");
       assert.equal(result.NODE_EXTRA_CA_CERTS, "/shared/network-ca.pem");
-    } finally {
-      for (const [key, value] of Object.entries(previous)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
+    });
   });
 
   it("preserves auth and backend routing explicitly configured by the selected instance", () => {
