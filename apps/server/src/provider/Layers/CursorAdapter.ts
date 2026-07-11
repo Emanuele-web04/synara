@@ -114,6 +114,15 @@ import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 
 const PROVIDER = "cursor" as const;
 export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
+
+export function stampCursorTerminalEventInstance(
+  event: ProviderRuntimeEvent,
+  providerInstanceId: ProviderSession["providerInstanceId"],
+): ProviderRuntimeEvent {
+  return providerInstanceId && event.providerInstanceId !== providerInstanceId
+    ? { ...event, providerInstanceId }
+    : event;
+}
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 // Backstop for an alive-but-silent cursor-agent child: if a turn produces no
@@ -674,13 +683,18 @@ export function makeCursorAdapter(
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
-        yield* offerRuntimeEvent({
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+        yield* offerRuntimeEvent(
+          stampCursorTerminalEventInstance(
+            {
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              payload: { exitKind: "graceful" },
+            },
+            ctx.session.providerInstanceId,
+          ),
+        );
       });
 
     const startSession: CursorAdapterShape["startSession"] = (input) =>

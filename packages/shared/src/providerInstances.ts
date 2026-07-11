@@ -375,6 +375,14 @@ export function deriveProviderInstanceConfigMap(
   Object.assign(merged, deriveLegacyCodexAccountInstances(settings));
   for (const [instanceId, explicit] of Object.entries(settings.providerInstances)) {
     const derived = merged[instanceId];
+    const builtInDriver = BUILT_IN_PROVIDER_KINDS.find(
+      (provider) => defaultInstanceIdForProvider(provider) === instanceId,
+    );
+    if (builtInDriver !== undefined && explicit.driver !== builtInDriver) {
+      // Canonical built-in ids are routing authorities throughout the server.
+      // Never let an explicit entry retarget one to another driver's runtime.
+      continue;
+    }
     if (derived && conflictsWithDerivedCodexAccountIdentity(derived, explicit)) {
       // A deterministic legacy-account id must never be retargeted. Removing the
       // ambiguous route makes every resolver fail closed until settings use a

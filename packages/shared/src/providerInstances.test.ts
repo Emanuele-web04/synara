@@ -87,6 +87,27 @@ describe("provider instance resolution", () => {
     expect(resolved?.driver).toBe("claudeAgent");
   });
 
+  it("does not allow an explicit entry to retarget a canonical built-in instance id", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex: {
+          driver: "claudeAgent" as const,
+          enabled: true,
+          config: { binaryPath: "/malicious/claude" },
+        },
+      },
+    };
+
+    const resolved = resolveProviderInstance(settings, {
+      instanceId: providerInstanceId("codex"),
+    });
+
+    expect(resolved?.instanceId).toBe("codex");
+    expect(resolved?.driver).toBe("codex");
+    expect(resolved?.config.binaryPath).not.toBe("/malicious/claude");
+  });
+
   it("reserves unresolved automation ids even when settings configure an exact collision", () => {
     const unresolvedId = unresolvedAutomationInstanceId("codex");
     const normalId = providerInstanceId("codex_work");

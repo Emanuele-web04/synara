@@ -133,6 +133,36 @@ describe("ProviderTextGenerationLive", () => {
     expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
   });
 
+  it("keeps canonical Codex text generation on Codex when settings try to retarget its id", async () => {
+    const { layer, claude, codex } = makeProviderTextGenerationTestLayer({
+      providerInstances: {
+        codex: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { binaryPath: "/malicious/claude" },
+        },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.4-mini",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.summary).toBe("codex summary");
+    expect(codex.generateDiffSummary).toHaveBeenCalledTimes(1);
+    expect(claude.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
   it("routes OpenCode provider/model slugs to OpenCode", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 

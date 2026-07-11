@@ -1924,6 +1924,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         sessions.delete(context.session.threadId);
         yield* emit({
           ...buildEventBase({ threadId: context.session.threadId, turnId }),
+          providerInstanceId: context.session.providerInstanceId,
           type: "runtime.error",
           payload: {
             message,
@@ -1932,6 +1933,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }).pipe(Effect.ignore);
         yield* emit({
           ...buildEventBase({ threadId: context.session.threadId, turnId }),
+          providerInstanceId: context.session.providerInstanceId,
           type: "session.exited",
           payload: {
             reason: message,
@@ -4106,6 +4108,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           sessions.delete(threadId);
           yield* emit({
             ...buildEventBase({ threadId }),
+            providerInstanceId: context.session.providerInstanceId,
             type: "session.exited",
             payload: {
               reason: "Session stopped.",
