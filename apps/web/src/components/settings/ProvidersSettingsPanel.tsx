@@ -44,9 +44,11 @@ import {
 
 import {
   getCodexAccountOptions,
+  getManageableProviderInstances,
   getProviderInstanceOptions,
   mergeProviderInstanceConfigPatch,
   normalizeCodexAccounts,
+  removeManageableProviderInstance,
   type AppSettings,
   type AppSettingsBinding,
   type CodexAccountSettings,
@@ -1016,9 +1018,7 @@ function ProviderInstancesControl(props: {
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
   const provider = props.config.provider;
-  const instances = Object.entries(props.settings.providerInstances).filter(
-    ([instanceId, config]) => config.driver === provider && instanceId !== provider,
-  );
+  const instances = getManageableProviderInstances(props.settings, provider);
   const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
 
   const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
@@ -1058,7 +1058,14 @@ function ProviderInstancesControl(props: {
       readonly config?: Record<string, unknown> | undefined;
     },
   ) => {
-    const existing = props.settings.providerInstances[instanceId];
+    const existing: ProviderInstanceConfig | null =
+      props.settings.providerInstances[instanceId] ??
+      (() => {
+        const derived = getProviderInstanceOptions(props.settings).find(
+          (instance) => instance.instanceId === instanceId,
+        );
+        return derived ? ({ driver: derived.driver } as ProviderInstanceConfig) : null;
+      })();
     if (!existing) return;
     const {
       displayName: existingDisplayName,
@@ -1123,7 +1130,7 @@ function ProviderInstancesControl(props: {
         </Button>
       </div>
 
-      {instances.map(([instanceId, instance]) => {
+      {instances.map(({ instanceId, instance }) => {
         const instanceStatus = providerInstanceStatusSummary(
           props.providerStatusByInstance.get(instanceId),
         );
@@ -1162,12 +1169,9 @@ function ProviderInstancesControl(props: {
                   size="xs"
                   variant="ghost"
                   onClick={() => {
-                    const next = { ...props.settings.providerInstances } as Record<
-                      string,
-                      ProviderInstanceConfig
-                    >;
-                    delete next[instanceId];
-                    updateInstances(next);
+                    props.updateSettings(
+                      removeManageableProviderInstance(props.settings, instanceId),
+                    );
                   }}
                 >
                   <XIcon className="size-3.5" />

@@ -68,7 +68,12 @@ import {
 } from "~/lib/gitReactQuery";
 import { LoaderCircleIcon, RefreshCwIcon, TemporaryThreadIcon } from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
-import { findProviderStatus } from "~/lib/providerAvailability";
+import {
+  findProviderStatus,
+  resolveVoiceTranscriptionTarget,
+} from "~/lib/providerAvailability";
+import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
+import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -1334,11 +1339,10 @@ export default function ChatView({
     () => providerInstances.filter((instance) => instance.provider === selectedProvider),
     [providerInstances, selectedProvider],
   );
-  const selectedProviderInstanceLabel =
-    selectedProviderInstances.find((instance) => instance.instanceId === selectedProviderInstanceId)
-      ?.label ??
-    selectedProviderInstances[0]?.label ??
-    "Default";
+  const selectedProviderInstanceLabel = resolveProviderInstanceLabel(
+    selectedProviderInstances,
+    selectedProviderInstanceId,
+  );
   const showProviderInstancePicker =
     selectedProvider === "codex" ||
     selectedProvider === "claudeAgent" ||
@@ -2327,15 +2331,17 @@ export default function ChatView({
     dismissedProviderHealthBannerKeys.includes(activeProviderHealthBannerDismissalKey)
       ? null
       : activeProviderStatus;
-  const voiceProviderStatus = useMemo(
+  const voiceProviderTarget = useMemo(
     () =>
-      findProviderStatus(
-        providerStatuses,
-        "codex",
-        selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
-      ),
-    [providerStatuses, selectedProvider, selectedProviderInstanceId],
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider,
+        selectedProviderInstanceId,
+      }),
+    [providerInstances, providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
+  const voiceProviderStatus = voiceProviderTarget?.status ?? null;
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = isGroupContainer ? null : (activeThread?.worktreePath ?? null);
@@ -2713,6 +2719,7 @@ export default function ChatView({
     threadId,
     selectedProvider,
     selectedProviderInstanceId,
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: pendingUserInputs.length,
     onTranscriptReady: appendVoiceTranscriptToComposer,
@@ -2924,7 +2931,10 @@ export default function ChatView({
     latestTurnSettled,
     codexHomePath: settings.codexHomePath || null,
     providerOptions: providerOptionsForDispatch ?? null,
-    textGenerationModelSelection: selectedModelSelection,
+    textGenerationModelSelection: resolveAuxiliaryTextGenerationSelection({
+      provider: selectedProvider,
+      modelSelection: selectedModelSelection,
+    }),
   });
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,

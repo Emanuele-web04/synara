@@ -42,7 +42,7 @@ async function renderPalette(searchThread: SidebarSearchThread = thread) {
         onOpenUsageSettings={vi.fn()}
         onOpenProject={vi.fn()}
         onOpenThread={onOpenThread}
-        importProviders={[]}
+        importTargets={[]}
         onImportThread={vi.fn().mockResolvedValue(undefined)}
         onImportProjects={vi.fn()}
       />
@@ -130,7 +130,7 @@ it("opens a source page for importing projects and hands the chosen source to th
           onOpenUsageSettings={vi.fn()}
           onOpenProject={vi.fn()}
           onOpenThread={vi.fn()}
-          importProviders={[]}
+          importTargets={[]}
           onImportThread={vi.fn().mockResolvedValue(undefined)}
           onImportProjects={onImportProjects}
         />
