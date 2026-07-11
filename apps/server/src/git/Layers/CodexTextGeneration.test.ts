@@ -2,19 +2,13 @@
 // Purpose: Verifies isolated Codex text generation, account auth selection, and CLI safety.
 // Layer: Server text-generation integration tests.
 
-import {
-  copyFileSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Duration, Effect, Fiber, FileSystem, Layer, Path } from "effect";
+import { TestClock } from "effect/testing";
 import { expect } from "vitest";
 
 import {
@@ -22,13 +16,7 @@ import {
   resolveSynaraCodexHomeOverlayPath,
 } from "../../codexHomePaths.ts";
 import { ServerConfig } from "../../config.ts";
-import {
-  CodexTextGenerationAuthConflictError,
-  CodexTextGenerationLive,
-  prepareCodexTextGenerationAuthMirror,
-  reconcileCodexTextGenerationAuthMirror,
-  sanitizeCodexConfigForTextGeneration,
-} from "./CodexTextGeneration.ts";
+import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "../Errors.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 
@@ -55,6 +43,22 @@ function acquireCodexEnvLock() {
   });
 }
 
+function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (existsSync(path)) {
+        resolve();
+      } else if (Date.now() - startedAt >= timeoutMs) {
+        reject(new Error(`Timed out waiting for test marker: ${path}`));
+      } else {
+        setTimeout(poll, 10);
+      }
+    };
+    poll();
+  });
+}
+
 function makeFakeCodexBinary(dir: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -68,6 +72,7 @@ function makeFakeCodexBinary(dir: string) {
       [
         "#!/bin/sh",
         'output_path=""',
+        'schema_path=""',
         "while [ $# -gt 0 ]; do",
         '  if [ "$1" = "--image" ]; then',
         "    shift",
@@ -92,6 +97,10 @@ function makeFakeCodexBinary(dir: string) {
         '  if [ "$1" = "--output-last-message" ]; then',
         "    shift",
         '    output_path="$1"',
+        "  fi",
+        '  if [ "$1" = "--output-schema" ]; then',
+        "    shift",
+        '    schema_path="$1"',
         "  fi",
         "  shift",
         "done",
@@ -160,10 +169,30 @@ function makeFakeCodexBinary(dir: string) {
         '    printf "%s\\n" "user extension config leaked into CODEX_HOME" >&2',
         "    exit 17",
         "  fi",
+        '  if grep -E -- "^(notify|sqlite_home|instructions)[[:space:]]*=|^\\[(mcp_servers|projects|shell_environment_policy)" "$CODEX_HOME/config.toml" >/dev/null; then',
+        '    printf "%s\\n" "executable or unrelated config leaked into CODEX_HOME" >&2',
+        "    exit 22",
+        "  fi",
         '  if [ -e "$CODEX_HOME/skills" ] || [ -e "$CODEX_HOME/plugins" ]; then',
         '    printf "%s\\n" "user extension assets leaked into CODEX_HOME" >&2',
         "    exit 18",
         "  fi",
+        "fi",
+        'if [ "$SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION" = "1" ]; then',
+        '  if [ "$CODEX_SQLITE_HOME" != "$CODEX_HOME" ]; then',
+        '    printf "%s\\n" "CODEX_SQLITE_HOME is not isolated with CODEX_HOME" >&2',
+        "    exit 20",
+        "  fi",
+        '  node -e \'const fs=require("node:fs"); const [home,cwd,config,schema,output,forbidden]=process.argv.slice(1); const mode=(p)=>fs.statSync(p).mode & 0o777; if (home===forbidden || cwd===forbidden || fs.readdirSync(cwd).length!==0 || mode(home)!==0o700 || mode(cwd)!==0o700 || mode(config)!==0o600 || mode(schema)!==0o600 || mode(output)!==0o600) process.exit(1);\' "$CODEX_HOME" "$PWD" "$CODEX_HOME/config.toml" "$schema_path" "$output_path" "$SYNARA_FAKE_CODEX_FORBIDDEN_CWD" || {',
+        '    printf "%s\\n" "Codex process resources were not privately isolated" >&2',
+        "    exit 21",
+        "  }",
+        "fi",
+        'if [ -n "$SYNARA_FAKE_CODEX_RESOURCE_MANIFEST" ]; then',
+        '  node -e \'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)));\' "$SYNARA_FAKE_CODEX_RESOURCE_MANIFEST" "$CODEX_HOME" "$PWD" "$schema_path" "$output_path"',
+        "fi",
+        'if [ "$SYNARA_FAKE_CODEX_TRAP_TERM" = "1" ]; then',
+        '  exec node -e \'const fs=require("node:fs"); const [term,pid,ready]=process.argv.slice(1); fs.writeFileSync(pid,String(process.pid)); process.on("SIGTERM",()=>fs.appendFileSync(term,"TERM\\n")); fs.writeFileSync(ready,"ready"); setInterval(()=>{},1000);\' "$SYNARA_FAKE_CODEX_TERM_MARKER" "$SYNARA_FAKE_CODEX_PID_MARKER" "$SYNARA_FAKE_CODEX_READY_MARKER"',
         "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_STDERR" ]; then',
         '  printf "%s\\n" "$SYNARA_FAKE_CODEX_STDERR" >&2',
@@ -199,6 +228,14 @@ function withFakeCodexEnv<A, E, R>(
     forbidIgnoreUserConfig?: boolean;
     requireAzureProviderRouting?: boolean;
     requireNoUserExtensions?: boolean;
+    requireSecureIsolation?: boolean;
+    forbiddenCwd?: string;
+    trapTerm?: boolean;
+    termMarkerPath?: string;
+    pidMarkerPath?: string;
+    readyMarkerPath?: string;
+    resourceManifestPath?: string;
+    permissiveUmask?: boolean;
     rotatedAuth?: string;
     codexHomeConfigMustContain?: string;
     codexHomeConfigMustNotContain?: string;
@@ -236,10 +273,19 @@ function withFakeCodexEnv<A, E, R>(
         process.env.SYNARA_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
       const previousCodexHomeConfigMustNotContain =
         process.env.SYNARA_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN;
+      const previousRequireSecureIsolation = process.env.SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION;
+      const previousForbiddenCwd = process.env.SYNARA_FAKE_CODEX_FORBIDDEN_CWD;
+      const previousTrapTerm = process.env.SYNARA_FAKE_CODEX_TRAP_TERM;
+      const previousTermMarker = process.env.SYNARA_FAKE_CODEX_TERM_MARKER;
+      const previousPidMarker = process.env.SYNARA_FAKE_CODEX_PID_MARKER;
+      const previousReadyMarker = process.env.SYNARA_FAKE_CODEX_READY_MARKER;
+      const previousResourceManifest = process.env.SYNARA_FAKE_CODEX_RESOURCE_MANIFEST;
+      const previousUmask = process.umask();
 
       yield* Effect.sync(() => {
         process.env.PATH = `${binDir}:${previousPath ?? ""}`;
         process.env.SYNARA_HOME = tempDir;
+        if (input.permissiveUmask) process.umask(0);
         process.env.SYNARA_FAKE_CODEX_OUTPUT_B64 = Buffer.from(input.output, "utf8").toString(
           "base64",
         );
@@ -318,6 +364,30 @@ function withFakeCodexEnv<A, E, R>(
         } else {
           delete process.env.SYNARA_FAKE_CODEX_REQUIRE_NO_USER_EXTENSIONS;
         }
+        if (input.requireSecureIsolation) {
+          process.env.SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION = "1";
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION;
+        }
+        if (input.forbiddenCwd !== undefined) {
+          process.env.SYNARA_FAKE_CODEX_FORBIDDEN_CWD = input.forbiddenCwd;
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_FORBIDDEN_CWD;
+        }
+        if (input.trapTerm) {
+          process.env.SYNARA_FAKE_CODEX_TRAP_TERM = "1";
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_TRAP_TERM;
+        }
+        for (const [key, value] of [
+          ["SYNARA_FAKE_CODEX_TERM_MARKER", input.termMarkerPath],
+          ["SYNARA_FAKE_CODEX_PID_MARKER", input.pidMarkerPath],
+          ["SYNARA_FAKE_CODEX_READY_MARKER", input.readyMarkerPath],
+          ["SYNARA_FAKE_CODEX_RESOURCE_MANIFEST", input.resourceManifestPath],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
         if (input.rotatedAuth !== undefined) {
           process.env.SYNARA_FAKE_CODEX_ROTATED_AUTH = input.rotatedAuth;
         } else {
@@ -359,6 +429,14 @@ function withFakeCodexEnv<A, E, R>(
         previousRotatedAuth,
         previousCodexHomeConfigMustContain,
         previousCodexHomeConfigMustNotContain,
+        previousRequireSecureIsolation,
+        previousForbiddenCwd,
+        previousTrapTerm,
+        previousTermMarker,
+        previousPidMarker,
+        previousReadyMarker,
+        previousResourceManifest,
+        previousUmask,
         releaseLock,
       };
     }),
@@ -478,101 +556,26 @@ function withFakeCodexEnv<A, E, R>(
             previous.previousCodexHomeConfigMustNotContain;
         }
 
+        for (const [key, value] of [
+          ["SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION", previous.previousRequireSecureIsolation],
+          ["SYNARA_FAKE_CODEX_FORBIDDEN_CWD", previous.previousForbiddenCwd],
+          ["SYNARA_FAKE_CODEX_TRAP_TERM", previous.previousTrapTerm],
+          ["SYNARA_FAKE_CODEX_TERM_MARKER", previous.previousTermMarker],
+          ["SYNARA_FAKE_CODEX_PID_MARKER", previous.previousPidMarker],
+          ["SYNARA_FAKE_CODEX_READY_MARKER", previous.previousReadyMarker],
+          ["SYNARA_FAKE_CODEX_RESOURCE_MANIFEST", previous.previousResourceManifest],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        process.umask(previous.previousUmask);
+
         previous.releaseLock();
       }),
   );
 }
 
 it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
-  it.effect("copies rotated auth back when auth symlinks are unavailable", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const accountHome = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-codex-auth-copy-source-",
-      });
-      const isolatedHome = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-codex-auth-copy-target-",
-      });
-      const authPath = path.join(accountHome, "auth.json");
-      const initialAuth = '{"access_token":"before"}';
-      const rotatedAuth = '{"access_token":"after"}';
-      yield* fs.writeFileString(authPath, initialAuth);
-
-      const mirror = prepareCodexTextGenerationAuthMirror(authPath, isolatedHome, {
-        symlink: (() => {
-          throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
-        }) as typeof symlinkSync,
-        copyFile: copyFileSync,
-      });
-      expect(mirror?.mode).toBe("copy");
-      writeFileSync(path.join(isolatedHome, "auth.json"), rotatedAuth);
-
-      reconcileCodexTextGenerationAuthMirror(mirror);
-
-      expect(readFileSync(authPath, "utf8")).toBe(rotatedAuth);
-    }),
-  );
-
-  it.effect("preserves concurrently changed auth when fallback rotation conflicts", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const accountHome = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-codex-auth-conflict-source-",
-      });
-      const isolatedHome = yield* fs.makeTempDirectoryScoped({
-        prefix: "synara-codex-auth-conflict-target-",
-      });
-      const authPath = path.join(accountHome, "auth.json");
-      const concurrentAuth = '{"access_token":"newer-authoritative"}';
-      yield* fs.writeFileString(authPath, '{"access_token":"before"}');
-
-      const mirror = prepareCodexTextGenerationAuthMirror(authPath, isolatedHome, {
-        symlink: (() => {
-          throw Object.assign(new Error("symlinks unavailable"), { code: "EPERM" });
-        }) as typeof symlinkSync,
-        copyFile: copyFileSync,
-      });
-      writeFileSync(path.join(isolatedHome, "auth.json"), '{"access_token":"rotated"}');
-      writeFileSync(authPath, concurrentAuth);
-
-      expect(() => reconcileCodexTextGenerationAuthMirror(mirror)).toThrowError(
-        CodexTextGenerationAuthConflictError,
-      );
-      expect(readFileSync(authPath, "utf8")).toBe(concurrentAuth);
-    }),
-  );
-
-  it.effect("keeps provider routing while removing skills and plugin config", () =>
-    Effect.sync(() => {
-      const sanitized = sanitizeCodexConfigForTextGeneration(
-        [
-          'model_provider = "azure"',
-          'cli_auth_credentials_store = "ephemeral"',
-          'plugins = { "inline@local" = { enabled = true } }',
-          "[model_providers.azure]",
-          'env_key = "AZURE_OPENAI_API_KEY"',
-          "[[skills.config]]",
-          'path = "/unsafe/SKILL.md"',
-          '[plugins."unsafe@local"]',
-          "enabled = true",
-          "[features]",
-          "fast_mode = true",
-        ].join("\n"),
-      );
-
-      expect(sanitized).toContain('model_provider = "azure"');
-      expect(sanitized).toContain('cli_auth_credentials_store = "file"');
-      expect(sanitized).not.toContain('cli_auth_credentials_store = "ephemeral"');
-      expect(sanitized).toContain("[model_providers.azure]");
-      expect(sanitized).toContain("[features]");
-      expect(sanitized).not.toContain("skills.config");
-      expect(sanitized).not.toContain("plugins.");
-      expect(sanitized).not.toContain("plugins =");
-    }),
-  );
-
   it.effect("generates and sanitizes commit messages without branch by default", () =>
     withFakeCodexEnv(
       {
@@ -888,6 +891,49 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
       ),
   );
 
+  it.effect("keeps an exit-zero auth rotation when downstream output decoding fails", () => {
+    const rotatedAuth = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { account_id: "workspace-1", access_token: "after" },
+    });
+    return withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "This is not a branch payload" }),
+        requireAuthJson: true,
+        rotatedAuth,
+      },
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const accountHome = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "synara-output-error-auth-",
+        });
+        const authPath = path.join(accountHome, "auth.json");
+        yield* fileSystem.writeFileString(
+          authPath,
+          JSON.stringify({
+            auth_mode: "chatgpt",
+            tokens: { account_id: "workspace-1", access_token: "before" },
+          }),
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const error = yield* textGeneration
+          .generateBranchName({
+            cwd: process.cwd(),
+            message: "Fix websocket reconnect flake",
+            providerOptions: { codex: { homePath: accountHome } },
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(TextGenerationError);
+        expect(error.message).toContain("Codex returned invalid structured output");
+        expect(error.message).not.toContain("auth changed");
+        expect(yield* fileSystem.readFileString(authPath)).toBe(rotatedAuth);
+      }),
+    );
+  });
+
   it.effect("returns typed TextGenerationError when codex exits non-zero", () =>
     withFakeCodexEnv(
       {
@@ -933,6 +979,10 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         forbidIgnoreUserConfig: true,
         requireAzureProviderRouting: true,
         requireNoUserExtensions: true,
+        requireSecureIsolation: true,
+        forbiddenCwd: process.cwd(),
+        permissiveUmask: true,
+        codexHomeConfigMustNotContain: "sqlite_home",
       },
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -946,7 +996,14 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         yield* fs.writeFileString(
           path.join(customCodexHome, "config.toml"),
           [
+            'profile = "work"',
+            'sqlite_home = "/shared/codex.sqlite"',
+            'notify = ["/bin/sh", "-c", "unsafe"]',
+            'instructions = "unsafe inherited instructions"',
+            "",
+            "[profiles.work]",
             'model_provider = "azure"',
+            'model = "gpt-5.6-mini"',
             "",
             "[model_providers.azure]",
             'base_url = "https://example.openai.azure.com/openai"',
@@ -962,6 +1019,15 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
             "",
             "[features]",
             "fast_mode = true",
+            "",
+            "[mcp_servers.unsafe]",
+            'command = "unsafe-mcp"',
+            "",
+            '[projects."/repo"]',
+            'trust_level = "trusted"',
+            "",
+            "[shell_environment_policy]",
+            'include_only = ["SECRET"]',
             "",
           ].join("\n"),
         );
@@ -1508,3 +1574,65 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 });
+
+it.effect("escalates from TERM to KILL when a timed-out child traps TERM", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const markerDirectory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "synara-codex-term-markers-",
+    });
+    const termMarkerPath = `${markerDirectory}/term`;
+    const pidMarkerPath = `${markerDirectory}/pid`;
+    const readyMarkerPath = `${markerDirectory}/ready`;
+    const resourceManifestPath = `${markerDirectory}/resources.json`;
+
+    const requestFiber = yield* withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "never written", body: "" }),
+        trapTerm: true,
+        termMarkerPath,
+        pidMarkerPath,
+        readyMarkerPath,
+        resourceManifestPath,
+      },
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        const requestExit = yield* textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/timeout",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+          })
+          .pipe(Effect.exit);
+        const resourcePaths = JSON.parse(
+          readFileSync(resourceManifestPath, "utf8"),
+        ) as readonly string[];
+        return {
+          requestExit,
+          leakedResourcePaths: resourcePaths.filter(existsSync),
+        };
+      }),
+    ).pipe(Effect.forkChild({ startImmediately: true }));
+
+    yield* Effect.promise(() => waitForFile(readyMarkerPath));
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust(Duration.millis(180_000));
+    if (process.platform !== "win32") {
+      yield* Effect.promise(() => waitForFile(termMarkerPath));
+    } else {
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
+    }
+    yield* TestClock.adjust(Duration.millis(1_500));
+    const result = yield* Fiber.join(requestFiber);
+
+    expect(result.requestExit._tag).toBe("Failure");
+    expect(result.leakedResourcePaths).toEqual([]);
+    expect(existsSync(readyMarkerPath)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(readFileSync(termMarkerPath, "utf8")).toContain("TERM");
+    }
+    const pid = Number(readFileSync(pidMarkerPath, "utf8"));
+    expect(() => process.kill(pid, 0)).toThrow();
+  }).pipe(Effect.provide(CodexTextGenerationTestLayer)),
+);
