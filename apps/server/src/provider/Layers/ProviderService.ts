@@ -2981,21 +2981,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const requestedProviderInstanceId = input.modelSelection
           ? resolveModelSelectionInstanceId(input.modelSelection)
           : undefined;
-        if (
-          requestedProviderInstanceId !== undefined &&
-          requestedProviderInstanceId !== sourceBoundProviderInstanceId
-        ) {
-          yield* Effect.logInfo(
-            "provider native fork skipped because requested instance differs from source binding",
-            {
-              sourceThreadId: input.sourceThreadId,
-              threadId: input.threadId,
-              sourceProviderInstanceId: sourceBoundProviderInstanceId,
-              requestedProviderInstanceId,
-            },
-          );
-          return null;
-        }
         const sourceProviderInstanceId =
           requestedProviderInstanceId ?? sourceBoundProviderInstanceId;
         const hasSourceProviderInstanceBinding = bindingHasExplicitProviderInstance({
@@ -3012,7 +2997,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           sourcePersistedProviderOptions !== undefined;
         const resolvedSource = yield* resolveLaunchProviderInstance({
           operation: "ProviderService.forkThread",
-          ...providerKindConstraint(sourceBinding.provider),
           providerInstanceId: sourceProviderInstanceId,
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
           providerOptions:
@@ -3020,23 +3004,67 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             (hasSourceProviderInstanceBinding ? undefined : sourcePersistedProviderOptions),
           ...(usesPersistedSourceOptions ? { providerOptionsPrecedence: "caller" as const } : {}),
         });
+        if (resolvedSource.instance.driver !== sourceBinding.provider) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because requested instance uses another provider",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              sourceProvider: sourceBinding.provider,
+              sourceProviderInstanceId: sourceBoundProviderInstanceId,
+              requestedProvider: resolvedSource.instance.driver,
+              requestedProviderInstanceId: resolvedSource.instance.instanceId,
+            },
+          );
+          return null;
+        }
         const effectiveProviderOptions = resolvedSource.providerOptions;
         const effectiveProviderCredentialsFingerprint = credentialsFingerprintForProvider(
           resolvedSource.instance.driver,
           effectiveProviderOptions,
           credentialsFingerprintKey,
         );
-        const canReuseSourceResumeCursor = providerStartOptionsEqualForProvider(
-          resolvedSource.instance.driver,
-          credentialsFingerprintKey,
-          {
-            options: sourcePersistedProviderOptions,
-            credentialsFingerprint: readPersistedCredentialsFingerprint(
-              sourceBinding.runtimePayload,
-            ),
-          },
-          effectiveProviderOptions,
-        );
+        const hasSourceResumeCursor = hasResumeCursor(sourceBinding.resumeCursor);
+        const canReuseSourceResumeCursor =
+          hasSourceResumeCursor &&
+          persistedContinuationMatchesLaunch({
+            binding: sourceBinding,
+            provider: resolvedSource.instance.driver,
+            providerInstanceId: resolvedSource.instance.instanceId,
+            providerOptions: effectiveProviderOptions,
+            credentialsFingerprintKey,
+          });
+        if (
+          resolvedSource.instance.instanceId !== sourceBoundProviderInstanceId &&
+          !canReuseSourceResumeCursor
+        ) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because requested instance cannot reuse source continuation",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              sourceProviderInstanceId: sourceBoundProviderInstanceId,
+              requestedProviderInstanceId: resolvedSource.instance.instanceId,
+            },
+          );
+          return null;
+        }
+        if (
+          hasSourceResumeCursor &&
+          providerUsesProtectedNativeContinuation(resolvedSource.instance.driver) &&
+          !canReuseSourceResumeCursor
+        ) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because source continuation storage is incompatible",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              sourceProviderInstanceId: sourceBoundProviderInstanceId,
+              requestedProviderInstanceId: resolvedSource.instance.instanceId,
+            },
+          );
+          return null;
+        }
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
         const targetCwd = input.cwd ?? sourceCwd;
         yield* validateAutoRuntimeMode(
@@ -3061,9 +3089,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ...(effectiveProviderOptions !== undefined
               ? { providerOptions: effectiveProviderOptions }
               : {}),
-            ...(canReuseSourceResumeCursor &&
-            sourceBinding.resumeCursor !== null &&
-            sourceBinding.resumeCursor !== undefined
+            ...(canReuseSourceResumeCursor
               ? { sourceResumeCursor: sourceBinding.resumeCursor }
               : {}),
             ...(sourceCwd ? { sourceCwd } : {}),
