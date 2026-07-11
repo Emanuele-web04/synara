@@ -18,11 +18,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCodexProcessEnv,
   disableCodexConfigSections,
+  isCodexSharedContinuationStatePrepared,
   linkOrCopyCodexOverlayEntry,
   prioritizeCodexOverlayEntries,
 } from "./codexProcessEnv";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
+import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", async () => {
@@ -284,6 +286,82 @@ describe("buildCodexProcessEnv account overlays", () => {
       } satisfies NodeJS.ProcessEnv,
     };
   }
+
+  it("shares continuation state across account overlays while keeping private state separate", async () => {
+    const fixture = makeAccountFixture();
+    const personalShadowHomePath = path.join(fixture.root, "codex-shadow-personal");
+    mkdirSync(personalShadowHomePath, { recursive: true });
+    writeFileSync(path.join(personalShadowHomePath, "auth.json"), '{"account":"personal"}', "utf8");
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+
+    try {
+      const personalEnv = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: personalShadowHomePath,
+        accountId: "personal",
+        platform: "win32",
+      });
+      expect(personalEnv.CODEX_HOME).toBeTruthy();
+      expect(personalEnv.CODEX_SQLITE_HOME).toBe(fixture.homePath);
+      expect(
+        isCodexSharedContinuationStatePrepared({
+          env: fixture.env,
+          homePath: fixture.homePath,
+        }),
+      ).toBe(true);
+      const personalSessionsPath = path.join(personalEnv.CODEX_HOME!, "sessions");
+      expect(lstatSync(personalSessionsPath).isSymbolicLink()).toBe(true);
+      writeFileSync(path.join(personalSessionsPath, "thread-personal.jsonl"), "personal", "utf8");
+
+      const workEnv = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(workEnv.CODEX_HOME).not.toBe(personalEnv.CODEX_HOME);
+      expect(workEnv.CODEX_SQLITE_HOME).toBe(fixture.homePath);
+      expect(
+        readFileSync(path.join(workEnv.CODEX_HOME!, "sessions", "thread-personal.jsonl"), "utf8"),
+      ).toBe("personal");
+      expect(path.resolve(readlinkSync(path.join(workEnv.CODEX_HOME!, "auth.json")))).toBe(
+        path.resolve(path.join(fixture.shadowHomePath, "auth.json")),
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs legacy account continuation state into the shared store", async () => {
+    const fixture = makeAccountFixture();
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+    const overlayHomePath = resolveActiveCodexHomeWritePath({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+    });
+    mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
+    writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
+
+    try {
+      await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(lstatSync(path.join(overlayHomePath, "sessions")).isSymbolicLink()).toBe(true);
+      expect(readFileSync(path.join(fixture.homePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
+        "legacy",
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 
   it("links account-private auth from the shadow home instead of the shared home", async () => {
     const fixture = makeAccountFixture();

@@ -49,6 +49,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 import {
   ProviderAdapterProcessError,
@@ -90,6 +91,36 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderInstanceId = (value: string): ProviderInstanceId => value as ProviderInstanceId;
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+async function makeSharedCodexContinuationFixture(accountIds: readonly string[]) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-continuation-"));
+  const homePath = path.join(root, "codex-home");
+  const runtimeHomePath = path.join(root, "synara-runtime");
+  const environment = { SYNARA_HOME: runtimeHomePath };
+  const instanceEnvironment = [{ name: "SYNARA_HOME", value: runtimeHomePath }];
+  fs.mkdirSync(homePath, { recursive: true });
+  fs.writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+  const shadowHomePaths = new Map<string, string>();
+  for (const accountId of accountIds) {
+    const shadowHomePath = path.join(root, `codex-shadow-${accountId}`);
+    fs.mkdirSync(shadowHomePath, { recursive: true });
+    fs.writeFileSync(path.join(shadowHomePath, "auth.json"), JSON.stringify({ accountId }), "utf8");
+    shadowHomePaths.set(accountId, shadowHomePath);
+    await buildCodexProcessEnv({
+      env: { ...process.env, ...environment },
+      homePath,
+      shadowHomePath,
+      accountId,
+    });
+  }
+  return {
+    root,
+    homePath,
+    environment,
+    instanceEnvironment,
+    shadowHomePath: (accountId: string) => shadowHomePaths.get(accountId)!,
+  };
+}
 
 const providerServiceSecretBytes = new Map<string, Uint8Array>();
 const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
@@ -705,7 +736,10 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       const serverSettings = yield* ServerSettingsService;
       const sourceThreadId = asThreadId("thread-fork-source-personal");
       const targetThreadId = asThreadId("thread-fork-target-work");
-      const sharedHomePath = "/tmp/codex-fork-shared-home";
+      const fixture = yield* Effect.promise(() =>
+        makeSharedCodexContinuationFixture(["personal", "work"]),
+      );
+      const sharedHomePath = fixture.homePath;
 
       yield* serverSettings.updateSettings({
         providerInstances: {
@@ -713,17 +747,19 @@ routing.layer("ProviderServiceLive native forks", (it) => {
             driver: "codex",
             config: {
               homePath: sharedHomePath,
-              shadowHomePath: "/tmp/codex-fork-personal-auth",
+              shadowHomePath: fixture.shadowHomePath("personal"),
               accountId: "personal",
             },
+            environment: fixture.instanceEnvironment,
           },
           codex_work: {
             driver: "codex",
             config: {
               homePath: sharedHomePath,
-              shadowHomePath: "/tmp/codex-fork-work-auth",
+              shadowHomePath: fixture.shadowHomePath("work"),
               accountId: "work",
             },
+            environment: fixture.instanceEnvironment,
           },
         },
       });
@@ -745,6 +781,7 @@ routing.layer("ProviderServiceLive native forks", (it) => {
         sourceThreadId,
         threadId: targetThreadId,
         modelSelection: {
+          provider: "codex",
           instanceId: "codex_work",
           model: "gpt-5.4",
         },
@@ -759,10 +796,12 @@ routing.layer("ProviderServiceLive native forks", (it) => {
       assert.deepEqual(forkInput?.providerOptions, {
         codex: {
           homePath: sharedHomePath,
-          shadowHomePath: "/tmp/codex-fork-work-auth",
+          shadowHomePath: fixture.shadowHomePath("work"),
           accountId: "work",
+          environment: fixture.environment,
         },
       });
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }),
   );
 
@@ -5307,6 +5346,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const threadId = asThreadId("thread-instance-options-clear");
+      const fixture = yield* Effect.promise(() =>
+        makeSharedCodexContinuationFixture(["work"]),
+      );
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
         Layer.provide(persistenceLayer),
@@ -5317,10 +5359,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
             driver: "codex",
             enabled: true,
             config: {
-              homePath: "/tmp/codex-work",
-              shadowHomePath: "/tmp/codex-work-shadow",
+              homePath: fixture.homePath,
+              shadowHomePath: fixture.shadowHomePath("work"),
               accountId: "work",
             },
+            environment: fixture.instanceEnvironment,
           },
         },
       };
@@ -5329,7 +5372,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
           codex_work: {
             driver: "codex",
             enabled: true,
-            config: { homePath: "/tmp/codex-work" },
+            config: { homePath: fixture.homePath },
+            environment: fixture.instanceEnvironment,
           },
         },
       };
@@ -5399,12 +5443,17 @@ routing.layer("ProviderServiceLive routing", (it) => {
         };
         assert.equal(startPayload.providerInstanceId, "codex_work");
         assert.deepEqual(startPayload.providerOptions, {
-          codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
+          codex: {
+            homePath: fixture.homePath,
+            accountId: "codex_work",
+            environment: fixture.environment,
+          },
         });
         assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
       }
 
       fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(fixture.root, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
