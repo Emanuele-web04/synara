@@ -9,6 +9,7 @@ import {
   resolveAvailableProviderPreference,
   resolveProviderSendAvailability,
   resolveProviderSendAvailabilityWithRefresh,
+  resolveVoiceTranscriptionTarget,
 } from "./providerAvailability";
 
 const BASE_STATUS: ServerProviderStatus = {
@@ -261,6 +262,90 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         customBinaryPath: "/custom/bin/codex",
       }),
     ).toEqual(status);
+  });
+});
+
+describe("resolveVoiceTranscriptionTarget", () => {
+  const codexStatus = (
+    instanceId: string,
+    voiceTranscriptionAvailable: boolean | undefined,
+  ): ServerProviderStatus => ({
+    ...READY_STATUS,
+    provider: "codex",
+    driver: "codex",
+    instanceId,
+    displayName: instanceId,
+    ...(voiceTranscriptionAvailable === undefined ? {} : { voiceTranscriptionAvailable }),
+  });
+  const providerInstances = [
+    {
+      instanceId: "codex" as const,
+      provider: "codex" as const,
+      enabled: true,
+      isDefault: true,
+    },
+    {
+      instanceId: "codex_work" as const,
+      provider: "codex" as const,
+      enabled: true,
+      isDefault: false,
+    },
+  ];
+
+  it("uses a capable selected Codex account", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_work", true)],
+        providerInstances,
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_work",
+      })?.instanceId,
+    ).toBe("codex_work");
+  });
+
+  it("uses a secondary capable Codex account when the default cannot transcribe", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", false), codexStatus("codex_work", true)],
+        providerInstances,
+        selectedProvider: "gemini",
+        selectedProviderInstanceId: "gemini",
+      })?.instanceId,
+    ).toBe("codex_work");
+  });
+
+  it("chooses secondary accounts deterministically regardless of status arrival order", () => {
+    const instances = [
+      ...providerInstances,
+      {
+        instanceId: "codex_alpha" as const,
+        provider: "codex" as const,
+        enabled: true,
+        isDefault: false,
+      },
+    ];
+    const statuses = [
+      codexStatus("codex_work", true),
+      codexStatus("codex_alpha", true),
+      codexStatus("codex", false),
+    ];
+
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses,
+        providerInstances: instances,
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      })?.instanceId,
+    ).toBe("codex_alpha");
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [...statuses].reverse(),
+        providerInstances: [...instances].reverse(),
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      })?.instanceId,
+    ).toBe("codex_alpha");
   });
 });
 

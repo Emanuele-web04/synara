@@ -11,6 +11,10 @@ import {
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { SettingsIcon, UserIcon } from "~/lib/icons";
+import {
+  MISSING_PROVIDER_INSTANCE_LABEL,
+  resolveProviderInstanceLabel,
+} from "~/lib/providerInstancePresentation";
 import { cn } from "~/lib/utils";
 import {
   Menu,
@@ -59,10 +63,10 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
     () => props.providerInstances.filter((instance) => instance.provider === props.provider),
     [props.provider, props.providerInstances],
   );
-  const selectedInstance =
-    instances.find((instance) => instance.instanceId === props.selectedProviderInstanceId) ??
-    instances[0];
-  const selectedLabel = selectedInstance?.label ?? "Default";
+  const selectedInstance = instances.find(
+    (instance) => instance.instanceId === props.selectedProviderInstanceId,
+  );
+  const selectedLabel = resolveProviderInstanceLabel(instances, props.selectedProviderInstanceId);
   const triggerLabel = `Account: ${selectedLabel}`;
 
   const handleInstanceChange = useCallback(
@@ -100,6 +104,14 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
           value={props.selectedProviderInstanceId}
           onValueChange={handleInstanceChange}
         >
+          {!selectedInstance ? (
+            <MenuRadioItem value={props.selectedProviderInstanceId} disabled>
+              <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
+              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                Unavailable
+              </span>
+            </MenuRadioItem>
+          ) : null}
           {instances.map((instance) => {
             const availability = instance.enabled
               ? resolveLiveProviderAvailability(

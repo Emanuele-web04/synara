@@ -37,6 +37,7 @@ import {
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
   getGitTextGenerationPickerOptions,
+  getManageableProviderInstances,
   getProviderInstanceOptions,
   getUnsupportedProviderInstanceOptions,
   getServerDisabledProviders,
@@ -52,6 +53,7 @@ import {
   normalizeTerminalFontSizePx,
   patchCustomModels,
   patchCustomModelsForProviderInstance,
+  removeManageableProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
   resolveTerminalFontFamilyStack,
@@ -1293,6 +1295,83 @@ describe("getProviderInstanceOptions", () => {
         supported: false,
       },
     ]);
+  });
+
+  it("surfaces legacy derived Codex accounts as manageable rows", () => {
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(
+      getManageableProviderInstances(
+        {
+          codexAccounts: [
+            {
+              id: "work@example.com",
+              label: "Work",
+              homePath: "/Users/you/.codex-work",
+              shadowHomePath: "/Users/you/.codex-work-shadow",
+            },
+          ],
+          codexBinaryPath: "/opt/codex",
+          codexHomePath: "",
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              enabled: false,
+              config: { binaryPath: "/opt/work-codex" },
+            },
+          },
+          selectedCodexAccountId: "work@example.com",
+        },
+        "codex",
+      ),
+    ).toEqual([
+      {
+        instanceId,
+        legacyCodexAccountId: "work@example.com",
+        instance: {
+          driver: "codex",
+          displayName: "Work",
+          enabled: false,
+          config: {
+            accountId: "work@example.com",
+            binaryPath: "/opt/work-codex",
+            homePath: "/Users/you/.codex-work",
+            shadowHomePath: "/Users/you/.codex-work-shadow",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("removes a legacy Codex account and its exact-instance preferences together", () => {
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(
+      removeManageableProviderInstance(
+        {
+          codexAccounts: [
+            {
+              id: "work@example.com",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "",
+            },
+          ],
+          codexHomePath: "",
+          favorites: [{ provider: instanceId, model: "gpt-work" }],
+          providerInstances: {
+            [instanceId]: { driver: "codex", enabled: false },
+          },
+          selectedCodexAccountId: "work@example.com",
+        },
+        instanceId,
+      ),
+    ).toEqual({
+      codexAccounts: [],
+      favorites: [],
+      providerInstances: {},
+      selectedCodexAccountId: "default",
+    });
   });
 });
 

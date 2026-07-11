@@ -14,7 +14,11 @@ import {
   SettingsIcon,
   SunIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import {
+  type FilesystemBrowseResult,
+  type ProviderInstanceId,
+  type ProviderKind,
+} from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
@@ -69,6 +73,7 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { ShortcutKbd } from "./ui/shortcut-kbd";
+import type { ThreadImportTarget } from "~/lib/threadImport";
 
 export type SidebarSearchPaletteMode = "search" | "import";
 
@@ -89,14 +94,9 @@ interface SidebarSearchPaletteProps {
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
-  importProviders: readonly ImportProviderKind[];
-  onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  importTargets: readonly ThreadImportTarget[];
+  onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
 }
-
-export type ImportProviderKind = Extract<
-  ProviderKind,
-  "codex" | "claudeAgent" | "cursor" | "opencode"
->;
 
 function actionHandler(
   actionId: string,
@@ -352,17 +352,19 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
   const [query, setQuery] = useState("");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
-  const [importProviderState, setImportProvider] = useState<ImportProviderKind>(
-    props.importProviders[0] ?? "codex",
+  const [importTargetId, setImportTargetId] = useState<ProviderInstanceId | null>(
+    props.importTargets[0]?.instanceId ?? null,
   );
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   // Derived fallback (no syncing effect): an unavailable provider renders as
   // the first available one, and the user's pick resurfaces if it comes back.
-  const importProvider = props.importProviders.includes(importProviderState)
-    ? importProviderState
-    : (props.importProviders[0] ?? "codex");
+  const importTarget =
+    props.importTargets.find((target) => target.instanceId === importTargetId) ??
+    props.importTargets[0] ??
+    null;
+  const importProvider = importTarget?.provider ?? "codex";
   // Error keyed to the query it was produced for: editing the query derives
   // straight back to null with no state-clearing effect.
   const [addProjectErrorState, setAddProjectErrorState] = useState<{
@@ -386,7 +388,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     const timeoutId = window.setTimeout(() => {
       setQuery("");
       setHighlightedItemValue(null);
-      setImportProvider(props.importProviders[0] ?? "codex");
+      setImportTargetId(props.importTargets[0]?.instanceId ?? null);
       setImportId("");
       setImportError(null);
       setIsImporting(false);
@@ -394,7 +396,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       setIsAddingProject(false);
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [props.importProviders, props.open]);
+  }, [props.importTargets, props.open]);
 
   const platform = getNavigatorPlatform();
   const trimmedQuery = query.trim();
@@ -476,6 +478,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       ? "Paste a Claude session id"
       : importProvider === "cursor"
         ? "Paste a Cursor session id"
+        : importProvider === "droid"
+          ? "Paste a Droid session id"
         : importProvider === "opencode"
           ? "Paste an OpenCode session id"
           : "Paste a Codex thread id";
@@ -573,12 +577,12 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
   const submitImport = () => {
     const normalizedImportId = importId.trim();
-    if (!normalizedImportId || isImporting) {
+    if (!normalizedImportId || !importTarget || isImporting) {
       return;
     }
     setImportError(null);
     setIsImporting(true);
-    void Promise.resolve(props.onImportThread(importProvider, normalizedImportId))
+    void Promise.resolve(props.onImportThread(importTarget, normalizedImportId))
       .then(() => {
         props.onOpenChange(false);
       })
@@ -620,29 +624,23 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">Provider</p>
                 <div className="flex gap-2">
-                  {props.importProviders.map((provider) => (
+                  {props.importTargets.map((target) => (
                     <Button
-                      key={provider}
+                      key={target.instanceId}
                       className={
-                        importProvider === provider
+                        importTarget?.instanceId === target.instanceId
                           ? "flex-1 justify-start border-border bg-muted text-foreground hover:bg-muted/80"
                           : "flex-1 justify-start"
                       }
                       variant="outline"
-                      onClick={() => setImportProvider(provider)}
+                      onClick={() => setImportTargetId(target.instanceId)}
                     >
-                      <ProviderIcon provider={provider} />
-                      {provider === "claudeAgent"
-                        ? "Claude"
-                        : provider === "cursor"
-                          ? "Cursor"
-                          : provider === "opencode"
-                            ? "OpenCode"
-                            : "Codex"}
+                      <ProviderIcon provider={target.provider} />
+                      <span className="truncate">{target.label}</span>
                     </Button>
                   ))}
                 </div>
-                {props.importProviders.length === 0 ? (
+                {props.importTargets.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
                     No connected providers expose chat import in this build.
                   </p>
@@ -655,7 +653,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   nativeInput
                   placeholder={importPlaceholder}
                   value={importId}
-                  disabled={props.importProviders.length === 0}
+                  disabled={props.importTargets.length === 0}
                   onChange={(event) => setImportId(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -669,6 +667,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     ? "Claude resumes a persisted session by session id."
                     : importProvider === "cursor"
                       ? "Cursor resumes a persisted session by session id."
+                      : importProvider === "droid"
+                        ? "Droid resumes a persisted session by session id."
                       : importProvider === "opencode"
                         ? "OpenCode resumes a persisted session by session id."
                         : "Codex resumes a persisted thread by thread id."}
@@ -691,7 +691,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </Button>
                 <Button
                   disabled={
-                    props.importProviders.length === 0 ||
+                    props.importTargets.length === 0 ||
                     importId.trim().length === 0 ||
                     isImporting
                   }
@@ -822,7 +822,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               if (action.id === "import-thread") {
                                 setImportError(null);
                                 setImportId("");
-                                setImportProvider(props.importProviders[0] ?? "codex");
+                                setImportTargetId(props.importTargets[0]?.instanceId ?? null);
                                 props.onModeChange("import");
                                 return;
                               }

@@ -195,6 +195,82 @@ export function resolveAvailableProviderPreference(input: {
   );
 }
 
+export interface VoiceTranscriptionTarget {
+  readonly instanceId: ProviderInstanceId;
+  readonly status: ServerProviderStatus;
+}
+
+// Voice always uses a Codex ChatGPT session. Prefer the actively selected Codex
+// account when it advertises voice, otherwise choose a capable configured account
+// by identity (default first, then stable instance id) rather than status arrival order.
+export function resolveVoiceTranscriptionTarget(input: {
+  readonly statuses: readonly ServerProviderStatus[];
+  readonly providerInstances: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId;
+    readonly provider: ProviderKind;
+    readonly enabled: boolean;
+    readonly isDefault: boolean;
+  }>;
+  readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
+}): VoiceTranscriptionTarget | null {
+  const statusByInstanceId = new Map<ProviderInstanceId, ServerProviderStatus>();
+  for (const status of input.statuses) {
+    if ((status.driver ?? status.provider) !== "codex") {
+      continue;
+    }
+    statusByInstanceId.set(providerStatusInstanceKey(status), status);
+  }
+
+  const orderedInstanceIds = input.providerInstances
+    .filter((instance) => instance.provider === "codex" && instance.enabled)
+    .toSorted((left, right) => {
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return String(left.instanceId).localeCompare(String(right.instanceId));
+    })
+    .map((instance) => instance.instanceId);
+  const configuredInstanceIds = new Set(orderedInstanceIds);
+  for (const instanceId of [...statusByInstanceId.keys()].toSorted((left, right) =>
+    String(left).localeCompare(String(right)),
+  )) {
+    if (!configuredInstanceIds.has(instanceId)) {
+      orderedInstanceIds.push(instanceId);
+      configuredInstanceIds.add(instanceId);
+    }
+  }
+
+  if (input.selectedProvider === "codex") {
+    const selectedIndex = orderedInstanceIds.indexOf(input.selectedProviderInstanceId);
+    if (selectedIndex >= 0) {
+      orderedInstanceIds.splice(selectedIndex, 1);
+    }
+    orderedInstanceIds.unshift(input.selectedProviderInstanceId);
+  }
+
+  const capableInstanceId = orderedInstanceIds.find((instanceId) => {
+    const status = statusByInstanceId.get(instanceId);
+    return (
+      status?.enabled !== false &&
+      status?.authStatus !== "unauthenticated" &&
+      status?.voiceTranscriptionAvailable === true
+    );
+  });
+  const fallbackInstanceId =
+    capableInstanceId ??
+    (input.selectedProvider === "codex" && statusByInstanceId.has(input.selectedProviderInstanceId)
+      ? input.selectedProviderInstanceId
+      : statusByInstanceId.has("codex" as ProviderInstanceId)
+        ? ("codex" as ProviderInstanceId)
+        : orderedInstanceIds.find((instanceId) => statusByInstanceId.has(instanceId)));
+  if (!fallbackInstanceId) {
+    return null;
+  }
+  const status = statusByInstanceId.get(fallbackInstanceId);
+  return status ? { instanceId: fallbackInstanceId, status } : null;
+}
+
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;

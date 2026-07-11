@@ -45,6 +45,7 @@ export interface UseComposerVoiceControllerOptions {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
   selectedProviderInstanceId: ProviderInstanceId;
+  voiceProviderInstanceId: ProviderInstanceId;
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
@@ -84,6 +85,7 @@ export function useComposerVoiceController(
     threadId,
     selectedProvider,
     selectedProviderInstanceId,
+    voiceProviderInstanceId,
     activeProviderStatus,
     pendingUserInputCount,
     onTranscriptReady,
@@ -105,7 +107,8 @@ export function useComposerVoiceController(
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
-  const voiceProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
+  const composerProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
+  const voiceProviderInstanceRef = useRef<ProviderInstanceId>(voiceProviderInstanceId);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const failureCopy = {
     ...DEFAULT_FAILURE_COPY,
@@ -116,8 +119,9 @@ export function useComposerVoiceController(
   useLayoutEffect(() => {
     voiceThreadIdRef.current = threadId;
     voiceProviderRef.current = selectedProvider;
-    voiceProviderInstanceRef.current = selectedProviderInstanceId;
-  }, [threadId, selectedProvider, selectedProviderInstanceId]);
+    composerProviderInstanceRef.current = selectedProviderInstanceId;
+    voiceProviderInstanceRef.current = voiceProviderInstanceId;
+  }, [threadId, selectedProvider, selectedProviderInstanceId, voiceProviderInstanceId]);
 
   const voiceRecordingDurationLabel = formatVoiceRecordingDuration(voiceRecordingDurationMs);
   const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
@@ -138,7 +142,13 @@ export function useComposerVoiceController(
         setIsVoiceTranscribing(false);
       }
     });
-  }, [cancelVoiceRecording, selectedProvider, selectedProviderInstanceId, threadId]);
+  }, [
+    cancelVoiceRecording,
+    selectedProvider,
+    selectedProviderInstanceId,
+    threadId,
+    voiceProviderInstanceId,
+  ]);
 
   useEffect(
     () => () => {
@@ -221,8 +231,7 @@ export function useComposerVoiceController(
       void api?.server
         .prewarmVoice?.({
           provider: "codex",
-          providerInstanceId:
-            selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
+          providerInstanceId: voiceProviderInstanceId,
           cwd: activeProject.cwd,
           ...(activeThreadId ? { threadId: activeThreadId } : {}),
         })
@@ -263,11 +272,13 @@ export function useComposerVoiceController(
     const requestThreadId = threadId;
     const requestProvider = selectedProvider;
     const requestProviderInstanceId = selectedProviderInstanceId;
+    const requestVoiceProviderInstanceId = voiceProviderInstanceId;
     const isCurrentVoiceRequest = () =>
       voiceTranscriptionRequestIdRef.current === requestId &&
       voiceThreadIdRef.current === requestThreadId &&
       voiceProviderRef.current === requestProvider &&
-      voiceProviderInstanceRef.current === requestProviderInstanceId;
+      composerProviderInstanceRef.current === requestProviderInstanceId &&
+      voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
 
     // Promise chain instead of async/try-catch-finally: React Compiler does
     // not yet support try/finally, and it would skip optimizing this hook.
@@ -286,8 +297,7 @@ export function useComposerVoiceController(
         return api.server
           .transcribeVoice({
             provider: "codex",
-            providerInstanceId:
-              selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
+            providerInstanceId: requestVoiceProviderInstanceId,
             cwd: activeProject.cwd,
             ...(activeThreadId ? { threadId: activeThreadId } : {}),
             ...payload,
