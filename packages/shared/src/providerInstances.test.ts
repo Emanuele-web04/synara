@@ -8,9 +8,14 @@ import { Schema } from "effect";
 
 import {
   codexAccountInstanceId,
+  deriveProviderInstances,
+  isUnresolvedAutomationInstanceId,
   providerStartOptionsFromInstance,
   resolveProviderInstance,
+  unresolvedAutomationInstanceId,
 } from "./providerInstances";
+
+const providerInstanceId = (value: string) => ProviderInstanceId.makeUnsafe(value);
 
 describe("provider instance resolution", () => {
   it("rejects explicit unknown instance ids instead of falling back", () => {
@@ -49,6 +54,33 @@ describe("provider instance resolution", () => {
 
     expect(resolved?.instanceId).toBe("claudeAgent");
     expect(resolved?.driver).toBe("claudeAgent");
+  });
+
+  it("reserves unresolved automation ids even when settings configure an exact collision", () => {
+    const unresolvedId = unresolvedAutomationInstanceId("codex");
+    const normalId = providerInstanceId("codex_work");
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [unresolvedId]: {
+          driver: "codex" as const,
+          enabled: true,
+          config: { accountId: "must-never-resolve" },
+        },
+        [normalId]: {
+          driver: "codex" as const,
+          enabled: true,
+          config: { accountId: "work" },
+        },
+      },
+    };
+
+    expect(isUnresolvedAutomationInstanceId(unresolvedId)).toBe(true);
+    expect(resolveProviderInstance(settings, { instanceId: unresolvedId })).toBeNull();
+    expect(
+      deriveProviderInstances(settings).some((instance) => instance.instanceId === unresolvedId),
+    ).toBe(false);
+    expect(resolveProviderInstance(settings, { instanceId: normalId })?.instanceId).toBe(normalId);
   });
 
   it("keeps derived Codex account instance ids within the schema limit", () => {

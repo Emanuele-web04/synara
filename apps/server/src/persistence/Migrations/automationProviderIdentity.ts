@@ -1,4 +1,7 @@
-import { codexAccountInstanceId } from "@synara/shared/providerInstances";
+import {
+  codexAccountInstanceId,
+  unresolvedAutomationInstanceId,
+} from "@synara/shared/providerInstances";
 
 const PROVIDERS = [
   "codex",
@@ -177,7 +180,6 @@ export function resolveAutomationProviderIdentity(
       };
 }
 
-const UNRESOLVED_INSTANCE_SUFFIX = "_unresolved_legacy_automation";
 const UNRESOLVED_MODEL = "legacy-automation-unresolved";
 const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
@@ -224,7 +226,7 @@ export function makeUnresolvedAutomationModelSelection(
   return {
     provider,
     modelSelection: {
-      instanceId: `${provider}${UNRESOLVED_INSTANCE_SUFFIX}`,
+      instanceId: unresolvedAutomationInstanceId(provider),
       model,
     },
   };
