@@ -5,8 +5,10 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import * as fs from "node:fs/promises";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { parse as parseToml } from "smol-toml";
 
 import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
 import {
@@ -27,6 +29,7 @@ import {
 } from "./providerChildEnvironment.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
+const CODEX_SQLITE_HOME_ENV_NAME = "CODEX_SQLITE_HOME";
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 const CODEX_ACCOUNT_PRIVATE_STATE_FILES = new Set(["auth.json", "models_cache.json"]);
 // SQLite databases and their WAL/SHM/journal sidecars are never mirrored into
@@ -42,19 +45,12 @@ const SYNARA_SHARED_CONTINUATION_MARKER_FILE = "synara-shared-continuation-v1.js
 const SYNARA_SHARED_CONTINUATION_MARKER_VERSION = 1;
 const SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY = ".synara-shared-continuation-v1.lock";
 const SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE = "owner.json";
+const SYNARA_SHARED_CONTINUATION_LOCK_QUARANTINE_INFIX = ".quarantine-";
 const SYNARA_SHARED_CONTINUATION_LOCK_TIMEOUT_MS = 10_000;
 const SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS = 25;
-const SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS = 30_000;
-const REQUIRED_SHARED_CONTINUATION_DIRECTORIES = [
-  "sessions",
-  "archived_sessions",
-  "sqlite",
-] as const;
-const REQUIRED_SHARED_CONTINUATION_FILES = [
-  "history.jsonl",
-  "session_index.jsonl",
-  "state_5.sqlite",
-] as const;
+const SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS = 2_000;
+const REQUIRED_SHARED_CONTINUATION_DIRECTORIES = ["sessions", "archived_sessions"] as const;
+const REQUIRED_SHARED_CONTINUATION_FILES = ["history.jsonl", "session_index.jsonl"] as const;
 const SYNARA_MANAGED_MCP_TABLE_HEADER = "[mcp_servers.synara]";
 export const SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS = [
   '[plugins."browser@openai-bundled"]',
@@ -72,6 +68,59 @@ const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
 interface CodexOverlayEntryLinker {
   readonly symlink: typeof fs.symlink;
   readonly copyFile: typeof fs.copyFile;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function parseManagedCodexConfig(config: string): {
+  readonly root: Record<string, unknown>;
+  readonly activeProfile?: Record<string, unknown>;
+} {
+  let root: Record<string, unknown>;
+  try {
+    root = parseToml(config) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(
+      "Codex config.toml must be valid TOML so Synara can verify managed account state safely.",
+      { cause: error },
+    );
+  }
+  if (root.profile === undefined) {
+    return { root };
+  }
+  if (typeof root.profile !== "string" || root.profile.trim().length === 0) {
+    throw new Error("Codex config profile must name a valid profile table.");
+  }
+  const activeProfile = asRecord(asRecord(root.profiles)?.[root.profile]);
+  if (!activeProfile) {
+    throw new Error(`Codex config profile '${root.profile}' does not name a valid profile table.`);
+  }
+  return { root, activeProfile };
+}
+
+function assertCodexSqliteHomeMatchesSource(input: {
+  readonly sourceConfig: string;
+  readonly sourceHomePath: string;
+}): void {
+  const { root, activeProfile } = parseManagedCodexConfig(input.sourceConfig);
+  const configured = activeProfile?.sqlite_home ?? root.sqlite_home;
+  if (configured === undefined) {
+    return;
+  }
+  if (
+    typeof configured !== "string" ||
+    !path.isAbsolute(configured) ||
+    !codexPathsReferenceSameLocation(configured, input.sourceHomePath)
+  ) {
+    const displayPath = typeof configured === "string" && configured ? configured : "<invalid>";
+    throw new Error(
+      `Codex config sqlite_home at ${displayPath} must resolve to the source CODEX_HOME ${path.resolve(input.sourceHomePath)} so Synara account overlays share one continuation database.`,
+    );
+  }
 }
 
 function isSafePluginSectionHeader(value: unknown): value is string {
@@ -312,32 +361,129 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function readSharedContinuationLockOwner(lockPath: string): Promise<number | undefined> {
+interface SharedContinuationLockSnapshot {
+  readonly lockPath: string;
+  readonly token?: string;
+  readonly pid?: number;
+  readonly createdAtMs: number;
+  readonly device: string;
+  readonly inode: string;
+  readonly ownerDevice?: string;
+  readonly ownerInode?: string;
+}
+
+async function readSharedContinuationLock(
+  lockPath: string,
+): Promise<SharedContinuationLockSnapshot | undefined> {
   try {
-    const parsed = JSON.parse(
-      await fs.readFile(path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE), "utf8"),
-    ) as { readonly pid?: unknown };
-    return typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0
-      ? parsed.pid
-      : undefined;
+    const lockStat = await fs.lstat(lockPath);
+    if (!lockStat.isDirectory() || lockStat.isSymbolicLink()) {
+      throw new Error(`Codex continuation lock at ${lockPath} must be a real directory.`);
+    }
+    const ownerPath = path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE);
+    const ownerStat = await lstatIfExists(ownerPath);
+    if (ownerStat && (!ownerStat.isFile() || ownerStat.isSymbolicLink())) {
+      throw new Error(`Codex continuation lock owner at ${ownerPath} must be a regular file.`);
+    }
+    let parsed: {
+      readonly token?: unknown;
+      readonly pid?: unknown;
+      readonly createdAtMs?: unknown;
+    } = {};
+    if (ownerStat) {
+      try {
+        parsed = JSON.parse(await fs.readFile(ownerPath, "utf8")) as typeof parsed;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) {
+          throw error;
+        }
+      }
+    }
+    return {
+      lockPath,
+      ...(typeof parsed.token === "string" && parsed.token.length > 0
+        ? { token: parsed.token }
+        : {}),
+      ...(typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0
+        ? { pid: parsed.pid }
+        : {}),
+      createdAtMs:
+        typeof parsed.createdAtMs === "number" && Number.isFinite(parsed.createdAtMs)
+          ? parsed.createdAtMs
+          : Number(ownerStat?.mtimeMs ?? lockStat.mtimeMs),
+      device: String(lockStat.dev),
+      inode: String(lockStat.ino),
+      ...(ownerStat
+        ? { ownerDevice: String(ownerStat.dev), ownerInode: String(ownerStat.ino) }
+        : {}),
+    };
   } catch (error) {
-    if (isMissingPathError(error) || error instanceof SyntaxError) {
+    if (isMissingPathError(error)) {
       return undefined;
     }
     throw error;
   }
 }
 
-async function canReclaimSharedContinuationLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await readSharedContinuationLockOwner(lockPath);
-  if (ownerPid !== undefined) {
-    return !processIsAlive(ownerPid);
-  }
-  const lockStat = await lstatIfExists(lockPath);
+function sameSharedContinuationLockDirectory(
+  left: SharedContinuationLockSnapshot,
+  right: SharedContinuationLockSnapshot,
+): boolean {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+function sameSharedContinuationLock(
+  left: SharedContinuationLockSnapshot,
+  right: SharedContinuationLockSnapshot,
+): boolean {
   return (
-    lockStat !== undefined &&
-    Date.now() - Number(lockStat.mtimeMs) >= SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS
+    sameSharedContinuationLockDirectory(left, right) &&
+    left.token === right.token &&
+    left.ownerDevice === right.ownerDevice &&
+    left.ownerInode === right.ownerInode
   );
+}
+
+async function quarantineObservedSharedContinuationLock(input: {
+  readonly observed: SharedContinuationLockSnapshot;
+}): Promise<boolean> {
+  const quarantinePath = `${input.observed.lockPath}${SYNARA_SHARED_CONTINUATION_LOCK_QUARANTINE_INFIX}${randomUUID()}`;
+  try {
+    await fs.rename(input.observed.lockPath, quarantinePath);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+    throw error;
+  }
+
+  const quarantined = await readSharedContinuationLock(quarantinePath);
+  if (quarantined && sameSharedContinuationLock(input.observed, quarantined)) {
+    await fs.rm(quarantinePath, { recursive: true, force: true });
+    return true;
+  }
+
+  let restored = false;
+  if (!(await lstatIfExists(input.observed.lockPath)) && (await lstatIfExists(quarantinePath))) {
+    try {
+      await fs.rename(quarantinePath, input.observed.lockPath);
+      restored = true;
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+  throw new Error(
+    `Codex continuation lock changed while quarantining ${input.observed.lockPath}; the moved successor was not deleted${restored ? " and was restored" : ` and remains at ${quarantinePath}`}.`,
+  );
+}
+
+function sharedContinuationLockIsStale(snapshot: SharedContinuationLockSnapshot): boolean {
+  if (snapshot.pid !== undefined) {
+    return !processIsAlive(snapshot.pid);
+  }
+  return Date.now() - snapshot.createdAtMs >= SYNARA_SHARED_CONTINUATION_ORPHAN_LOCK_GRACE_MS;
 }
 
 async function withSharedContinuationLock<T>(
@@ -347,43 +493,78 @@ async function withSharedContinuationLock<T>(
   await fs.mkdir(sourceHomePath, { recursive: true });
   const lockPath = sharedContinuationLockPath(sourceHomePath);
   const startedAt = Date.now();
+  const token = randomUUID();
+  let ownership: SharedContinuationLockSnapshot | undefined;
 
-  while (true) {
+  while (!ownership) {
+    let created = false;
     try {
       await fs.mkdir(lockPath, { mode: 0o700 });
-      try {
-        await fs.writeFile(
-          path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE),
-          `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-          { encoding: "utf8", mode: 0o600 },
-        );
-      } catch (error) {
-        await fs.rm(lockPath, { recursive: true, force: true });
-        throw error;
-      }
-      break;
+      created = true;
     } catch (error) {
       if (errorCode(error) !== "EEXIST") {
         throw error;
       }
-      if (await canReclaimSharedContinuationLock(lockPath)) {
-        await fs.rm(lockPath, { recursive: true, force: true });
-        continue;
+    }
+
+    if (created) {
+      const emptyOwnership = await readSharedContinuationLock(lockPath);
+      if (!emptyOwnership) {
+        throw new Error(`Codex continuation lock disappeared after creation at ${lockPath}.`);
       }
-      if (Date.now() - startedAt >= SYNARA_SHARED_CONTINUATION_LOCK_TIMEOUT_MS) {
+      try {
+        await fs.writeFile(
+          path.join(lockPath, SYNARA_SHARED_CONTINUATION_LOCK_OWNER_FILE),
+          `${JSON.stringify({ token, pid: process.pid, createdAtMs: Date.now() })}\n`,
+          { encoding: "utf8", flag: "wx", mode: 0o600 },
+        );
+      } catch (error) {
+        const current = await readSharedContinuationLock(lockPath);
+        if (current && sameSharedContinuationLock(emptyOwnership, current)) {
+          await quarantineObservedSharedContinuationLock({ observed: emptyOwnership });
+        }
+        throw error;
+      }
+      const claimed = await readSharedContinuationLock(lockPath);
+      if (
+        !claimed ||
+        claimed.token !== token ||
+        !sameSharedContinuationLockDirectory(emptyOwnership, claimed)
+      ) {
         throw new Error(
-          `Timed out waiting for Codex continuation-state preparation lock at ${lockPath}.`,
-          { cause: error },
+          `Codex continuation lock ownership changed during acquisition at ${lockPath}; refusing to remove it.`,
         );
       }
-      await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
+      ownership = claimed;
+      break;
     }
+
+    const observed = await readSharedContinuationLock(lockPath);
+    if (observed && sharedContinuationLockIsStale(observed)) {
+      if (await quarantineObservedSharedContinuationLock({ observed })) {
+        continue;
+      }
+    }
+    if (Date.now() - startedAt >= SYNARA_SHARED_CONTINUATION_LOCK_TIMEOUT_MS) {
+      throw new Error(`Timed out waiting for Codex continuation-state lock at ${lockPath}.`);
+    }
+    await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
   }
 
   try {
     return await operation();
   } finally {
-    await fs.rm(lockPath, { recursive: true, force: true });
+    const observed = await readSharedContinuationLock(lockPath);
+    if (!observed || !sameSharedContinuationLock(ownership, observed)) {
+      throw new Error(
+        `Lost ownership of Codex continuation lock ${lockPath}; refusing to remove another owner.`,
+      );
+    }
+    if (!(await quarantineObservedSharedContinuationLock({ observed }))) {
+      throw new Error(
+        `Lost ownership of Codex continuation lock ${lockPath} during release; no successor was removed.`,
+      );
+    }
   }
 }
 
@@ -394,8 +575,16 @@ function isSharedContinuationEntry(entryName: string): boolean {
     ) ||
     REQUIRED_SHARED_CONTINUATION_FILES.includes(
       entryName as (typeof REQUIRED_SHARED_CONTINUATION_FILES)[number],
-    ) ||
-    isCodexSqliteStateEntry(entryName)
+    )
+  );
+}
+
+function isSharedContinuationLockEntry(entryName: string): boolean {
+  return (
+    entryName === SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY ||
+    entryName.startsWith(
+      `${SYNARA_SHARED_CONTINUATION_LOCK_DIRECTORY}${SYNARA_SHARED_CONTINUATION_LOCK_QUARANTINE_INFIX}`,
+    )
   );
 }
 
@@ -620,7 +809,6 @@ async function prepareSharedCodexContinuationState(input: {
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
 }): Promise<void> {
   await withSharedContinuationLock(input.sourceHomePath, async () => {
-    await fs.rm(sharedContinuationMarkerPath(input.sourceHomePath), { force: true });
     const [sourceEntries, overlayEntries] = await Promise.all([
       readDirectoryEntries(input.sourceHomePath),
       readDirectoryEntries(input.overlayHomePath),
@@ -685,37 +873,13 @@ function lstatSyncIfExists(entryPath: string): ReturnType<typeof lstatSync> | un
   }
 }
 
-function readDirectoryEntriesSync(directoryPath: string): readonly string[] {
-  try {
-    return readdirSync(directoryPath);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return [];
-    }
-    throw error;
-  }
-}
-
 function resolvedSymlinkTargetSync(linkPath: string): string {
   const target = readlinkSync(linkPath);
   return path.isAbsolute(target) ? target : path.resolve(path.dirname(linkPath), target);
 }
 
-function sharedContinuationIdentityEntryNames(input: {
-  readonly sourceHomePath: string;
-  readonly overlayHomePath: string;
-}): readonly string[] {
-  const stateDatabaseFilePattern = /^.+\.sqlite$/;
-  return [
-    ...new Set([
-      ...REQUIRED_SHARED_CONTINUATION_DIRECTORIES,
-      ...REQUIRED_SHARED_CONTINUATION_FILES,
-      ...readDirectoryEntriesSync(input.sourceHomePath).filter((entryName) =>
-        stateDatabaseFilePattern.test(entryName),
-      ),
-      ...readDirectoryEntriesSync(input.overlayHomePath).filter(isCodexSqliteStateEntry),
-    ]),
-  ];
+function sharedContinuationIdentityEntryNames(): readonly string[] {
+  return [...REQUIRED_SHARED_CONTINUATION_DIRECTORIES, ...REQUIRED_SHARED_CONTINUATION_FILES];
 }
 
 function selectedCodexOverlaySharesContinuationState(input: {
@@ -725,7 +889,7 @@ function selectedCodexOverlaySharesContinuationState(input: {
   if (codexPathsReferenceSameLocation(input.sourceHomePath, input.overlayHomePath)) {
     return true;
   }
-  return sharedContinuationIdentityEntryNames(input).every((entryName) => {
+  return sharedContinuationIdentityEntryNames().every((entryName) => {
     const sourcePath = path.join(input.sourceHomePath, entryName);
     const targetPath = path.join(input.overlayHomePath, entryName);
     const kind = sharedContinuationEntryKind(entryName);
@@ -736,11 +900,6 @@ function selectedCodexOverlaySharesContinuationState(input: {
       (kind === "dir" ? sourceStat.isDirectory() : sourceStat.isFile());
     if (!sourceMatchesExpectedType) {
       return false;
-    }
-    if (isCodexSqliteStateEntry(entryName)) {
-      // SQLite state is opened through CODEX_SQLITE_HOME, never through an
-      // overlay mirror, so any overlay-side database entry is stale.
-      return targetStat === undefined;
     }
     return (
       targetStat?.isSymbolicLink() === true &&
@@ -770,6 +929,16 @@ export function isCodexSharedContinuationStatePrepared(input: {
     }),
   );
   try {
+    const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+    let sourceConfig = "";
+    try {
+      sourceConfig = readFileSync(sourceConfigPath, "utf8");
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+    assertCodexSqliteHomeMatchesSource({ sourceConfig, sourceHomePath });
     const marker = JSON.parse(
       readFileSync(sharedContinuationMarkerPath(sourceHomePath), "utf8"),
     ) as { readonly version?: unknown; readonly sourceHomeIdentity?: unknown };
@@ -1212,6 +1381,14 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly overlayEntryLinker?: CodexOverlayEntryLinker;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
+  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+  const sourceConfig = await fs.readFile(sourceConfigPath, "utf8").catch((cause: unknown) => {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw cause;
+  });
+  assertCodexSqliteHomeMatchesSource({ sourceConfig, sourceHomePath });
   // A genuinely distinct explicit home belongs to the account and may mirror
   // private state. Repeating the shared CODEX_HOME explicitly must not turn it
   // into an account-owned home or leak the default account's credentials.
@@ -1286,6 +1463,8 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       if (
         entry === "config.toml" ||
         entry === SYNARA_SHARED_CONTINUATION_MARKER_FILE ||
+        isSharedContinuationLockEntry(entry) ||
+        isCodexSqliteStateEntry(entry) ||
         isSharedContinuationEntry(entry)
       ) {
         continue;
@@ -1361,13 +1540,6 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
     }
   }
 
-  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  const sourceConfig = await fs.readFile(sourceConfigPath, "utf8").catch((cause: unknown) => {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw cause;
-  });
   const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
   const suppressedSections = [
     ...new Set([
@@ -1445,6 +1617,7 @@ export async function buildCodexProcessEnv(
   } = {},
 ): Promise<NodeJS.ProcessEnv> {
   const baseEnv = { ...(input.env ?? process.env) };
+  const sourceHomePath = resolveBaseCodexHomePath(baseEnv, input.homePath);
   const overlayHomePath = input.skipHomeOverlay
     ? undefined
     : await prepareSynaraCodexHomeOverlay({
@@ -1462,16 +1635,15 @@ export async function buildCodexProcessEnv(
     : input.homePath
       ? resolveBaseCodexHomePath(baseEnv, input.homePath)
       : undefined;
-  const configuredEnv =
-    overlayHomePath || directAccountHomePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? directAccountHomePath }
-      : baseEnv;
-  if (overlayHomePath && !configuredEnv.CODEX_SQLITE_HOME?.trim()) {
-    // Keep every Codex process (Synara's app-server, the user's own `codex`
-    // CLI) on one SQLite home reached through one path; see
-    // CODEX_SQLITE_STATE_ENTRY_PATTERN. A user-provided value wins.
-    configuredEnv.CODEX_SQLITE_HOME = resolveBaseCodexHomePath(baseEnv, input.homePath);
-  }
+  const configuredEnv: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    ...(overlayHomePath || directAccountHomePath
+      ? { CODEX_HOME: overlayHomePath ?? directAccountHomePath }
+      : {}),
+    // Config sqlite_home has higher precedence and was validated before any
+    // overlay mutation. Route all future DB names and sidecars to one source.
+    [CODEX_SQLITE_HOME_ENV_NAME]: path.resolve(sourceHomePath),
+  };
   const platform = input.platform ?? process.platform;
   const effectiveEnv = buildProviderChildEnvironment({
     provider: "codex",

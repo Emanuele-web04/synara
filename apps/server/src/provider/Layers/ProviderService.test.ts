@@ -4897,7 +4897,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const threadId = asThreadId("thread-instance-options-clear");
       const fixture = yield* Effect.promise(() =>
-        makeSharedCodexContinuationFixture(["work"]),
+        makeSharedCodexContinuationFixture(["work", "codex_work"]),
       );
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(

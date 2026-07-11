@@ -82,7 +82,7 @@ describe("providerContinuationIdentity", () => {
       const workAfter = providerContinuationIdentity("codex", options("work", workShadowHomePath));
       assert.equal(personalAfter, workAfter);
 
-      fs.unlinkSync(path.join(homePath, "state_5.sqlite"));
+      fs.unlinkSync(path.join(homePath, "session_index.jsonl"));
       assert.match(
         String(providerContinuationIdentity("codex", options("work", workShadowHomePath))),
         /^codex:overlay-v1:/,
