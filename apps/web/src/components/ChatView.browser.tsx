@@ -1350,6 +1350,30 @@ function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): vo
   );
 }
 
+function dispatchModelCycleShortcut(target: EventTarget, key: "[" | "]"): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code: key === "]" ? "BracketRight" : "BracketLeft",
+    altKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+async function dispatchModelCycleShortcutWhenReady(
+  target: EventTarget,
+  key: "[" | "]",
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchModelCycleShortcut(target, key).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+}
+
 function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
@@ -2714,6 +2738,41 @@ describe("ChatView timeline estimator parity (full app)", () => {
       dispatchComposerPickerShortcut(composerEditor, "m");
 
       await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cycles the active provider model without opening the picker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-cycle-shortcut" as MessageId,
+        targetText: "model cycle shortcut",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "]");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.5" });
+      });
+      expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "[");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.2" });
+      });
     } finally {
       await mounted.cleanup();
     }
