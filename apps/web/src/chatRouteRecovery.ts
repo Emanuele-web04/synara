@@ -34,6 +34,32 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
   });
 }
 
+/**
+ * Home/sidebar stuck case: projects hydrated, threads empty.
+ * Only pulls shell + full snapshot; never repairState (projects-only rebuild).
+ * Only syncs payloads that actually include threads, so a project-only response
+ * cannot wipe a concurrent thread upsert.
+ */
+export async function refreshMissingThreadSnapshots(api: NativeApi | undefined): Promise<boolean> {
+  if (!api) {
+    return false;
+  }
+
+  const shellSnapshot = await api.orchestration.getShellSnapshot();
+  if (shellSnapshotHasThreads(shellSnapshot)) {
+    useStore.getState().syncServerShellSnapshot(shellSnapshot);
+    return true;
+  }
+
+  const readModel = await api.orchestration.getSnapshot();
+  if (readModelHasThreads(readModel)) {
+    useStore.getState().syncServerReadModel(readModel);
+    return true;
+  }
+
+  return false;
+}
+
 // Empty shell snapshots can arrive before desktop projection startup catches up.
 // Try progressively stronger reads so route guards do not replace valid thread URLs.
 export async function refreshEmptyRouteRestoreSnapshot(

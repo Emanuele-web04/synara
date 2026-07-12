@@ -75,7 +75,7 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
-import { refreshEmptyRouteRestoreSnapshot } from "../chatRouteRecovery";
+import { refreshMissingThreadSnapshots } from "../chatRouteRecovery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
@@ -1475,7 +1475,8 @@ function DesktopProjectBootstrap() {
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // #282: project-only hydration can stick on home/sidebar (route recovery never runs).
+    // #282: project-only hydration can stick on home/sidebar. Light refresh only
+    // (shell → snapshot); never repairState here (that rebuilds projects, not threads).
     const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
     if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
       return;
@@ -1484,7 +1485,7 @@ function DesktopProjectBootstrap() {
     attemptedRecoveryRef.current = true;
 
     if (hasProjectsWithoutThreads) {
-      void refreshEmptyRouteRestoreSnapshot(api).catch(() => {
+      void refreshMissingThreadSnapshots(api).catch(() => {
         attemptedRecoveryRef.current = false;
       });
       return;

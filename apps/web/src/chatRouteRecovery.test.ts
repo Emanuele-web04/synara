@@ -16,7 +16,10 @@ vi.mock("./store", () => ({
   },
 }));
 
-import { refreshEmptyRouteRestoreSnapshot } from "./chatRouteRecovery";
+import {
+  refreshEmptyRouteRestoreSnapshot,
+  refreshMissingThreadSnapshots,
+} from "./chatRouteRecovery";
 
 function shellSnapshot(input: {
   projects?: unknown[];
@@ -114,5 +117,60 @@ describe("refreshEmptyRouteRestoreSnapshot", () => {
     expect(orchestration.repairState).not.toHaveBeenCalled();
     expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
     expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
+  });
+});
+
+describe("refreshMissingThreadSnapshots", () => {
+  beforeEach(() => {
+    storeMocks.syncServerReadModel.mockClear();
+    storeMocks.syncServerShellSnapshot.mockClear();
+  });
+
+  it("syncs shell when it already has threads and never repairs", async () => {
+    const shell = shellSnapshot({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1" }],
+    });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
+
+    expect(orchestration.getSnapshot).not.toHaveBeenCalled();
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerShellSnapshot).toHaveBeenCalledWith(shell);
+  });
+
+  it("escalates to full snapshot for threads without applying project-only shell", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1" }],
+    });
+    const repaired = readModel({ projects: [{ id: "project-1" }] });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(true);
+
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerReadModel).toHaveBeenCalledWith(snapshot);
+  });
+
+  it("returns false without repair when both reads stay project-only", async () => {
+    const shell = shellSnapshot({ projects: [{ id: "project-1" }] });
+    const snapshot = readModel({ projects: [{ id: "project-1" }] });
+    const repaired = readModel({
+      projects: [{ id: "project-1" }],
+      threads: [{ id: "thread-1" }],
+    });
+    const { api, orchestration } = makeApi({ shell, snapshot, repaired });
+
+    await expect(refreshMissingThreadSnapshots(api)).resolves.toBe(false);
+
+    expect(orchestration.repairState).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerShellSnapshot).not.toHaveBeenCalled();
+    expect(storeMocks.syncServerReadModel).not.toHaveBeenCalled();
   });
 });
