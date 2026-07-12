@@ -1250,6 +1250,20 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
     harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-stale-reasoning-summary-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "Stale streamed summary",
+      },
+    });
+    harness.emit({
       type: "item.completed",
       eventId: asEventId("evt-reasoning-completed"),
       provider: "codex",
@@ -1291,6 +1305,225 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("buffers Codex summary deltas into one completed reasoning activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const baseEvent = {
+      provider: "codex" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-reasoning"),
+      itemId: asItemId("reasoning-buffered-1"),
+    };
+
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Inspect",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-2"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: " the protocol**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-3"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 1,
+        delta: "**Update the adapter**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "item.completed",
+      eventId: asEventId("evt-buffered-reasoning-completed"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+      },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-buffered-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+    const reasoningActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+    );
+
+    expect(reasoningActivities).toHaveLength(1);
+    expect(reasoningActivities[0]).toMatchObject({
+      kind: "task.progress",
+      tone: "tool",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail: "**Inspect the protocol**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->",
+        data: { toolCallId: "reasoning-buffered-1" },
+      },
+    });
+  });
+
+  it("settles buffered Codex reasoning when a turn is aborted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-aborted-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted-reasoning"),
+      itemId: asItemId("reasoning-aborted-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this partial summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-aborted-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted-reasoning"),
+      payload: { state: "interrupted" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-aborted-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this partial summary**\n\n<!-- -->",
+      },
+    });
+  });
+
+  it("marks buffered Codex reasoning failed when the turn completes with an error", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-failed-turn-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-failed-reasoning"),
+      itemId: asItemId("reasoning-failed-turn-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this failed turn summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-failed-turn-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-failed-reasoning"),
+      payload: { state: "failed", errorMessage: "turn failed" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-failed-turn-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this failed turn summary**\n\n<!-- -->",
+      },
+    });
+  });
+
+  it("settles and clears buffered Codex reasoning on runtime errors", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-errored-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-errored-reasoning"),
+      itemId: asItemId("reasoning-errored-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this failed summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-errored-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-errored-reasoning"),
+      payload: { message: "app-server exited" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-errored-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this failed summary**\n\n<!-- -->",
+      },
+    });
+  });
+
   it("omits empty completed Codex reasoning just like thread/read", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1307,6 +1540,20 @@ describe("ProviderRuntimeIngestion", () => {
         itemType: "reasoning",
         status: "inProgress",
         title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-empty-reasoning-raw-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        streamKind: "reasoning_text",
+        contentIndex: 0,
+        delta: "private raw trace",
       },
     });
     harness.emit({

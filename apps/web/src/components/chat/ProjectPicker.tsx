@@ -9,6 +9,7 @@ import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
+import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -66,6 +67,15 @@ function joinDirectoryPath(rootPath: string, relativePath: string): string {
   const normalizedRoot = rootPath.endsWith(separator) ? rootPath.slice(0, -1) : rootPath;
   const normalizedRelative = relativePath.split(/[\\/]+/).join(separator);
   return `${normalizedRoot}${separator}${normalizedRelative}`;
+}
+
+function getNavigatorPlatform(): string {
+  const navigatorLike = globalThis.navigator as
+    | (Navigator & { userAgentData?: { platform?: string } })
+    | undefined;
+  return [navigatorLike?.platform, navigatorLike?.userAgentData?.platform]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export const ProjectPicker = memo(function ProjectPicker({
@@ -153,7 +163,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
   );
-  const macFolderOptions = useMemo(() => {
+  const localFolderOptions = useMemo(() => {
     if (isProjectSelectionMode) return [];
     return directoryEntries
       .filter((entry) => !entry.name.startsWith("."))
@@ -163,6 +173,10 @@ export const ProjectPicker = memo(function ProjectPicker({
       }))
       .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
   }, [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode]);
+  const localFoldersGroupLabel = useMemo(
+    () => getLocalFoldersGroupLabel(homeDir, getNavigatorPlatform()),
+    [homeDir],
+  );
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
   const filteredActiveFolderOptions = useMemo(() => {
@@ -175,26 +189,26 @@ export const ProjectPicker = memo(function ProjectPicker({
         .includes(normalizedQuery),
     );
   }, [activeFolderOptions, normalizedQuery]);
-  const filteredMacFolderOptions = useMemo(() => {
-    if (normalizedQuery.length === 0) return macFolderOptions;
-    return macFolderOptions.filter(({ entry }) =>
+  const filteredLocalFolderOptions = useMemo(() => {
+    if (normalizedQuery.length === 0) return localFolderOptions;
+    return localFolderOptions.filter(({ entry }) =>
       directorySearchHaystack(entry).includes(normalizedQuery),
     );
-  }, [macFolderOptions, normalizedQuery]);
+  }, [localFolderOptions, normalizedQuery]);
 
   const selectableDirectoryPaths = useMemo(
     () => [
       ...activeFolderOptions.map((entry) => entry.cwd),
-      ...macFolderOptions.map((entry) => entry.absolutePath),
+      ...localFolderOptions.map((entry) => entry.absolutePath),
     ],
-    [activeFolderOptions, macFolderOptions],
+    [activeFolderOptions, localFolderOptions],
   );
   const filteredDirectoryPaths = useMemo(
     () => [
       ...filteredActiveFolderOptions.map((entry) => entry.cwd),
-      ...filteredMacFolderOptions.map((entry) => entry.absolutePath),
+      ...filteredLocalFolderOptions.map((entry) => entry.absolutePath),
     ],
-    [filteredActiveFolderOptions, filteredMacFolderOptions],
+    [filteredActiveFolderOptions, filteredLocalFolderOptions],
   );
   const selectedFolderOption = useMemo(() => {
     if (isProjectSelectionMode) {
@@ -204,7 +218,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     if (!selectedWorkspaceRoot) return null;
     return (
       activeFolderOptions.find((entry) => entry.cwd === selectedWorkspaceRoot) ??
-      macFolderOptions
+      localFolderOptions
         .filter(({ absolutePath }) => absolutePath === selectedWorkspaceRoot)
         .map(({ entry, absolutePath }) => ({
           cwd: absolutePath,
@@ -216,7 +230,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [
     activeFolderOptions,
     isProjectSelectionMode,
-    macFolderOptions,
+    localFolderOptions,
     selectedProjectId,
     selectedWorkspaceRoot,
   ]);
@@ -453,7 +467,7 @@ export const ProjectPicker = memo(function ProjectPicker({
           <ComboboxEmpty>
             {isLoadingDirectories
               ? "Loading folders…"
-              : activeFolderOptions.length === 0 && macFolderOptions.length === 0
+              : activeFolderOptions.length === 0 && localFolderOptions.length === 0
                 ? "No folders found"
                 : "No matches"}
           </ComboboxEmpty>
@@ -471,13 +485,13 @@ export const ProjectPicker = memo(function ProjectPicker({
                 )}
               </ComboboxGroup>
             ) : null}
-            {filteredActiveFolderOptions.length > 0 && filteredMacFolderOptions.length > 0 ? (
+            {filteredActiveFolderOptions.length > 0 && filteredLocalFolderOptions.length > 0 ? (
               <ComboboxSeparator />
             ) : null}
-            {filteredMacFolderOptions.length > 0 ? (
+            {filteredLocalFolderOptions.length > 0 ? (
               <ComboboxGroup>
-                <ComboboxGroupLabel>Folders on this Mac</ComboboxGroupLabel>
-                {filteredMacFolderOptions.map(({ absolutePath, entry }, index) => (
+                <ComboboxGroupLabel>{localFoldersGroupLabel}</ComboboxGroupLabel>
+                {filteredLocalFolderOptions.map(({ absolutePath, entry }, index) => (
                   <ComboboxItem
                     hideIndicator={absolutePath !== selectedWorkspaceRoot}
                     key={absolutePath}

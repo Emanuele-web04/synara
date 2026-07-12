@@ -1037,6 +1037,77 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("persists task-list resume state before the active turn completes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-task-resume-refresh"), {
+        provider: "claudeAgent",
+        threadId: asThreadId("thread-task-resume-refresh"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "continue the work",
+        attachments: [],
+      });
+      const updatedResumeCursor = {
+        threadId: session.threadId,
+        resume: "550e8400-e29b-41d4-a716-446655440000",
+        turnCount: 1,
+        trackedTasks: [
+          {
+            id: "task-1",
+            subject: "Patch UI",
+            status: "in_progress",
+            blockedBy: [],
+          },
+        ],
+      };
+
+      routing.claude.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        resumeCursor: updatedResumeCursor,
+      }));
+      routing.claude.emit({
+        type: "turn.tasks.updated",
+        eventId: asEventId("runtime-task-resume-refresh"),
+        provider: "claudeAgent",
+        createdAt: "2026-02-27T00:04:30.000Z",
+        threadId: session.threadId,
+        turnId: turn.turnId,
+        payload: {
+          tasks: [{ task: "Patching UI", status: "inProgress" }],
+        },
+      });
+
+      yield* waitUntilEffect(
+        () =>
+          runtimeRepository.getByThreadId({ threadId: session.threadId }).pipe(
+            Effect.map(
+              Option.exists((runtime) => {
+                const cursor = runtime.resumeCursor;
+                return cursor !== null && typeof cursor === "object" && "trackedTasks" in cursor;
+              }),
+            ),
+          ),
+        500,
+        20,
+        "task resume cursor persistence",
+      );
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.deepEqual(runtime.value.resumeCursor, updatedResumeCursor);
+        assert.equal(runtime.value.status, "running");
+      }
+    }),
+  );
+
   it.effect("marks persisted runtime bindings errored on runtime errors", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
