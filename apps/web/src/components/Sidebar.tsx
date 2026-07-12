@@ -588,6 +588,11 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   sidebarHoverRevealHideClassName("thread-row"),
 );
 
+// Jump hints are wider than the status glyph they replace. Add clearance only
+// after the row's text/content so leading icons and title alignment stay fixed.
+const THREAD_JUMP_HINT_TEXT_GAP_CLASS_NAME =
+  "mr-1 transition-[margin] duration-150 ease-out group-hover/thread-row:mr-0 group-focus-within/thread-row:mr-0";
+
 /** Fixed-width status column; fades on hover so pin/archive can overlay this slot. */
 function threadRowTimestampSlotClassName(
   isSubagentThread: boolean,
@@ -5085,7 +5090,6 @@ export default function Sidebar() {
     rightMetaChips: ThreadMetaChip[];
     threadStatus: ReturnType<typeof resolveThreadStatusForSidebar>;
     timestampToneClassName?: string;
-    hoverActions: ReactNode;
   }) {
     return (
       <div className="relative flex shrink-0 items-center justify-end gap-1">
@@ -5114,7 +5118,6 @@ export default function Sidebar() {
             <SidebarStatusTrailingGlyph status={input.threadStatus} />
           </span>
         ) : null}
-        {input.hoverActions}
       </div>
     );
   }
@@ -5323,7 +5326,14 @@ export default function Sidebar() {
                 terminalCount={terminalCount}
               />
             ) : null}
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-1.5 text-left group-hover/thread-row:flex-[0_1_auto] group-focus-within/thread-row:flex-[0_1_auto]",
+                threadJumpLabel &&
+                  !projectLabel &&
+                  THREAD_JUMP_HINT_TEXT_GAP_CLASS_NAME,
+              )}
+            >
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5",
@@ -5363,13 +5373,21 @@ export default function Sidebar() {
               // touching the worktree chip. It costs no space when the row is idle.
               <span
                 className={cn(
-                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                  hasTrailingStatusGlyph && "mr-2",
+                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out group-hover/thread-row:hidden group-focus-within/thread-row:hidden",
+                  threadJumpLabel
+                    ? THREAD_JUMP_HINT_TEXT_GAP_CLASS_NAME
+                    : hasTrailingStatusGlyph && "mr-2",
                 )}
               >
                 {projectLabel}
               </span>
             ) : null}
+            {renderThreadHoverActions({
+              threadId: thread.id,
+              toneClassName: "text-muted-foreground/42",
+              isPinned: true,
+              compact: isSubagentThread,
+            })}
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
@@ -5378,12 +5396,6 @@ export default function Sidebar() {
                 rightMetaChips,
                 threadStatus,
                 timestampToneClassName: "text-muted-foreground/38",
-                hoverActions: renderThreadHoverActions({
-                  threadId: thread.id,
-                  toneClassName: "text-muted-foreground/42",
-                  isPinned: true,
-                  compact: isSubagentThread,
-                }),
               })}
             </div>
           </div>
@@ -5584,7 +5596,7 @@ export default function Sidebar() {
             ) : null}
             <div
               className={cn(
-                "flex min-w-0 flex-1 items-center text-left",
+                "flex min-w-0 flex-1 items-center text-left group-hover/thread-row:flex-[0_1_auto] group-focus-within/thread-row:flex-[0_1_auto]",
                 isSubagentThread ? "gap-[5px]" : "gap-1.5",
               )}
             >
@@ -5621,7 +5633,12 @@ export default function Sidebar() {
                 </span>
               ) : null}
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
+            <div
+              className={cn(
+                "ml-auto flex shrink-0 items-center gap-1.5 pr-1 group-hover/thread-row:hidden group-focus-within/thread-row:hidden",
+                threadJumpLabel && THREAD_JUMP_HINT_TEXT_GAP_CLASS_NAME,
+              )}
+            >
               {canToggleSubagents ? (
                 <button
                   type="button"
@@ -5661,6 +5678,12 @@ export default function Sidebar() {
                 </Tooltip>
               ) : null}
             </div>
+            {renderThreadHoverActions({
+              threadId: thread.id,
+              toneClassName: secondaryMetaClass,
+              isPinned,
+              compact: isSubagentThread,
+            })}
             <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
@@ -5673,12 +5696,6 @@ export default function Sidebar() {
                     ? "text-foreground/38 dark:text-foreground/46"
                     : "text-muted-foreground/24"
                   : secondaryMetaClass,
-                hoverActions: renderThreadHoverActions({
-                  threadId: thread.id,
-                  toneClassName: secondaryMetaClass,
-                  isPinned,
-                  compact: isSubagentThread,
-                }),
               })}
             </div>
           </TooltipTrigger>

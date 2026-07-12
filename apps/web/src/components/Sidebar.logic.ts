@@ -348,9 +348,8 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
  * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
  *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
  *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
- *   on hover/focus (mirroring the project header row), so the title gives up that
- *   width exactly when those actions appear and not a moment sooner.
+ * - Hover pin/archive actions participate in the row's flex layout, so hover only
+ *   restores the standard right inset instead of reserving an absolute toolbar.
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
@@ -358,10 +357,10 @@ export function resolveThreadRowTrailingReserveClass(input: {
   metaChipCount: number;
   hasTrailingGlyph: boolean;
 }): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
-  // at the same time, so the hover reserve is constant regardless of rest content.
+  // Hover/focus reveals inline pin/archive actions while the absolute resting
+  // metadata fades out, so only the row's standard right inset is needed.
   const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
+    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-2 group-focus-within/thread-row:pr-2";
   const { metaChipCount, hasTrailingGlyph } = input;
   if (metaChipCount <= 0) {
     return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
