@@ -1531,6 +1531,29 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("preserves failures from the repository precheck", () =>
+      Effect.gen(function* () {
+        const precheckError = new GitCommandError({
+          operation: "GitCore.statusDetails.isInsideWorkTree",
+          command: "git rev-parse --is-inside-work-tree",
+          cwd: "C:\\repo",
+          detail: "git rev-parse --is-inside-work-tree timed out.",
+        });
+        const core = yield* makeIsolatedGitCore(() => Effect.fail(precheckError));
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: precheckError.operation,
+            detail: precheckError.detail,
+          });
+        }
+      }),
+    );
+
     it.effect("reports the tracked branch name without the remote prefix", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();

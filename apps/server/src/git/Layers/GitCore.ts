@@ -1310,7 +1310,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           },
         ).pipe(
           Effect.map((result) => result.code === 0 && result.stdout.trim() === "true"),
-          Effect.catch(() => Effect.succeed(false)),
+          Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(false)),
         );
         if (!isInsideWorkTree) {
           return NON_REPOSITORY_STATUS_DETAILS;
