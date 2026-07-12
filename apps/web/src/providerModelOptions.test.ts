@@ -10,6 +10,8 @@ import {
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  mergeDynamicModelOptions,
+  providerModelCostMultiplierLabel,
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
@@ -41,6 +43,44 @@ describe("formatProviderModelOptionName", () => {
         slug: "custom/internal-model",
       }),
     ).toBe("custom/internal-model");
+  });
+});
+
+describe("mergeDynamicModelOptions", () => {
+  it("preserves runtime descriptions without inventing them for custom models", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "droid",
+      staticOptions: [{ slug: "custom:model", name: "Custom model", isCustom: true }],
+      dynamicModels: [
+        {
+          slug: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          description: " 0.4x Factory token rate ",
+        },
+        { slug: "custom:model", name: "Custom model" },
+      ],
+    });
+
+    expect(options).toEqual([
+      {
+        slug: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        description: "0.4x Factory token rate",
+      },
+      { slug: "custom:model", name: "Custom model" },
+    ]);
+  });
+});
+
+describe("providerModelCostMultiplierLabel", () => {
+  it("formats live provider multipliers without hardcoding their values", () => {
+    expect(providerModelCostMultiplierLabel("0.38x Factory token rate")).toBe("0.38×");
+    expect(providerModelCostMultiplierLabel("12x Factory token rate")).toBe("12×");
+  });
+
+  it("ignores descriptions that do not begin with a multiplier", () => {
+    expect(providerModelCostMultiplierLabel("Launch Pricing")).toBeNull();
+    expect(providerModelCostMultiplierLabel()).toBeNull();
   });
 });
 

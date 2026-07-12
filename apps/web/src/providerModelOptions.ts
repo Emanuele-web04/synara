@@ -32,6 +32,7 @@ export type ProviderOptions = ProviderModelOptions[ProviderKind];
 export interface ProviderModelOption {
   slug: string;
   name: string;
+  description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
 }
@@ -108,6 +109,7 @@ export function mergeDynamicModelOptions(input: {
   dynamicModels: ReadonlyArray<{
     slug: string;
     name?: string | null | undefined;
+    description?: string | null | undefined;
     upstreamProviderId?: string | null | undefined;
     upstreamProviderName?: string | null | undefined;
   }>;
@@ -146,6 +148,7 @@ export function mergeDynamicModelOptions(input: {
         rawName.toLowerCase() !== normalizedSlug.toLowerCase()
           ? rawName
           : displayNameFallback),
+      ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),
       ...(dynamicModel.upstreamProviderId?.trim()
         ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
         : {}),
@@ -173,6 +176,12 @@ export function mergeDynamicModelOptions(input: {
       : normalizedDynamicOptions;
 
   return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
+}
+
+/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
+export function providerModelCostMultiplierLabel(description?: string): string | null {
+  const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
+  return multiplier ? `${multiplier}×` : null;
 }
 
 export function groupProviderModelOptions(

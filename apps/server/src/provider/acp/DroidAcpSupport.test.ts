@@ -222,7 +222,11 @@ describe("discoverDroidAcpModels", () => {
         type: "select",
         currentValue: currentModel,
         options: [
-          { value: "model-a", name: "Model A" },
+          {
+            value: "model-a",
+            name: "Model A",
+            description: "0.4x Factory token rate",
+          },
           { value: "model-b", name: "Model B" },
         ],
       },
@@ -258,6 +262,7 @@ describe("discoverDroidAcpModels", () => {
     expect(result.models).toEqual([
       expect.objectContaining({
         slug: "model-a",
+        description: "0.4x Factory token rate",
         defaultReasoningEffort: "medium",
         supportedReasoningEfforts: [
           { value: "low", label: "Low" },
@@ -273,6 +278,7 @@ describe("discoverDroidAcpModels", () => {
         ],
       }),
     ]);
+    expect(result.models[1]).not.toHaveProperty("description");
     expect(currentModel).toBe("model-a");
   });
 });
