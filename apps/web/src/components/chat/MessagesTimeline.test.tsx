@@ -2524,6 +2524,77 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">apps/web/src/components/chat<");
   });
 
+  it("labels the file-changes revert control as Revert changes, not Undo", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const userMessageId = MessageId.makeUnsafe("message-user-revert-label");
+    const assistantMessageId = MessageId.makeUnsafe("message-assistant-revert-label");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-user-revert-label",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:27.000Z",
+            message: {
+              id: userMessageId,
+              role: "user",
+              text: "edit the file",
+              createdAt: "2026-03-17T19:12:27.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-assistant-revert-label",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={
+          new Map([
+            [
+              assistantMessageId,
+              {
+                turnId: TurnId.makeUnsafe("turn-revert-label-1"),
+                completedAt: "2026-03-17T19:12:30.000Z",
+                assistantMessageId,
+                files: [{ path: "README.md", additions: 1, deletions: 0 }],
+              },
+            ],
+          ])
+        }
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map([[userMessageId, 0]])}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain('aria-label="Revert changes"');
+    expect(markup).toContain("Revert changes");
+    expect(markup).not.toContain(">Undo<");
+  });
+
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-summary-fallback");
