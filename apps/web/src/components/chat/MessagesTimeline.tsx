@@ -1594,7 +1594,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
                     row.message.id,
                   );
-                  const canUndo =
+                  const canRevert =
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   const totalAdditions = checkpointFiles.reduce(
@@ -1682,7 +1682,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          {canUndo && (
+                          {canRevert && (
                             <button
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"

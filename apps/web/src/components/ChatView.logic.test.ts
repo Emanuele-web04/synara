@@ -1624,17 +1624,19 @@ describe("buildCheckpointRevertConfirmMessage", () => {
   it("asks before clearing the whole conversation on turn 0", () => {
     expect(buildCheckpointRevertConfirmMessage(0)).toBe(
       [
-        "Clear this entire conversation and restore project files to before this thread started?",
+        "Clear this entire conversation and restore project files to how they were before this thread started?",
         "This cannot be undone.",
       ].join("\n"),
     );
   });
 
-  it("asks before discarding newer turns", () => {
+  it("names the keep-until turn for partial reverts", () => {
     expect(buildCheckpointRevertConfirmMessage(2)).toBe(
-      ["Discard newer messages and file changes in this thread?", "This cannot be undone."].join(
-        "\n",
-      ),
+      [
+        "Revert this conversation to turn 2?",
+        "This discards newer messages and file changes in this thread.",
+        "This cannot be undone.",
+      ].join("\n"),
     );
   });
 });

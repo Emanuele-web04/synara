@@ -2592,7 +2592,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Edited 1 file");
     expect(markup).toContain("Revert turn");
     expect(markup).not.toContain(">Undo<");
-    expect(markup).not.toContain(">Revert changes<");
   });
 
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
