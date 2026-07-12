@@ -797,6 +797,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
           stdio: ["pipe", "pipe", "pipe"],
           shell: prepared.shell,
           windowsHide: prepared.windowsHide,
+          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
         });
       },
       catch: (cause) =>

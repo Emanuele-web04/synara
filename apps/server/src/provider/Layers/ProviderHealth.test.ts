@@ -5,6 +5,7 @@ import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vitest";
 
 import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { ServerConfig } from "../../config";
@@ -63,6 +64,12 @@ function mockSpawnerLayer(
     args: ReadonlyArray<string>,
     command: string,
     env: NodeJS.ProcessEnv | undefined,
+    options:
+      | {
+          readonly env?: NodeJS.ProcessEnv;
+          readonly windowsVerbatimArguments?: boolean;
+        }
+      | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -75,9 +82,14 @@ function mockSpawnerLayer(
       const cmd = command as unknown as {
         command: string;
         args: ReadonlyArray<string>;
-        options?: { env?: NodeJS.ProcessEnv };
+        options?: {
+          env?: NodeJS.ProcessEnv;
+          windowsVerbatimArguments?: boolean;
+        };
       };
-      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
+      return Effect.succeed(
+        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options)),
+      );
     }),
   );
 }
@@ -630,6 +642,31 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("propagates verbatim Windows arguments through the Effect command", () => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      return Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("C:\\tools(x86)\\codex.cmd");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, _env, options) => {
+            assert.strictEqual(command, "C:\\Windows\\System32\\cmd.exe");
+            assert.strictEqual(options?.windowsVerbatimArguments, true);
+            const commandLine = args.at(-1) ?? "";
+            if (commandLine.includes('"--version"')) {
+              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            }
+            if (commandLine.includes('"login" "status"')) {
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => platform.mockRestore())),
+      );
+    });
 
     it.effect("uses configured codex home for version, config, and auth probes", () => {
       let sawLoginStatusProbe = false;

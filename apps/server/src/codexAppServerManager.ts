@@ -579,6 +579,7 @@ function spawnCodexAppServer(input: {
     stdio: ["pipe", "pipe", "pipe"],
     shell: prepared.shell,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -3397,6 +3398,7 @@ function assertSupportedCodexCliVersion(input: {
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 
   if (result.error) {

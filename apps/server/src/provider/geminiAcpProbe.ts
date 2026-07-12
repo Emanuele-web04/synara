@@ -250,6 +250,7 @@ export const probeGeminiCapabilities = (input: {
           env,
           shell: prepared.shell,
           windowsHide: prepared.windowsHide,
+          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
           stdio: ["pipe", "pipe", "pipe"],
         });
 

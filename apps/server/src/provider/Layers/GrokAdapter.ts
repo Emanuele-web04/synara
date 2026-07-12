@@ -2318,6 +2318,7 @@ export function makeGrokAdapter(
           const child = yield* childProcessSpawner.spawn(
             ChildProcess.make(prepared.command, prepared.args, {
               shell: prepared.shell,
+              ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
               env: process.env,
             }),
           );

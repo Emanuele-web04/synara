@@ -604,6 +604,7 @@ const runProviderCommand = (
     const prepared = prepareWindowsSafeProcess(executable, args, { env });
     const command = ChildProcess.make(prepared.command, prepared.args, {
       shell: prepared.shell,
+      ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       env,
     });
 
@@ -2334,6 +2335,7 @@ export const ProviderHealthLive = Layer.effect(
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           env: process.env,
         }),
       );

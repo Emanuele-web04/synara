@@ -242,6 +242,7 @@ const makeAcpSessionRuntime = (
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
           shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }),
       )
       .pipe(

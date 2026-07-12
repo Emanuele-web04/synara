@@ -92,6 +92,7 @@ async function resolveDesktopVoiceAuth(
       stdio: ["pipe", "pipe", "pipe"],
       shell: prepared.shell,
       windowsHide: prepared.windowsHide,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
     });
 
     let settled = false;
