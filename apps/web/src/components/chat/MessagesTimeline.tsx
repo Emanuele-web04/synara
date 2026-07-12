@@ -1654,7 +1654,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
                           fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}
