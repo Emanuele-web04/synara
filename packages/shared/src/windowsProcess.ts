@@ -65,7 +65,7 @@ export function isWindowsBatchCommand(command: string): boolean {
   return WINDOWS_BATCH_EXTENSION_PATTERN.test(command);
 }
 
-function quoteWindowsBatchToken(token: string, label: string): string {
+function validateWindowsBatchToken(token: string, label: string): string {
   if (WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN.test(token)) {
     throw new Error(
       `Cannot safely execute Windows batch ${label} containing cmd.exe control characters.`,
@@ -84,8 +84,8 @@ export function buildWindowsBatchCommandArgs(
     "/v:off",
     "/c",
     "call",
-    quoteWindowsBatchToken(command, "command"),
-    ...args.map((arg) => quoteWindowsBatchToken(arg, "argument")),
+    validateWindowsBatchToken(command, "command"),
+    ...args.map((arg) => validateWindowsBatchToken(arg, "argument")),
   ];
 }
 

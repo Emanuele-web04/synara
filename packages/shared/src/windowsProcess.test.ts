@@ -235,6 +235,26 @@ describe("windowsProcess", () => {
     });
   });
 
+  it("wraps a configured .cmd Codex path without truncating it", () => {
+    const spawnSync = vi.fn();
+    const customPath = "C:\\Users\\Test User\\AppData\\Roaming\\npm\\codex.cmd";
+
+    expect(
+      prepareWindowsSafeProcess(customPath, ["app-server"], {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/v:off", "/c", "call", customPath, "app-server"],
+      shell: false,
+      windowsHide: true,
+    });
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
   it("passes batch commands and arguments separately to cmd.exe call", () => {
     expect(
       buildWindowsBatchCommandArgs("C:\\Users\\Test User\\npm\\tool.cmd", [
