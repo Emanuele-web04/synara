@@ -4040,7 +4040,7 @@ export function syncServerShellSnapshot(
   state: AppState,
   snapshot: OrchestrationShellSnapshot,
   options?: {
-    preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+    preserveDetailForThreadIds?: readonly ThreadId[];
   },
 ): AppState {
   rememberProjectUiState(state.projects);
@@ -4055,33 +4055,34 @@ export function syncServerShellSnapshot(
     (project) => deletedProjectIdsById[project.id] !== true,
   );
   const projects = mapProjectsFromShellSnapshot(snapshotProjects, state.projects);
-  const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
-  const preserveIds = !options?.preserveDetailForThreadIds
-    ? null
-    : options.preserveDetailForThreadIds instanceof Set
-      ? options.preserveDetailForThreadIds
-      : new Set(options.preserveDetailForThreadIds);
+  const previousSessions = state.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID;
+  const previousTurns = state.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID;
+  const preserveIds = options?.preserveDetailForThreadIds
+    ? new Set(options.preserveDetailForThreadIds)
+    : null;
 
-  // Hot-path detail can outrank an older shell for session/turn; seed those maps
-  // before rebuild so sidebar hydration does not clobber newer live detail.
-  const preservedSessionById: Record<ThreadId, ThreadSession | null> = {};
-  const preservedTurnStateById: Record<ThreadId, ThreadTurnState> = {};
-  if (preserveIds && preserveIds.size > 0) {
-    const previousSessions = state.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID;
-    const previousTurns = state.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID;
-    for (const threadId of nextThreadIds) {
-      if (!preserveIds.has(threadId)) {
-        continue;
+  const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
+  if (preserveIds) {
+    for (const threadId of preserveIds) {
+      if (
+        state.threadShellById?.[threadId] ||
+        Object.hasOwn(previousSessions, threadId) ||
+        Object.hasOwn(previousTurns, threadId) ||
+        getThreadFromState(state, threadId)
+      ) {
+        nextThreadIds.add(threadId);
       }
-      if (Object.hasOwn(previousSessions, threadId)) {
-        preservedSessionById[threadId] = previousSessions[threadId] ?? null;
-      }
-      if (Object.hasOwn(previousTurns, threadId)) {
-        const turnState = previousTurns[threadId];
-        if (turnState) {
-          preservedTurnStateById[threadId] = turnState;
-        }
-      }
+    }
+  }
+
+  const snapshotThreadById = new Map(snapshotThreads.map((thread) => [thread.id, thread] as const));
+  const orderedThreadIds: ThreadId[] = [];
+  for (const thread of snapshotThreads) {
+    orderedThreadIds.push(thread.id);
+  }
+  for (const threadId of nextThreadIds) {
+    if (!snapshotThreadById.has(threadId)) {
+      orderedThreadIds.push(threadId);
     }
   }
 
@@ -4089,8 +4090,8 @@ export function syncServerShellSnapshot(
     ...state,
     threadIds: [],
     threadShellById: {},
-    threadSessionById: preservedSessionById,
-    threadTurnStateById: preservedTurnStateById,
+    threadSessionById: {},
+    threadTurnStateById: {},
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
@@ -4107,17 +4108,68 @@ export function syncServerShellSnapshot(
     ),
   };
 
-  for (const thread of snapshotThreads) {
-    const previousThread = getThreadFromState(state, thread.id);
-    const normalized = normalizeThreadShellSnapshot(thread, previousThread);
+  for (const threadId of orderedThreadIds) {
+    const preserved = preserveIds?.has(threadId) === true;
+    const existingShell = state.threadShellById?.[threadId];
+    const hasSession = Object.hasOwn(previousSessions, threadId);
+    const hasTurn = Object.hasOwn(previousTurns, threadId);
+    const snapshotThread = snapshotThreadById.get(threadId);
+
+    if (preserved && existingShell) {
+      normalizedState = writeThreadShellProjection(normalizedState, {
+        shell: existingShell,
+        session: hasSession ? (previousSessions[threadId] ?? null) : null,
+        turnState: hasTurn
+          ? (previousTurns[threadId] ?? { latestTurn: null })
+          : { latestTurn: null },
+      });
+      continue;
+    }
+
+    if (preserved && (hasSession || hasTurn)) {
+      if (snapshotThread) {
+        const previousThread = getThreadFromState(state, threadId);
+        const normalized = normalizeThreadShellSnapshot(snapshotThread, previousThread);
+        normalizedState = writeThreadShellProjection(normalizedState, {
+          shell: normalized.shell,
+          session: hasSession ? (previousSessions[threadId] ?? null) : normalized.session,
+          turnState: hasTurn
+            ? (previousTurns[threadId] ?? normalized.turnState)
+            : normalized.turnState,
+        });
+      } else {
+        normalizedState = ensureThreadRegistered(normalizedState, threadId);
+        if (hasSession) {
+          normalizedState = {
+            ...normalizedState,
+            threadSessionById: {
+              ...(normalizedState.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID),
+              [threadId]: previousSessions[threadId] ?? null,
+            },
+          };
+        }
+        if (hasTurn && previousTurns[threadId]) {
+          normalizedState = {
+            ...normalizedState,
+            threadTurnStateById: {
+              ...(normalizedState.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID),
+              [threadId]: previousTurns[threadId],
+            },
+          };
+        }
+      }
+      continue;
+    }
+
+    if (!snapshotThread) {
+      continue;
+    }
+    const previousThread = getThreadFromState(state, threadId);
+    const normalized = normalizeThreadShellSnapshot(snapshotThread, previousThread);
     normalizedState = writeThreadShellProjection(normalizedState, {
       shell: normalized.shell,
-      session: Object.hasOwn(preservedSessionById, thread.id)
-        ? (preservedSessionById[thread.id] ?? null)
-        : normalized.session,
-      turnState: Object.hasOwn(preservedTurnStateById, thread.id)
-        ? (preservedTurnStateById[thread.id] ?? normalized.turnState)
-        : normalized.turnState,
+      session: normalized.session,
+      turnState: normalized.turnState,
     });
   }
 
@@ -4508,7 +4560,7 @@ interface AppStore extends AppState {
   syncServerShellSnapshot: (
     snapshot: OrchestrationShellSnapshot,
     options?: {
-      preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+      preserveDetailForThreadIds?: readonly ThreadId[];
     },
   ) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;

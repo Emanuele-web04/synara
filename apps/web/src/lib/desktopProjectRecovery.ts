@@ -36,6 +36,7 @@ export function classifyDesktopHydrationRecovery(state: {
 
 export type RepairedShellDecision =
   | { action: "confirmed-empty" }
+  | { action: "inconsistent-empty"; shellThreadCount: number }
   | { action: "reject-incomplete"; shellThreadCount: number }
   | {
       action: "apply";
@@ -48,17 +49,22 @@ export type RepairedShellDecision =
     };
 
 /** Decide how to treat repairState output before any store write. */
-export function resolveRepairedShellApplication(
-  repaired: OrchestrationReadModel,
-): RepairedShellDecision {
-  const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
-  const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
+export function resolveRepairedShellApplication(input: {
+  repaired: OrchestrationReadModel;
+  /** True if this recovery attempt already observed live threads (client, shell, or full snapshot). */
+  observedLiveThreadEvidence: boolean;
+}): RepairedShellDecision {
+  const liveProjects = input.repaired.projects.filter((project) => project.deletedAt == null);
+  const liveThreads = input.repaired.threads.filter((thread) => thread.deletedAt == null);
   if (liveProjects.length === 0 && liveThreads.length === 0) {
+    if (input.observedLiveThreadEvidence) {
+      return { action: "inconsistent-empty", shellThreadCount: 0 };
+    }
     return { action: "confirmed-empty" };
   }
   const shell = {
-    snapshotSequence: repaired.snapshotSequence,
-    updatedAt: repaired.updatedAt,
+    snapshotSequence: input.repaired.snapshotSequence,
+    updatedAt: input.repaired.updatedAt,
     projects: liveProjects,
     threads: liveThreads,
   };

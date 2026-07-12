@@ -3311,6 +3311,134 @@ describe("store read model sync", () => {
     ).toBe("running");
   });
 
+  it("retains a protected hot-path thread omitted from an older shell snapshot", () => {
+    const threadId = ThreadId.makeUnsafe("thread-omitted-preserve");
+    const turnId = TurnId.makeUnsafe("turn-omitted-preserve");
+    const otherThreadId = ThreadId.makeUnsafe("thread-other");
+    const withShell = syncServerReadModel(
+      makeState(makeThread({ id: threadId, title: "Live title" })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Live title",
+          latestTurn: {
+            turnId,
+            state: "running",
+            requestedAt: "2026-02-27T00:00:00.000Z",
+            startedAt: "2026-02-27T00:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          updatedAt: "2026-02-27T00:00:02.000Z",
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:02.000Z",
+          },
+        }),
+      ),
+    );
+
+    const next = syncServerShellSnapshot(
+      withShell,
+      makeShellSnapshot({
+        id: otherThreadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Other thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+        handoff: null,
+        session: null,
+      }),
+      { preserveDetailForThreadIds: [threadId] },
+    );
+
+    expect(next.threadIds).toContain(threadId);
+    expect(next.threadShellById?.[threadId]?.title).toBe("Live title");
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
+    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Live title");
+  });
+
+  it("keeps newer shell title when a preserved snapshot row is older", () => {
+    const threadId = ThreadId.makeUnsafe("thread-preserve-title");
+    const turnId = TurnId.makeUnsafe("turn-preserve-title");
+    const withShell = syncServerReadModel(
+      makeState(makeThread({ id: threadId, title: "Newer local title" })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Newer local title",
+          latestTurn: {
+            turnId,
+            state: "running",
+            requestedAt: "2026-02-27T00:00:00.000Z",
+            startedAt: "2026-02-27T00:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          updatedAt: "2026-02-27T00:00:02.000Z",
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-27T00:00:02.000Z",
+          },
+        }),
+      ),
+    );
+
+    const next = syncServerShellSnapshot(
+      withShell,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Older shell title",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+        handoff: null,
+        session: null,
+      }),
+      { preserveDetailForThreadIds: [threadId] },
+    );
+
+    expect(next.threadShellById?.[threadId]?.title).toBe("Newer local title");
+    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Newer local title");
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
+  });
+
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Original title" })),

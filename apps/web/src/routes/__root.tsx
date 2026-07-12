@@ -91,12 +91,15 @@ import {
   resolveRepairedShellApplication,
 } from "../lib/desktopProjectRecovery";
 import {
+  bumpRecoveryMutationLease,
   bumpShellRefreshEpoch,
+  getRecoveryMutationLease,
   getShellRefreshEpoch,
   registerShellRefreshRequest,
   registerShellSnapshotApply,
   requestShellRefresh,
   shouldAcceptShellSnapshotSequence,
+  shouldSkipShellThreadMutation,
   subscribeShellRefreshEpoch,
   tryApplyShellSnapshot,
   type ShellRefreshResult,
@@ -918,6 +921,18 @@ function EventRouter() {
       }
     };
 
+    const applyFencedShellEvent = (event: OrchestrationShellStreamEvent): boolean => {
+      if (event.kind === "thread-upserted" || event.kind === "thread-removed") {
+        const threadId = event.kind === "thread-upserted" ? event.thread.id : event.threadId;
+        const detailSequence = threadSnapshotSequenceById.get(threadId);
+        if (shouldSkipShellThreadMutation(detailSequence, event.sequence)) {
+          return false;
+        }
+      }
+      applyShellEvent(event);
+      return true;
+    };
+
     const flushShellBuffer = (snapshotSequence: number) => {
       const nextPending = pendingShellEvents
         .filter((event) => event.sequence > snapshotSequence)
@@ -925,7 +940,7 @@ function EventRouter() {
       pendingShellEvents = [];
       for (const event of nextPending) {
         shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
-        applyShellEvent(event);
+        applyFencedShellEvent(event);
       }
     };
 
@@ -939,7 +954,7 @@ function EventRouter() {
       shellSnapshotSequence = snapshot.snapshotSequence;
       const preserveDetailForThreadIds: ThreadId[] = [];
       for (const [threadId, detailSequence] of threadSnapshotSequenceById) {
-        if (detailSequence > snapshot.snapshotSequence) {
+        if (detailSequence >= snapshot.snapshotSequence) {
           preserveDetailForThreadIds.push(threadId);
         }
       }
@@ -952,9 +967,14 @@ function EventRouter() {
 
     const performShellRefresh = async (): Promise<ShellRefreshResult> => {
       const generation = ++shellRefreshGeneration;
+      const lease = getRecoveryMutationLease();
       try {
         const fetched = await fetchMissingThreadSnapshots(api);
-        if (disposed || generation !== shellRefreshGeneration) {
+        if (
+          lease !== getRecoveryMutationLease() ||
+          disposed ||
+          generation !== shellRefreshGeneration
+        ) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
 
@@ -996,11 +1016,25 @@ function EventRouter() {
         }
 
         if (fetched.kind === "repair-projects") {
-          const repaired = await api.orchestration.repairState();
-          if (disposed || generation !== shellRefreshGeneration) {
+          if (
+            lease !== getRecoveryMutationLease() ||
+            disposed ||
+            generation !== shellRefreshGeneration
+          ) {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
-          const decision = resolveRepairedShellApplication(repaired);
+          const repaired = await api.orchestration.repairState();
+          if (
+            lease !== getRecoveryMutationLease() ||
+            disposed ||
+            generation !== shellRefreshGeneration
+          ) {
+            return { applied: false, shellThreadCount: 0, reason: "stale" };
+          }
+          const decision = resolveRepairedShellApplication({
+            repaired,
+            observedLiveThreadEvidence: true,
+          });
           if (decision.action === "confirmed-empty") {
             return {
               applied: true,
@@ -1008,7 +1042,7 @@ function EventRouter() {
               reason: "confirmed-empty",
             };
           }
-          if (decision.action === "reject-incomplete") {
+          if (decision.action === "inconsistent-empty" || decision.action === "reject-incomplete") {
             return {
               applied: false,
               shellThreadCount: decision.shellThreadCount,
@@ -1305,8 +1339,8 @@ function EventRouter() {
         return;
       }
       shellSnapshotSequence = item.sequence;
-      applyShellEvent(item);
-      if (item.kind === "thread-upserted") {
+      const mutationApplied = applyFencedShellEvent(item);
+      if (mutationApplied && item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
       }
       if (
@@ -1622,6 +1656,7 @@ function DesktopProjectBootstrap() {
     });
     controller.start();
     return () => {
+      bumpRecoveryMutationLease();
       controller.cancel();
     };
   }, [recoveryKind, shellRefreshEpoch]);
@@ -1637,15 +1672,23 @@ function DesktopProjectBootstrap() {
       isStillNeeded: () =>
         classifyDesktopHydrationRecovery(useStore.getState()) === "repair-projects",
       refresh: async () => {
+        const lease = getRecoveryMutationLease();
         const api = readNativeApi();
         if (!api) {
           return { applied: false, shellThreadCount: 0, reason: "unavailable" };
         }
         const snapshot = await api.orchestration.getShellSnapshot();
+        if (lease !== getRecoveryMutationLease()) {
+          return { applied: false, shellThreadCount: 0, reason: "stale" };
+        }
+        const store = useStore.getState();
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
+          if (lease !== getRecoveryMutationLease()) {
+            return { applied: false, shellThreadCount: 0, reason: "stale" };
+          }
           const snapshotApplied = tryApplyShellSnapshot(snapshot);
           const recovered =
             snapshotApplied &&
@@ -1656,8 +1699,17 @@ function DesktopProjectBootstrap() {
             reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
           };
         }
+        if (lease !== getRecoveryMutationLease()) {
+          return { applied: false, shellThreadCount: 0, reason: "stale" };
+        }
         const repaired = await api.orchestration.repairState();
-        const decision = resolveRepairedShellApplication(repaired);
+        if (lease !== getRecoveryMutationLease()) {
+          return { applied: false, shellThreadCount: 0, reason: "stale" };
+        }
+        const decision = resolveRepairedShellApplication({
+          repaired,
+          observedLiveThreadEvidence: store.threads.length > 0 || snapshot.threads.length > 0,
+        });
         if (decision.action === "confirmed-empty") {
           return {
             applied: true,
@@ -1665,7 +1717,7 @@ function DesktopProjectBootstrap() {
             reason: "confirmed-empty",
           };
         }
-        if (decision.action === "reject-incomplete") {
+        if (decision.action === "inconsistent-empty" || decision.action === "reject-incomplete") {
           return {
             applied: false,
             shellThreadCount: decision.shellThreadCount,
@@ -1685,6 +1737,7 @@ function DesktopProjectBootstrap() {
     });
     controller.start();
     return () => {
+      bumpRecoveryMutationLease();
       controller.cancel();
     };
   }, [recoveryKind, shellRefreshEpoch]);
