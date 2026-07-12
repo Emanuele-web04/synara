@@ -5705,6 +5705,45 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  const onProviderModelSelect = useCallback(
+    (provider: ProviderKind, model: ModelSlug) => {
+      if (!activeThread) return;
+      if (lockedProvider !== null && provider !== lockedProvider) {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider[provider],
+        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
+      });
+      const nextModelSelection: ModelSelection = {
+        provider,
+        model: resolvedModel,
+      };
+      setComposerDraftModelSelection(activeThread.id, nextModelSelection);
+      if (provider === "cursor" && !showExpandedCursorModelVariants) {
+        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+          persistSticky: true,
+          model: resolvedModel,
+        });
+      }
+      setStickyComposerModelSelection(nextModelSelection);
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      lockedProvider,
+      scheduleComposerFocus,
+      setComposerDraftModelSelection,
+      setComposerDraftProviderModelOptions,
+      setStickyComposerModelSelection,
+      showExpandedCursorModelVariants,
+      customModelsByProvider,
+      modelOptionsByProvider,
+    ],
+  );
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -5766,7 +5805,7 @@ export default function ChatView({
       }
 
       if (command === "model.next" || command === "model.previous") {
-        if (!composerPickerShortcutActive || !activeThread) return;
+        if (!composerPickerShortcutActive) return;
         event.preventDefault();
         event.stopPropagation();
         const direction = command === "model.next" ? "next" : "previous";
@@ -5778,19 +5817,7 @@ export default function ChatView({
           direction,
         });
         if (!nextSlug) return;
-        const resolvedModel = resolveCommittedProviderModel({
-          selectedModel: nextSlug as ModelSlug,
-          availableOptions: providerOptions,
-          fallback: () =>
-            resolveAppModelSelection(selectedProvider, customModelsByProvider, nextSlug),
-        });
-        const nextModelSelection: ModelSelection = {
-          provider: selectedProvider,
-          model: resolvedModel,
-        };
-        setComposerDraftModelSelection(activeThread.id, nextModelSelection);
-        setStickyComposerModelSelection(nextModelSelection);
-        scheduleComposerFocus();
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
         return;
       }
 
@@ -5969,9 +5996,7 @@ export default function ChatView({
     selectedProvider,
     selectedModel,
     modelOptionsByProvider,
-    customModelsByProvider,
-    setComposerDraftModelSelection,
-    setStickyComposerModelSelection,
+    onProviderModelSelect,
   ]);
 
   const startComposerVoiceRecording = useCallback(async () => {
@@ -8569,44 +8594,6 @@ export default function ChatView({
     selectedModel,
   ]);
 
-  const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
-      if (!activeThread) return;
-      if (lockedProvider !== null && provider !== lockedProvider) {
-        scheduleComposerFocus();
-        return;
-      }
-      const resolvedModel = resolveCommittedProviderModel({
-        selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
-        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-      });
-      const nextModelSelection: ModelSelection = {
-        provider,
-        model: resolvedModel,
-      };
-      setComposerDraftModelSelection(activeThread.id, nextModelSelection);
-      if (provider === "cursor" && !showExpandedCursorModelVariants) {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
-      }
-      setStickyComposerModelSelection(nextModelSelection);
-      scheduleComposerFocus();
-    },
-    [
-      activeThread,
-      lockedProvider,
-      scheduleComposerFocus,
-      setComposerDraftModelSelection,
-      setComposerDraftProviderModelOptions,
-      setStickyComposerModelSelection,
-      showExpandedCursorModelVariants,
-      customModelsByProvider,
-      modelOptionsByProvider,
-    ],
-  );
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
       const currentPrompt = promptRef.current;

@@ -736,6 +736,36 @@ describe("resolveCycledModelSlug", () => {
       }),
     ).toBe("b");
   });
+
+  it("starts at the ordered boundary when the current model is unavailable", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "previous",
+      }),
+    ).toBe("c");
+  });
+
+  it("normalizes whitespace and ignores duplicate or unavailable favorites", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: " d ",
+        options: [{ slug: " a " }, { slug: "b" }, { slug: "b" }, { slug: "d" }],
+        favoriteSlugs: [" missing ", " d ", "d"],
+        direction: "next",
+      }),
+    ).toBe("a");
+  });
 });
 
 describe("resolveActiveTurnLiveDiffState", () => {

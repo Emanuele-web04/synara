@@ -1350,6 +1350,18 @@ function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): vo
   );
 }
 
+function dispatchModelCycleShortcut(target: EventTarget, key: "[" | "]"): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code: key === "]" ? "BracketRight" : "BracketLeft",
+    altKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
@@ -2714,6 +2726,72 @@ describe("ChatView timeline estimator parity (full app)", () => {
       dispatchComposerPickerShortcut(composerEditor, "m");
 
       await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cycles the active provider model without opening the picker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-cycle-shortcut" as MessageId,
+        targetText: "model cycle shortcut",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "model.next",
+              shortcut: {
+                key: "]",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: false,
+              },
+            },
+            {
+              command: "model.previous",
+              shortcut: {
+                key: "[",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: true,
+                modKey: false,
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      await waitForServerConfigToApply();
+      composerEditor.focus();
+
+      const nextEvent = dispatchModelCycleShortcut(composerEditor, "]");
+      expect(nextEvent.defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.5" });
+      });
+      expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+
+      const previousEvent = dispatchModelCycleShortcut(composerEditor, "[");
+      expect(previousEvent.defaultPrevented).toBe(true);
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.2" });
+      });
     } finally {
       await mounted.cleanup();
     }
