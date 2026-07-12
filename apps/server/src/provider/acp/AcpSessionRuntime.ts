@@ -13,6 +13,7 @@ import {
   Layer,
   Queue,
   Ref,
+  Schema,
   Scope,
   ServiceMap,
   Stream,
@@ -20,7 +21,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 import {
@@ -300,12 +301,18 @@ const makeAcpSessionRuntime = (
           update.sessionUpdate === "available_commands_update"
             ? Ref.set(availableCommandsRef, update.availableCommands)
             : Effect.void;
+        const rememberConfigOptions =
+          update.sessionUpdate === "config_option_update"
+            ? Ref.set(configOptionsRef, update.configOptions)
+            : Effect.void;
+        const rememberBoundedState = rememberCommands.pipe(Effect.andThen(rememberConfigOptions));
         if (!acceptingSessionUpdates) {
-          // Command inventory is bounded state, not transcript replay; retain
-          // it even while historical session updates are being suppressed.
-          return rememberCommands;
+          // Command and configuration inventories are bounded state, not
+          // transcript replay; retain them even while historical session
+          // updates are being suppressed.
+          return rememberBoundedState;
         }
-        return rememberCommands.pipe(
+        return rememberBoundedState.pipe(
           Effect.andThen(
             handleSessionUpdate({
               offer: offerSessionEvent,
@@ -402,6 +409,31 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.ResumeSessionResponse,
     ): Effect.Effect<void> => Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(response));
 
+    const waitForConfigOptionUpdate = (
+      configId: string,
+      value: string | boolean,
+      attemptsRemaining = 25,
+    ): Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>> =>
+      Ref.get(configOptionsRef).pipe(
+        Effect.flatMap((configOptions) => {
+          const updated = findSessionConfigOption(configOptions, configId);
+          if (updated && configOptionCurrentValueMatches(updated, value)) {
+            return Effect.succeed(configOptions);
+          }
+          if (attemptsRemaining > 0) {
+            return Effect.sleep("10 millis").pipe(
+              Effect.andThen(waitForConfigOptionUpdate(configId, value, attemptsRemaining - 1)),
+            );
+          }
+          // Some agents return an empty success response without publishing a
+          // config update. Preserve discovery progress with the requested
+          // value while retaining the last known option inventory.
+          return Ref.updateAndGet(configOptionsRef, (current) =>
+            applySessionConfigOptionValue(current, configId, value),
+          );
+        }),
+      );
+
     const updateCurrentModeId = (modeId: string): Effect.Effect<void> =>
       Ref.update(modeStateRef, (current) =>
         current ? { ...current, currentModeId: modeId } : current,
@@ -438,8 +470,34 @@ const makeAcpSessionRuntime = (
               return runLoggedRequest(
                 "session/set_config_option",
                 requestPayload,
-                acp.agent.setSessionConfigOption(requestPayload),
-              ).pipe(Effect.tap((response) => updateConfigOptions(response)));
+                acp.raw.request("session/set_config_option", requestPayload),
+              ).pipe(
+                Effect.flatMap((response) => {
+                  if (isEmptyRecord(response)) {
+                    return waitForConfigOptionUpdate(configId, value).pipe(
+                      Effect.map(
+                        (configOptions) =>
+                          ({
+                            configOptions,
+                          }) satisfies EffectAcpSchema.SetSessionConfigOptionResponse,
+                      ),
+                    );
+                  }
+                  return Schema.decodeUnknownEffect(EffectAcpSchema.SetSessionConfigOptionResponse)(
+                    response,
+                  ).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new EffectAcpErrors.AcpTransportError({
+                          detail:
+                            "ACP agent returned an invalid session/set_config_option response",
+                          cause,
+                        }),
+                    ),
+                    Effect.tap((decoded) => updateConfigOptions(decoded)),
+                  );
+                }),
+              );
             }),
           ),
         ),
@@ -757,6 +815,31 @@ function configOptionCurrentValueMatches(
     return false;
   }
   return currentValue.trim() === String(value).trim();
+}
+
+export function applySessionConfigOptionValue(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  configId: string,
+  value: string | boolean,
+): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
+  return configOptions.map((configOption) => {
+    if (configOption.id !== configId) {
+      return configOption;
+    }
+    if (configOption.type === "boolean") {
+      return typeof value === "boolean" ? { ...configOption, currentValue: value } : configOption;
+    }
+    return typeof value === "string" ? { ...configOption, currentValue: value } : configOption;
+  });
+}
+
+function isEmptyRecord(value: unknown): value is Record<string, never> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
 }
 
 const handleSessionUpdate = ({

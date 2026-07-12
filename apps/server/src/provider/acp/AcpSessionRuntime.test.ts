@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { assistantItemId } from "./AcpSessionRuntime.ts";
+import type * as EffectAcpSchema from "effect-acp/schema";
+
+import { applySessionConfigOptionValue, assistantItemId } from "./AcpSessionRuntime.ts";
 
 describe("assistantItemId", () => {
   // Format contract only — distinct runtimeInstanceId wiring is covered by
@@ -12,5 +14,47 @@ describe("assistantItemId", () => {
     expect(a).not.toBe(b);
     expect(a).toBe("assistant:session-1:aaaa1111:segment:0");
     expect(b).toBe("assistant:session-1:bbbb2222:segment:0");
+  });
+});
+
+describe("applySessionConfigOptionValue", () => {
+  it("updates the requested option while retaining the rest of the inventory", () => {
+    const configOptions = [
+      {
+        id: "model",
+        name: "Model",
+        type: "select",
+        currentValue: "gpt-5.5",
+        options: [
+          { value: "gpt-5.5", name: "GPT-5.5" },
+          { value: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+        ],
+      },
+      {
+        id: "thinking",
+        name: "Thinking",
+        type: "boolean",
+        currentValue: false,
+      },
+    ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+
+    expect(applySessionConfigOptionValue(configOptions, "model", "gpt-5.6-luna")).toEqual([
+      { ...configOptions[0], currentValue: "gpt-5.6-luna" },
+      configOptions[1],
+    ]);
+    expect(configOptions[0]?.currentValue).toBe("gpt-5.5");
+  });
+
+  it("does not apply a value with the wrong option type", () => {
+    const configOptions = [
+      {
+        id: "thinking",
+        name: "Thinking",
+        type: "boolean",
+        currentValue: false,
+      },
+    ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+
+    expect(applySessionConfigOptionValue(configOptions, "thinking", "true")).toEqual(configOptions);
   });
 });
