@@ -220,6 +220,7 @@ export const ProviderReadPluginInput = Schema.Struct({
   marketplacePath: TrimmedNonEmptyString,
   pluginName: TrimmedNonEmptyString,
   cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 

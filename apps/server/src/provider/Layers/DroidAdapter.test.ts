@@ -3,9 +3,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   isRenderableDroidAssistantDelta,
+  resolveDroidSessionCwd,
   scopeDroidRuntimeItemIdForTurn,
   scopeDroidToolCallStateForTurn,
 } from "./DroidAdapter.ts";
+
+const serverConfig = {
+  cwd: "/server/cwd",
+  homeDir: "/home/test",
+} as Parameters<typeof resolveDroidSessionCwd>[1];
+
+describe("resolveDroidSessionCwd", () => {
+  it("prefers an explicit cwd over the active thread session cwd", () => {
+    expect(resolveDroidSessionCwd("/explicit", serverConfig, "/thread")).toBe("/explicit");
+  });
+
+  it("uses the active thread session cwd before the server fallback", () => {
+    expect(resolveDroidSessionCwd(undefined, serverConfig, "/thread")).toBe("/thread");
+  });
+});
 
 describe("DroidAdapter runtime event scoping", () => {
   it("makes reused ACP assistant segment ids unique per turn", () => {

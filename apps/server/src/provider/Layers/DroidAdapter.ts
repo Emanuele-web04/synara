@@ -365,11 +365,12 @@ function withDroidPlanModePrompt(input: {
     : DROID_PLAN_MODE_PROMPT_PREFIX;
 }
 
-function resolveDroidSessionCwd(
+export function resolveDroidSessionCwd(
   inputCwd: string | undefined,
   serverConfig: ServerConfigShape,
+  sessionCwd?: string,
 ): string | undefined {
-  const requestedCwd = inputCwd?.trim();
+  const requestedCwd = inputCwd?.trim() || sessionCwd?.trim();
   if (requestedCwd) {
     return nodePath.resolve(requestedCwd);
   }
@@ -1802,9 +1803,13 @@ export function makeDroidAdapter(
         ),
       );
 
-    const listPlugins: NonNullable<DroidAdapterShape["listPlugins"]> = (input) =>
-      Effect.tryPromise({
-        try: () => listFactoryPlugins(serverConfig.homeDir, input.cwd),
+    const listPlugins: NonNullable<DroidAdapterShape["listPlugins"]> = (input) => {
+      const sessionCwd = input.threadId
+        ? sessions.get(ThreadId.makeUnsafe(input.threadId))?.session.cwd
+        : undefined;
+      const cwd = resolveDroidSessionCwd(input.cwd, serverConfig, sessionCwd);
+      return Effect.tryPromise({
+        try: () => listFactoryPlugins(serverConfig.homeDir, cwd),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -1813,15 +1818,20 @@ export function makeDroidAdapter(
             cause,
           }),
       });
+    };
 
-    const readPlugin: NonNullable<DroidAdapterShape["readPlugin"]> = (input) =>
-      Effect.tryPromise({
+    const readPlugin: NonNullable<DroidAdapterShape["readPlugin"]> = (input) => {
+      const sessionCwd = input.threadId
+        ? sessions.get(ThreadId.makeUnsafe(input.threadId))?.session.cwd
+        : undefined;
+      const cwd = resolveDroidSessionCwd(input.cwd, serverConfig, sessionCwd);
+      return Effect.tryPromise({
         try: () =>
           readFactoryPlugin({
             homeDir: serverConfig.homeDir,
             marketplacePath: input.marketplacePath,
             pluginName: input.pluginName,
-            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(cwd !== undefined ? { cwd } : {}),
           }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
@@ -1843,6 +1853,7 @@ export function makeDroidAdapter(
               ),
         ),
       );
+    };
 
     const listCommands: NonNullable<DroidAdapterShape["listCommands"]> = (input) =>
       Effect.gen(function* () {
