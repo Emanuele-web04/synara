@@ -113,6 +113,7 @@ import {
   shouldReconcileCheckpointFileRestoreAcceptance,
   subscribePendingCheckpointFileRestore,
   waitForCheckpointFileRestore,
+  type PendingCheckpointFileRestore,
 } from "~/lib/checkpointFileRestore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
@@ -3854,6 +3855,27 @@ export default function ChatView({
     },
     [queryClient],
   );
+  const releaseCheckpointFileRestoreReservation = useCallback(
+    async (pending: PendingCheckpointFileRestore): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api) return false;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.checkpoint.files.restore.reviewed",
+          commandId: newCommandId(),
+          requestCommandId: pending.requestCommandId,
+          threadId: pending.threadId,
+          messageId: pending.messageId,
+          turnCount: pending.turnCount,
+          createdAt: new Date().toISOString(),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const pending = readPendingCheckpointFileRestore();
@@ -6467,6 +6489,38 @@ export default function ChatView({
       }
       if (pendingConfirmation) {
         setIsRevertingCheckpoint(true);
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "thread.checkpoint.files.restore.prepare",
+            commandId: newCommandId(),
+            requestCommandId: commandId,
+            threadId: activeThread.id,
+            messageId: messageId!,
+            turnCount,
+            createdAt: pendingConfirmation.createdAt,
+          });
+        } catch (error) {
+          if (isDefinitiveDispatchRejection(error)) {
+            clearPendingCheckpointFileRestore(commandId);
+            setIsRevertingCheckpoint(false);
+            setThreadError(
+              activeThread.id,
+              error instanceof Error
+                ? error.message
+                : "File restore could not reserve the workspace.",
+            );
+            return;
+          }
+          void savePendingCheckpointFileRestore({
+            ...pendingConfirmation,
+            acceptanceAmbiguous: true,
+          });
+          const reviewMessage =
+            "File restore reservation status is indeterminate. Inspect the working tree, then use “Review and unlock” before starting new work.";
+          setCheckpointFileRestoreReviewMessage(reviewMessage);
+          setThreadError(activeThread.id, reviewMessage);
+          return;
+        }
       }
       let confirmed = false;
       try {
@@ -6485,9 +6539,17 @@ export default function ChatView({
         );
       } catch (error) {
         if (pendingConfirmation) {
+          const released = await releaseCheckpointFileRestoreReservation(pendingConfirmation);
+          if (!released) {
+            const reviewMessage =
+              "File restore confirmation was interrupted, but Synara could not confirm the server-side safety lock was released. Use “Review and unlock” before starting new work.";
+            setCheckpointFileRestoreReviewMessage(reviewMessage);
+            setThreadError(activeThread.id, reviewMessage);
+            return;
+          }
           clearPendingCheckpointFileRestore(commandId);
-          setIsRevertingCheckpoint(false);
         }
+        setIsRevertingCheckpoint(false);
         setThreadError(
           activeThread.id,
           error instanceof Error ? error.message : "Could not confirm the file restore.",
@@ -6496,9 +6558,17 @@ export default function ChatView({
       }
       if (!confirmed) {
         if (pendingConfirmation) {
+          const released = await releaseCheckpointFileRestoreReservation(pendingConfirmation);
+          if (!released) {
+            const reviewMessage =
+              "File restore was cancelled, but Synara could not confirm the server-side safety lock was released. Use “Review and unlock” before starting new work.";
+            setCheckpointFileRestoreReviewMessage(reviewMessage);
+            setThreadError(activeThread.id, reviewMessage);
+            return;
+          }
           clearPendingCheckpointFileRestore(commandId);
-          setIsRevertingCheckpoint(false);
         }
+        setIsRevertingCheckpoint(false);
         return;
       }
 
@@ -6516,9 +6586,17 @@ export default function ChatView({
           phase: "dispatched" as const,
         };
         if (!savePendingCheckpointFileRestore(pendingRestore)) {
-          clearPendingCheckpointFileRestore(commandId);
-          setThreadError(activeThread.id, "The file restore safety lock could not be updated.");
-          setIsRevertingCheckpoint(false);
+          const released = await releaseCheckpointFileRestoreReservation(pendingConfirmation!);
+          if (released) {
+            clearPendingCheckpointFileRestore(commandId);
+            setIsRevertingCheckpoint(false);
+            setThreadError(activeThread.id, "The file restore safety lock could not be updated.");
+          } else {
+            const reviewMessage =
+              "The file restore safety lock could not be updated, and Synara could not confirm the server-side lock was released. Use “Review and unlock” before starting new work.";
+            setCheckpointFileRestoreReviewMessage(reviewMessage);
+            setThreadError(activeThread.id, reviewMessage);
+          }
           return;
         }
         try {
@@ -6532,12 +6610,20 @@ export default function ChatView({
           });
         } catch (error) {
           if (isDefinitiveDispatchRejection(error)) {
-            clearPendingCheckpointFileRestore(commandId);
-            setThreadError(
-              activeThread.id,
-              error instanceof Error ? error.message : "File restore was rejected.",
-            );
-            setIsRevertingCheckpoint(false);
+            const released = await releaseCheckpointFileRestoreReservation(pendingRestore);
+            if (released) {
+              clearPendingCheckpointFileRestore(commandId);
+              setThreadError(
+                activeThread.id,
+                error instanceof Error ? error.message : "File restore was rejected.",
+              );
+              setIsRevertingCheckpoint(false);
+            } else {
+              const reviewMessage =
+                "File restore was rejected, but Synara could not confirm the server-side safety lock was released. Use “Review and unlock” before starting new work.";
+              setCheckpointFileRestoreReviewMessage(reviewMessage);
+              setThreadError(activeThread.id, reviewMessage);
+            }
             return;
           }
           // The request may have been accepted before the transport failed.
@@ -10257,13 +10343,21 @@ export default function ChatView({
       ].join("\n"),
     );
     if (!confirmed) return;
+    const released = await releaseCheckpointFileRestoreReservation(pending);
+    if (!released) {
+      const reviewMessage =
+        "Synara could not persist the file-restore unlock. Keep the working tree paused and try “Review and unlock” again.";
+      setCheckpointFileRestoreReviewMessage(reviewMessage);
+      setThreadError(pending.threadId, reviewMessage);
+      return;
+    }
     clearPendingCheckpointFileRestore(pending.requestCommandId);
     setCheckpointFileRestoreReviewMessage(null);
     setThreadError(pending.threadId, null);
     if (activeThreadId !== pending.threadId) {
       setThreadError(activeThreadId, null);
     }
-  }, [activeThreadId, setThreadError]);
+  }, [activeThreadId, releaseCheckpointFileRestoreReservation, setThreadError]);
   const dismissActiveProviderHealthBanner = useCallback(() => {
     if (!activeProviderHealthBannerDismissalKey) return;
     setDismissedProviderHealthBannerKeys((current) => {

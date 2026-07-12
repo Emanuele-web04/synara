@@ -1179,6 +1179,7 @@ const make = Effect.gen(function* () {
       Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
     );
     type RestoreState = {
+      prepared?: Extract<OrchestrationEvent, { type: "thread.checkpoint-files-restore-prepared" }>;
       request?: Extract<OrchestrationEvent, { type: "thread.checkpoint-files-restore-requested" }>;
       reconciliation?: Extract<
         OrchestrationEvent,
@@ -1196,6 +1197,10 @@ const make = Effect.gen(function* () {
     };
 
     for (const event of events) {
+      if (event.type === "thread.checkpoint-files-restore-prepared") {
+        stateFor(event.payload.requestCommandId).prepared = event;
+        continue;
+      }
       if (event.type === "thread.checkpoint-files-restore-requested" && event.commandId !== null) {
         stateFor(event.commandId).request = event;
         continue;
@@ -1206,7 +1211,8 @@ const make = Effect.gen(function* () {
       }
       if (
         event.type === "thread.checkpoint-files-restored" ||
-        event.type === "thread.checkpoint-files-restore-failed"
+        event.type === "thread.checkpoint-files-restore-failed" ||
+        event.type === "thread.checkpoint-files-restore-reviewed"
       ) {
         stateFor(event.payload.requestCommandId).terminal = true;
       }
@@ -1217,16 +1223,19 @@ const make = Effect.gen(function* () {
       restoreStates.entries(),
       ([requestCommandId, state]) => {
         if (state.terminal) return Effect.void;
-        const source = state.request ?? state.reconciliation;
+        const source = state.request ?? state.reconciliation ?? state.prepared;
         if (!source) return Effect.void;
+        const preparedOnly = state.request === undefined && state.prepared !== undefined;
         return appendFilesRestoreFailureTerminalEventually(
           {
             threadId: source.payload.threadId,
             turnCount: source.payload.turnCount,
-            detail: state.request
-              ? "File restore did not finish before Synara restarted. No automatic retry was run; inspect the working tree before continuing."
-              : "Synara restarted before file restore acceptance could be confirmed. No restore was replayed; inspect the working tree before continuing.",
-            requiresWorkspaceReview: true,
+            detail: preparedOnly
+              ? "File restore confirmation did not finish before Synara restarted. No restore was run."
+              : state.request
+                ? "File restore did not finish before Synara restarted. No automatic retry was run; inspect the working tree before continuing."
+                : "Synara restarted before file restore acceptance could be confirmed. No restore was replayed; inspect the working tree before continuing.",
+            requiresWorkspaceReview: !preparedOnly,
             createdAt: now,
             filesRestore: {
               requestCommandId,
@@ -1248,6 +1257,13 @@ const make = Effect.gen(function* () {
     let terminal = false;
     for (const event of events) {
       if (
+        event.type === "thread.checkpoint-files-restore-prepared" &&
+        event.payload.requestCommandId === requestCommandId
+      ) {
+        requested = true;
+        continue;
+      }
+      if (
         event.type === "thread.checkpoint-files-restore-requested" &&
         event.commandId === requestCommandId
       ) {
@@ -1256,7 +1272,8 @@ const make = Effect.gen(function* () {
       }
       if (
         (event.type === "thread.checkpoint-files-restored" ||
-          event.type === "thread.checkpoint-files-restore-failed") &&
+          event.type === "thread.checkpoint-files-restore-failed" ||
+          event.type === "thread.checkpoint-files-restore-reviewed") &&
         event.payload.requestCommandId === requestCommandId
       ) {
         terminal = true;
@@ -1393,9 +1410,11 @@ const make = Effect.gen(function* () {
   const start: CheckpointReactorShape["start"] = Effect.gen(function* () {
     yield* failInterruptedFileRestoresOnStart().pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("failed to reconcile interrupted file restores on checkpoint startup", {
-          cause: Cause.pretty(cause),
-        }),
+        Effect.die(
+          new Error(
+            `Failed to reconcile interrupted file restores before checkpoint startup: ${Cause.pretty(cause)}`,
+          ),
+        ),
       ),
     );
 

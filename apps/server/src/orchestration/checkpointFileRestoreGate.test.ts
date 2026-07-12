@@ -45,6 +45,20 @@ function requested(sequence: number): OrchestrationEvent {
   };
 }
 
+function prepared(sequence: number): OrchestrationEvent {
+  return {
+    ...base(sequence, CommandId.makeUnsafe(`cmd-prepare-${sequence}`)),
+    type: "thread.checkpoint-files-restore-prepared",
+    payload: {
+      threadId,
+      messageId,
+      turnCount: 0,
+      requestCommandId,
+      createdAt,
+    },
+  };
+}
+
 function restored(sequence: number): OrchestrationEvent {
   return {
     ...base(sequence, CommandId.makeUnsafe(`cmd-terminal-${sequence}`)),
@@ -54,6 +68,35 @@ function restored(sequence: number): OrchestrationEvent {
       messageId,
       turnCount: 0,
       requestCommandId,
+    },
+  };
+}
+
+function failed(sequence: number, requiresWorkspaceReview: boolean): OrchestrationEvent {
+  return {
+    ...base(sequence, CommandId.makeUnsafe(`cmd-failed-${sequence}`)),
+    type: "thread.checkpoint-files-restore-failed",
+    payload: {
+      threadId,
+      messageId,
+      turnCount: 0,
+      requestCommandId,
+      detail: "File restore failed.",
+      requiresWorkspaceReview,
+    },
+  };
+}
+
+function reviewed(sequence: number): OrchestrationEvent {
+  return {
+    ...base(sequence, CommandId.makeUnsafe(`cmd-reviewed-${sequence}`)),
+    type: "thread.checkpoint-files-restore-reviewed",
+    payload: {
+      threadId,
+      messageId,
+      turnCount: 0,
+      requestCommandId,
+      createdAt,
     },
   };
 }
@@ -78,8 +121,25 @@ describe("checkpoint file restore gate", () => {
     expect(hasPendingCheckpointFileRestore([requested(1), restored(2)])).toBe(false);
   });
 
+  it("keeps server reservations pending until they are used or explicitly reviewed", () => {
+    expect(hasPendingCheckpointFileRestore([prepared(1)])).toBe(true);
+    expect(hasPendingCheckpointFileRestore([prepared(1), reviewed(2)])).toBe(false);
+    expect(hasPendingCheckpointFileRestore([prepared(1), requested(2), restored(3)])).toBe(false);
+  });
+
+  it("keeps review-required failures gated until explicit review unlock", () => {
+    expect(hasPendingCheckpointFileRestore([requested(1), failed(2, true)])).toBe(true);
+    expect(hasPendingCheckpointFileRestore([requested(1), failed(2, false)])).toBe(false);
+    expect(hasPendingCheckpointFileRestore([requested(1), failed(2, true), reviewed(3)])).toBe(
+      false,
+    );
+  });
+
   it("does not reopen the gate when reconciliation is logged after terminal state", () => {
     expect(hasPendingCheckpointFileRestore([requested(1), restored(2), reconcile(3)])).toBe(false);
+    expect(
+      hasPendingCheckpointFileRestore([requested(1), failed(2, true), reviewed(3), reconcile(4)]),
+    ).toBe(false);
   });
 
   it("allows recorded command ids to reach receipt-based idempotency", () => {
@@ -95,6 +155,20 @@ describe("checkpoint file restore gate", () => {
         [requested(1)],
         "thread.checkpoint.files.restore",
         { allowRecordedCommandId: CommandId.makeUnsafe("cmd-unrecorded-retry") },
+      ),
+    ).toBe(true);
+    expect(
+      shouldBlockCommandForPendingCheckpointFileRestore(
+        [prepared(1)],
+        "thread.checkpoint.files.restore",
+        { allowRequestCommandId: requestCommandId },
+      ),
+    ).toBe(false);
+    expect(
+      shouldBlockCommandForPendingCheckpointFileRestore(
+        [prepared(1)],
+        "thread.checkpoint.files.restore",
+        { allowRequestCommandId: CommandId.makeUnsafe("cmd-other-request") },
       ),
     ).toBe(true);
     expect(
@@ -122,6 +196,11 @@ describe("checkpoint file restore gate", () => {
     expect(
       isOrchestrationCommandTypeBlockedByPendingCheckpointFileRestore(
         "thread.checkpoint.files.restore",
+      ),
+    ).toBe(true);
+    expect(
+      isOrchestrationCommandTypeBlockedByPendingCheckpointFileRestore(
+        "thread.checkpoint.files.restore.prepare",
       ),
     ).toBe(true);
     expect(isOrchestrationCommandTypeBlockedByPendingCheckpointFileRestore("thread.archive")).toBe(

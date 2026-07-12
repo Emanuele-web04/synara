@@ -2152,6 +2152,48 @@ describe("CheckpointReactor", () => {
     expect(events.some((event) => event.type === "thread.checkpoint-files-restored")).toBe(false);
   });
 
+  it("terminalizes an interrupted prepared-only restore on startup without restoring files", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const createdAt = new Date().toISOString();
+    const requestCommandId = CommandId.makeUnsafe("cmd-prepared-only-files-restore");
+    const restoreSpy = vi.spyOn(harness.checkpointStore, "restoreCheckpoint");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.files.restore.prepare",
+        commandId: CommandId.makeUnsafe("cmd-prepared-only-files-restore-prepare"),
+        requestCommandId,
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("message-prepared-only-files-restore"),
+        turnCount: 0,
+        createdAt,
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+
+    const events = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      ),
+    );
+    const failure = events.find(
+      (
+        event,
+      ): event is Extract<
+        (typeof events)[number],
+        { type: "thread.checkpoint-files-restore-failed" }
+      > =>
+        event.type === "thread.checkpoint-files-restore-failed" &&
+        event.payload.requestCommandId === requestCommandId,
+    );
+    expect(restoreSpy).not.toHaveBeenCalled();
+    expect(failure?.payload.detail).toContain("No restore was run");
+    expect(failure?.payload.requiresWorkspaceReview).toBe(false);
+    expect(hasPendingCheckpointFileRestore(events)).toBe(false);
+  });
+
   it("does not restore files or leave a pending gate for legacy requests without command ids", async () => {
     const harness = await createHarness({ startReactor: false });
     const createdAt = new Date().toISOString();

@@ -245,6 +245,13 @@ export function checkpointFileRestoreStatusFromEvents(input: {
       continue;
     }
     if (
+      event.type === "thread.checkpoint-files-restore-prepared" &&
+      event.payload.requestCommandId === input.requestCommandId
+    ) {
+      requested = { status: "pending", sequence: event.sequence };
+      continue;
+    }
+    if (
       event.type === "thread.checkpoint-files-restore-requested" &&
       event.commandId === input.requestCommandId
     ) {
@@ -253,8 +260,15 @@ export function checkpointFileRestoreStatusFromEvents(input: {
     }
     if (
       event.type !== "thread.checkpoint-files-restored" &&
-      event.type !== "thread.checkpoint-files-restore-failed"
+      event.type !== "thread.checkpoint-files-restore-failed" &&
+      event.type !== "thread.checkpoint-files-restore-reviewed"
     ) {
+      continue;
+    }
+    if (event.type === "thread.checkpoint-files-restore-reviewed") {
+      if (event.payload.requestCommandId === input.requestCommandId) {
+        requested = null;
+      }
       continue;
     }
     if (event.payload.requestCommandId !== input.requestCommandId) {

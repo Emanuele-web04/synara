@@ -229,6 +229,22 @@ describe("OrchestrationEngine", () => {
         createdAt,
       }),
     );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.checkpoint.files.restore",
+          commandId: requestCommandId,
+          threadId,
+          messageId: asMessageId("msg-restore-gate"),
+          turnCount: 1,
+          createdAt,
+        }),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sequence: expect.any(Number),
+      }),
+    );
 
     await expect(
       system.run(
@@ -328,6 +344,37 @@ describe("OrchestrationEngine", () => {
         turnCount: 1,
         detail: "Restore outcome requires review.",
         requiresWorkspaceReview: true,
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-restore-gate-turn-review-blocked"),
+          threadId,
+          message: {
+            messageId: asMessageId("msg-restore-gate-review-blocked"),
+            role: "user",
+            text: "review-required restore should still gate",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("A checkpoint file restore is still pending");
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.checkpoint.files.restore.reviewed",
+        commandId: CommandId.makeUnsafe("cmd-restore-gate-reviewed"),
+        requestCommandId,
+        threadId,
+        messageId: asMessageId("msg-restore-gate"),
+        turnCount: 1,
         createdAt,
       }),
     );

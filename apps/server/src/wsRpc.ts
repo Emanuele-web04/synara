@@ -81,6 +81,13 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+const CHECKPOINT_FILE_RESTORE_GATED_RPC_METHODS = new Set<string>([
+  ORCHESTRATION_WS_METHODS.importThread,
+]);
+
+export function isRpcMethodBlockedByPendingCheckpointFileRestore(method: string): boolean {
+  return CHECKPOINT_FILE_RESTORE_GATED_RPC_METHODS.has(method);
+}
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
 // The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
@@ -640,7 +647,10 @@ export const makeWsRpcLayer = () =>
 
       const requireNoPendingCheckpointFileRestore = (
         operation: string,
-        options?: { readonly allowRecordedCommandId?: CommandId },
+        options?: {
+          readonly allowRecordedCommandId?: CommandId;
+          readonly allowRequestCommandId?: CommandId;
+        },
       ) =>
         Stream.runCollect(orchestrationEngine.readEvents(0)).pipe(
           Effect.map((events): OrchestrationEvent[] => Array.from(events)),
@@ -659,14 +669,14 @@ export const makeWsRpcLayer = () =>
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
         options?: { readonly code?: WsRpcErrorCode },
-      ): Effect.Effect<A, WsRpcError, R> =>
-        rpcEffect(
-          withCheckpointFileRestoreInterlock(
-            requireNoPendingCheckpointFileRestore(operation).pipe(Effect.flatMap(() => effect)),
-          ),
-          fallbackMessage,
-          options,
-        );
+      ): Effect.Effect<A, WsRpcError, R> => {
+        const protectedEffect = isRpcMethodBlockedByPendingCheckpointFileRestore(operation)
+          ? withCheckpointFileRestoreInterlock(
+              requireNoPendingCheckpointFileRestore(operation).pipe(Effect.flatMap(() => effect)),
+            )
+          : effect;
+        return rpcEffect(protectedEffect, fallbackMessage, options);
+      };
 
       const gateDispatchCommandIfPotentiallyMutating = <A, E, R>(
         command: ClientOrchestrationCommand,
@@ -676,6 +686,9 @@ export const makeWsRpcLayer = () =>
           ? withCheckpointFileRestoreInterlock(
               requireNoPendingCheckpointFileRestore(command.type, {
                 allowRecordedCommandId: command.commandId,
+                ...(command.type === "thread.checkpoint.files.restore"
+                  ? { allowRequestCommandId: command.commandId }
+                  : {}),
               }).pipe(Effect.flatMap(() => effect)),
             )
           : effect;
@@ -710,7 +723,11 @@ export const makeWsRpcLayer = () =>
             ),
           ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
-          rpcEffect(importThread(input), "Failed to import thread"),
+          gatedRpcEffect(
+            ORCHESTRATION_WS_METHODS.importThread,
+            importThread(input),
+            "Failed to import thread",
+          ),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
           rpcEffect(
             projectionReadModelQuery.getSnapshot(),

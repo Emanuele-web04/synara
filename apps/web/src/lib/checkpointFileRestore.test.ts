@@ -85,6 +85,20 @@ function requestedEvent(sequence = 1): OrchestrationEvent {
   };
 }
 
+function preparedEvent(sequence = 1): OrchestrationEvent {
+  return {
+    ...eventBase(sequence),
+    type: "thread.checkpoint-files-restore-prepared",
+    payload: {
+      threadId,
+      messageId,
+      turnCount: 1,
+      requestCommandId,
+      createdAt: "2026-07-12T00:00:00.000Z",
+    },
+  };
+}
+
 function successEvent(sequence = 2, commandId = requestCommandId): OrchestrationEvent {
   return {
     ...eventBase(sequence),
@@ -94,6 +108,20 @@ function successEvent(sequence = 2, commandId = requestCommandId): Orchestration
       messageId,
       turnCount: 1,
       requestCommandId: commandId,
+    },
+  };
+}
+
+function reviewedEvent(sequence = 2): OrchestrationEvent {
+  return {
+    ...eventBase(sequence),
+    type: "thread.checkpoint-files-restore-reviewed",
+    payload: {
+      threadId,
+      messageId,
+      turnCount: 1,
+      requestCommandId,
+      createdAt: "2026-07-12T00:00:00.000Z",
     },
   };
 }
@@ -309,6 +337,22 @@ describe("checkpoint file restore status", () => {
         requestCommandId,
       }),
     ).toEqual({ status: "pending", sequence: 1 });
+
+    expect(
+      checkpointFileRestoreStatusFromEvents({
+        events: [preparedEvent()],
+        threadId,
+        requestCommandId,
+      }),
+    ).toEqual({ status: "pending", sequence: 1 });
+
+    expect(
+      checkpointFileRestoreStatusFromEvents({
+        events: [preparedEvent(1), reviewedEvent(2)],
+        threadId,
+        requestCommandId,
+      }),
+    ).toEqual({ status: "not-found" });
 
     expect(
       checkpointFileRestoreStatusFromEvents({

@@ -578,6 +578,17 @@ it.effect("defaults legacy file-restore failures to no workspace review", () =>
 
 it.effect("decodes idempotent file-restore reconciliation commands", () =>
   Effect.gen(function* () {
+    const prepareCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.checkpoint.files.restore.prepare",
+      commandId: "cmd-file-restore-prepare",
+      requestCommandId: "cmd-file-restore",
+      threadId: "thread-1",
+      messageId: "message-1",
+      turnCount: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(prepareCommand.type, "thread.checkpoint.files.restore.prepare");
+
     const command = yield* decodeClientOrchestrationCommand({
       type: "thread.checkpoint.files.restore.reconcile",
       commandId: "cmd-file-restore-reconcile",
@@ -590,6 +601,59 @@ it.effect("decodes idempotent file-restore reconciliation commands", () =>
 
     assert.strictEqual(command.type, "thread.checkpoint.files.restore.reconcile");
     assert.strictEqual(command.requestCommandId, "cmd-file-restore");
+
+    const reviewedCommand = yield* decodeClientOrchestrationCommand({
+      type: "thread.checkpoint.files.restore.reviewed",
+      commandId: "cmd-file-restore-reviewed",
+      requestCommandId: "cmd-file-restore",
+      threadId: "thread-1",
+      messageId: "message-1",
+      turnCount: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(reviewedCommand.type, "thread.checkpoint.files.restore.reviewed");
+
+    const preparedEvent = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-file-restore-prepared",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.checkpoint-files-restore-prepared",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-file-restore-prepare",
+      causationEventId: null,
+      correlationId: "cmd-file-restore-prepare",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        messageId: "message-1",
+        turnCount: 0,
+        requestCommandId: "cmd-file-restore",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(preparedEvent.type, "thread.checkpoint-files-restore-prepared");
+
+    const reviewedEvent = yield* decodeOrchestrationEvent({
+      sequence: 2,
+      eventId: "event-file-restore-reviewed",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      type: "thread.checkpoint-files-restore-reviewed",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-file-restore-reviewed",
+      causationEventId: null,
+      correlationId: "cmd-file-restore-reviewed",
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        messageId: "message-1",
+        turnCount: 0,
+        requestCommandId: "cmd-file-restore",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(reviewedEvent.type, "thread.checkpoint-files-restore-reviewed");
   }),
 );
 

@@ -1371,6 +1371,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.checkpoint.files.restore.prepare": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.checkpoint-files-restore-prepared",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          turnCount: command.turnCount,
+          requestCommandId: command.requestCommandId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.checkpoint.files.restore.reconcile": {
       return {
         ...withEventBase({
@@ -1380,6 +1400,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         }),
         type: "thread.checkpoint-files-restore-reconciliation-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          turnCount: command.turnCount,
+          requestCommandId: command.requestCommandId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.checkpoint.files.restore.reviewed": {
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.checkpoint-files-restore-reviewed",
         payload: {
           threadId: command.threadId,
           messageId: command.messageId,

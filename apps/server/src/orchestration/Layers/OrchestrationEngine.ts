@@ -389,7 +389,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const events = yield* Stream.runCollect(eventStore.readFromSequence(0)).pipe(
           Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
         );
-        if (shouldBlockCommandForPendingCheckpointFileRestore(events, envelope.command.type)) {
+        const allowedRequestCommandId =
+          envelope.command.type === "thread.checkpoint.files.restore"
+            ? envelope.command.commandId
+            : undefined;
+        if (
+          shouldBlockCommandForPendingCheckpointFileRestore(events, envelope.command.type, {
+            allowRecordedCommandId: envelope.command.commandId,
+            ...(allowedRequestCommandId !== undefined
+              ? { allowRequestCommandId: allowedRequestCommandId }
+              : {}),
+          })
+        ) {
           return yield* makePendingCheckpointFileRestoreCommandError(envelope.command.type);
         }
       }
