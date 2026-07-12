@@ -59,6 +59,8 @@ describe("decodeSetSessionConfigOptionResponse", () => {
       ).pipe(Effect.flip),
     );
     expect(error._tag).toBe("AcpTransportError");
-    expect(error.detail).toContain("invalid session/set_config_option response");
+    if (error._tag === "AcpTransportError") {
+      expect(error.detail).toContain("invalid session/set_config_option response");
+    }
   });
 });
