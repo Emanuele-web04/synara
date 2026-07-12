@@ -25,6 +25,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
@@ -39,7 +40,6 @@ import {
   shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
-  shouldSuppressEnvironmentPanelOnFirstSend,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
@@ -699,25 +699,46 @@ describe("environment panel visibility", () => {
     });
   });
 
-  it("suppresses the first-send transition only when default-open is disabled", () => {
+  it("resolves landing preferences on first send without changing non-landing state", () => {
     expect(
-      shouldSuppressEnvironmentPanelOnFirstSend({
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
         isCenteredEmptyLanding: true,
         settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
-      shouldSuppressEnvironmentPanelOnFirstSend({
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
         isCenteredEmptyLanding: true,
         settingsDefaultOpen: true,
+        currentPreferenceOpen: false,
       }),
-    ).toBe(false);
+    ).toBeNull();
     expect(
-      shouldSuppressEnvironmentPanelOnFirstSend({
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
         isCenteredEmptyLanding: false,
         settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("clears an action-close override so default-open applies after first send", () => {
+    const actionClose = resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false });
+    const afterFirstSend = resolveEnvironmentPanelPreferenceAfterFirstSend({
+      isCenteredEmptyLanding: true,
+      settingsDefaultOpen: true,
+      currentPreferenceOpen: actionClose.userPreferenceOpen,
+    });
+
+    expect(actionClose.settingsDefaultOpen).toBeNull();
+    expect(afterFirstSend).toBeNull();
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        userPreferenceOpen: afterFirstSend,
+      }),
+    ).toBe(true);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {

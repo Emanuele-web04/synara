@@ -339,11 +339,15 @@ export function resolveEnvironmentPanelPreferenceUpdate(input: {
   };
 }
 
-export function shouldSuppressEnvironmentPanelOnFirstSend(input: {
+export function resolveEnvironmentPanelPreferenceAfterFirstSend(input: {
   isCenteredEmptyLanding: boolean;
   settingsDefaultOpen: boolean;
-}): boolean {
-  return input.isCenteredEmptyLanding && !input.settingsDefaultOpen;
+  currentPreferenceOpen: boolean | null;
+}): boolean | null {
+  if (!input.isCenteredEmptyLanding) {
+    return input.currentPreferenceOpen;
+  }
+  return input.settingsDefaultOpen ? null : false;
 }
 
 export function resolveEnvironmentPanelVisible(input: {

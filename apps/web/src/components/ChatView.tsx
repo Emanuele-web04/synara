@@ -166,6 +166,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
@@ -174,7 +175,6 @@ import {
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
-  shouldSuppressEnvironmentPanelOnFirstSend,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -7506,15 +7506,16 @@ export default function ChatView({
       })),
     ];
     // Sending the first message flips the centered empty landing into a normal
-    // transcript. Suppress that transition only when the setting is off; users who
-    // opted into default-open expect the panel to appear when the normal chat begins.
-    if (
-      shouldSuppressEnvironmentPanelOnFirstSend({
-        isCenteredEmptyLanding,
-        settingsDefaultOpen: settings.environmentPanelDefaultOpen,
-      })
-    ) {
-      setEnvironmentPanelPreferenceOpen(false);
+    // transcript. Clear session-only landing overrides when default-open is enabled;
+    // otherwise keep the transition closed.
+    if (isCenteredEmptyLanding) {
+      setEnvironmentPanelPreferenceOpen(
+        resolveEnvironmentPanelPreferenceAfterFirstSend({
+          isCenteredEmptyLanding,
+          settingsDefaultOpen: settings.environmentPanelDefaultOpen,
+          currentPreferenceOpen: environmentPanelPreferenceOpen,
+        }),
+      );
     }
     setOptimisticUserMessages((existing) => [
       ...existing,
