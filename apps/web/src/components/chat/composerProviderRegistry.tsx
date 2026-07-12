@@ -129,8 +129,13 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.codex;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
       const defaultReasoningEffort = getDefaultEffort(caps);
+      // An absent runtime descriptor means discovery has not yet proved the stored
+      // model-scoped effort invalid. Preserve it for immediate post-reload sends;
+      // once discovery returns a descriptor, its effort list is authoritative.
+      const reasoningEffortSupported =
+        input.runtimeModel === undefined || (rawEffort !== null && hasEffortLevel(caps, rawEffort));
       const reasoningEffort =
-        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+        rawEffort && reasoningEffortSupported && rawEffort !== defaultReasoningEffort
           ? rawEffort
           : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
@@ -226,7 +231,10 @@ function getProviderStateFromCapabilities(
   const promptEffort =
     provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
-      : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
+      : draftEffort &&
+          !isPromptInjected &&
+          ((provider === "codex" && input.runtimeModel === undefined) ||
+            hasEffortLevel(caps, draftEffort))
         ? draftEffort
         : defaultEffort && hasEffortLevel(caps, defaultEffort)
           ? defaultEffort

@@ -101,6 +101,58 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("preserves a stored runtime Codex effort for dispatch before discovery resolves", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "ultra",
+      modelOptionsForDispatch: {
+        reasoningEffort: "ultra",
+      },
+    });
+  });
+
+  it("drops a stored runtime Codex effort after discovery proves it unsupported", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      runtimeModel: {
+        slug: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "low",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("preserves codex fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "codex",
