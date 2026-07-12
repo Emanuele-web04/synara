@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { Effect } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { applySessionConfigOptionValue, assistantItemId } from "./AcpSessionRuntime.ts";
+import { assistantItemId, decodeSetSessionConfigOptionResponse } from "./AcpSessionRuntime.ts";
 
 describe("assistantItemId", () => {
   // Format contract only — distinct runtimeInstanceId wiring is covered by
@@ -17,44 +18,47 @@ describe("assistantItemId", () => {
   });
 });
 
-describe("applySessionConfigOptionValue", () => {
-  it("updates the requested option while retaining the rest of the inventory", () => {
-    const configOptions = [
-      {
-        id: "model",
-        name: "Model",
-        type: "select",
-        currentValue: "gpt-5.5",
-        options: [
-          { value: "gpt-5.5", name: "GPT-5.5" },
-          { value: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
-        ],
-      },
-      {
-        id: "thinking",
-        name: "Thinking",
-        type: "boolean",
-        currentValue: false,
-      },
-    ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+describe("decodeSetSessionConfigOptionResponse", () => {
+  const configOptions = [
+    {
+      id: "model",
+      name: "Model",
+      type: "select",
+      currentValue: "gpt-5.6-luna",
+      options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
+    },
+  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
 
-    expect(applySessionConfigOptionValue(configOptions, "model", "gpt-5.6-luna")).toEqual([
-      { ...configOptions[0], currentValue: "gpt-5.6-luna" },
-      configOptions[1],
-    ]);
-    expect(configOptions[0]?.currentValue).toBe("gpt-5.5");
+  it("uses the matching config update for an empty response", () => {
+    const decoded = Effect.runSync(
+      decodeSetSessionConfigOptionResponse({}, Effect.succeed(configOptions)),
+    );
+    expect(decoded).toEqual({ configOptions });
   });
 
-  it("does not apply a value with the wrong option type", () => {
-    const configOptions = [
-      {
-        id: "thinking",
-        name: "Thinking",
-        type: "boolean",
-        currentValue: false,
-      },
-    ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  it("strictly decodes a non-empty response without awaiting an update", () => {
+    let awaitedUpdate = false;
+    const decoded = Effect.runSync(
+      decodeSetSessionConfigOptionResponse(
+        { configOptions },
+        Effect.sync(() => {
+          awaitedUpdate = true;
+          return [];
+        }),
+      ),
+    );
+    expect(decoded).toEqual({ configOptions });
+    expect(awaitedUpdate).toBe(false);
+  });
 
-    expect(applySessionConfigOptionValue(configOptions, "thinking", "true")).toEqual(configOptions);
+  it("rejects an invalid non-empty response", async () => {
+    const error = await Effect.runPromise(
+      decodeSetSessionConfigOptionResponse(
+        { unexpected: true },
+        Effect.succeed(configOptions),
+      ).pipe(Effect.flip),
+    );
+    expect(error._tag).toBe("AcpTransportError");
+    expect(error.detail).toContain("invalid session/set_config_option response");
   });
 });
