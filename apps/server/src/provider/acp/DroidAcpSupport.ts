@@ -248,6 +248,7 @@ function droidModelDescriptor(
   return {
     slug: model.value,
     name: model.name,
+    ...(model.description ? { description: model.description } : {}),
     supportedReasoningEfforts: efforts.map((effort) => ({
       value: effort.value,
       label: effort.name,

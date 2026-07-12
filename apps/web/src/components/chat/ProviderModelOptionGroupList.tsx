@@ -10,6 +10,7 @@ import { cn } from "~/lib/utils";
 import {
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
+  providerModelCostMultiplierLabel,
   type ProviderModelOption,
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
@@ -55,12 +56,16 @@ function ProviderModelRadioItem(
     onAfterSelection,
   } = props;
   const supportsFavorites = favoriteProvider !== null;
+  const costMultiplierLabel =
+    provider === "droid" ? providerModelCostMultiplierLabel(modelOption.description) : null;
+  const preserveChildLayout = supportsFavorites || costMultiplierLabel !== null;
 
   return (
     <MenuRadioItem
       key={`${provider}:${modelOption.slug}`}
       value={modelOption.slug}
-      preserveChildLayout={supportsFavorites}
+      preserveChildLayout={preserveChildLayout}
+      className={costMultiplierLabel ? "grid-cols-[minmax(0,1fr)_auto]" : undefined}
       trailing={
         supportsFavorites ? (
           <button
@@ -90,17 +95,25 @@ function ProviderModelRadioItem(
               <StarIcon aria-hidden="true" className="size-3" />
             )}
           </button>
+        ) : costMultiplierLabel && modelOption.description ? (
+          <span
+            title={modelOption.description}
+            className="shrink-0 text-[10px] font-medium tabular-nums text-muted-foreground/65"
+          >
+            <span aria-hidden="true">{costMultiplierLabel}</span>
+            <span className="sr-only">{modelOption.description}</span>
+          </span>
         ) : null
       }
       onClick={() => {
         onAfterSelection?.();
       }}
     >
-      {supportsFavorites ? (
+      {preserveChildLayout ? (
         <span
           className={cn(
             "block min-w-0 truncate",
-            COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
+            supportsFavorites && COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
           )}
         >
           {modelOption.name}
