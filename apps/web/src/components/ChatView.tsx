@@ -166,6 +166,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
@@ -173,6 +174,7 @@ import {
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
+  shouldSuppressEnvironmentPanelOnFirstSend,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -4227,12 +4229,23 @@ export default function ChatView({
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
-  const setEnvironmentPanelOpenPreference = useCallback(
-    (open: boolean) => {
-      setEnvironmentPanelPreferenceOpen(open);
-      updateSettings({ environmentPanelDefaultOpen: open });
+  const updateEnvironmentPanelPreference = useCallback(
+    (open: boolean, persist: boolean) => {
+      const update = resolveEnvironmentPanelPreferenceUpdate({ open, persist });
+      setEnvironmentPanelPreferenceOpen(update.userPreferenceOpen);
+      if (update.settingsDefaultOpen !== null) {
+        updateSettings({ environmentPanelDefaultOpen: update.settingsDefaultOpen });
+      }
     },
     [updateSettings],
+  );
+  const setEnvironmentPanelOpenPreference = useCallback(
+    (open: boolean) => updateEnvironmentPanelPreference(open, true),
+    [updateEnvironmentPanelPreference],
+  );
+  const closeEnvironmentPanelAfterAction = useCallback(
+    () => updateEnvironmentPanelPreference(false, false),
+    [updateEnvironmentPanelPreference],
   );
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
@@ -7493,10 +7506,14 @@ export default function ChatView({
       })),
     ];
     // Sending the first message flips the centered empty landing into a normal
-    // transcript, which would otherwise let the Environment panel's default-open
-    // policy pop it open. Keep it closed on send regardless of whether the user
-    // had opened it in the empty view.
-    if (isCenteredEmptyLanding) {
+    // transcript. Suppress that transition only when the setting is off; users who
+    // opted into default-open expect the panel to appear when the normal chat begins.
+    if (
+      shouldSuppressEnvironmentPanelOnFirstSend({
+        isCenteredEmptyLanding,
+        settingsDefaultOpen: settings.environmentPanelDefaultOpen,
+      })
+    ) {
       setEnvironmentPanelPreferenceOpen(false);
     }
     setOptimisticUserMessages((existing) => [
@@ -10152,7 +10169,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelOpenPreference(false),
+    onClose: closeEnvironmentPanelAfterAction,
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).

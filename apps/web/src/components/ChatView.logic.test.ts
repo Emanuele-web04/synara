@@ -25,6 +25,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
@@ -38,6 +39,7 @@ import {
   shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
+  shouldSuppressEnvironmentPanelOnFirstSend,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
@@ -680,6 +682,42 @@ describe("environment panel visibility", () => {
         userPreferenceOpen: true,
       }),
     ).toBe(true);
+  });
+
+  it("persists explicit toggles but keeps action-driven closes session-only", () => {
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: true, persist: true })).toEqual({
+      userPreferenceOpen: true,
+      settingsDefaultOpen: true,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: true })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: false,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: null,
+    });
+  });
+
+  it("suppresses the first-send transition only when default-open is disabled", () => {
+    expect(
+      shouldSuppressEnvironmentPanelOnFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressEnvironmentPanelOnFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressEnvironmentPanelOnFirstSend({
+        isCenteredEmptyLanding: false,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(false);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {

@@ -326,6 +326,26 @@ export function resolveEnvironmentPanelOpen(input: {
   return input.userPreferenceOpen ?? input.defaultOpen;
 }
 
+export function resolveEnvironmentPanelPreferenceUpdate(input: {
+  open: boolean;
+  persist: boolean;
+}): {
+  userPreferenceOpen: boolean;
+  settingsDefaultOpen: boolean | null;
+} {
+  return {
+    userPreferenceOpen: input.open,
+    settingsDefaultOpen: input.persist ? input.open : null,
+  };
+}
+
+export function shouldSuppressEnvironmentPanelOnFirstSend(input: {
+  isCenteredEmptyLanding: boolean;
+  settingsDefaultOpen: boolean;
+}): boolean {
+  return input.isCenteredEmptyLanding && !input.settingsDefaultOpen;
+}
+
 export function resolveEnvironmentPanelVisible(input: {
   environmentEnabled: boolean;
   environmentPanelOpen: boolean;
