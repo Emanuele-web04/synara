@@ -13,6 +13,16 @@ describe("getLocalFoldersGroupLabel", () => {
     expect(getLocalFoldersGroupLabel("/Users/tester", "Win32")).toBe("Folders on this Mac");
   });
 
+  it("keeps non-macOS server paths neutral despite conflicting browser hints", () => {
+    expect(getLocalFoldersGroupLabel("/home/alice", "Win32")).toBe("Folders on this System");
+    expect(getLocalFoldersGroupLabel("/home/alice", "MacIntel")).toBe("Folders on this System");
+  });
+
+  it("treats only case-sensitive /Users paths as macOS homes", () => {
+    expect(getLocalFoldersGroupLabel("/Users/alice", "Linux x86_64")).toBe("Folders on this Mac");
+    expect(getLocalFoldersGroupLabel("/users/alice", "MacIntel")).toBe("Folders on this System");
+  });
+
   it("uses existing platform detection when the home directory is unavailable", () => {
     expect(getLocalFoldersGroupLabel(null, "Windows")).toBe("Folders on this PC");
     expect(getLocalFoldersGroupLabel(null, "MacIntel")).toBe("Folders on this Mac");
