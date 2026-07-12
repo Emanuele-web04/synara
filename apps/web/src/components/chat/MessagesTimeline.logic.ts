@@ -231,10 +231,21 @@ function mergeTurnDiffSummaries(
   for (const file of next.files) {
     filesByPath.set(file.path, file);
   }
+  const checkpointTurnCounts = new Set([
+    ...(existing.checkpointTurnCounts ??
+      (existing.checkpointTurnCount === undefined ? [] : [existing.checkpointTurnCount])),
+    ...(next.checkpointTurnCounts ??
+      (next.checkpointTurnCount === undefined ? [] : [next.checkpointTurnCount])),
+  ]);
 
   return {
     ...next,
     files: [...filesByPath.values()],
+    ...(checkpointTurnCounts.size === 0
+      ? {}
+      : {
+          checkpointTurnCounts: [...checkpointTurnCounts].toSorted((left, right) => left - right),
+        }),
   };
 }
 

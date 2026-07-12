@@ -469,10 +469,12 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       turnDiffSummaries: [
         makeSummary({
           turnId: "turn-files",
+          checkpointTurnCount: 1,
           files: [{ path: "a.ts", additions: 1, deletions: 0 }],
         }),
         makeSummary({
           turnId: "turn-final",
+          checkpointTurnCount: 2,
           files: [{ path: "b.ts", additions: 0, deletions: 1 }],
         }),
       ],
@@ -495,6 +497,7 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       "a.ts",
       "b.ts",
     ]);
+    expect(result.get(MessageId.makeUnsafe("a-final"))?.checkpointTurnCounts).toEqual([1, 2]);
   });
 
   it("keeps separate cards for response segments split by user messages", () => {

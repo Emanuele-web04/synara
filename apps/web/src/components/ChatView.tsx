@@ -3045,6 +3045,9 @@ export default function ChatView({
         ...summary,
         checkpointTurnCount:
           summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
+        checkpointTurnCounts: [
+          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
+        ].filter((turnCount): turnCount is number => typeof turnCount === "number"),
       })),
       messages: messagesForDiffAnchoring,
     });
@@ -6274,9 +6277,9 @@ export default function ChatView({
   );
 
   const onUndoTurnFiles = useCallback(
-    async (turnCount: number) => {
+    async (turnCounts: readonly number[]) => {
       const api = readNativeApi();
-      if (!api || !activeThread || isRevertingCheckpoint) return;
+      if (!api || !activeThread || isRevertingCheckpoint || turnCounts.length === 0) return;
 
       if (hasLiveTurn || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before undoing file changes.");
@@ -6284,7 +6287,7 @@ export default function ChatView({
       }
       const confirmed = await api.dialogs.confirm(
         [
-          `Undo file changes from turn ${turnCount}?`,
+          "Undo the file changes shown in this card?",
           "Messages and provider conversation history will be kept.",
           "This action cannot be undone.",
         ].join("\n"),
@@ -6294,14 +6297,16 @@ export default function ChatView({
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
       try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          turnCount,
-          scope: "files",
-          createdAt: new Date().toISOString(),
-        });
+        for (const turnCount of [...new Set(turnCounts)].toSorted((left, right) => right - left)) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.checkpoint.revert",
+            commandId: newCommandId(),
+            threadId: activeThread.id,
+            turnCount,
+            scope: "files",
+            createdAt: new Date().toISOString(),
+          });
+        }
       } catch (err) {
         setThreadError(
           activeThread.id,
