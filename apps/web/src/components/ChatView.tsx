@@ -159,7 +159,9 @@ import {
   buildThreadBreadcrumbs,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  hasFileUndoSettled,
   promptStillMatchesActiveHistoryBrowse,
+  type PendingFileUndo,
   type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
@@ -1191,6 +1193,7 @@ export default function ChatView({
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -1592,6 +1595,15 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  useEffect(() => {
+    if (
+      pendingFileUndo &&
+      hasFileUndoSettled({ pending: pendingFileUndo, thread: activeThread ?? null })
+    ) {
+      setPendingFileUndo(null);
+      setIsRevertingCheckpoint(false);
+    }
+  }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -6294,22 +6306,32 @@ export default function ChatView({
 
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
+      const turnCount = Math.max(...turnCounts);
+      const requestedAt = new Date().toISOString();
+      setPendingFileUndo({
+        threadId: activeThread.id,
+        turnCount,
+        existingFailureActivityIds: activeThread.activities
+          .filter((activity) => activity.kind === "checkpoint.revert.failed")
+          .map((activity) => activity.id),
+      });
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.checkpoint.revert",
           commandId: newCommandId(),
           threadId: activeThread.id,
-          turnCount: Math.max(...turnCounts),
+          turnCount,
           scope: "files",
-          createdAt: new Date().toISOString(),
+          createdAt: requestedAt,
         });
       } catch (err) {
+        setPendingFileUndo(null);
+        setIsRevertingCheckpoint(false);
         setThreadError(
           activeThread.id,
           err instanceof Error ? err.message : "Failed to undo file changes.",
         );
       }
-      setIsRevertingCheckpoint(false);
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );

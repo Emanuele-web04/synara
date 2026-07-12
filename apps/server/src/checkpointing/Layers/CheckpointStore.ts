@@ -413,11 +413,21 @@ const makeCheckpointStore = Effect.gen(function* () {
               args: ["apply", "--reverse", "--whitespace=nowarn", "--", patchPath],
             });
             if (affectedPaths.length > 0) {
-              yield* git.execute({
-                operation,
-                cwd: input.cwd,
-                args: ["reset", "--quiet", fromCommitOid, "--", ...affectedPaths],
-              });
+              const resetExit = yield* Effect.exit(
+                git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["reset", "--quiet", fromCommitOid, "--", ...affectedPaths],
+                }),
+              );
+              if (Exit.isFailure(resetExit)) {
+                yield* git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["apply", "--whitespace=nowarn", "--", patchPath],
+                });
+                return yield* Effect.failCause(resetExit.cause);
+              }
             }
             return true;
           }),

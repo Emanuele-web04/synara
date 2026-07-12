@@ -1,4 +1,4 @@
-import { ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +9,7 @@ import {
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  hasFileUndoSettled,
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
@@ -42,6 +43,88 @@ import {
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("file undo completion", () => {
+  const pending = {
+    threadId: ThreadId.makeUnsafe("thread-file-undo"),
+    turnCount: 2,
+    existingFailureActivityIds: [],
+  };
+  const summary = {
+    turnId: TurnId.makeUnsafe("turn-2"),
+    checkpointTurnCount: 2,
+    checkpointTurnCounts: [2],
+    checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread-file-undo/turn/2"),
+    status: "ready" as const,
+    completedAt: "2026-07-12T17:59:00.000Z",
+    files: [{ path: "src/file.ts", additions: 1, deletions: 0 }],
+  };
+
+  it("stays pending after command acceptance until the projected file diff settles", () => {
+    const baseThread = {
+      id: pending.threadId,
+      turnDiffSummaries: [summary],
+      activities: [],
+    };
+
+    expect(hasFileUndoSettled({ pending, thread: baseThread })).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          ...baseThread,
+          turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("settles when the matching revert failure is projected", () => {
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "reset failed" },
+              turnId: null,
+              createdAt: "2026-07-12T18:00:01.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores a matching failure activity that predates this undo request", () => {
+    expect(
+      hasFileUndoSettled({
+        pending: { ...pending, existingFailureActivityIds: ["activity-file-undo-failed"] },
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "old failure" },
+              turnId: null,
+              createdAt: "2026-07-12T17:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("composer menu selection", () => {
   const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
