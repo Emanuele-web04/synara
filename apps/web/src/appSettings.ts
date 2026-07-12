@@ -94,6 +94,7 @@ type CustomModelSettingsKey =
   | "customCursorModels"
   | "customGeminiModels"
   | "customGrokModels"
+  | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
   | "customPiModels";
@@ -113,6 +114,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
+  droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
@@ -146,6 +148,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -201,6 +204,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -282,6 +286,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Grok model slugs for the picker and `/model` command.",
     placeholder: "your-grok-model-slug",
     example: "grok-build-0.1",
+  },
+  droid: {
+    provider: "droid",
+    settingsKey: "customDroidModels",
+    defaultSettingsKey: "customDroidModels",
+    title: "Droid",
+    description: "Save additional Droid model slugs for the picker and `/model` command.",
+    placeholder: "your-droid-model-slug",
+    example: "claude-opus-4-8",
   },
   kilo: {
     provider: "kilo",
@@ -415,6 +428,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
+    droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
     openCodeBinaryPath: normalizeProviderBinaryPathOverride(
       "opencode",
@@ -430,6 +444,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
+    customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
@@ -451,6 +466,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
+    droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
@@ -465,6 +481,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
     customGrokModels: settings.providers.grok.customModels,
+    customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
@@ -575,6 +592,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
     };
   }
+  if (hasOwn(patch, "droidBinaryPath") || hasOwn(patch, "customDroidModels")) {
+    providers.droid = {
+      ...(hasOwn(patch, "droidBinaryPath") ? { binaryPath: patch.droidBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDroidModels")
+        ? { customModels: patch.customDroidModels ?? [] }
+        : {}),
+    };
+  }
   if (
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -651,6 +676,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
+    "droidBinaryPath",
     "kiloBinaryPath",
     "kiloServerPassword",
     "kiloServerUrl",
@@ -674,6 +700,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCursorModels",
     "customGeminiModels",
     "customGrokModels",
+    "customDroidModels",
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
@@ -722,6 +749,7 @@ export function getCustomModelsByProvider(
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     grok: getCustomModelsForProvider(settings, "grok"),
+    droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
@@ -866,6 +894,7 @@ export function getCustomModelOptionsByProvider(
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
+    droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
@@ -882,6 +911,7 @@ export function getProviderStartOptions(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "droidBinaryPath"
     | "kiloBinaryPath"
     | "kiloServerPassword"
     | "kiloServerUrl"
@@ -901,6 +931,7 @@ export function getProviderStartOptions(
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
+  const droidBinaryPath = normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
   const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
     "opencode",
@@ -948,6 +979,13 @@ export function getProviderStartOptions(
       ? {
           grok: {
             binaryPath: grokBinaryPath,
+          },
+        }
+      : {}),
+    ...(droidBinaryPath
+      ? {
+          droid: {
+            binaryPath: droidBinaryPath,
           },
         }
       : {}),
@@ -1003,6 +1041,7 @@ export function getCustomBinaryPathForProvider(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "droidBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
@@ -1020,6 +1059,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
     case "grok":
       return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
+    case "droid":
+      return normalizeProviderBinaryPathOverride(provider, settings.droidBinaryPath);
     case "kilo":
       return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":

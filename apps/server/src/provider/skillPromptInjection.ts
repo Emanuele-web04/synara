@@ -51,7 +51,7 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // gemini/grok/kilo/opencode have no native skill support.
+      // gemini/grok/droid/kilo/opencode have no native skill support.
       return true;
   }
 }

@@ -13,6 +13,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -218,6 +219,8 @@ export const ProviderReadPluginInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   marketplacePath: TrimmedNonEmptyString,
   pluginName: TrimmedNonEmptyString,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 
@@ -265,6 +268,7 @@ export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescri
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),

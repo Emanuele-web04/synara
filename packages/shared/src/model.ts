@@ -11,6 +11,8 @@ import {
   type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  type DroidModelOptions,
+  type DroidReasoningEffort,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
@@ -32,6 +34,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
+  droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
@@ -878,6 +881,21 @@ export function normalizeGrokModelOptions(
     return undefined;
   }
   return { reasoningEffort: reasoningEffort as GrokReasoningEffort };
+}
+
+export function normalizeDroidModelOptions(
+  model: string | null | undefined,
+  modelOptions: DroidModelOptions | null | undefined,
+): DroidModelOptions | undefined {
+  const caps = getModelCapabilities("droid", model);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(caps)) {
+    return undefined;
+  }
+  return { reasoningEffort: reasoningEffort as DroidReasoningEffort };
 }
 
 export function normalizePiModelOptions(

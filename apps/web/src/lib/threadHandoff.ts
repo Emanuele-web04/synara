@@ -23,6 +23,7 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",

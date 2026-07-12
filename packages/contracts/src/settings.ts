@@ -42,6 +42,12 @@ export const GrokServerProviderSettings = Schema.Struct({
 });
 export type GrokServerProviderSettings = typeof GrokServerProviderSettings.Type;
 
+export const DroidServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "droid")),
+});
+export type DroidServerProviderSettings = typeof DroidServerProviderSettings.Type;
+
 export const CursorServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "cursor-agent")),
@@ -101,6 +107,7 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -151,6 +158,7 @@ export const ServerSettingsPatch = Schema.Struct({
       ),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

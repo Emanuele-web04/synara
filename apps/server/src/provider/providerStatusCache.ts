@@ -15,6 +15,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
