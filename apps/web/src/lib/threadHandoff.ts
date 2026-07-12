@@ -11,8 +11,8 @@ import {
   type ModelSelection,
   type ProviderKind,
   type ThreadHandoffImportedMessage,
-} from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { randomUUID } from "./utils";

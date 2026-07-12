@@ -1,4 +1,4 @@
-import type { ServerAuthDescriptor } from "@t3tools/contracts";
+import type { ServerAuthDescriptor } from "@synara/contracts";
 import { Effect, ServiceMap } from "effect";
 
 export interface ServerAuthPolicyShape {
@@ -6,5 +6,5 @@ export interface ServerAuthPolicyShape {
 }
 
 export class ServerAuthPolicy extends ServiceMap.Service<ServerAuthPolicy, ServerAuthPolicyShape>()(
-  "t3/auth/Services/ServerAuthPolicy",
+  "synara/auth/Services/ServerAuthPolicy",
 ) {}

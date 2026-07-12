@@ -3,7 +3,7 @@
 //          file search, file/diff preview, and chat.
 // Layer: Chat route presentation
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
   type CSSProperties,

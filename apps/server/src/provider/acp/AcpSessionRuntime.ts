@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -152,7 +152,7 @@ interface EnsureActiveAssistantSegmentResult {
 export class AcpSessionRuntime extends ServiceMap.Service<
   AcpSessionRuntime,
   AcpSessionRuntimeShape
->()("t3/provider/acp/AcpSessionRuntime") {
+>()("synara/provider/acp/AcpSessionRuntime") {
   static layer(
     options: AcpSessionRuntimeOptions,
   ): Layer.Layer<
@@ -242,6 +242,7 @@ const makeAcpSessionRuntime = (
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
           env,
           shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }),
       )
       .pipe(

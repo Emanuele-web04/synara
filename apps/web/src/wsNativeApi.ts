@@ -35,7 +35,7 @@ import {
   WS_METHODS,
   type WsWelcomePayload,
   type AutomationStreamEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
@@ -508,7 +508,7 @@ export function createWsNativeApi(): NativeApi {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
     },
     studio: {
-      listRecentOutputs: (input) => transport.request(WS_METHODS.studioListRecentOutputs, input),
+      listThreadOutputs: (input) => transport.request(WS_METHODS.studioListThreadOutputs, input),
     },
     shell: {
       openInEditor: (cwd, editor) =>

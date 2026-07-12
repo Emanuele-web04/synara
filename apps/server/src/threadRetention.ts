@@ -8,7 +8,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 

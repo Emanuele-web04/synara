@@ -4,7 +4,7 @@
  * Centralizes provider-to-icon mapping so new providers do not need repeated
  * branching across every UI surface.
  */
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";

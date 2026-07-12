@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
@@ -9,15 +10,15 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   decodeSubagentAgentStates,
   extractSubagentIdentityHints,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
-} from "@t3tools/shared/subagents";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/shared/subagents";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
+import { pluralize } from "@synara/shared/text";
 import {
   deriveReadableToolTitle,
   isGenericToolTitle,
@@ -570,7 +571,7 @@ function toActiveTaskListState(activity: OrchestrationThreadActivity): ActiveTas
         status: "pending" | "inProgress" | "completed";
       } => task !== null,
     );
-  if (tasks.length === 0) {
+  if (rawTasks.length > 0 && tasks.length === 0) {
     return null;
   }
   return {
@@ -610,7 +611,7 @@ export function deriveActiveTaskListState(
         .findLast((taskList) => taskList !== null) ?? null)
     : null;
   if (currentTurnTaskList) {
-    return currentTurnTaskList;
+    return currentTurnTaskList.tasks.length > 0 ? currentTurnTaskList : null;
   }
 
   // Keep the most recent unfinished prior task list visible so implementation turns
@@ -619,6 +620,10 @@ export function deriveActiveTaskListState(
     allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
     null;
   if (!latestPriorTaskList) {
+    return null;
+  }
+
+  if (latestPriorTaskList.tasks.length === 0) {
     return null;
   }
 
@@ -823,6 +828,8 @@ export function deriveWorkLogEntries(
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    // Server-side Studio output attribution is environment-panel data, not transcript work.
+    .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);

@@ -6,7 +6,7 @@
 
 ## Summary
 
-The goal was to investigate noisy Linux startup notifications and provider routing bugs where DP Code fell back to Codex after a non-Codex first turn. The change removes Linux native menu accelerators that can surface as keybinding notifications, stops stale terminal runtime state from replaying old notifications, and keeps first-turn provider selection bound to the provider the user actually picked. Provider-specific title/branch generation now avoids calling Codex for providers that do not have a text-generation adapter.
+The goal was to investigate noisy Linux startup notifications and provider routing bugs where Synara fell back to Codex after a non-Codex first turn. The change removes Linux native menu accelerators that can surface as keybinding notifications, stops stale terminal runtime state from replaying old notifications, and keeps first-turn provider selection bound to the provider the user actually picked. Provider-specific title/branch generation now avoids calling Codex for providers that do not have a text-generation adapter.
 
 ---
 

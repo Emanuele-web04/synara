@@ -1,22 +1,22 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 import {
   addThreadMarker,
   removeThreadMarker,
   setThreadMarkerDone,
   setThreadMarkerLabel,
-} from "@t3tools/shared/threadMarkers";
+} from "@synara/shared/threadMarkers";
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
@@ -211,6 +211,41 @@ function compareThreadActivities(
   }
 
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function upsertThreadActivity(
+  activities: ReadonlyArray<OrchestrationThread["activities"][number]>,
+  activity: OrchestrationThread["activities"][number],
+): ReadonlyArray<OrchestrationThread["activities"][number]> {
+  const existingIndex = activities.findIndex((entry) => entry.id === activity.id);
+  if (existingIndex >= 0 && compareThreadActivities(activities[existingIndex]!, activity) === 0) {
+    const next = [...activities];
+    next[existingIndex] = activity;
+    return next.slice(-MAX_THREAD_ACTIVITIES);
+  }
+
+  const withoutExisting =
+    existingIndex < 0
+      ? activities
+      : [...activities.slice(0, existingIndex), ...activities.slice(existingIndex + 1)];
+  const last = withoutExisting.at(-1);
+  if (!last || compareThreadActivities(last, activity) <= 0) {
+    return [...withoutExisting, activity].slice(-MAX_THREAD_ACTIVITIES);
+  }
+
+  let low = 0;
+  let high = withoutExisting.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareThreadActivities(withoutExisting[middle]!, activity) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return [...withoutExisting.slice(0, low), activity, ...withoutExisting.slice(low)].slice(
+    -MAX_THREAD_ACTIVITIES,
+  );
 }
 
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
@@ -1037,12 +1072,7 @@ export function projectEvent(
             return nextBase;
           }
 
-          const activities = [
-            ...thread.activities.filter((entry) => entry.id !== payload.activity.id),
-            payload.activity,
-          ]
-            .toSorted(compareThreadActivities)
-            .slice(-MAX_THREAD_ACTIVITIES);
+          const activities = upsertThreadActivity(thread.activities, payload.activity);
 
           return {
             ...nextBase,

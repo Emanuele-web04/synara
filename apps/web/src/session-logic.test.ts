@@ -4,7 +4,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -470,6 +470,35 @@ describe("deriveActiveTaskListState", () => {
     ];
 
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+  });
+
+  it("treats an empty task update as an explicit clear", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-with-task",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [{ task: "Patch UI", status: "inProgress" }],
+        },
+      }),
+      makeActivity({
+        id: "plan-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [],
+        },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
   });
 });
 
@@ -1704,7 +1733,7 @@ describe("deriveWorkLogEntries", () => {
                   type: "read",
                   command: "sed -n '1,220p' README.md",
                   name: "README.md",
-                  path: "/Users/emanueledipietro/Developer/Testing/t3code/README.md",
+                  path: "/Users/emanueledipietro/Developer/Testing/synara/README.md",
                 },
               ],
             },
@@ -1813,7 +1842,7 @@ describe("deriveWorkLogEntries", () => {
               type: "commandExecution",
               id: "call_6OII41pekq8cFCpOCF9pbeMu",
               command: "/bin/zsh -lc 'git status --short'",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               status: "completed",
               commandActions: [{ type: "unknown", command: "git status --short" }],
               aggregatedOutput: " M apps/desktop/src/main.ts\n...",
@@ -3528,7 +3557,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "inProgress",
@@ -3566,7 +3595,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "completed",

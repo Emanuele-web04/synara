@@ -17,7 +17,7 @@ import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.t
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@synara/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 
@@ -117,7 +117,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       }
 
       yield* Effect.acquireUseRelease(
-        fs.makeTempDirectory({ prefix: "t3-fs-checkpoint-" }),
+        fs.makeTempDirectory({ prefix: "synara-fs-checkpoint-" }),
         (tempDir) =>
           Effect.gen(function* () {
             const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
@@ -125,9 +125,9 @@ const makeCheckpointStore = Effect.gen(function* () {
               ...process.env,
               GIT_INDEX_FILE: tempIndexPath,
               GIT_AUTHOR_NAME: "Synara",
-              GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+              GIT_AUTHOR_EMAIL: "synara@users.noreply.github.com",
               GIT_COMMITTER_NAME: "Synara",
-              GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+              GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
             };
 
             const headExists = yield* hasHeadCommit(input.cwd);
@@ -163,7 +163,7 @@ const makeCheckpointStore = Effect.gen(function* () {
               });
             }
 
-            const message = `t3 checkpoint ref=${input.checkpointRef}`;
+            const message = `Synara checkpoint ref=${input.checkpointRef}`;
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,

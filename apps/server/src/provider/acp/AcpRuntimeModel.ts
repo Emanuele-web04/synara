@@ -3,8 +3,8 @@ import type {
   RuntimeContentStreamKind,
   ThreadTokenUsageSnapshot,
   ToolLifecycleItemType,
-} from "@t3tools/contracts";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+} from "@synara/contracts";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
 

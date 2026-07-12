@@ -9,17 +9,20 @@ import {
   MODEL_OPTIONS_BY_PROVIDER,
   CODEX_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   applyClaudePromptEffortPrefix,
+  claudeSelectionRequiresRestart,
   formatModelDisplayName,
+  getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
   getGeminiThinkingModelAlias,
   getModelCapabilities,
   getModelOptions,
   hasContextWindowOption,
+  hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
@@ -453,18 +456,23 @@ describe("provider option descriptor helpers", () => {
 });
 
 describe("context window helpers", () => {
-  it("returns the default context window from capabilities", () => {
-    expect(getDefaultContextWindow(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe(
-      "200k",
+  it("separates Claude's real context capacity from its auto-compact budget", () => {
+    const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
+    expect(getDefaultContextWindow(opusCaps)).toBeNull();
+    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("200k");
+    expect(opusCaps.contextWindowTokens).toBe(1_000_000);
+    expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
+      200_000,
     );
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
   });
 
-  it("validates context window against model capabilities", () => {
+  it("validates auto-compact budgets against model capabilities", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
-    expect(hasContextWindowOption(opusCaps, "200k")).toBe(true);
-    expect(hasContextWindowOption(opusCaps, "1m")).toBe(true);
-    expect(hasContextWindowOption(opusCaps, "2m")).toBe(false);
+    expect(hasContextWindowOption(opusCaps, "1m")).toBe(false);
+    expect(hasAutoCompactWindowOption(opusCaps, "200k")).toBe(true);
+    expect(hasAutoCompactWindowOption(opusCaps, "1m")).toBe(true);
+    expect(hasAutoCompactWindowOption(opusCaps, "2m")).toBe(false);
   });
 });
 
@@ -522,22 +530,32 @@ describe("normalizeClaudeModelOptions", () => {
       normalizeClaudeModelOptions("claude-opus-4-6", {
         effort: "high",
         fastMode: false,
-        contextWindow: "200k",
+        autoCompactWindow: "200k",
       }),
     ).toBeUndefined();
   });
 
-  it("preserves non-default claude context window options", () => {
+  it("preserves non-default Claude auto-compact budgets", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-opus-4-6", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({
+      autoCompactWindow: "1m",
+    });
+  });
+
+  it("migrates the legacy context-window field to the auto-compact budget", () => {
     expect(
       normalizeClaudeModelOptions("claude-opus-4-6", {
         contextWindow: "1m",
       }),
     ).toEqual({
-      contextWindow: "1m",
+      autoCompactWindow: "1m",
     });
   });
 
-  it("omits unsupported claude context window options", () => {
+  it("omits unsupported Claude auto-compact budgets", () => {
     expect(
       normalizeClaudeModelOptions("claude-haiku-4-5", {
         thinking: false,
@@ -590,21 +608,21 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
-  it("adds the 1m suffix for Claude models when selected", () => {
+  it("keeps native-1M Claude model ids unchanged", () => {
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
-        options: { contextWindow: "1m" },
+        options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-opus-4-6[1m]");
+    ).toBe("claude-opus-4-6");
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-sonnet-5",
-        options: { contextWindow: "1m" },
+        options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-sonnet-5[1m]");
+    ).toBe("claude-sonnet-5");
   });
 
   it("leaves Claude models unchanged for the default context window", () => {
@@ -615,6 +633,141 @@ describe("resolveApiModelId", () => {
         options: { contextWindow: "200k" },
       }),
     ).toBe("claude-opus-4-6");
+  });
+});
+
+describe("claudeSelectionRequiresRestart", () => {
+  const selection = (
+    model: string,
+    options?: {
+      effort?: string;
+      contextWindow?: string;
+      autoCompactWindow?: string;
+      fastMode?: boolean;
+      thinking?: boolean;
+    },
+  ) =>
+    ({
+      provider: "claudeAgent",
+      model,
+      ...(options ? { options } : {}),
+    }) as Parameters<typeof claudeSelectionRequiresRestart>[1];
+
+  it("never restarts for non-Claude selections", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        { provider: "codex", model: "gpt-5.5" },
+        { provider: "codex", model: "gpt-5.4" },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart on the first observed selection", () => {
+    expect(
+      claudeSelectionRequiresRestart(undefined, selection("claude-opus-4-8", { effort: "max" })),
+    ).toBe(false);
+  });
+
+  it("does not restart for a model-only change", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "max" }),
+        selection("claude-fable-5", { effort: "max" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart when a model switch carries an unsupported thinking override", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5", { thinking: false }),
+        selection("claude-opus-4-8", { thinking: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart when a model switch carries an unsupported fast-mode flag", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
+        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still restarts when spawn-fixed options change together with the model", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-sonnet-5", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not restart for an auto-compact-budget-only change", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "200k" }),
+        selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "1m" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("restarts when the effective effort changes", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats ultrathink as prompt-injected, not a spawn change", () => {
+    // ultrathink carries no API effort, so switching from no effort to ultrathink
+    // must not respawn the subprocess.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "ultrathink" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("restarts when ultracode toggles", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "xhigh" }),
+        selection("claude-opus-4-8", { effort: "ultracode" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts when fast mode toggles", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts when the thinking toggle changes on a supported model", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5"),
+        selection("claude-haiku-4-5", { thinking: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores options the target model does not support", () => {
+    // fastMode is not supported on Sonnet models, so toggling it is a no-op.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-sonnet-5", { effort: "high" }),
+        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(false);
   });
 });
 

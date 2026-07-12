@@ -8,9 +8,9 @@ import {
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
   ThreadId,
-} from "@t3tools/contracts";
-import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
-import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
+} from "@synara/contracts";
+import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { DateTime, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -470,7 +470,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     }
 
     // Error responses need the trusted-origin CORS headers too: the desktop
-    // app fetches cross-origin (t3://app), and without them the browser masks
+    // app fetches cross-origin (synara://app), and without them the browser masks
     // a 400/404/409 body as an opaque network failure.
     const corsHeaders = localPreviewCorsHeaders({ config, request, url });
 

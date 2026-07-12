@@ -1,4 +1,4 @@
-import { EventId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import { EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { AppState } from "../store";

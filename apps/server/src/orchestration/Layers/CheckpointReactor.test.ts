@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-import type { ProviderKind, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type { ProviderKind, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
 import {
+  CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -12,7 +13,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -187,7 +188,7 @@ function runGit(cwd: string, args: ReadonlyArray<string>) {
 }
 
 function createGitRepository() {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "t3-checkpoint-handler-"));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synara-checkpoint-handler-"));
   runGit(cwd, ["init", "--initial-branch=main"]);
   runGit(cwd, ["config", "user.email", "test@example.com"]);
   runGit(cwd, ["config", "user.name", "Test User"]);
@@ -274,7 +275,7 @@ describe("CheckpointReactor", () => {
     );
 
     const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-      prefix: "t3-checkpoint-reactor-test-",
+      prefix: "synara-checkpoint-reactor-test-",
     });
 
     const layer = CheckpointReactorLive.pipe(
@@ -1271,7 +1272,7 @@ describe("CheckpointReactor", () => {
 
   it("continues processing runtime events after a single checkpoint runtime failure", async () => {
     const nonRepositorySessionCwd = fs.mkdtempSync(
-      path.join(os.tmpdir(), "t3-checkpoint-runtime-non-repo-"),
+      path.join(os.tmpdir(), "synara-checkpoint-runtime-non-repo-"),
     );
     tempDirs.push(nonRepositorySessionCwd);
 
@@ -1405,6 +1406,70 @@ describe("CheckpointReactor", () => {
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
+  });
+
+  it("restores turn zero from the persisted checkpoint family", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const historicalTurnZeroRef = checkpointRefForThreadTurn(threadId, 0).replace(
+      "refs/synara/",
+      "refs/historical/",
+    );
+    const historicalTurnOneRef = CheckpointRef.makeUnsafe(
+      checkpointRefForThreadTurn(threadId, 1).replace("refs/synara/", "refs/historical/"),
+    );
+
+    runGit(harness.cwd, ["update-ref", historicalTurnZeroRef, "HEAD"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+    runGit(harness.cwd, ["add", "."]);
+    runGit(harness.cwd, ["commit", "-m", "Second"]);
+    runGit(harness.cwd, ["update-ref", historicalTurnOneRef, "HEAD"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v3\n", "utf8");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-historical-session-set"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-historical-diff-1"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        completedAt: createdAt,
+        checkpointRef: historicalTurnOneRef,
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-historical-revert-zero"),
+        threadId,
+        turnCount: 0,
+        createdAt,
+      }),
+    );
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
   });
 
   it("executes provider revert and emits thread.reverted for claude sessions", async () => {

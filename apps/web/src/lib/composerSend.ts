@@ -12,8 +12,8 @@ import {
   type ClaudeCodeEffort,
   type ProviderKind,
   type UploadChatAttachment,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 
 import type {
   ComposerAssistantSelectionAttachment,

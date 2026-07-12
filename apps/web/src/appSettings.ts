@@ -15,13 +15,13 @@ import {
   type ProviderStartOptions,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -40,7 +40,7 @@ import {
 } from "./lib/appDensity";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
-const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
+const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;

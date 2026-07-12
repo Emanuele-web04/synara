@@ -8,7 +8,7 @@ import {
   AutomationId,
   type AutomationDefinition,
   type AutomationStreamEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, PubSub, Stream } from "effect";
 
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";

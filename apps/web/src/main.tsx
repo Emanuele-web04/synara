@@ -4,7 +4,6 @@ import { RouterProvider } from "@tanstack/react-router";
 
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
-import "./storageKeyMigration";
 
 import { appHistory } from "./appNavigation";
 import { getRouter } from "./router";

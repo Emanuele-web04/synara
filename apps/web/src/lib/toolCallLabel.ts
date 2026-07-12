@@ -2,9 +2,9 @@
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
 // Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
-// Depends on: @t3tools/contracts tool lifecycle item types
+// Depends on: @synara/contracts tool lifecycle item types
 
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type { ToolLifecycleItemType } from "@synara/contracts";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value

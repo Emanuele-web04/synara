@@ -1,10 +1,10 @@
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
 import { openUsageProviderIdForProvider } from "./openUsageRateLimits";
 
 const OPEN_USAGE_BASE_URL = "http://127.0.0.1:6736";
-const OPEN_USAGE_ENABLED_STORAGE_KEY = "t3code.openUsage.enabled";
+const OPEN_USAGE_ENABLED_STORAGE_KEY = "synara.openUsage.enabled";
 
 function isOpenUsagePollingEnabled(): boolean {
   if (typeof window === "undefined") {

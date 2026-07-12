@@ -9,8 +9,8 @@ import {
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix } from "@synara/shared/model";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
@@ -252,6 +252,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     contextWindowOptions,
     contextWindow,
     defaultContextWindow,
+    contextWindowDescriptor,
     ultrathinkPromptControlled,
     primarySelectDescriptor,
     fastModeDescriptor,
@@ -349,14 +350,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorContextWindowSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Context"
+            label={contextWindowDescriptor?.label ?? "Context"}
             value={contextWindow ?? defaultContextWindow ?? ""}
             options={contextWindowOptions.map((option) => ({
               value: option.value,
               label: option.label,
               isDefault: option.value === defaultContextWindow,
             }))}
-            onValueChange={(value) => commitTrait({ contextWindow: value })}
+            onValueChange={(value) =>
+              commitTrait({ [contextWindowDescriptor?.id ?? "contextWindow"]: value })
+            }
             onSelectionComplete={onSelectionComplete}
           />
         </>

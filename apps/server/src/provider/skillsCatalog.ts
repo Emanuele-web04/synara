@@ -11,7 +11,7 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
-import type { ProviderKind, ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
 
 type FrontmatterValue = string | boolean;
 

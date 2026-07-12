@@ -9,7 +9,7 @@ import {
   mergePathEntries,
   readPathFromLaunchctl,
   readPathFromLoginShell,
-} from "@t3tools/shared/shell";
+} from "@synara/shared/shell";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
   console.warn(`[server] ${message}`, error instanceof Error ? error.message : (error ?? ""));

@@ -1,5 +1,5 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -143,6 +143,7 @@ export async function runProcess(
       stdio: "pipe",
       shell: prepared.shell,
       windowsHide: prepared.windowsHide,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
     });
 
     let stdout = "";

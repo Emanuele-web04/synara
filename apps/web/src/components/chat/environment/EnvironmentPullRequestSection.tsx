@@ -4,18 +4,17 @@
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers and the shared Environment row skin.
 
-import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@t3tools/contracts";
+import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { DiffStatLabel } from "../DiffStatLabel";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../../ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import {
   ArrowUpRightIcon,
-  BotIcon,
   ChatBubbleIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -163,8 +162,7 @@ function CommentsMenuRow({
 }) {
   const display = describePullRequestComment(comment);
   return (
-    // items-stretch overrides the menu-option default items-center, which would otherwise
-    // center every line of this column layout (title, snippet, footer) horizontally.
+    // items-stretch overrides the menu-option default items-center for this column layout.
     <MenuRow
       url={comment.url}
       onOpenUrl={onOpenUrl}
@@ -247,6 +245,7 @@ export function EnvironmentPullRequestSection({
   // Any failed refetch should be visible; otherwise stale rows look current.
   const failed = snapshotQuery.isError;
 
+  // Fix actions keep the PR context visible while the user reviews the generated draft.
   const handleFixComments = () => {
     if (!activeThreadId || comments.length === 0) {
       return;
@@ -260,7 +259,6 @@ export function EnvironmentPullRequestSection({
         commentsTruncated,
       }),
     );
-    onClose();
   };
 
   const handleResolveConflicts = () => {
@@ -276,7 +274,6 @@ export function EnvironmentPullRequestSection({
         headBranch: displayPr.headBranch,
       }),
     );
-    onClose();
   };
 
   return (
@@ -433,11 +430,7 @@ export function EnvironmentPullRequestSection({
             </ComposerPickerMenuPopup>
           </Menu>
 
-          {/*
-        The whole row opens the comments popup; "Fix" is a sibling control (buttons cannot
-        nest), so the row grid mirrors ENVIRONMENT_ROW_CLASS_NAME with the trigger as the
-        flexible first cell.
-      */}
+          {/* The summary opens details; its sibling Fix drafts the entire visible batch. */}
           <div className="flex w-full items-center gap-1">
             <Menu>
               <MenuTrigger
@@ -473,45 +466,19 @@ export function EnvironmentPullRequestSection({
                     }
                   />
                 ) : (
-                  <div className="flex min-h-0 flex-col gap-0.5">
-                    {/* The list scrolls on its own so the "Fix with agent" footer stays visible
-                        even on PRs with many comments. */}
-                    <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
-                      {comments.map((comment) => (
-                        <CommentsMenuRow
-                          key={comment.id}
-                          comment={comment}
-                          onOpenUrl={(url) => {
-                            onOpenUrl(url);
-                            onClose();
-                          }}
-                        />
-                      ))}
-                      {commentsTruncated ? (
-                        <MenuPlaceholder text="More review comments may be available on GitHub." />
-                      ) : null}
-                    </div>
-                    {activeThreadId ? (
-                      // Self-describing twin of the sibling "Fix" button so users can see
-                      // what fixing does before committing to it.
-                      <>
-                        <MenuSeparator />
-                        <MenuItem
-                          onClick={handleFixComments}
-                          className="flex cursor-pointer items-start gap-2 rounded-[0.5rem] px-2 py-1.5 data-highlighted:bg-[var(--color-background-elevated-secondary)]"
-                        >
-                          <BotIcon className="mt-px size-3.5 shrink-0" aria-hidden />
-                          <span className="flex min-w-0 flex-col gap-0.5">
-                            <span className="text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)]">
-                              Fix with agent
-                            </span>
-                            <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
-                              Drafts a prompt with these comments in the composer — review it, then
-                              send.
-                            </span>
-                          </span>
-                        </MenuItem>
-                      </>
+                  <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+                    {comments.map((comment) => (
+                      <CommentsMenuRow
+                        key={comment.id}
+                        comment={comment}
+                        onOpenUrl={(url) => {
+                          onOpenUrl(url);
+                          onClose();
+                        }}
+                      />
+                    ))}
+                    {commentsTruncated ? (
+                      <MenuPlaceholder text="More review comments may be available on GitHub." />
                     ) : null}
                   </div>
                 )}
@@ -521,7 +488,7 @@ export function EnvironmentPullRequestSection({
               <button
                 type="button"
                 onClick={handleFixComments}
-                title="Drafts a prompt in the composer asking the agent to address these review comments — review it, then send"
+                title="Draft one prompt containing all visible review comments"
                 className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
               >
                 Fix

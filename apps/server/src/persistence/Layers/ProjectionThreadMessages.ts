@@ -7,7 +7,7 @@ import {
   ProviderMentionReference,
   ProviderSkillReference,
   TurnDispatchMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -29,6 +29,10 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     dispatchOrigin: Schema.NullOr(MessageDispatchOrigin),
   }),
 );
+
+const LatestUserMessageAtRowSchema = Schema.Struct({
+  latestUserMessageAt: Schema.String,
+});
 
 function toProjectionThreadMessage(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>,
@@ -189,6 +193,21 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const getLatestProjectionThreadUserMessageAtRow = SqlSchema.findOneOption({
+    Request: ListProjectionThreadMessagesInput,
+    Result: LatestUserMessageAtRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          created_at AS "latestUserMessageAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND role = 'user'
+        ORDER BY created_at DESC, message_id DESC
+        LIMIT 1
+      `,
+  });
+
   const getProjectionThreadMessageRow = SqlSchema.findOneOption({
     Request: GetProjectionThreadMessageInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -245,6 +264,16 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toProjectionThreadMessage)),
     );
 
+  const getLatestUserMessageAt: ProjectionThreadMessageRepositoryShape["getLatestUserMessageAt"] = (
+    input,
+  ) =>
+    getLatestProjectionThreadUserMessageAtRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.getLatestUserMessageAt:query"),
+      ),
+      Effect.map(Option.match({ onNone: () => null, onSome: (row) => row.latestUserMessageAt })),
+    );
+
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
@@ -256,6 +285,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     upsert,
     getByMessageId,
     listByThreadId,
+    getLatestUserMessageAt,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });

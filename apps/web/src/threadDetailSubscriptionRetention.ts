@@ -3,7 +3,7 @@
 // Layer: Web subscription retention utility
 // Exports: retain/release helpers plus React and imperative subscription listeners.
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
 

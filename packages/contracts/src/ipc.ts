@@ -92,7 +92,7 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
-import type { StudioListRecentOutputsInput, StudioListRecentOutputsResult } from "./studio";
+import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
@@ -215,6 +215,7 @@ export interface DesktopUpdateState {
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
+  installFailureCount: number;
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub
@@ -328,6 +329,12 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export interface SynaraStorageSnapshot {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly entries: Readonly<Record<string, string>>;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -369,6 +376,10 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  storageMigration: {
+    readSnapshot: () => SynaraStorageSnapshot | null;
+    acknowledgeSnapshot: () => Promise<void>;
   };
   server?: {
     transcribeVoice: (
@@ -442,9 +453,9 @@ export interface NativeApi {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
   };
   studio: {
-    listRecentOutputs: (
-      input: StudioListRecentOutputsInput,
-    ) => Promise<StudioListRecentOutputsResult>;
+    listThreadOutputs: (
+      input: StudioListThreadOutputsInput,
+    ) => Promise<StudioListThreadOutputsResult>;
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;

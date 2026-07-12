@@ -3,7 +3,7 @@
 // Layer: UI state hook (projection only — board math lives in kanban.logic.ts)
 // Exports: useKanbanBoard
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useAppSettings } from "~/appSettings";

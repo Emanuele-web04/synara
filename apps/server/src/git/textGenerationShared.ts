@@ -4,8 +4,8 @@ import {
   ServerGenerateAutomationIntentResult,
   type AutomationMode,
   type ChatAttachment,
-} from "@t3tools/contracts";
-import { MAX_CHAT_THREAD_TITLE_WORDS } from "@t3tools/shared/chatThreads";
+} from "@synara/contracts";
+import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
 
 import { TextGenerationError } from "./Errors.ts";
 

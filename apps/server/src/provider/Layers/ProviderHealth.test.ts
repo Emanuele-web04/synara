@@ -1,12 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ServerProviderStatus } from "@t3tools/contracts";
-import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vitest";
 
-import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
+import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { ProviderHealth } from "../Services/ProviderHealth";
@@ -63,6 +64,12 @@ function mockSpawnerLayer(
     args: ReadonlyArray<string>,
     command: string,
     env: NodeJS.ProcessEnv | undefined,
+    options:
+      | {
+          readonly env?: NodeJS.ProcessEnv;
+          readonly windowsVerbatimArguments?: boolean;
+        }
+      | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -75,9 +82,14 @@ function mockSpawnerLayer(
       const cmd = command as unknown as {
         command: string;
         args: ReadonlyArray<string>;
-        options?: { env?: NodeJS.ProcessEnv };
+        options?: {
+          env?: NodeJS.ProcessEnv;
+          windowsVerbatimArguments?: boolean;
+        };
       };
-      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
+      return Effect.succeed(
+        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options)),
+      );
     }),
   );
 }
@@ -149,19 +161,18 @@ function withTempCodexHome(configContent?: string) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-codex-" });
-    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-runtime-" });
+    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-test-codex-" });
+    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "synara-test-runtime-",
+    });
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        // Override every runtime-home var the overlay resolver consults (SYNARA_HOME wins over
-        // DPCODE_HOME/T3CODE_HOME) plus CODEX_HOME, so an ambient SYNARA_HOME can't shadow the
-        // temp dir and skew the resolved CODEX_HOME during this test.
+        // Override the runtime and source homes so ambient state cannot skew
+        // the resolved CODEX_HOME during this test.
         const overrides: Record<string, string> = {
           CODEX_HOME: tmpDir,
           SYNARA_HOME: runtimeDir,
-          DPCODE_HOME: runtimeDir,
-          T3CODE_HOME: runtimeDir,
         };
         const restore: Record<string, string | undefined> = {};
         for (const [key, value] of Object.entries(overrides)) {
@@ -632,6 +643,31 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("propagates verbatim Windows arguments through the Effect command", () => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      return Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("C:\\tools(x86)\\codex.cmd");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, _env, options) => {
+            assert.strictEqual(command, "C:\\Windows\\System32\\cmd.exe");
+            assert.strictEqual(options?.windowsVerbatimArguments, true);
+            const commandLine = args.at(-1) ?? "";
+            if (commandLine.includes('"--version"')) {
+              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            }
+            if (commandLine.includes('"login" "status"')) {
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => platform.mockRestore())),
+      );
+    });
+
     it.effect("uses configured codex home for version, config, and auth probes", () => {
       let sawLoginStatusProbe = false;
       let expectedCodexHome: string | undefined;
@@ -644,13 +680,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           'model_provider = "portkey"\n',
         );
         const configuredHome = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-configured-codex-",
+          prefix: "synara-configured-codex-",
         });
         yield* fileSystem.writeFileString(
           path.join(configuredHome, "config.toml"),
           'model_provider = "openai"\n',
         );
-        expectedCodexHome = path.join(runtimeDir, DPCODE_CODEX_HOME_OVERLAY_DIR);
+        expectedCodexHome = path.join(runtimeDir, SYNARA_CODEX_HOME_OVERLAY_DIR);
 
         const status = yield* makeCheckCodexProviderStatus("codex", configuredHome);
         assert.strictEqual(status.status, "ready");

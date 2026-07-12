@@ -1,6 +1,6 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { NonNegativeInt } from "@t3tools/contracts";
+import { NonNegativeInt } from "@synara/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
@@ -9,11 +9,19 @@ import {
   DeleteProjectionThreadActivitiesInput,
   ListProjectionThreadActivitiesInput,
   ProjectionThreadActivity,
+  ProjectionThreadActivitySummary,
   ProjectionThreadActivityRepository,
   type ProjectionThreadActivityRepositoryShape,
 } from "../Services/ProjectionThreadActivities.ts";
 
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
+  Struct.assign({
+    payload: Schema.fromJsonString(Schema.Unknown),
+    sequence: Schema.NullOr(NonNegativeInt),
+  }),
+);
+
+const ProjectionThreadActivitySummaryDbRowSchema = ProjectionThreadActivitySummary.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
     sequence: Schema.NullOr(NonNegativeInt),
@@ -94,6 +102,35 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       `,
   });
 
+  const listProjectionThreadActivitySummaryRows = SqlSchema.findAll({
+    Request: ListProjectionThreadActivitiesInput,
+    Result: ProjectionThreadActivitySummaryDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          kind,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND kind IN (
+            'approval.requested',
+            'approval.resolved',
+            'provider.approval.respond.failed',
+            'user-input.requested',
+            'user-input.resolved',
+            'provider.user-input.respond.failed'
+          )
+        ORDER BY
+          CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
   const deleteProjectionThreadActivityRows = SqlSchema.void({
     Request: DeleteProjectionThreadActivitiesInput,
     execute: ({ threadId }) =>
@@ -136,6 +173,27 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       ),
     );
 
+  const listSummaryByThreadId: ProjectionThreadActivityRepositoryShape["listSummaryByThreadId"] = (
+    input,
+  ) =>
+    listProjectionThreadActivitySummaryRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadActivityRepository.listSummaryByThreadId:query",
+          "ProjectionThreadActivityRepository.listSummaryByThreadId:decodeRows",
+        ),
+      ),
+      Effect.map((rows) =>
+        rows.map((row) => ({
+          activityId: row.activityId,
+          kind: row.kind,
+          payload: row.payload,
+          ...(row.sequence !== null ? { sequence: row.sequence } : {}),
+          createdAt: row.createdAt,
+        })),
+      ),
+    );
+
   const deleteByThreadId: ProjectionThreadActivityRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadActivityRows(input).pipe(
       Effect.mapError(
@@ -146,6 +204,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   return {
     upsert,
     listByThreadId,
+    listSummaryByThreadId,
     deleteByThreadId,
   } satisfies ProjectionThreadActivityRepositoryShape;
 });

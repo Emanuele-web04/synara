@@ -4,7 +4,7 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { isSupportedLocalImagePath } from "@t3tools/shared/localPreviewFiles";
+import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { memo, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
 

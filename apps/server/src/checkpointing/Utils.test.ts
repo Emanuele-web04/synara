@@ -1,7 +1,58 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { resolveProjectCwdForKind, resolveThreadWorkspaceCwd } from "./Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnInManagedFamily,
+  checkpointRefForThreadTurnStartInManagedFamily,
+  isManagedCheckpointRefForThread,
+  parseManagedCheckpointRef,
+  resolveProjectCwdForKind,
+  resolveThreadWorkspaceCwd,
+} from "./Utils.ts";
+
+describe("managed checkpoint refs", () => {
+  const threadId = ThreadId.makeUnsafe("thread-1");
+
+  it("creates canonical Synara refs", () => {
+    expect(checkpointRefForThreadTurn(threadId, 4)).toMatch(/^refs\/synara\/checkpoints\//);
+  });
+
+  it("recognizes a structurally valid persisted ref for the same thread", () => {
+    const canonical = checkpointRefForThreadTurn(threadId, 4);
+    const historical = canonical.replace("refs/synara/", "refs/historical/");
+    expect(parseManagedCheckpointRef(historical)?.namespace).toBe("historical");
+    expect(isManagedCheckpointRefForThread(historical, threadId)).toBe(true);
+  });
+
+  it("rejects malformed refs and refs belonging to a different thread", () => {
+    expect(parseManagedCheckpointRef("refs/heads/feature")).toBeNull();
+    expect(
+      isManagedCheckpointRefForThread(
+        checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-2"), 4),
+        threadId,
+      ),
+    ).toBe(false);
+  });
+
+  it("reconstructs turn and turn-start refs in an existing managed family", () => {
+    const historical = checkpointRefForThreadTurn(threadId, 4).replace(
+      "refs/synara/",
+      "refs/historical/",
+    );
+
+    expect(checkpointRefForThreadTurnInManagedFamily(historical, threadId, 0)).toBe(
+      historical.replace(/\/turn\/4$/, "/turn/0"),
+    );
+    expect(
+      checkpointRefForThreadTurnStartInManagedFamily(
+        historical,
+        threadId,
+        TurnId.makeUnsafe("turn-1"),
+      ),
+    ).toMatch(/^refs\/historical\/checkpoints\/.+\/turn-start\//);
+  });
+});
 
 describe("resolveProjectCwdForKind", () => {
   it("suppresses the workspace root for a chat-kind project with no materialized worktree", () => {
@@ -75,6 +126,15 @@ describe("resolveThreadWorkspaceCwd", () => {
         projects: [{ id: projectId, kind: "studio", workspaceRoot: "/tmp/studio-root" }],
       }),
     ).toBe("/tmp/studio-root");
+  });
+
+  it("resolves the materialized worktree path for a studio-kind thread", () => {
+    expect(
+      resolveThreadWorkspaceCwd({
+        thread: { projectId, envMode: "worktree", worktreePath: "/tmp/studio-worktree" },
+        projects: [{ id: projectId, kind: "studio", workspaceRoot: "/tmp/studio-root" }],
+      }),
+    ).toBe("/tmp/studio-worktree");
   });
 
   it("resolves the materialized worktree path for a chat-kind thread once a worktree exists", () => {

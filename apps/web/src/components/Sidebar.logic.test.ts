@@ -33,6 +33,7 @@ import {
   recoverExistingAddProjectTarget,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
+  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
@@ -45,7 +46,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -67,6 +68,16 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("resolvePendingSidebarViewSelection", () => {
+  it("optimistically follows a destination segment", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "studio")).toBe("studio");
+  });
+
+  it("clears the optimistic segment when the user returns to the active view", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
@@ -514,7 +525,7 @@ describe("add-project error helpers", () => {
 
   it("explains root-absolute add-project paths that probably missed the home directory", () => {
     expect(
-      describeAddProjectError("Failed to create project directory: /Developer/Testing/t3code"),
+      describeAddProjectError("Failed to create project directory: /Developer/Testing/synara"),
     ).toContain("/Users/<name>/Developer");
   });
 

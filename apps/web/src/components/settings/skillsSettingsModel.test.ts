@@ -2,7 +2,7 @@
 // Purpose: Locks down Settings -> Skills grouping for duplicate provider skill copies.
 // Layer: Web settings logic tests
 
-import type { ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { buildSettingsSkillGroups, buildSettingsSkillSections } from "./skillsSettingsModel";

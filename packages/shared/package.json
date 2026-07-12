@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/shared",
+  "name": "@synara/shared",
   "version": "0.0.0-alpha.1",
   "private": true,
   "type": "module",
@@ -24,6 +24,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./staticSnapshot": {
+      "types": "./src/staticSnapshot.ts",
+      "import": "./src/staticSnapshot.ts"
+    },
     "./windowsProcess": {
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
@@ -35,6 +39,10 @@
     "./desktopChrome": {
       "types": "./src/desktopChrome.ts",
       "import": "./src/desktopChrome.ts"
+    },
+    "./desktopIdentity": {
+      "types": "./src/desktopIdentity.ts",
+      "import": "./src/desktopIdentity.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
@@ -155,7 +163,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
+    "@synara/contracts": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

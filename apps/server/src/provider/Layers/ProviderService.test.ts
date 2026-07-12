@@ -8,7 +8,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderTurnStartResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   EventId,
@@ -16,7 +16,7 @@ import {
   ProviderSessionStartInput,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { it, assert, vi } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 
@@ -332,7 +332,7 @@ function makeProviderServiceLayer(options?: Parameters<typeof makeProviderServic
 const routing = makeProviderServiceLayer();
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-"));
     const dbPath = path.join(tempDir, "orchestration.sqlite");
 
     const codex = makeFakeCodexAdapter();
@@ -398,7 +398,7 @@ it.effect(
   "ProviderServiceLive persists active sessions as stopped before adapter cleanup runs",
   () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-stopall-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-stopall-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
@@ -474,7 +474,7 @@ it.effect(
   "ProviderServiceLive restores rollback routing after restart using persisted thread mapping",
   () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-restart-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-restart-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
@@ -990,7 +990,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("refreshes persisted resume cursor from the active session on runtime events", () =>
+  it.effect("refreshes persisted resume cursor immediately on model reroutes", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -1005,6 +1005,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         resume: "550e8400-e29b-41d4-a716-446655440000",
         resumeSessionAt: "assistant-message-refresh",
         turnCount: 2,
+        rerouteOriginalApiModelId: "claude-fable-5",
+        rerouteFallbackApiModelId: "claude-opus-4-8",
       };
 
       routing.claude.updateSession(session.threadId, (existing) => ({
@@ -1012,12 +1014,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
         resumeCursor: updatedResumeCursor,
       }));
       routing.claude.emit({
-        type: "thread.started",
-        eventId: asEventId("runtime-thread-started-refresh"),
+        type: "model.rerouted",
+        eventId: asEventId("runtime-model-rerouted-refresh"),
         provider: "claudeAgent",
         createdAt: "2026-02-27T00:04:00.000Z",
         threadId: session.threadId,
-        payload: { providerThreadId: updatedResumeCursor.resume },
+        payload: {
+          fromModel: "claude-fable-5",
+          toModel: "claude-opus-4-8",
+          reason: "Model safeguards rerouted this request.",
+        },
       });
       yield* sleep(50);
 
@@ -1027,6 +1033,77 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(Option.isSome(runtime), true);
       if (Option.isSome(runtime)) {
         assert.deepEqual(runtime.value.resumeCursor, updatedResumeCursor);
+      }
+    }),
+  );
+
+  it.effect("persists task-list resume state before the active turn completes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-task-resume-refresh"), {
+        provider: "claudeAgent",
+        threadId: asThreadId("thread-task-resume-refresh"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "continue the work",
+        attachments: [],
+      });
+      const updatedResumeCursor = {
+        threadId: session.threadId,
+        resume: "550e8400-e29b-41d4-a716-446655440000",
+        turnCount: 1,
+        trackedTasks: [
+          {
+            id: "task-1",
+            subject: "Patch UI",
+            status: "in_progress",
+            blockedBy: [],
+          },
+        ],
+      };
+
+      routing.claude.updateSession(session.threadId, (existing) => ({
+        ...existing,
+        resumeCursor: updatedResumeCursor,
+      }));
+      routing.claude.emit({
+        type: "turn.tasks.updated",
+        eventId: asEventId("runtime-task-resume-refresh"),
+        provider: "claudeAgent",
+        createdAt: "2026-02-27T00:04:30.000Z",
+        threadId: session.threadId,
+        turnId: turn.turnId,
+        payload: {
+          tasks: [{ task: "Patching UI", status: "inProgress" }],
+        },
+      });
+
+      yield* waitUntilEffect(
+        () =>
+          runtimeRepository.getByThreadId({ threadId: session.threadId }).pipe(
+            Effect.map(
+              Option.exists((runtime) => {
+                const cursor = runtime.resumeCursor;
+                return cursor !== null && typeof cursor === "object" && "trackedTasks" in cursor;
+              }),
+            ),
+          ),
+        500,
+        20,
+        "task resume cursor persistence",
+      );
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.deepEqual(runtime.value.resumeCursor, updatedResumeCursor);
+        assert.equal(runtime.value.status, "running");
       }
     }),
   );
@@ -1167,7 +1244,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
   it.effect("reuses persisted resume cursor when startSession is called after a restart", () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-start-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-start-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
@@ -1257,7 +1334,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
   it.effect("clears stale resume cursor while preserving provider options for fresh restart", () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-clear-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-clear-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
@@ -1348,7 +1425,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
   it.effect("stops the live runtime while preserving resume cursor and provider options", () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-stop-runtime-"));
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "synara-provider-service-stop-runtime-"),
+      );
       const dbPath = path.join(tempDir, "orchestration.sqlite");
       const persistenceLayer = makeSqlitePersistenceLive(dbPath);
       const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(

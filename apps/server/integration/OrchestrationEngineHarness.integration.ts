@@ -6,7 +6,7 @@ import {
   ProviderKind,
   type OrchestrationEvent,
   type OrchestrationThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   Effect,
   Exit,
@@ -45,6 +45,7 @@ import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
@@ -237,7 +238,7 @@ export const makeOrchestrationIntegrationHarness = (
         } as typeof ProviderAdapterRegistry.Service)
       : null;
     const rootDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-orchestration-integration-",
+      prefix: "synara-orchestration-integration-",
     });
     const workspaceDir = path.join(rootDir, "workspace");
     const { stateDir, dbPath } = yield* deriveServerPaths(rootDir, undefined).pipe(
@@ -308,8 +309,12 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
+    const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(studioOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -321,6 +326,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(studioOutputReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

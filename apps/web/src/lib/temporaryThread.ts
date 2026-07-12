@@ -3,7 +3,7 @@
 // Layer: Web route/domain helpers
 // Exports: switch-aware resolver for temporary thread cleanup
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import type { DraftThreadState } from "../composerDraftStore";
 
 export function resolveTemporaryThreadIdToDelete(input: {

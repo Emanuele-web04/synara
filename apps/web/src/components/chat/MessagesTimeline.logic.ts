@@ -3,7 +3,7 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
-import { type MessageId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import {
@@ -132,6 +132,48 @@ export function resolveAssistantMessageCopyState({
     text: normalizedText,
     visible: showCopyButton && normalizedText !== null && !streaming,
   };
+}
+
+type AssistantMessageDisplayInput = {
+  readonly message: Pick<ChatMessage, "text" | "streaming">;
+  readonly leadingWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly inlineWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly collapsedTurnItems?: ReadonlyArray<CollapsedTurnItem>;
+};
+
+function isVisibleGeneratedImageEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.itemType === "image_generation" &&
+    entry.activityKind === "tool.completed" &&
+    entry.tone !== "error"
+  );
+}
+
+/**
+ * Resolves the markdown body for an assistant row. A completed image-generation
+ * work item is already visible non-text output, so an adjacent empty provider
+ * message must not add the misleading "(empty response)" placeholder. Truly
+ * empty settled turns retain the placeholder, and live empty text stays blank.
+ */
+export function resolveAssistantMessageDisplayText(
+  input: AssistantMessageDisplayInput,
+): string | null {
+  if (input.message.text) {
+    return input.message.text;
+  }
+  if (input.message.streaming) {
+    return "";
+  }
+
+  const hasVisibleGeneratedImage = [
+    ...(input.leadingWorkEntries ?? []),
+    ...(input.inlineWorkEntries ?? []),
+    ...(input.collapsedTurnItems ?? []).flatMap((item) =>
+      item.kind === "work" ? [item.entry] : [],
+    ),
+  ].some(isVisibleGeneratedImageEntry);
+
+  return hasVisibleGeneratedImage ? null : "(empty response)";
 }
 
 // Builds the "Files changed" lookup keyed by the last assistant row in the
@@ -378,9 +420,8 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The generic "Working..." shimmer yields to the setup card only while the
-  // card is open; once the card starts its close animation the turn's own
-  // shimmer is already rendering after it, so the handoff has no gap.
+  // The generic Thinking shimmer remains the single live status. Provider work
+  // rows are transcript history and must never replace it.
   if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",

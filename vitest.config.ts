@@ -5,7 +5,7 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: /^@t3tools\/contracts$/,
+        find: /^@synara\/contracts$/,
         replacement: path.resolve(import.meta.dirname, "./packages/contracts/src/index.ts"),
       },
       // The web app's `~` alias (only workspace that defines one), so its

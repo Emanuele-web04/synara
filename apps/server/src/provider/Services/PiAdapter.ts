@@ -16,5 +16,5 @@ export interface PiAdapterShape extends ProviderAdapterShape<ProviderAdapterErro
 }
 
 export class PiAdapter extends ServiceMap.Service<PiAdapter, PiAdapterShape>()(
-  "t3/provider/Services/PiAdapter",
+  "synara/provider/Services/PiAdapter",
 ) {}

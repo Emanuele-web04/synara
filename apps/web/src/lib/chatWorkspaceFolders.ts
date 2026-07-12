@@ -3,7 +3,7 @@
 // Layer: Web domain helper
 // Exports: date/slug helpers plus unique chat workspace path resolution.
 
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 const FALLBACK_CHAT_WORKSPACE_SLUG = "new-thread";
 const MAX_CHAT_WORKSPACE_SLUG_LENGTH = 72;

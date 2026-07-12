@@ -4,7 +4,7 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -787,7 +787,7 @@ describe("orchestration projector", () => {
           threadId: "thread-1",
           turnId: "turn-1",
           checkpointTurnCount: 1,
-          checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+          checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
           status: "ready",
           files: [],
           assistantMessageId: "assistant-msg-1",
@@ -861,7 +861,7 @@ describe("orchestration projector", () => {
           threadId: "thread-1",
           turnId: "turn-2",
           checkpointTurnCount: 2,
-          checkpointRef: "refs/t3/checkpoints/thread-1/turn/2",
+          checkpointRef: "refs/synara/checkpoints/thread-1/turn/2",
           status: "ready",
           files: [],
           assistantMessageId: "assistant-msg-2",
@@ -966,7 +966,7 @@ describe("orchestration projector", () => {
           threadId: "thread-revert",
           turnId: "turn-1",
           checkpointTurnCount: 1,
-          checkpointRef: "refs/t3/checkpoints/thread-revert/turn/1",
+          checkpointRef: "refs/synara/checkpoints/thread-revert/turn/1",
           status: "ready",
           files: [],
           assistantMessageId: "assistant-keep",
@@ -1002,7 +1002,7 @@ describe("orchestration projector", () => {
           threadId: "thread-revert",
           turnId: "turn-2",
           checkpointTurnCount: 2,
-          checkpointRef: "refs/t3/checkpoints/thread-revert/turn/2",
+          checkpointRef: "refs/synara/checkpoints/thread-revert/turn/2",
           status: "ready",
           files: [],
           assistantMessageId: "assistant-remove",
@@ -1073,6 +1073,81 @@ describe("orchestration projector", () => {
         turnId: message.turnId,
       })),
     ).toEqual([{ id: "assistant-keep", role: "assistant", turnId: "turn-1" }]);
+  });
+
+  it("keeps activity order while appending and replacing without a full sort", async () => {
+    const createdAt = "2026-07-09T00:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-activity-order",
+          occurredAt: createdAt,
+          commandId: "cmd-thread-activity-order",
+          payload: {
+            threadId: "thread-activity-order",
+            projectId: "project-1",
+            title: "Activity order",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const activityEvent = (input: { id: string; sequence: number; summary: string }) =>
+      makeEvent({
+        sequence: input.sequence,
+        type: "thread.activity-appended",
+        aggregateKind: "thread",
+        aggregateId: "thread-activity-order",
+        occurredAt: createdAt,
+        commandId: `cmd-${input.id}-${input.summary}`,
+        payload: {
+          threadId: "thread-activity-order",
+          activity: {
+            id: input.id,
+            tone: "tool",
+            kind: "tool.updated",
+            summary: input.summary,
+            payload: {},
+            turnId: null,
+            sequence: input.sequence,
+            createdAt,
+          },
+        },
+      });
+
+    const afterLate = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        activityEvent({ id: "activity-late", sequence: 30, summary: "late" }),
+      ),
+    );
+    const afterEarly = await Effect.runPromise(
+      projectEvent(
+        afterLate,
+        activityEvent({ id: "activity-early", sequence: 10, summary: "early" }),
+      ),
+    );
+    const afterReplacement = await Effect.runPromise(
+      projectEvent(
+        afterEarly,
+        activityEvent({ id: "activity-late", sequence: 30, summary: "late updated" }),
+      ),
+    );
+
+    expect(afterReplacement.threads[0]?.activities.map((activity) => activity.id)).toEqual([
+      "activity-early",
+      "activity-late",
+    ]);
+    expect(afterReplacement.threads[0]?.activities[1]?.summary).toBe("late updated");
   });
 
   it("caps message and checkpoint retention for long-lived threads", async () => {
@@ -1151,7 +1226,7 @@ describe("orchestration projector", () => {
             threadId: "thread-capped",
             turnId: `turn-${index}`,
             checkpointTurnCount: index + 1,
-            checkpointRef: `refs/t3/checkpoints/thread-capped/turn/${index + 1}`,
+            checkpointRef: `refs/synara/checkpoints/thread-capped/turn/${index + 1}`,
             status: "ready",
             files: [],
             assistantMessageId: `msg-${index}`,

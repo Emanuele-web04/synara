@@ -3,7 +3,7 @@
 // Layer: Chat composer hook
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
-import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@t3tools/contracts";
+import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project } from "../../types";

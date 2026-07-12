@@ -22,6 +22,152 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.0",
+    date: "Jul 11",
+    features: [
+      {
+        id: "synara-identity",
+        title: "Synara, all the way through",
+        description:
+          "The app now uses one identity everywhere, from its desktop installation and command line to packages, settings, diagnostics, and release artifacts.",
+        details:
+          "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Synara namespace. The 0.4.2 bridge preserves renderer state during the origin change.",
+      },
+      {
+        id: "claude-context-and-resume",
+        title: "Claude keeps context under control",
+        description:
+          "Claude sessions now report live context usage, warn before compaction, switch model and context settings in place, and resume with their safeguards intact.",
+        details:
+          "The adapter combines SDK context controls with accumulated token usage, preserves the effective context window across responses, keeps fallback reroutes pinned until you choose another model, and stores resume state without forcing unnecessary provider restarts.",
+      },
+      {
+        id: "provider-task-progress",
+        title: "Agent task progress stays visible",
+        description:
+          "Claude task tools and Codex task events now appear through one shared progress stream, so resumable work is easier to follow while it runs.",
+        details:
+          "Claude TaskCreate, TaskUpdate, TaskGet, TaskList, and TodoWrite results are normalized into the shared runtime task list and persisted in the resume cursor. Codex task events and provider summaries use the same projection, with coverage for reconnects and resumed sessions.",
+      },
+      {
+        id: "codex-stream-reliability",
+        title: "Codex reasoning and streams are easier to trust",
+        description:
+          "Codex reasoning summaries, context compaction, task updates, and noisy app-server output are handled more reliably, keeping live transcripts clearer during long turns.",
+        details:
+          "The app-server bridge now ignores non-protocol stdout safely, preserves provider-authored reasoning summaries, normalizes runtime events, and hardens resume and ingestion paths so progress is not lost between streamed updates.",
+      },
+      {
+        id: "faster-recovery",
+        title: "Chat startup and recovery are lighter",
+        description:
+          "Chat dock panels load on demand, deleted projects remain safe client tombstones, and browser profile migrations repair database sidecars transactionally instead of leaving partial state behind.",
+        details:
+          "The chat route measures LCP while deferring secondary panels, while project deletion and desktop profile repair now preserve predictable local state through reloads, retries, and interrupted migrations.",
+      },
+      {
+        id: "safer-release-updates",
+        title: "Desktop updates have stronger guardrails",
+        description:
+          "Release automation now validates compatibility-feed manifests and protects the packaged desktop from unsafe bundle swaps across update and startup paths.",
+        details:
+          "The release workflow verifies the pinned updater lane, keeps clean releases off the compatibility channel, repairs update-feed metadata, and hardens desktop startup when an app.asar swap is detected.",
+      },
+    ],
+  },
+  {
+    version: "0.4.2",
+    date: "Jul 9",
+    features: [
+      {
+        id: "synara-identity-bridge",
+        title: "Synara is preparing a seamless identity upgrade",
+        description:
+          "Launch this version at least once before installing the next Synara release so your drafts, pins, theme, browser state, and other local interface preferences move with you.",
+        details:
+          "This bridge writes a validated Synara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
+      },
+      {
+        id: "claude-usage-reliability",
+        title: "Claude threads use far fewer tokens and restart less",
+        description:
+          "Long Claude conversations now track their 1M-token context window per thread, compact automatically, and switch models without restarting the session — ending runaway usage.",
+        details:
+          "Each thread tracks its own context window and warns as usage approaches the limit. After a safeguard reroute, the fallback model stays pinned until you explicitly pick another model, and model or context-window changes apply in-session instead of tearing the session down.",
+      },
+      {
+        id: "desktop-update-verification",
+        title: "Desktop updates now verify their own installs",
+        description:
+          "Synara checks that an update actually installed after restart, detects failed installs, and recovers instead of silently staying on the old version.",
+        details:
+          "A durable install marker survives restarts and tracks handoff state, an install watchdog recovers from hung installs, and on macOS dedicated diagnostics capture updater state to make failures actionable.",
+      },
+      {
+        id: "studio-and-migration-fixes",
+        title: "Studio shortcut and migration fixes",
+        description:
+          "The new-chat keyboard shortcut now routes correctly inside Studio, composer drafts survive the storage migration, and incomplete legacy home imports repair themselves.",
+        details:
+          "Renderer storage migration is guaranteed to run before app hydration, the legacy environment identity is restored from the bridge marker, and checkpoint metadata is canonicalized while keeping existing persisted refs readable.",
+      },
+    ],
+  },
+  {
+    version: "0.4.1",
+    date: "Jul 9",
+    features: [
+      {
+        id: "studio-workspace",
+        title: "A dedicated Studio workspace for agent-led work",
+        description:
+          "Studio gives long-running, agent-led work its own focused space, keeping it distinct from your regular chats while making it quick to start or revisit.",
+        details:
+          "Studio projects, threads, routing, sidebar rows, empty-state entry points, and restore behavior now share a clear workspace boundary. The release also hardens cross-kind project ownership so a regular chat and a Studio thread cannot accidentally reuse the same container.",
+      },
+      {
+        id: "studio-outputs",
+        title: "Studio outputs are collected where you need them",
+        description:
+          "Files, generated images, and other agent outputs from Studio are surfaced in the Environment panel so finished work is easier to find and open.",
+        details:
+          "The server records Studio output activity and generated-image metadata, then projects it into a dedicated Environment section with resilient display helpers and targeted coverage for output ordering and presentation.",
+      },
+      {
+        id: "worktree-setup",
+        title: "Starting work in a worktree is more transparent",
+        description:
+          "Project actions now make worktree setup visible, so you can understand what is being prepared before a new workspace-backed thread starts.",
+        details:
+          "New setup steps and timeline states expose progress and failure more clearly, while the underlying scaffold path self-heals and keeps project/worktree ownership consistent through retries and restores.",
+      },
+      {
+        id: "restore-and-routing-reliability",
+        title: "Returning to a chat or Studio is more reliable",
+        description:
+          "Synara is more careful about restoring the right destination after reloads, segment switches, reconnects, and partially completed project creation.",
+        details:
+          "Routing now prefers canonical containers, waits for snapshot hydration where needed, fails closed on ambiguous thread kinds, and guards against overlapping fresh-chat creation so drafts and active work land in the intended surface.",
+      },
+      {
+        id: "steadier-live-transcripts",
+        title: "Live transcripts stay steadier during active work",
+        description:
+          "Transcript rendering and active-turn behavior have been refined to keep ongoing agent work easier to follow without needless scroll or layout churn.",
+        details:
+          "The session orchestration and timeline paths were refactored with focused coverage for worktree setup, transcript rows, sidebar visibility, and workspace handoffs, preserving predictable behavior as sessions stream and reconnect.",
+      },
+      {
+        id: "provider-and-windows-hardening",
+        title: "Safer provider startup and Windows launching",
+        description:
+          "Authentication preparation and provider launch handling are more robust, including a fix for launching Codex on Windows.",
+        details:
+          "The release prepares the Codex auth overlay before dependent startup paths run, hardens process environment handling, and includes the Windows launcher repair alongside broader orchestration and projection reliability work.",
+      },
+    ],
+  },
+  {
     version: "0.4.0",
     date: "Jul 6",
     features: [
@@ -1385,7 +1531,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "synara-home-migration",
         title: "Synara is now the default home",
         description:
-          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.dpcode` or `~/.t3` data on first launch.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports data from previous installations on first launch.",
       },
       {
         id: "desktop-platform-polish",
@@ -1748,9 +1894,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "legacy-import-recovery",
-        title: "Legacy T3 imports heal themselves",
+        title: "Legacy imports heal themselves",
         description:
-          "A new migration reconciles older imported T3 Code databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
+          "A new migration reconciles older imported databases whose migration history skipped required schema changes, preventing missing-column crashes after import.",
       },
       {
         id: "runtime-idle-cleanup",

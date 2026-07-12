@@ -10,7 +10,7 @@ import {
   type ProviderModelDescriptor,
   type ProviderModelOptions,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultContextWindow,
   getDefaultEffort,
@@ -25,7 +25,7 @@ import {
   normalizePiModelOptions,
   resolveLabeledOptionValue,
   trimOrNull,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import type { ReactNode } from "react";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";

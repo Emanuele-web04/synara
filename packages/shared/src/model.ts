@@ -3,6 +3,7 @@ import {
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
   type CodexModelOptions,
@@ -23,7 +24,7 @@ import {
   type ProviderKind,
   type ProviderWithDefaultModel,
   CodexReasoningEffort,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
@@ -283,6 +284,16 @@ export function getDefaultContextWindow(caps: ModelCapabilities): string | null 
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
+/** Check whether a Claude auto-compaction budget is supported. */
+export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {
+  return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
+}
+
+/** Return the default Claude auto-compaction budget, or null if the model has no override. */
+export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
+  return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
+}
+
 export function resolveLabeledOptionValue(
   options: ReadonlyArray<{ value: string; isDefault?: boolean | undefined }> | undefined,
   rawValue: string | null | undefined,
@@ -476,6 +487,20 @@ function legacyCapabilityDescriptors(
         ...(option.isDefault ? { isDefault: true as const } : {}),
       })),
       ...(defaultContextWindowOption ? { currentValue: defaultContextWindowOption.value } : {}),
+    });
+  }
+  if (caps.autoCompactWindowOptions && caps.autoCompactWindowOptions.length > 0) {
+    const defaultOption = caps.autoCompactWindowOptions.find((option) => option.isDefault);
+    descriptors.push({
+      id: "autoCompactWindow",
+      label: "Auto-compact",
+      type: "select",
+      options: caps.autoCompactWindowOptions.map((option) => ({
+        id: option.value,
+        label: option.label,
+        ...(option.isDefault ? { isDefault: true as const } : {}),
+      })),
+      ...(defaultOption ? { currentValue: defaultOption.value } : {}),
     });
   }
   if (caps.supportsFastMode) {
@@ -672,9 +697,10 @@ export function normalizeClaudeModelOptions(
 ): ClaudeModelOptions | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
-  const defaultContextWindow = getDefaultContextWindow(caps);
+  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
-  const resolvedContextWindow = trimOrNull(modelOptions?.contextWindow);
+  const resolvedAutoCompactWindow =
+    trimOrNull(modelOptions?.autoCompactWindow) ?? trimOrNull(modelOptions?.contextWindow);
   const isPromptInjected = caps.promptInjectedEffortLevels.includes(resolvedEffort ?? "");
   const effort =
     resolvedEffort &&
@@ -683,11 +709,11 @@ export function normalizeClaudeModelOptions(
     resolvedEffort !== defaultReasoningEffort
       ? resolvedEffort
       : undefined;
-  const contextWindow =
-    resolvedContextWindow &&
-    hasContextWindowOption(caps, resolvedContextWindow) &&
-    resolvedContextWindow !== defaultContextWindow
-      ? resolvedContextWindow
+  const autoCompactWindow =
+    resolvedAutoCompactWindow &&
+    hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) &&
+    resolvedAutoCompactWindow !== defaultAutoCompactWindow
+      ? resolvedAutoCompactWindow
       : undefined;
   const thinking =
     caps.supportsThinkingToggle && modelOptions?.thinking === false ? false : undefined;
@@ -696,22 +722,121 @@ export function normalizeClaudeModelOptions(
     ...(thinking === false ? { thinking: false } : {}),
     ...(effort ? { effort } : {}),
     ...(fastMode ? { fastMode: true } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
+    ...(autoCompactWindow ? { autoCompactWindow } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
-  switch (modelSelection.provider) {
-    case "claudeAgent": {
-      const caps = getModelCapabilities(modelSelection.provider, modelSelection.model);
-      return modelSelection.options?.contextWindow === "1m" && hasContextWindowOption(caps, "1m")
-        ? `${modelSelection.model}[1m]`
-        : modelSelection.model;
-    }
-    default:
-      return modelSelection.model;
+  return modelSelection.model;
+}
+
+/**
+ * Map a requested Claude Code effort to the API effort passed at session spawn.
+ * `ultrathink` is prompt-injected (no API effort); `ultracode` runs as xhigh plus
+ * the `ultracode` session setting.
+ */
+export function getEffectiveClaudeCodeEffort(
+  effort: ClaudeCodeEffort | null | undefined,
+): ClaudeApiEffort | null {
+  if (!effort || effort === "ultrathink") {
+    return null;
   }
+  return effort === "ultracode" ? "xhigh" : effort;
+}
+
+interface ClaudeSpawnProfile {
+  readonly effectiveEffort: ClaudeApiEffort | null;
+  readonly thinking: boolean | undefined;
+  readonly fastMode: boolean;
+  readonly ultracode: boolean;
+}
+
+interface ClaudeRequestedSpawnOptions {
+  readonly effort: string | null;
+  readonly thinking: boolean | undefined;
+  readonly fastMode: boolean;
+}
+
+function claudeRequestedSpawnOptions(
+  selection: Extract<ModelSelection, { provider: "claudeAgent" }>,
+): ClaudeRequestedSpawnOptions {
+  return {
+    effort: trimOrNull(selection.options?.effort ?? null),
+    thinking:
+      typeof selection.options?.thinking === "boolean" ? selection.options.thinking : undefined,
+    fastMode: selection.options?.fastMode === true,
+  };
+}
+
+function sameClaudeRequestedSpawnOptions(
+  previous: Extract<ModelSelection, { provider: "claudeAgent" }>,
+  next: Extract<ModelSelection, { provider: "claudeAgent" }>,
+): boolean {
+  const prev = claudeRequestedSpawnOptions(previous);
+  const desired = claudeRequestedSpawnOptions(next);
+  return (
+    prev.effort === desired.effort &&
+    prev.thinking === desired.thinking &&
+    prev.fastMode === desired.fastMode
+  );
+}
+
+// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
+// only these inputs are fixed at subprocess spawn (query `effort` + `settings`).
+// Model and context window switch in-session via `setModel`.
+function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
+  const caps = getModelCapabilities("claudeAgent", selection.model);
+  const requestedEffort = trimOrNull(selection.options?.effort ?? null);
+  const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+  return {
+    effectiveEffort: getEffectiveClaudeCodeEffort(effort),
+    thinking:
+      typeof selection.options?.thinking === "boolean" && caps.supportsThinkingToggle
+        ? selection.options.thinking
+        : undefined,
+    fastMode: selection.options?.fastMode === true && caps.supportsFastMode,
+    ultracode: effort === "ultracode" && hasEffortLevel(caps, "xhigh"),
+  } satisfies ClaudeSpawnProfile;
+}
+
+/**
+ * Whether switching from `previous` to `next` requires restarting the Claude
+ * subprocess. Restarting resumes via `--resume`, which replays the whole
+ * conversation as uncached input tokens, so it must only happen for options
+ * fixed at spawn (effort/settings). Model changes use `setModel`, while the
+ * auto-compact budget uses the SDK's live flag-settings control.
+ */
+export function claudeSelectionRequiresRestart(
+  previous: ModelSelection | undefined,
+  next: ModelSelection,
+): boolean {
+  if (next.provider !== "claudeAgent") {
+    return false;
+  }
+  if (previous === undefined) {
+    // First observation in this process: the live session was started from the
+    // same selection source, so treat it as unchanged rather than replaying.
+    return false;
+  }
+  if (previous.provider !== "claudeAgent") {
+    return true;
+  }
+  if (previous.model !== next.model && sameClaudeRequestedSpawnOptions(previous, next)) {
+    // A model switch is handled by setModel. Do not interpret the new model's
+    // different capabilities as a spawn-setting change when the requested
+    // options themselves are unchanged (for example, a stale Haiku `thinking`
+    // override or Opus `fastMode` flag carried into the next selection).
+    return false;
+  }
+  const prev = claudeSpawnProfile(previous);
+  const desired = claudeSpawnProfile(next);
+  return (
+    prev.effectiveEffort !== desired.effectiveEffort ||
+    prev.thinking !== desired.thinking ||
+    prev.fastMode !== desired.fastMode ||
+    prev.ultracode !== desired.ultracode
+  );
 }
 
 export function normalizeGeminiModelOptions(

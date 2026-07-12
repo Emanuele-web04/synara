@@ -3,7 +3,7 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
-import type { ThreadId, TurnId } from "@t3tools/contracts";
+import type { ThreadId, TurnId } from "@synara/contracts";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime

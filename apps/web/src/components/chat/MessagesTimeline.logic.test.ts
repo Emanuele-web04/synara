@@ -1,4 +1,4 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -8,6 +8,7 @@ import {
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
@@ -625,6 +626,81 @@ describe("resolveAssistantMessageCopyState", () => {
   });
 });
 
+describe("resolveAssistantMessageDisplayText", () => {
+  it("suppresses the empty placeholder when the turn visibly completed an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        collapsedTurnItems: [
+          {
+            kind: "work",
+            id: "generated-image",
+            entry: {
+              id: "generated-image",
+              createdAt: "2026-07-08T10:00:00.000Z",
+              label: "Generated image",
+              tone: "tool",
+              itemType: "image_generation",
+              activityKind: "tool.completed",
+            },
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the placeholder when a settled turn produced no visible content", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("does not mistake an unfinished or failed image tool row for produced content", () => {
+    const imageEntry = {
+      id: "generated-image",
+      createdAt: "2026-07-08T10:00:00.000Z",
+      label: "Generating image",
+      tone: "tool" as const,
+      itemType: "image_generation" as const,
+      activityKind: "tool.started",
+    };
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [imageEntry],
+      }),
+    ).toBe("(empty response)");
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [
+          { ...imageEntry, activityKind: "tool.completed", tone: "error" as const },
+        ],
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("preserves real assistant text even when the same turn generated an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "Here is your image.", streaming: false },
+        inlineWorkEntries: [
+          {
+            id: "generated-image",
+            createdAt: "2026-07-08T10:00:00.000Z",
+            label: "Generated image",
+            tone: "tool",
+            itemType: "image_generation",
+            activityKind: "tool.completed",
+          },
+        ],
+      }),
+    ).toBe("Here is your image.");
+  });
+});
+
 describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
@@ -746,6 +822,34 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.inlineWorkEntries).toBeUndefined();
     // Timed from the user message, not from the last intermediate narration.
     expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("folds settled reasoning traces into the terminal turn disclosure", () => {
+    const reasoning = workEntry("reasoning-1", "2026-01-01T00:00:02Z", "Reasoning trace");
+    if (reasoning.kind === "work") {
+      reasoning.entry = {
+        ...reasoning.entry,
+        detail: "Inspecting apps/web/src/store.ts",
+        toolTitle: "Reasoning trace",
+      };
+    }
+
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        reasoning,
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(collapsedSignature(terminal!)).toEqual(["work:reasoning-1"]);
     expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 

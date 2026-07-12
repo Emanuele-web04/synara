@@ -5,7 +5,7 @@
 
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";

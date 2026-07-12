@@ -11,8 +11,8 @@ import {
   ThreadId,
   TurnId,
   type ThreadEnvironmentMode,
-} from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { Cause, Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -20,8 +20,8 @@ import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurnStart,
+  isManagedCheckpointRefForThread,
   resolveProjectCwdForKind,
-  CHECKPOINT_REFS_PREFIX,
 } from "./checkpointing/Utils";
 import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
@@ -151,15 +151,15 @@ function checkpointRefsForThreadPurge(
   messageRows: ReadonlyArray<CheckpointMessageRow>,
 ): ReadonlyArray<CheckpointRef> {
   const refs = new Set<string>();
+  const typedThreadId = ThreadId.makeUnsafe(threadId);
 
   const addRef = (checkpointRef: CheckpointRef | string | null | undefined) => {
     const raw = readString(checkpointRef);
-    if (raw?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`)) {
+    if (raw && isManagedCheckpointRefForThread(raw, typedThreadId)) {
       refs.add(raw);
     }
   };
 
-  const typedThreadId = ThreadId.makeUnsafe(threadId);
   for (const row of turnRows) {
     const checkpointRef = readString(row.checkpointRef);
     addRef(checkpointRef);
@@ -410,9 +410,13 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       `;
 
       const cwd = threadWorkspaceCwdForCheckpointCleanup(thread);
-      const hasPersistedCheckpointRef = checkpointTurnRows.some((row) =>
-        readString(row.checkpointRef)?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`),
-      );
+      const typedThreadId = ThreadId.makeUnsafe(threadId);
+      const hasPersistedCheckpointRef = checkpointTurnRows.some((row) => {
+        const checkpointRef = readString(row.checkpointRef);
+        return checkpointRef
+          ? isManagedCheckpointRefForThread(checkpointRef, typedThreadId)
+          : false;
+      });
       const checkpointRefs =
         cwd !== null || hasPersistedCheckpointRef
           ? checkpointRefsForThreadPurge(threadId, checkpointTurnRows, checkpointMessageRows)

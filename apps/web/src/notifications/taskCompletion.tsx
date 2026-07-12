@@ -3,7 +3,7 @@
 // Layer: Notification runtime
 // Exports: TaskCompletionNotifications and browser permission helpers
 
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
 import { toastManager } from "../components/ui/toast";

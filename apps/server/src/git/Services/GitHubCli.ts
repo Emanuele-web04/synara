@@ -7,7 +7,7 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
-import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
+import type { GitPullRequestCheck, GitPullRequestComment } from "@synara/contracts";
 
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
@@ -161,5 +161,5 @@ export interface GitHubCliShape {
  * GitHubCli - Service tag for GitHub CLI process execution.
  */
 export class GitHubCli extends ServiceMap.Service<GitHubCli, GitHubCliShape>()(
-  "t3/git/Services/GitHubCli",
+  "synara/git/Services/GitHubCli",
 ) {}

@@ -12,15 +12,15 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
-} from "@t3tools/shared/terminalThreads";
-import { describeErrorMessage } from "@t3tools/shared/errorMessages";
+} from "@synara/shared/terminalThreads";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import {
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
   TERMINAL_MIN_COLS,
   TERMINAL_MIN_ROWS,
-} from "@t3tools/contracts";
-import type { TerminalSessionSnapshot } from "@t3tools/contracts";
+} from "@synara/contracts";
+import type { TerminalSessionSnapshot } from "@synara/contracts";
 import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";

@@ -10,14 +10,15 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
   resolveThreadWorkspaceCwd,
@@ -887,9 +888,19 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const earliestManagedBaselineRef = thread.checkpoints
+      .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
+      .map((checkpoint) =>
+        checkpointRefForThreadTurnInManagedFamily(
+          checkpoint.checkpointRef,
+          event.payload.threadId,
+          0,
+        ),
+      )
+      .find((checkpointRef) => checkpointRef !== null);
     const targetCheckpointRef =
       event.payload.turnCount === 0
-        ? checkpointRefForThreadTurn(event.payload.threadId, 0)
+        ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(event.payload.threadId, 0))
         : thread.checkpoints.find(
             (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
           )?.checkpointRef;
