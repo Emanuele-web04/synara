@@ -938,9 +938,7 @@ function EventRouter() {
       return true;
     };
 
-    const performShellRefresh = async (options?: {
-      includeReadModel?: boolean;
-    }): Promise<ShellRefreshResult> => {
+    const performShellRefresh = async (): Promise<ShellRefreshResult> => {
       const generation = ++shellRefreshGeneration;
       try {
         const fetched = await fetchMissingThreadSnapshots(api);
@@ -965,9 +963,6 @@ function EventRouter() {
         }
 
         if (fetched.kind === "readModel") {
-          if (options?.includeReadModel === false) {
-            return { applied: false, shellThreadCount: 0, reason: "empty" };
-          }
           if (
             !shouldAcceptShellSnapshotSequence(
               shellSnapshotSequence,
@@ -1587,21 +1582,13 @@ function DesktopProjectBootstrap() {
           const state = useStore.getState();
           return state.projects.length > 0 && state.threads.length === 0;
         },
-        refresh: () => requestShellRefresh({ includeReadModel: true }),
+        refresh: () => requestShellRefresh(),
         onAttempt: ({ attempt, result }) => {
-          if (result == null) {
-            console.info("[synara] missing-thread recovery attempt", {
-              attempt,
-              projectCount: useStore.getState().projects.length,
-              threadCount: useStore.getState().threads.length,
-            });
-            return;
-          }
-          console.info("[synara] missing-thread recovery result", {
+          console.info("[synara] missing-thread recovery", {
             attempt,
-            applied: result.applied,
-            reason: result.reason,
-            shellThreadCount: result.shellThreadCount,
+            applied: result?.applied ?? null,
+            reason: result?.reason ?? "start",
+            shellThreadCount: result?.shellThreadCount ?? null,
             projectCount: useStore.getState().projects.length,
             threadCount: useStore.getState().threads.length,
           });
