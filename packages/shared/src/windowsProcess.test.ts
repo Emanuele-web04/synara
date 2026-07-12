@@ -46,10 +46,49 @@ describe("windowsProcess", () => {
     );
   });
 
+  it("prefers .cmd over extensionless npm shims from where.exe", () => {
+    const spawnSync = vi.fn(() => ({
+      stdout: [
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+      ].join("\r\n"),
+      status: 0,
+    }));
+
+    expect(
+      resolveWindowsCommandPath("codex", {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toBe("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd");
+  });
+
   it("skips current-directory command hits from where.exe", () => {
     const spawnSync = vi.fn(() => ({
       stdout: [
         "C:\\projects\\synara\\codex.cmd",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+      ].join("\r\n"),
+      status: 0,
+    }));
+
+    expect(
+      resolveWindowsCommandPath("codex", {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toBe("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd");
+  });
+
+  it("filters current-directory hits before preferring spawn-safe candidates", () => {
+    const spawnSync = vi.fn(() => ({
+      stdout: [
+        "C:\\projects\\synara\\codex.cmd",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
         "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
       ].join("\r\n"),
       status: 0,
@@ -91,7 +130,10 @@ describe("windowsProcess", () => {
 
   it("resolves extensionless path-like Windows shims before spawning", () => {
     const spawnSync = vi.fn(() => ({
-      stdout: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd\r\n",
+      stdout: [
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+      ].join("\r\n"),
       status: 0,
     }));
 
@@ -152,7 +194,9 @@ describe("windowsProcess", () => {
         "/s",
         "/v:off",
         "/c",
-        '"C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd" "app-server"',
+        "call",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+        "app-server",
       ],
       shell: false,
       windowsHide: true,
@@ -161,7 +205,10 @@ describe("windowsProcess", () => {
 
   it("wraps resolved extensionless path-like shims through cmd.exe", () => {
     const spawnSync = vi.fn(() => ({
-      stdout: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd\r\n",
+      stdout: [
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+      ].join("\r\n"),
       status: 0,
     }));
 
@@ -179,14 +226,16 @@ describe("windowsProcess", () => {
         "/s",
         "/v:off",
         "/c",
-        '"C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd" "app-server"',
+        "call",
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+        "app-server",
       ],
       shell: false,
       windowsHide: true,
     });
   });
 
-  it("quotes batch commands and arguments in a single cmd.exe command line", () => {
+  it("passes batch commands and arguments separately to cmd.exe call", () => {
     expect(
       buildWindowsBatchCommandArgs("C:\\Users\\Test User\\npm\\tool.cmd", [
         "path with spaces",
@@ -197,24 +246,33 @@ describe("windowsProcess", () => {
       "/s",
       "/v:off",
       "/c",
-      '"C:\\Users\\Test User\\npm\\tool.cmd" "path with spaces" "flag=value"',
+      "call",
+      "C:\\Users\\Test User\\npm\\tool.cmd",
+      "path with spaces",
+      "flag=value",
     ]);
   });
 
-  it("escapes batch arguments that cmd.exe can expand or reinterpret", () => {
+  it("rejects batch tokens with cmd.exe control characters", () => {
+    expect(() => buildWindowsBatchCommandArgs("C:\\tools\\bad%path\\codex.cmd", [])).toThrow(
+      /Cannot safely execute Windows batch command/,
+    );
+    expect(() => buildWindowsBatchCommandArgs("C:\\tools\\codex.cmd", ["one&two"])).toThrow(
+      /Cannot safely execute Windows batch argument/,
+    );
+  });
+
+  it("allows batch paths with spaces and parentheses", () => {
     expect(
-      buildWindowsBatchCommandArgs("C:\\tools\\bad%path\\codex.cmd", [
-        "%PATH%",
-        'approval_policy="never"',
-        "one&two",
-        "bang!value",
-      ]),
+      buildWindowsBatchCommandArgs("C:\\Program Files (x86)\\Tool\\tool.cmd", ["--version"]),
     ).toEqual([
       "/d",
       "/s",
       "/v:off",
       "/c",
-      '"C:\\tools\\bad%%path\\codex.cmd" "%%PATH%%" "approval_policy=^"never^"" "one^&two" "bang^!value"',
+      "call",
+      "C:\\Program Files (x86)\\Tool\\tool.cmd",
+      "--version",
     ]);
   });
 
@@ -243,6 +301,29 @@ describe("windowsProcess", () => {
       shell: false,
       windowsHide: true,
     });
+  });
+
+  it("keeps a configured native Codex executable path intact", () => {
+    const spawnSync = vi.fn();
+
+    expect(
+      prepareWindowsSafeProcess(
+        "C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+        ["app-server"],
+        {
+          platform: "win32",
+          cwd: "C:\\projects\\synara",
+          env: { SystemRoot: "C:\\Windows" },
+          spawnSync,
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+      args: ["app-server"],
+      shell: false,
+      windowsHide: true,
+    });
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("resolves ComSpec from environment before falling back", () => {
