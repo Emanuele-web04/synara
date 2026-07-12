@@ -471,6 +471,35 @@ describe("deriveActiveTaskListState", () => {
 
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
+
+  it("treats an empty task update as an explicit clear", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-with-task",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [{ task: "Patch UI", status: "inProgress" }],
+        },
+      }),
+      makeActivity({
+        id: "plan-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [],
+        },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
+  });
 });
 
 describe("deriveActiveBackgroundTasksState", () => {

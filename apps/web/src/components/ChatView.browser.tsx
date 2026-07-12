@@ -3433,7 +3433,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
-      await expect.element(page.getByText("Folders on this Mac")).not.toBeInTheDocument();
+      await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
 
       const currentProjectOption = await waitForElement(
         () =>

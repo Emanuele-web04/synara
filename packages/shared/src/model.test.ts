@@ -15,12 +15,14 @@ import {
   applyClaudePromptEffortPrefix,
   claudeSelectionRequiresRestart,
   formatModelDisplayName,
+  getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
   getGeminiThinkingModelAlias,
   getModelCapabilities,
   getModelOptions,
   hasContextWindowOption,
+  hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
@@ -454,18 +456,23 @@ describe("provider option descriptor helpers", () => {
 });
 
 describe("context window helpers", () => {
-  it("returns the default context window from capabilities", () => {
-    expect(getDefaultContextWindow(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe(
-      "200k",
+  it("separates Claude's real context capacity from its auto-compact budget", () => {
+    const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
+    expect(getDefaultContextWindow(opusCaps)).toBeNull();
+    expect(getDefaultAutoCompactWindow(opusCaps)).toBe("200k");
+    expect(opusCaps.contextWindowTokens).toBe(1_000_000);
+    expect(getModelCapabilities("claudeAgent", "claude-opus-4-5").contextWindowTokens).toBe(
+      200_000,
     );
     expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
   });
 
-  it("validates context window against model capabilities", () => {
+  it("validates auto-compact budgets against model capabilities", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
-    expect(hasContextWindowOption(opusCaps, "200k")).toBe(true);
-    expect(hasContextWindowOption(opusCaps, "1m")).toBe(true);
-    expect(hasContextWindowOption(opusCaps, "2m")).toBe(false);
+    expect(hasContextWindowOption(opusCaps, "1m")).toBe(false);
+    expect(hasAutoCompactWindowOption(opusCaps, "200k")).toBe(true);
+    expect(hasAutoCompactWindowOption(opusCaps, "1m")).toBe(true);
+    expect(hasAutoCompactWindowOption(opusCaps, "2m")).toBe(false);
   });
 });
 
@@ -523,22 +530,32 @@ describe("normalizeClaudeModelOptions", () => {
       normalizeClaudeModelOptions("claude-opus-4-6", {
         effort: "high",
         fastMode: false,
-        contextWindow: "200k",
+        autoCompactWindow: "200k",
       }),
     ).toBeUndefined();
   });
 
-  it("preserves non-default claude context window options", () => {
+  it("preserves non-default Claude auto-compact budgets", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-opus-4-6", {
+        autoCompactWindow: "1m",
+      }),
+    ).toEqual({
+      autoCompactWindow: "1m",
+    });
+  });
+
+  it("migrates the legacy context-window field to the auto-compact budget", () => {
     expect(
       normalizeClaudeModelOptions("claude-opus-4-6", {
         contextWindow: "1m",
       }),
     ).toEqual({
-      contextWindow: "1m",
+      autoCompactWindow: "1m",
     });
   });
 
-  it("omits unsupported claude context window options", () => {
+  it("omits unsupported Claude auto-compact budgets", () => {
     expect(
       normalizeClaudeModelOptions("claude-haiku-4-5", {
         thinking: false,
@@ -591,21 +608,21 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
-  it("adds the 1m suffix for Claude models when selected", () => {
+  it("keeps native-1M Claude model ids unchanged", () => {
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
-        options: { contextWindow: "1m" },
+        options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-opus-4-6[1m]");
+    ).toBe("claude-opus-4-6");
     expect(
       resolveApiModelId({
         provider: "claudeAgent",
         model: "claude-sonnet-5",
-        options: { contextWindow: "1m" },
+        options: { autoCompactWindow: "1m" },
       }),
-    ).toBe("claude-sonnet-5[1m]");
+    ).toBe("claude-sonnet-5");
   });
 
   it("leaves Claude models unchanged for the default context window", () => {
@@ -622,7 +639,13 @@ describe("resolveApiModelId", () => {
 describe("claudeSelectionRequiresRestart", () => {
   const selection = (
     model: string,
-    options?: { effort?: string; contextWindow?: string; fastMode?: boolean; thinking?: boolean },
+    options?: {
+      effort?: string;
+      contextWindow?: string;
+      autoCompactWindow?: string;
+      fastMode?: boolean;
+      thinking?: boolean;
+    },
   ) =>
     ({
       provider: "claudeAgent",
@@ -681,11 +704,11 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(true);
   });
 
-  it("does not restart for a context-window-only change", () => {
+  it("does not restart for an auto-compact-budget-only change", () => {
     expect(
       claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8", { effort: "xhigh", contextWindow: "200k" }),
-        selection("claude-opus-4-8", { effort: "xhigh", contextWindow: "1m" }),
+        selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "200k" }),
+        selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "1m" }),
       ),
     ).toBe(false);
   });

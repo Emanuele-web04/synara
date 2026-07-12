@@ -32,12 +32,13 @@ export interface WindowsSafeProcessCommand {
   readonly args: string[];
   readonly shell: false;
   readonly windowsHide?: true;
+  readonly windowsVerbatimArguments?: true;
 }
 
 const WINDOWS_BATCH_EXTENSION_PATTERN = /\.(?:cmd|bat)$/i;
+const WINDOWS_SPAWN_SAFE_EXTENSION_PATTERN = /\.(?:exe|com|cmd|bat)$/i;
 const WINDOWS_PATH_SEPARATOR_PATTERN = /[\\/]/;
-const WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN = /[\r\n]/;
-const WINDOWS_BATCH_CARET_ESCAPE_PATTERN = /[&|<>()^"!]/g;
+const WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN = /[\r\n&|<>^%]/;
 const WHERE_TIMEOUT_MS = 2_000;
 
 function trimNonEmpty(value: string | null | undefined): string | null {
@@ -67,19 +68,22 @@ export function isWindowsBatchCommand(command: string): boolean {
 
 function quoteWindowsBatchToken(token: string, label: string): string {
   if (WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN.test(token)) {
-    throw new Error(`Cannot safely execute Windows batch ${label} containing line breaks.`);
+    throw new Error(
+      `Cannot safely execute Windows batch ${label} containing cmd.exe control characters.`,
+    );
   }
-  const escaped = token
-    .replace(/%/g, "%%")
-    .replace(WINDOWS_BATCH_CARET_ESCAPE_PATTERN, (match) => `^${match}`);
-  return `"${escaped}"`;
+  return `"${token.replaceAll('"', '""')}"`;
 }
 
 export function buildWindowsBatchCommandArgs(
   command: string,
   args: ReadonlyArray<string>,
 ): string[] {
+  // Keep cmd.exe's semantic command line together so quote-bearing arguments
+  // are encoded for cmd instead of independently escaped as C-runtime argv.
+  // The call prefix also keeps /s from stripping the executable's outer quotes.
   const commandLine = [
+    "call",
     quoteWindowsBatchToken(command, "command"),
     ...args.map((arg) => quoteWindowsBatchToken(arg, "argument")),
   ].join(" ");
@@ -103,9 +107,25 @@ function isFromCurrentDirectory(candidate: string, cwd: string | undefined): boo
   return candidateDir === currentDir;
 }
 
+function isWindowsSpawnSafeResolvedCommand(command: string): boolean {
+  return WINDOWS_SPAWN_SAFE_EXTENSION_PATTERN.test(command);
+}
+
+function selectWindowsCommandCandidate(
+  candidates: ReadonlyArray<string>,
+  cwd: string | undefined,
+  pathLikeCommand: boolean,
+): string | undefined {
+  const allowedCandidates = pathLikeCommand
+    ? candidates
+    : candidates.filter((candidate) => !isFromCurrentDirectory(candidate, cwd));
+  return allowedCandidates.find(isWindowsSpawnSafeResolvedCommand) ?? allowedCandidates[0];
+}
+
 // Resolve PATH/PATHEXT commands through where.exe so `.cmd` shims can be wrapped
-// explicitly. We skip current-directory hits to avoid restoring shell-style CWD
-// command hijacking.
+// explicitly. Prefer candidates that native spawn can execute or that we can
+// wrap, and skip current-directory hits for PATH commands to avoid restoring
+// shell-style CWD command hijacking.
 export function resolveWindowsCommandPath(
   command: string,
   input: WindowsSafeProcessInput = {},
@@ -135,10 +155,7 @@ export function resolveWindowsCommandPath(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (pathLikeCommand) {
-    return candidates[0] ?? command;
-  }
-  return candidates.find((candidate) => !isFromCurrentDirectory(candidate, cwd)) ?? command;
+  return selectWindowsCommandCandidate(candidates, cwd, pathLikeCommand) ?? command;
 }
 
 export function prepareWindowsSafeProcess(
@@ -167,5 +184,6 @@ export function prepareWindowsSafeProcess(
     args: buildWindowsBatchCommandArgs(resolvedCommand, args),
     shell: false,
     windowsHide: true,
+    windowsVerbatimArguments: true,
   };
 }

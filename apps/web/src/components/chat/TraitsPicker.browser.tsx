@@ -78,6 +78,7 @@ async function mountClaudePicker(props?: {
     effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultrathink";
     thinking?: boolean;
     fastMode?: boolean;
+    autoCompactWindow?: string;
     contextWindow?: string;
   } | null;
   skipDraftModelOptions?: boolean;
@@ -170,14 +171,14 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows context window controls for Opus models", async () => {
+  it("shows auto-compact budget controls for native-1M Claude models", async () => {
     await using _ = await mountClaudePicker();
 
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Context");
+      expect(text).toContain("Auto-compact");
       expect(text).toContain("200k");
       expect(text).toContain("1M");
     });
@@ -283,10 +284,10 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows the non-default context window in the trigger label", async () => {
+  it("shows the non-default auto-compact budget in the trigger label", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-6",
-      options: { contextWindow: "1m" },
+      options: { autoCompactWindow: "1m" },
     });
 
     await vi.waitFor(() => {
@@ -294,19 +295,19 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("keeps the claude context window per-thread instead of sticky", async () => {
+  it("keeps the Claude auto-compact budget per-thread instead of sticky", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-6",
-      options: { contextWindow: "200k" },
+      options: { autoCompactWindow: "200k" },
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "1M" }).click();
+    await page.getByRole("menuitemradio", { name: "1M (model default)" }).click();
 
     // A 1M thread can grow far beyond the normal compaction point: keep the explicit
     // thread choice, but never leak it into sticky defaults for future threads.
     const sticky = useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent;
-    expect(sticky?.provider === "claudeAgent" ? sticky.options?.contextWindow : undefined).toBe(
+    expect(sticky?.provider === "claudeAgent" ? sticky.options?.autoCompactWindow : undefined).toBe(
       undefined,
     );
   });

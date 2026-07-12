@@ -143,6 +143,7 @@ export async function runProcess(
       stdio: "pipe",
       shell: prepared.shell,
       windowsHide: prepared.windowsHide,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
     });
 
     let stdout = "";

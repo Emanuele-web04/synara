@@ -23,7 +23,7 @@ import type { WhatsNewEntry } from "./logic";
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
     version: "0.5.0",
-    date: "Jul 9",
+    date: "Jul 11",
     features: [
       {
         id: "synara-identity",
@@ -32,6 +32,46 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "The app now uses one identity everywhere, from its desktop installation and command line to packages, settings, diagnostics, and release artifacts.",
         details:
           "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Synara namespace. The 0.4.2 bridge preserves renderer state during the origin change.",
+      },
+      {
+        id: "claude-context-and-resume",
+        title: "Claude keeps context under control",
+        description:
+          "Claude sessions now report live context usage, warn before compaction, switch model and context settings in place, and resume with their safeguards intact.",
+        details:
+          "The adapter combines SDK context controls with accumulated token usage, preserves the effective context window across responses, keeps fallback reroutes pinned until you choose another model, and stores resume state without forcing unnecessary provider restarts.",
+      },
+      {
+        id: "provider-task-progress",
+        title: "Agent task progress stays visible",
+        description:
+          "Claude task tools and Codex task events now appear through one shared progress stream, so resumable work is easier to follow while it runs.",
+        details:
+          "Claude TaskCreate, TaskUpdate, TaskGet, TaskList, and TodoWrite results are normalized into the shared runtime task list and persisted in the resume cursor. Codex task events and provider summaries use the same projection, with coverage for reconnects and resumed sessions.",
+      },
+      {
+        id: "codex-stream-reliability",
+        title: "Codex reasoning and streams are easier to trust",
+        description:
+          "Codex reasoning summaries, context compaction, task updates, and noisy app-server output are handled more reliably, keeping live transcripts clearer during long turns.",
+        details:
+          "The app-server bridge now ignores non-protocol stdout safely, preserves provider-authored reasoning summaries, normalizes runtime events, and hardens resume and ingestion paths so progress is not lost between streamed updates.",
+      },
+      {
+        id: "faster-recovery",
+        title: "Chat startup and recovery are lighter",
+        description:
+          "Chat dock panels load on demand, deleted projects remain safe client tombstones, and browser profile migrations repair database sidecars transactionally instead of leaving partial state behind.",
+        details:
+          "The chat route measures LCP while deferring secondary panels, while project deletion and desktop profile repair now preserve predictable local state through reloads, retries, and interrupted migrations.",
+      },
+      {
+        id: "safer-release-updates",
+        title: "Desktop updates have stronger guardrails",
+        description:
+          "Release automation now validates compatibility-feed manifests and protects the packaged desktop from unsafe bundle swaps across update and startup paths.",
+        details:
+          "The release workflow verifies the pinned updater lane, keeps clean releases off the compatibility channel, repairs update-feed metadata, and hardens desktop startup when an app.asar swap is detected.",
       },
     ],
   },

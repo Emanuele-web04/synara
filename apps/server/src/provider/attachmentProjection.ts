@@ -1,9 +1,9 @@
 // FILE: attachmentProjection.ts
-// Purpose: Builds provider prompt text for non-native file attachments.
+// Purpose: Builds provider prompt text for attachments that a provider must read from disk.
 // Layer: Provider adapter utility
 // Depends on: attachmentStore path resolution and shared byte formatting.
 
-import type { ChatAttachment, ChatFileAttachment } from "@synara/contracts";
+import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from "@synara/contracts";
 import { formatBytes } from "@synara/shared/formatBytes";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
@@ -11,7 +11,11 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 function isProjectedFileAttachment(
   attachment: ChatAttachment,
   include: "all-files" | "non-pdf-files",
-): attachment is ChatFileAttachment {
+  includeImage: ((attachment: ChatImageAttachment) => boolean) | undefined,
+): attachment is ChatImageAttachment | ChatFileAttachment {
+  if (attachment.type === "image") {
+    return includeImage?.(attachment) ?? false;
+  }
   if (attachment.type !== "file") {
     return false;
   }
@@ -25,15 +29,16 @@ function quotePromptValue(value: string): string {
   return JSON.stringify(value);
 }
 
-// Produces a stable path-reference block; providers read the bytes with their filesystem tools.
+// Produces a stable path-reference block for regular files and selected non-native image types.
 export function buildFileAttachmentsPromptBlock(input: {
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
   readonly attachmentsDir: string;
   readonly include: "all-files" | "non-pdf-files";
+  readonly includeImage?: (attachment: ChatImageAttachment) => boolean;
 }): string | null {
   const lines: string[] = [];
   for (const attachment of input.attachments ?? []) {
-    if (!isProjectedFileAttachment(attachment, input.include)) {
+    if (!isProjectedFileAttachment(attachment, input.include, input.includeImage)) {
       continue;
     }
     const attachmentPath = resolveAttachmentPath({
@@ -66,11 +71,13 @@ export function appendFileAttachmentsPromptBlock(input: {
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
   readonly attachmentsDir: string;
   readonly include: "all-files" | "non-pdf-files";
+  readonly includeImage?: (attachment: ChatImageAttachment) => boolean;
 }): string | undefined {
   const fileBlock = buildFileAttachmentsPromptBlock({
     attachments: input.attachments,
     attachmentsDir: input.attachmentsDir,
     include: input.include,
+    ...(input.includeImage ? { includeImage: input.includeImage } : {}),
   });
   return fileBlock ? `${input.text ?? ""}${input.text ? "\n\n" : ""}${fileBlock}` : input.text;
 }

@@ -218,6 +218,7 @@ function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean
     (event.type === "thread.state.changed" &&
       event.payload.state === "compacted" &&
       event.turnId === undefined) ||
+    event.type === "turn.tasks.updated" ||
     event.type === "turn.completed" ||
     event.type === "turn.aborted"
   );
@@ -524,6 +525,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         case "thread.started":
         case "thread.state.changed":
         case "turn.started":
+        case "turn.tasks.updated":
         case "model.rerouted":
         case "turn.completed":
         case "turn.aborted":

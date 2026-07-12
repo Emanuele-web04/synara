@@ -840,6 +840,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           ...(input.cwd ? { cwd: input.cwd } : {}),
           env: process.env,
         }),

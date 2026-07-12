@@ -343,6 +343,42 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps structured reasoning summary parts without exposing raw content", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-structured-reasoning-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("reasoning_2"),
+        payload: {
+          item: {
+            type: "reasoning",
+            id: "reasoning_2",
+            summary: [
+              { type: "summary_text", text: "Inspect the protocol." },
+              { summary: "Update the adapter." },
+            ],
+            content: [{ type: "reasoning_text", text: "private raw trace" }],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.detail, "Inspect the protocol.\n\nUpdate the adapter.");
+    }),
+  );
+
   it.effect("keeps Codex reasoning trace and summary delta streams distinct", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

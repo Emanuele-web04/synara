@@ -571,7 +571,7 @@ function toActiveTaskListState(activity: OrchestrationThreadActivity): ActiveTas
         status: "pending" | "inProgress" | "completed";
       } => task !== null,
     );
-  if (tasks.length === 0) {
+  if (rawTasks.length > 0 && tasks.length === 0) {
     return null;
   }
   return {
@@ -611,7 +611,7 @@ export function deriveActiveTaskListState(
         .findLast((taskList) => taskList !== null) ?? null)
     : null;
   if (currentTurnTaskList) {
-    return currentTurnTaskList;
+    return currentTurnTaskList.tasks.length > 0 ? currentTurnTaskList : null;
   }
 
   // Keep the most recent unfinished prior task list visible so implementation turns
@@ -620,6 +620,10 @@ export function deriveActiveTaskListState(
     allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
     null;
   if (!latestPriorTaskList) {
+    return null;
+  }
+
+  if (latestPriorTaskList.tasks.length === 0) {
     return null;
   }
 

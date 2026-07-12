@@ -405,6 +405,7 @@ export function hardenElectronUpdater(
         encoding: "utf8",
         shell: prepared.shell,
         windowsHide: prepared.windowsHide,
+        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
       });
       const { error, status, stdout, stderr } = response;
       if (error) {

@@ -1361,20 +1361,21 @@ function normalizeProviderModelOptions(
       : claudeCandidate?.fastMode === false
         ? false
         : undefined;
-  const claudeContextWindow =
-    typeof claudeCandidate?.contextWindow === "string" && claudeCandidate.contextWindow.length > 0
-      ? claudeCandidate.contextWindow
-      : undefined;
+  const claudeAutoCompactWindow =
+    trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
+    trimStringOrUndefined(claudeCandidate?.contextWindow);
   const claude =
     claudeThinking !== undefined ||
     claudeEffort !== undefined ||
     claudeFastMode !== undefined ||
-    claudeContextWindow !== undefined
+    claudeAutoCompactWindow !== undefined
       ? {
           ...(claudeThinking !== undefined ? { thinking: claudeThinking } : {}),
           ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
           ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
-          ...(claudeContextWindow !== undefined ? { contextWindow: claudeContextWindow } : {}),
+          ...(claudeAutoCompactWindow !== undefined
+            ? { autoCompactWindow: claudeAutoCompactWindow }
+            : {}),
         }
       : undefined;
 
@@ -1498,7 +1499,7 @@ function normalizeModelSelection(
   if (typeof rawModel !== "string") {
     return null;
   }
-  const inferredClaudeContextWindow =
+  const inferredClaudeAutoCompactWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(rawModel, provider);
   if (!model) {
@@ -1513,11 +1514,11 @@ function normalizeModelSelection(
     provider === "codex"
       ? modelOptions?.codex
       : provider === "claudeAgent"
-        ? inferredClaudeContextWindow !== undefined
+        ? inferredClaudeAutoCompactWindow !== undefined
           ? {
               ...modelOptions?.claudeAgent,
-              contextWindow:
-                modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
+              autoCompactWindow:
+                modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
             }
           : modelOptions?.claudeAgent
         : provider === "gemini"
@@ -1542,10 +1543,17 @@ function normalizeModelSelection(
 // beyond the normal 200k compaction point and consume usage limits much faster, so a
 // one-off pick must never silently become every future thread's sticky default.
 function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
-  if (selection.provider !== "claudeAgent" || !selection.options?.contextWindow) {
+  if (
+    selection.provider !== "claudeAgent" ||
+    (!selection.options?.contextWindow && !selection.options?.autoCompactWindow)
+  ) {
     return selection;
   }
-  const { contextWindow: _contextWindow, ...rest } = selection.options;
+  const {
+    contextWindow: _contextWindow,
+    autoCompactWindow: _autoCompactWindow,
+    ...rest
+  } = selection.options;
   return makeModelSelection(
     selection.provider,
     selection.model,
@@ -1557,7 +1565,10 @@ function sanitizeStickyModelSelectionMap(
   map: Partial<Record<ProviderKind, ModelSelection>>,
 ): Partial<Record<ProviderKind, ModelSelection>> {
   const claude = map.claudeAgent;
-  if (claude?.provider !== "claudeAgent" || !claude.options?.contextWindow) {
+  if (
+    claude?.provider !== "claudeAgent" ||
+    (!claude.options?.contextWindow && !claude.options?.autoCompactWindow)
+  ) {
     return map;
   }
   return { ...map, claudeAgent: stripNonStickyModelOptions(claude) };

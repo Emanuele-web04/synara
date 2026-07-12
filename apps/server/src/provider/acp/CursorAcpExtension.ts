@@ -5,6 +5,8 @@
 import type { UserInputQuestion } from "@synara/contracts";
 import { Schema } from "effect";
 
+import { normalizeRuntimeTaskStatus } from "../runtimeTaskList.ts";
+
 const CursorAskQuestionOption = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
@@ -87,12 +89,7 @@ export function extractTodosAsPlan(params: typeof CursorUpdateTodosRequest.Type)
     if (step === "") {
       return [];
     }
-    const status: "pending" | "inProgress" | "completed" =
-      todo.status === "completed"
-        ? "completed"
-        : todo.status === "in_progress" || todo.status === "inProgress"
-          ? "inProgress"
-          : "pending";
+    const status = normalizeRuntimeTaskStatus(todo.status);
     return [{ step, status }];
   });
   return { plan };

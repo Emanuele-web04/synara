@@ -933,6 +933,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -966,6 +967,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...approvalRequiredTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -993,6 +995,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "image",
@@ -1020,6 +1023,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1053,6 +1057,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1081,6 +1086,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1112,6 +1118,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1144,6 +1151,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1194,6 +1202,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1232,6 +1241,25 @@ describe("sendTurn", () => {
         threadId: asThreadId("thread_1"),
       }),
     ).rejects.toThrow("Turn input must include text or attachments.");
+  });
+
+  it("disables reasoning summaries for Codex Spark", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Inspect the repository",
+      model: "gpt-5.3-codex-spark",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        model: "gpt-5.3-codex-spark",
+        summary: "none",
+      }),
+    );
   });
 });
 
@@ -2197,6 +2225,7 @@ describe("respondToRequest", () => {
     expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",

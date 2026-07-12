@@ -2245,6 +2245,26 @@ describe("composerDraftStore sticky composer settings", () => {
     );
   });
 
+  it("keeps the Claude auto-compact budget thread-local", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.makeUnsafe("thread-sticky-auto-compact-window");
+
+    store.setProviderModelOptions(
+      threadId,
+      "claudeAgent",
+      { effort: "xhigh", autoCompactWindow: "1m" },
+      { persistSticky: true, model: "claude-opus-4-7" },
+    );
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider
+        .claudeAgent?.options,
+    ).toEqual({ effort: "xhigh", autoCompactWindow: "1m" });
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-7", { effort: "xhigh" }),
+    );
+  });
+
   it("does not persist Claude context window changes through sticky provider options", () => {
     const store = useComposerDraftStore.getState();
     const threadId = ThreadId.makeUnsafe("thread-sticky-context-window");
@@ -2257,11 +2277,11 @@ describe("composerDraftStore sticky composer settings", () => {
     );
 
     const state = useComposerDraftStore.getState();
-    // The thread keeps its own context window choice.
+    // The thread keeps its own choice and migrates the legacy field name.
     expect(state.draftsByThreadId[threadId]?.modelSelectionByProvider.claudeAgent?.options).toEqual(
       {
         effort: "xhigh",
-        contextWindow: "1m",
+        autoCompactWindow: "1m",
       },
     );
     // The sticky snapshot only carries options that are safe to inherit.
