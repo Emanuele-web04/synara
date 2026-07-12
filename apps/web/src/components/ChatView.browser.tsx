@@ -813,6 +813,35 @@ function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithSettledCompletedInlinePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithSettledInlinePlan();
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            activities: thread.activities.map((activity) =>
+              activity.kind === "turn.tasks.updated"
+                ? {
+                    ...activity,
+                    payload: {
+                      tasks: [
+                        { task: "Inspecting ChatView boundaries", status: "completed" },
+                        { task: "Patch the shared checklist receiver", status: "completed" },
+                        { task: "Run final validation", status: "completed" },
+                      ],
+                    },
+                  }
+                : activity,
+            ),
+          }
+        : thread,
+    ),
+  };
+}
+
 // A plan-mode thread whose latest turn has settled and that still has an
 // actionable (unimplemented) proposed plan. This is exactly the state where the
 // live composer shows the plan-follow-up prompt, so it's the setup that used to
@@ -4923,7 +4952,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("hides the inline plan card once the latest turn is settled", async () => {
+  it("keeps an unfinished task list visible once the latest turn is settled", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -4933,8 +4962,30 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
-          expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
+          expect(document.body.textContent).toContain("Patch the shared checklist receiver");
           expect(document.body.textContent).not.toContain("1 background agent");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides a completed task list once the latest turn is settled", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledCompletedInlinePlan(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Finished the investigation.");
+          expect(document.body.textContent).not.toContain("3 out of 3 tasks completed");
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );

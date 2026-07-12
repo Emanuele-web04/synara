@@ -440,7 +440,7 @@ describe("deriveActiveTaskListState", () => {
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 
-  it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
+  it("keeps an unfinished task list visible after its turn completes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "unfinished-plan-from-turn-1",
@@ -469,7 +469,14 @@ describe("deriveActiveTaskListState", () => {
       }),
     ];
 
-    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
+      createdAt: "2026-02-23T00:00:01.000Z",
+      turnId: "turn-1",
+      tasks: [
+        { task: "Inspect theme implementation", status: "pending" },
+        { task: "Patch token plumbing", status: "pending" },
+      ],
+    });
   });
 
   it("treats an empty task update as an explicit clear", () => {

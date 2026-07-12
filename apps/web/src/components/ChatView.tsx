@@ -2571,9 +2571,8 @@ export default function ChatView({
       };
     }
 
-    return latestTurnSettled
-      ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
+    const liveTurnId = latestTurnSettled ? undefined : activeLatestTurn?.turnId;
+    return deriveActiveTaskListState(threadActivities, liveTurnId);
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
     () =>
