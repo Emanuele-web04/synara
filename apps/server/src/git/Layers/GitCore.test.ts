@@ -1509,6 +1509,95 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("does not resolve upstream before rejecting non-repository directories", () =>
+      Effect.gen(function* () {
+        const operations: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) =>
+          Effect.sync(() => {
+            operations.push(input.operation);
+            if (input.operation === "GitCore.statusDetails.isInsideWorkTree") {
+              return {
+                code: 128,
+                stdout: "",
+                stderr: "fatal: not a git repository",
+              };
+            }
+            throw new Error(`Unexpected git command: ${input.operation}`);
+          }),
+        );
+
+        const details = yield* core.statusDetails("C:\\Users\\Windows");
+
+        expect(details.isRepo).toBe(false);
+        expect(operations).toEqual(["GitCore.statusDetails.isInsideWorkTree"]);
+      }),
+    );
+
+    it.effect("preserves failures from the repository precheck", () =>
+      Effect.gen(function* () {
+        const precheckError = new GitCommandError({
+          operation: "GitCore.statusDetails.isInsideWorkTree",
+          command: "git rev-parse --is-inside-work-tree",
+          cwd: "C:\\repo",
+          detail: "git rev-parse --is-inside-work-tree timed out.",
+        });
+        const core = yield* makeIsolatedGitCore(() => Effect.fail(precheckError));
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: precheckError.operation,
+            detail: precheckError.detail,
+          });
+        }
+      }),
+    );
+
+    it.effect("rejects unrelated nonzero repository precheck results", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          }),
+        );
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.statusDetails.isInsideWorkTree",
+            detail: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          });
+        }
+      }),
+    );
+
+    it.effect("keeps missing repository directories on the non-repository fallback", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitCore.statusDetails.isInsideWorkTree",
+              command: "git rev-parse --is-inside-work-tree",
+              cwd: "C:\\missing",
+              detail: "ENOENT: no such file or directory",
+            }),
+          ),
+        );
+
+        const details = yield* core.statusDetails("C:\\missing");
+
+        expect(details.isRepo).toBe(false);
+      }),
+    );
+
     it.effect("reports the tracked branch name without the remote prefix", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();
