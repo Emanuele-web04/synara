@@ -141,6 +141,41 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it.each([
+    {
+      shape: "omits the effort list",
+      runtimeModel: { slug: "gpt-5.4", name: "GPT-5.4" },
+    },
+    {
+      shape: "reports an empty effort list",
+      runtimeModel: {
+        slug: "gpt-5.4",
+        name: "GPT-5.4",
+        supportedReasoningEfforts: [],
+      },
+    },
+  ])("falls back to static Codex efforts when runtime metadata $shape", ({ runtimeModel }) => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      runtimeModel,
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "xhigh",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        reasoningEffort: "xhigh",
+      },
+    });
+  });
+
   it("drops a stored runtime Codex effort after discovery proves it unsupported", () => {
     const state = getComposerProviderState({
       provider: "codex",

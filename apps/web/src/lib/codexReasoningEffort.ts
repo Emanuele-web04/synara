@@ -16,10 +16,9 @@ export function classifyCodexReasoningEffortSupport(input: {
     return "unsupported";
   }
 
-  if (input.runtimeModel) {
-    return input.runtimeModel.supportedReasoningEfforts?.some(
-      (candidate) => candidate.value === effort,
-    ) === true
+  const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  if (runtimeEfforts && runtimeEfforts.length > 0) {
+    return runtimeEfforts.some((candidate) => candidate.value === effort)
       ? "supported"
       : "unsupported";
   }
