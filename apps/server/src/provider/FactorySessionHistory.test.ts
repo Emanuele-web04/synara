@@ -37,14 +37,32 @@ it("reads only user-visible Droid session messages", async () => {
       },
       {
         type: "message",
+        id: "explicitly-hidden",
+        message: {
+          role: "assistant",
+          visibility: "both",
+          isUserVisible: false,
+          content: [{ type: "text", text: "also hidden" }],
+        },
+      },
+      {
+        type: "message",
         id: "user-1",
         timestamp: "2026-07-08T00:00:00.000Z",
-        message: { role: "user", content: [{ type: "text", text: "Question" }] },
+        message: {
+          role: "user",
+          visibility: "both",
+          content: [{ type: "text", text: "Question" }],
+        },
       },
       {
         type: "message",
         id: "assistant-1",
-        message: { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+        message: {
+          role: "assistant",
+          visibility: "user_only",
+          content: [{ type: "text", text: "Answer" }],
+        },
       },
     ]
       .map((entry) => JSON.stringify(entry))

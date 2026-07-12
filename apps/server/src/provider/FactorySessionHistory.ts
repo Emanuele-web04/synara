@@ -37,6 +37,10 @@ function visibleMessageText(content: unknown): string {
     .trim();
 }
 
+function isFactoryMessageUserVisible(message: Record<string, unknown>): boolean {
+  return message.isUserVisible !== false && message.visibility !== "llm_only";
+}
+
 async function findFactorySessionPath(
   sessionsDir: string,
   sessionId: string,
@@ -60,7 +64,7 @@ async function findFactorySessionPath(
   return null;
 }
 
-// Filters llm-only/user-only bookkeeping rows so imports match Droid's visible transcript.
+// Filters model-only rows so imports match Droid's user-visible transcript.
 export async function readFactorySessionHistory(
   homeDir: string,
   sessionId: string,
@@ -89,7 +93,7 @@ export async function readFactorySessionHistory(
     }
     if (parsed.type !== "message") continue;
     const message = recordValue(parsed.message);
-    if (!message || (message.visibility !== undefined && message.visibility !== null)) continue;
+    if (!message || !isFactoryMessageUserVisible(message)) continue;
     if (message.role !== "user" && message.role !== "assistant") continue;
     const text = visibleMessageText(message.content);
     if (!text) continue;
