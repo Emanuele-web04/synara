@@ -2009,6 +2009,16 @@ export default function ChatView({
       enabled: selectedProvider === "grok" || lockedProvider === "grok" || isModelPickerOpen,
     }),
   );
+  const droidModelDiscoveryEnabled =
+    selectedProvider === "droid" || lockedProvider === "droid" || isModelPickerOpen;
+  const droidDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "droid",
+      binaryPath: settings.droidBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: droidModelDiscoveryEnabled,
+    }),
+  );
   const openCodeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "opencode",
@@ -2071,6 +2081,13 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const hasResolvedDroidModelDiscovery =
+    droidDynamicModelsQuery.data?.source === "droid-acp" &&
+    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const droidModelDiscoveryPending =
+    droidModelDiscoveryEnabled &&
+    !hasResolvedDroidModelDiscovery &&
+    (droidDynamicModelsQuery.isLoading || droidDynamicModelsQuery.isFetching);
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
@@ -2152,7 +2169,7 @@ export default function ChatView({
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
-      droid: undefined,
+      droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -2164,6 +2181,7 @@ export default function ChatView({
       "cursor",
       "gemini",
       "grok",
+      "droid",
       "kilo",
       "opencode",
       "pi",
@@ -2186,6 +2204,7 @@ export default function ChatView({
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
     customModelsByProvider,
+    droidDynamicModelsQuery.data,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
@@ -2207,7 +2226,7 @@ export default function ChatView({
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
-      droid: [],
+      droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -2216,6 +2235,7 @@ export default function ChatView({
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
+      droidDynamicModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
@@ -2229,7 +2249,7 @@ export default function ChatView({
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
     grok: grokDynamicModelsQuery,
-    droid: undefined,
+    droid: droidDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,
@@ -2294,31 +2314,36 @@ export default function ChatView({
   const providerModelsLoading =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : selectedProviderModelsQuery !== undefined &&
-              (selectedProviderModelsQuery.isLoading ||
-                (selectedProviderModelsQuery.isFetching &&
-                  selectedProviderModelsQuery.data === undefined));
+      : selectedProvider === "droid"
+        ? droidModelDiscoveryPending
+        : selectedProvider === "kilo"
+          ? kiloModelDiscoveryPending
+          : selectedProvider === "opencode"
+            ? openCodeModelDiscoveryPending
+            : selectedProvider === "pi"
+              ? piModelDiscoveryPending
+              : selectedProviderModelsQuery !== undefined &&
+                (selectedProviderModelsQuery.isLoading ||
+                  (selectedProviderModelsQuery.isFetching &&
+                    selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : false;
+      : selectedProvider === "droid"
+        ? droidModelDiscoveryPending
+        : selectedProvider === "kilo"
+          ? kiloModelDiscoveryPending
+          : selectedProvider === "opencode"
+            ? openCodeModelDiscoveryPending
+            : selectedProvider === "pi"
+              ? piModelDiscoveryPending
+              : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -8702,6 +8727,7 @@ export default function ChatView({
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
           cursor: cursorModelDiscoveryPending,
+          droid: droidModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
           opencode: openCodeModelDiscoveryPending,
           pi: piModelDiscoveryPending,
@@ -8743,6 +8769,7 @@ export default function ChatView({
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={{
         cursor: cursorModelDiscoveryPending,
+        droid: droidModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
         opencode: openCodeModelDiscoveryPending,
         pi: piModelDiscoveryPending,

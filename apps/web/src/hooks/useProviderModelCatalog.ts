@@ -47,7 +47,7 @@ const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
   /**
-   * Enables discovery for the on-demand providers (cursor/grok/kilo/opencode/pi)
+   * Enables discovery for the on-demand providers (cursor/grok/droid/kilo/opencode/pi)
    * even when they are not selected — pass the picker's open state so their lists
    * are warm by the time the user browses them.
    */
@@ -88,6 +88,14 @@ export function useProviderModelCatalog(input: {
       provider: "grok",
       binaryPath: settings.grokBinaryPath || null,
       enabled: selectedProvider === "grok" || discoveryEnabled,
+    }),
+  );
+  const droidDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "droid",
+      binaryPath: settings.droidBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: selectedProvider === "droid" || discoveryEnabled,
     }),
   );
   const openCodeDynamicModelsQuery = useQuery(
@@ -160,6 +168,14 @@ export function useProviderModelCatalog(input: {
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const droidModelDiscoveryEnabled = selectedProvider === "droid" || discoveryEnabled;
+  const hasResolvedDroidModelDiscovery =
+    droidDynamicModelsQuery.data?.source === "droid-acp" &&
+    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const droidModelDiscoveryPending =
+    droidModelDiscoveryEnabled &&
+    !hasResolvedDroidModelDiscovery &&
+    (droidDynamicModelsQuery.isLoading || droidDynamicModelsQuery.isFetching);
   const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
@@ -229,7 +245,7 @@ export function useProviderModelCatalog(input: {
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
-      droid: undefined,
+      droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -241,6 +257,7 @@ export function useProviderModelCatalog(input: {
       "cursor",
       "gemini",
       "grok",
+      "droid",
       "kilo",
       "opencode",
       "pi",
@@ -262,6 +279,7 @@ export function useProviderModelCatalog(input: {
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
     customModelsByProvider,
+    droidDynamicModelsQuery.data,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
@@ -273,12 +291,14 @@ export function useProviderModelCatalog(input: {
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
     () => ({
       cursor: cursorModelDiscoveryPending,
+      droid: droidModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
     }),
     [
       cursorModelDiscoveryPending,
+      droidModelDiscoveryPending,
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
@@ -294,7 +314,7 @@ export function useProviderModelCatalog(input: {
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
-      droid: [],
+      droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -303,6 +323,7 @@ export function useProviderModelCatalog(input: {
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
+      droidDynamicModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,

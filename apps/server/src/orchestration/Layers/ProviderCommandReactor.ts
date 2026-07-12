@@ -380,6 +380,9 @@ const make = Effect.gen(function* () {
     attempt: PendingContextBootstrapAttempt,
     event: ProviderQueueDrainEvent,
   ) => {
+    // Keep bootstrap flags after cancellation or failure even though Droid may
+    // already have received the prompt. A bounded duplicate on retry is safer
+    // than dropping the only model-visible copy of the retained transcript.
     if (event.type !== "turn.completed" || event.payload.state !== "completed") {
       return;
     }
@@ -958,6 +961,8 @@ const make = Effect.gen(function* () {
           preferredProvider === "droid" &&
           thread.sidechatSourceThreadId
         ) {
+          // Droid's ACP fork preserves the native session but does not guarantee
+          // that the imported sidechat transcript is model-visible on its first prompt.
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
