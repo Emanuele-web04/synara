@@ -75,6 +75,7 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
+import { refreshEmptyRouteRestoreSnapshot } from "../chatRouteRecovery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
@@ -1474,11 +1475,22 @@ function DesktopProjectBootstrap() {
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    if (projects.length > 0 && !hasThreadWithoutProject) {
+    // Projects visible with zero threads is also a stuck-hydration case (#282):
+    // the empty-shell path can mark threadsHydrated without ever fetching threads,
+    // and route-only recovery never runs on the home/sidebar surface.
+    const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
+    if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
       return;
     }
 
     attemptedRecoveryRef.current = true;
+
+    if (hasProjectsWithoutThreads) {
+      void refreshEmptyRouteRestoreSnapshot(api).catch(() => {
+        attemptedRecoveryRef.current = false;
+      });
+      return;
+    }
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
