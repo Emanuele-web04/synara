@@ -72,7 +72,7 @@ function quoteWindowsBatchToken(token: string, label: string): string {
       `Cannot safely execute Windows batch ${label} containing cmd.exe control characters.`,
     );
   }
-  return `"${token.replaceAll('"', '^"')}"`;
+  return `"${token.replaceAll('"', '""')}"`;
 }
 
 export function buildWindowsBatchCommandArgs(

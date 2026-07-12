@@ -294,7 +294,7 @@ describe("windowsProcess", () => {
       "/s",
       "/v:off",
       "/c",
-      'call "C:\\tools\\codex.cmd" "exec" "--config" "approval_policy=^"never^"" "--config" "model_reasoning_effort=^"high^""',
+      'call "C:\\tools\\codex.cmd" "exec" "--config" "approval_policy=""never""" "--config" "model_reasoning_effort=""high"""',
     ]);
   });
 
