@@ -1311,7 +1311,28 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
-  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+  it.each([
+    {
+      responseShape: "camelCase",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        additionalSpeedTiers: ["fast"],
+      },
+    },
+    {
+      responseShape: "legacy snake_case",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        default_reasoning_effort: "low",
+        additional_speed_tiers: ["fast"],
+      },
+    },
+  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1348,15 +1369,7 @@ describe("CodexAppServerManager discovery", () => {
       )
       .mockResolvedValue({
         result: {
-          items: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
-              default_reasoning_effort: "medium",
-              additionalSpeedTiers: ["fast"],
-            },
-          ],
+          items: [item],
         },
       });
 
@@ -1369,15 +1382,17 @@ describe("CodexAppServerManager discovery", () => {
     });
     expect(result.models).toEqual([
       {
-        slug: "gpt-5.5",
-        name: "GPT-5.5",
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         supportedReasoningEfforts: [
           { value: "low" },
           { value: "medium" },
           { value: "high" },
           { value: "xhigh" },
+          { value: "max" },
+          { value: "ultra" },
         ],
-        defaultReasoningEffort: "medium",
+        defaultReasoningEffort: "low",
         supportsFastMode: true,
       },
     ]);

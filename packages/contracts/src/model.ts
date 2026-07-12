@@ -3,7 +3,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
+// Codex app-server can add model-specific efforts through runtime discovery.
+export type CodexReasoningEffort = string;
 export const CLAUDE_API_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeApiEffort = (typeof CLAUDE_API_EFFORT_OPTIONS)[number];
 export const CLAUDE_PROMPT_MODE_OPTIONS = ["ultrathink"] as const;
