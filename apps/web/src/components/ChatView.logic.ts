@@ -51,6 +51,41 @@ export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
+export interface PendingFileUndo {
+  readonly threadId: ThreadIdType;
+  readonly turnCount: number;
+  readonly existingFailureActivityIds: readonly string[];
+}
+
+export function hasFileUndoSettled(input: {
+  readonly pending: PendingFileUndo;
+  readonly thread: Pick<Thread, "id" | "turnDiffSummaries" | "activities"> | null;
+}): boolean {
+  if (!input.thread || input.thread.id !== input.pending.threadId) {
+    return false;
+  }
+
+  const targetSummary = input.thread.turnDiffSummaries.find(
+    (summary) => summary.checkpointTurnCount === input.pending.turnCount,
+  );
+  if (targetSummary?.files.length === 0) {
+    return true;
+  }
+
+  return input.thread.activities.some((activity) => {
+    if (
+      activity.kind !== "checkpoint.revert.failed" ||
+      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      typeof activity.payload !== "object" ||
+      activity.payload === null ||
+      !("turnCount" in activity.payload)
+    ) {
+      return false;
+    }
+    return activity.payload.turnCount === input.pending.turnCount;
+  });
+}
+
 const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
 
 /**

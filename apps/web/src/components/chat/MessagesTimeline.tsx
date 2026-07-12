@@ -407,6 +407,7 @@ interface MessagesTimelineProps {
   onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
@@ -463,6 +464,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   activeTurnId,
   isRevertingCheckpoint,
@@ -810,19 +812,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeTurnId, rows]);
-  const userMessageIdByAssistantMessageId = useMemo(() => {
-    const map = new Map<MessageId, MessageId>();
-    let lastUserMessageId: MessageId | null = null;
-    for (const row of rows) {
-      if (row.kind !== "message") continue;
-      if (row.message.role === "user") {
-        lastUserMessageId = row.message.id;
-      } else if (row.message.role === "assistant" && lastUserMessageId) {
-        map.set(row.message.id, lastUserMessageId);
-      }
-    }
-    return map;
-  }, [rows]);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -1591,12 +1580,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
-                  const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
-                    row.message.id,
-                  );
+                  const checkpointTurnCount = turnSummary.checkpointTurnCount;
+                  const checkpointTurnCounts =
+                    turnSummary.checkpointTurnCounts ??
+                    (checkpointTurnCount === undefined ? [] : [checkpointTurnCount]);
                   const canUndo =
-                    correspondingUserMessageId != null &&
-                    revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                    turnSummary.status !== "missing" &&
+                    turnSummary.status !== "error" &&
+                    turnSummary.checkpointRef !== undefined &&
+                    !turnSummary.checkpointRef.startsWith("provider-diff:") &&
+                    checkpointTurnCounts.length > 0 &&
+                    onUndoTurnFiles !== undefined;
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -1687,7 +1681,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
                             >
                               Undo
                               <Undo2Icon className="size-3" />
