@@ -17,7 +17,15 @@ import {
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -75,8 +83,18 @@ import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopT
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
-import { refreshMissingThreadSnapshots } from "../chatRouteRecovery";
+import { fetchMissingThreadSnapshots } from "../chatRouteRecovery";
+import { createMissingThreadRecoveryController } from "../missingThreadRecovery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
+import {
+  bumpShellRefreshEpoch,
+  getShellRefreshEpoch,
+  registerShellRefreshRequest,
+  requestShellRefresh,
+  shouldAcceptShellSnapshotSequence,
+  subscribeShellRefreshEpoch,
+  type ShellRefreshResult,
+} from "../shellRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useProviderAuthRefreshOnFocus } from "../hooks/useProviderAuthRefreshOnFocus";
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
@@ -850,6 +868,7 @@ function EventRouter() {
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
+    let shellRefreshGeneration = 0;
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
@@ -903,6 +922,81 @@ function EventRouter() {
         applyShellEvent(event);
       }
     };
+
+    const applyShellSnapshot = (snapshot: OrchestrationShellSnapshot): boolean => {
+      if (disposed) {
+        return false;
+      }
+      if (!shouldAcceptShellSnapshotSequence(shellSnapshotSequence, snapshot.snapshotSequence)) {
+        return false;
+      }
+      shellSnapshotSequence = snapshot.snapshotSequence;
+      syncServerShellSnapshot(snapshot);
+      reconcilePromotedDraftsFromShellThreads(snapshot.threads);
+      removeOrphanedTerminalsForCurrentState();
+      flushShellBuffer(snapshot.snapshotSequence);
+      return true;
+    };
+
+    const performShellRefresh = async (options?: {
+      includeReadModel?: boolean;
+    }): Promise<ShellRefreshResult> => {
+      const generation = ++shellRefreshGeneration;
+      try {
+        const fetched = await fetchMissingThreadSnapshots(api);
+        if (disposed || generation !== shellRefreshGeneration) {
+          return { applied: false, shellThreadCount: 0, reason: "stale" };
+        }
+
+        if (fetched.kind === "shell") {
+          const applied = applyShellSnapshot(fetched.snapshot);
+          if (!applied) {
+            return {
+              applied: false,
+              shellThreadCount: fetched.snapshot.threads.length,
+              reason: "stale",
+            };
+          }
+          return {
+            applied: true,
+            shellThreadCount: fetched.snapshot.threads.length,
+            reason: "ok",
+          };
+        }
+
+        if (fetched.kind === "readModel") {
+          if (options?.includeReadModel === false) {
+            return { applied: false, shellThreadCount: 0, reason: "empty" };
+          }
+          if (
+            !shouldAcceptShellSnapshotSequence(
+              shellSnapshotSequence,
+              fetched.snapshot.snapshotSequence,
+            )
+          ) {
+            return { applied: false, shellThreadCount: 0, reason: "stale" };
+          }
+          const appliedSequence = Math.max(
+            shellSnapshotSequence,
+            fetched.snapshot.snapshotSequence,
+          );
+          shellSnapshotSequence = appliedSequence;
+          useStore.getState().syncServerReadModel(fetched.snapshot);
+          flushShellBuffer(appliedSequence);
+          const liveCount = fetched.snapshot.threads.filter(
+            (thread) => thread.deletedAt == null,
+          ).length;
+          return { applied: true, shellThreadCount: liveCount, reason: "ok" };
+        }
+
+        return { applied: false, shellThreadCount: 0, reason: "empty" };
+      } catch {
+        return { applied: false, shellThreadCount: 0, reason: "error" };
+      }
+    };
+
+    registerShellRefreshRequest(performShellRefresh);
+    bumpShellRefreshEpoch();
 
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
       const nextThreadIds = new Set(threadIds);
@@ -973,16 +1067,13 @@ function EventRouter() {
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
-      shellSnapshotSequence = snapshot.snapshotSequence;
-      syncServerShellSnapshot(snapshot);
-      reconcilePromotedDraftsFromShellThreads(snapshot.threads);
-      removeOrphanedTerminalsForCurrentState();
-      flushShellBuffer(snapshot.snapshotSequence);
+      applyShellSnapshot(snapshot);
     };
 
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
+      shellRefreshGeneration += 1;
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
@@ -1159,11 +1250,7 @@ function EventRouter() {
 
     const unsubShellEvent = api.orchestration.onShellEvent((item) => {
       if (item.kind === "snapshot") {
-        shellSnapshotSequence = item.snapshot.snapshotSequence;
-        syncServerShellSnapshot(item.snapshot);
-        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        removeOrphanedTerminalsForCurrentState();
-        flushShellBuffer(item.snapshot.snapshotSequence);
+        applyShellSnapshot(item.snapshot);
         return;
       }
 
@@ -1413,6 +1500,9 @@ function EventRouter() {
     return () => {
       flushPendingDomainEvents();
       disposed = true;
+      shellRefreshGeneration += 1;
+      registerShellRefreshRequest(null);
+      bumpShellRefreshEpoch();
       window.clearTimeout(shellBootstrapFallbackTimer);
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
@@ -1465,31 +1555,68 @@ function DesktopProjectBootstrap() {
   const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const attemptedRecoveryRef = useRef(false);
+  const shellRefreshEpoch = useSyncExternalStore(
+    subscribeShellRefreshEpoch,
+    getShellRefreshEpoch,
+    getShellRefreshEpoch,
+  );
+  const attemptedOrphanRepairRef = useRef(false);
+
+  useEffect(() => {
+    attemptedOrphanRepairRef.current = false;
+  }, [shellRefreshEpoch]);
 
   useEffect(() => {
     const api = readNativeApi();
-    if (!api || attemptedRecoveryRef.current || !threadsHydrated) {
+    if (!api || !threadsHydrated) {
       return;
     }
 
     const projectIds = new Set(projects.map((project) => project.id));
     const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    // #282: project-only hydration can stick on home/sidebar. Light refresh only
-    // (shell → snapshot); never repairState here (that rebuilds projects, not threads).
+    // #282: project-only hydration can stick on home/sidebar. Sequence-aware
+    // refresh via EventRouter (shell → snapshot); never repairState here.
     const hasProjectsWithoutThreads = projects.length > 0 && threads.length === 0;
     if (projects.length > 0 && !hasThreadWithoutProject && !hasProjectsWithoutThreads) {
       return;
     }
 
-    attemptedRecoveryRef.current = true;
-
     if (hasProjectsWithoutThreads) {
-      void refreshMissingThreadSnapshots(api).catch(() => {
-        attemptedRecoveryRef.current = false;
+      const controller = createMissingThreadRecoveryController({
+        isStillNeeded: () => {
+          const state = useStore.getState();
+          return state.projects.length > 0 && state.threads.length === 0;
+        },
+        refresh: () => requestShellRefresh({ includeReadModel: true }),
+        onAttempt: ({ attempt, result }) => {
+          if (result == null) {
+            console.info("[synara] missing-thread recovery attempt", {
+              attempt,
+              projectCount: useStore.getState().projects.length,
+              threadCount: useStore.getState().threads.length,
+            });
+            return;
+          }
+          console.info("[synara] missing-thread recovery result", {
+            attempt,
+            applied: result.applied,
+            reason: result.reason,
+            shellThreadCount: result.shellThreadCount,
+            projectCount: useStore.getState().projects.length,
+            threadCount: useStore.getState().threads.length,
+          });
+        },
       });
+      controller.start();
+      return () => {
+        controller.cancel();
+      };
+    }
+
+    if (attemptedOrphanRepairRef.current) {
       return;
     }
+    attemptedOrphanRepairRef.current = true;
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
@@ -1509,9 +1636,9 @@ function DesktopProjectBootstrap() {
         });
       })
       .catch(() => {
-        attemptedRecoveryRef.current = false;
+        attemptedOrphanRepairRef.current = false;
       });
-  }, [projects, syncServerReadModel, threads, threadsHydrated]);
+  }, [projects, shellRefreshEpoch, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
