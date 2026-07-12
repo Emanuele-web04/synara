@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { assistantItemId, decodeSetSessionConfigOptionResponse } from "./AcpSessionRuntime.ts";
+import {
+  assistantItemId,
+  decodeSetSessionConfigOptionResponse,
+  sessionConfigOptionsFromSetup,
+} from "./AcpSessionRuntime.ts";
 
 describe("assistantItemId", () => {
   // Format contract only — distinct runtimeInstanceId wiring is covered by
@@ -62,5 +66,25 @@ describe("decodeSetSessionConfigOptionResponse", () => {
     if (error._tag === "AcpTransportError") {
       expect(error.detail).toContain("invalid session/set_config_option response");
     }
+  });
+});
+
+describe("sessionConfigOptionsFromSetup", () => {
+  const replayedConfigOptions = [
+    {
+      id: "model",
+      name: "Model",
+      type: "select",
+      currentValue: "gpt-5.6-luna",
+      options: [{ value: "gpt-5.6-luna", name: "GPT-5.6 Luna" }],
+    },
+  ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+
+  it("preserves config retained from replay when setup omits configOptions", () => {
+    expect(sessionConfigOptionsFromSetup({}, replayedConfigOptions)).toBe(replayedConfigOptions);
+  });
+
+  it("uses an explicit setup inventory instead of replayed config", () => {
+    expect(sessionConfigOptionsFromSetup({ configOptions: [] }, replayedConfigOptions)).toEqual([]);
   });
 });

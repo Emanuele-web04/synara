@@ -655,7 +655,9 @@ const makeAcpSessionRuntime = (
       }
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-      yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+      yield* Ref.update(configOptionsRef, (current) =>
+        sessionConfigOptionsFromSetup(sessionSetupResult, current),
+      );
       // Fresh sessions accept session/update while session/new is in flight, and
       // those events are already in the queue; resetting the merge/segment state
       // they created would orphan their continuations (new segment ids, unmerged
@@ -820,14 +822,15 @@ const makeAcpSessionRuntime = (
     } satisfies AcpSessionRuntimeShape;
   });
 
-function sessionConfigOptionsFromSetup(
+export function sessionConfigOptionsFromSetup(
   response:
     | {
         readonly configOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null;
       }
     | undefined,
+  fallback: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [],
 ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
-  return response?.configOptions ?? [];
+  return response?.configOptions ?? fallback;
 }
 
 // Flattens grouped ACP select options so semantic configuration lookup stays provider-agnostic.
