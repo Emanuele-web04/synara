@@ -1554,6 +1554,48 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("rejects unrelated nonzero repository precheck results", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          }),
+        );
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.statusDetails.isInsideWorkTree",
+            detail: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          });
+        }
+      }),
+    );
+
+    it.effect("keeps missing repository directories on the non-repository fallback", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitCore.statusDetails.isInsideWorkTree",
+              command: "git rev-parse --is-inside-work-tree",
+              cwd: "C:\\missing",
+              detail: "ENOENT: no such file or directory",
+            }),
+          ),
+        );
+
+        const details = yield* core.statusDetails("C:\\missing");
+
+        expect(details.isRepo).toBe(false);
+      }),
+    );
+
     it.effect("reports the tracked branch name without the remote prefix", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();
