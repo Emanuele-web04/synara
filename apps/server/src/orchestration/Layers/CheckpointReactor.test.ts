@@ -1508,17 +1508,15 @@ describe("CheckpointReactor", () => {
     expect(fs.existsSync(path.join(harness.cwd, "two.txt"))).toBe(false);
     expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 1))).toBe(true);
     expect(gitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 2))).toBe(true);
-    expect(
-      runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, 1)]).trim(),
-    ).not.toBe(runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, 2)]).trim());
+    expect(runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, 1)]).trim()).toBe(
+      runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, 2)]).trim(),
+    );
     expect(
       runGit(harness.cwd, [
-        "diff",
-        "--name-only",
+        "rev-parse",
         checkpointRefForThreadTurnStart(threadId, turnTwoId),
-        checkpointRefForThreadTurn(threadId, 2),
-      ]),
-    ).toBe("");
+      ]).trim(),
+    ).toBe(runGit(harness.cwd, ["rev-parse", checkpointRefForThreadTurn(threadId, 1)]).trim());
     expect(
       runGit(harness.cwd, [
         "ls-tree",
@@ -1526,7 +1524,7 @@ describe("CheckpointReactor", () => {
         "--name-only",
         checkpointRefForThreadTurnStart(threadId, turnTwoId),
       ]),
-    ).toContain("one.txt");
+    ).not.toContain("one.txt");
     expect(runGit(harness.cwd, ["diff", "--cached", "--name-only"]).trim()).toBe("");
     const events = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(

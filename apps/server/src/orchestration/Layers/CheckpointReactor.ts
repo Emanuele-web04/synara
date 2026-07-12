@@ -977,6 +977,34 @@ const make = Effect.gen(function* () {
         cwd: checkpointCwd,
         checkpointRef: targetCheckpoint.checkpointRef,
       });
+      yield* Effect.forEach(
+        thread.checkpoints.filter(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount > targetCheckpoint.checkpointTurnCount &&
+            isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId),
+        ),
+        (checkpoint) => {
+          const laterTurnStartCheckpointRef =
+            checkpointRefForThreadTurnStartInManagedFamily(
+              checkpoint.checkpointRef,
+              event.payload.threadId,
+              checkpoint.turnId,
+            ) ?? checkpointRefForThreadTurnStart(event.payload.threadId, checkpoint.turnId);
+          return Effect.all([
+            checkpointStore.copyCheckpointRef({
+              cwd: checkpointCwd,
+              fromCheckpointRef: targetCheckpoint.checkpointRef,
+              toCheckpointRef: checkpoint.checkpointRef,
+            }),
+            checkpointStore.copyCheckpointRef({
+              cwd: checkpointCwd,
+              fromCheckpointRef: targetCheckpoint.checkpointRef,
+              toCheckpointRef: laterTurnStartCheckpointRef,
+            }),
+          ]).pipe(Effect.asVoid);
+        },
+        { discard: true },
+      );
 
       clearWorkspaceIndexCache(checkpointCwd);
       yield* orchestrationEngine.dispatch({
