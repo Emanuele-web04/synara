@@ -1531,6 +1531,16 @@ describe("CheckpointReactor", () => {
         Effect.map((chunk) => Array.from(chunk)),
       ),
     );
+    const fileUndoEvent = events.find(
+      (event) =>
+        event.type === "thread.turn-diff-completed" &&
+        event.payload.turnId === turnOneId &&
+        event.payload.files.length === 0,
+    );
+    expect(fileUndoEvent?.type === "thread.turn-diff-completed").toBe(true);
+    if (fileUndoEvent?.type === "thread.turn-diff-completed") {
+      expect(fileUndoEvent.payload.preserveLatestTurn).toBe(true);
+    }
     expect(events.some((event) => event.type === "thread.reverted")).toBe(false);
 
     fs.writeFileSync(path.join(harness.cwd, "later.txt"), "later\n", "utf8");

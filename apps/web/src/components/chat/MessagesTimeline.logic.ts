@@ -253,6 +253,12 @@ function mergeTurnDiffSummaries(
     ...checkpointTurnCountsFor(existing),
     ...checkpointTurnCountsFor(next),
   ]);
+  const undoMetadata =
+    checkpointTurnCountsFor(next).length > 0
+      ? next
+      : checkpointTurnCountsFor(existing).length > 0
+        ? existing
+        : next;
   const allDisplayedFilesUndoable = [existing, next].every(
     (summary) => summary.files.length === 0 || checkpointTurnCountsFor(summary).length > 0,
   );
@@ -260,6 +266,9 @@ function mergeTurnDiffSummaries(
   return {
     ...next,
     files: [...filesByPath.values()],
+    checkpointRef: undoMetadata.checkpointRef,
+    status: undoMetadata.status,
+    checkpointTurnCount: undoMetadata.checkpointTurnCount,
     checkpointTurnCounts: allDisplayedFilesUndoable
       ? [...checkpointTurnCounts].toSorted((left, right) => left - right)
       : [],

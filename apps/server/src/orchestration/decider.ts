@@ -1615,6 +1615,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
           completedAt: command.completedAt,
+          ...(command.preserveLatestTurn ? { preserveLatestTurn: true } : {}),
         },
       };
     }

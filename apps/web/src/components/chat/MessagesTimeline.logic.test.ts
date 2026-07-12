@@ -500,6 +500,38 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
     expect(result.get(MessageId.makeUnsafe("a-final"))?.checkpointTurnCounts).toEqual([1, 2]);
   });
 
+  it("preserves Undo metadata when an empty placeholder follows file changes", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({ turnId: "turn-files", checkpointTurnCount: 1 }),
+        makeSummary({
+          turnId: "turn-empty-placeholder",
+          status: "missing",
+          checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-empty"),
+          files: [],
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-empty-placeholder"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-empty-placeholder"),
+        },
+      ],
+    });
+
+    const summary = result.get(MessageId.makeUnsafe("a-empty-placeholder"));
+    expect(summary?.checkpointTurnCounts).toEqual([1]);
+    expect(summary?.status).toBe("ready");
+    expect(summary?.checkpointRef).toBe(CheckpointRef.makeUnsafe("checkpoint-turn-files"));
+  });
+
   it("excludes no-change and placeholder mini-turns from merged Undo targets", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [

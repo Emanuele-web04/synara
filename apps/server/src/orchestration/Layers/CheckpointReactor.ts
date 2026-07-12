@@ -1020,6 +1020,7 @@ const make = Effect.gen(function* () {
           ? { assistantMessageId: targetCheckpoint.assistantMessageId }
           : {}),
         checkpointTurnCount: targetCheckpoint.checkpointTurnCount,
+        preserveLatestTurn: true,
         createdAt: now,
       });
       return;
