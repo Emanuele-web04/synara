@@ -1627,8 +1627,8 @@ describe("buildCheckpointRevertConfirmMessage", () => {
   it("asks before clearing the whole conversation on turn 0 without promising a thread baseline", () => {
     expect(buildCheckpointRevertConfirmMessage(0)).toBe(
       [
-        "Clear this conversation and restore the entire workspace to the earliest available checkpoint (or HEAD if none)?",
-        "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
+        "Clear this conversation and restore the entire workspace to its initial Synara checkpoint, or to the repository's current HEAD if that checkpoint is unavailable?",
+        "The workspace will be overwritten to that state. Current tracked changes and non-ignored untracked files may be lost, including work created outside this conversation.",
         "This cannot be undone.",
       ].join("\n"),
     );

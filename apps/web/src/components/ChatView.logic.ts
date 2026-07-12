@@ -1271,8 +1271,8 @@ export function buildRevertTurnCountByUserMessageId(input: {
 export function buildCheckpointRevertConfirmMessage(turnCount: number): string {
   if (turnCount === 0) {
     return [
-      "Clear this conversation and restore the entire workspace to the earliest available checkpoint (or HEAD if none)?",
-      "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
+      "Clear this conversation and restore the entire workspace to its initial Synara checkpoint, or to the repository's current HEAD if that checkpoint is unavailable?",
+      "The workspace will be overwritten to that state. Current tracked changes and non-ignored untracked files may be lost, including work created outside this conversation.",
       "This cannot be undone.",
     ].join("\n");
   }
