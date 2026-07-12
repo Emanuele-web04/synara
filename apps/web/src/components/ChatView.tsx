@@ -6234,7 +6234,7 @@ export default function ChatView({
       if (!api || !activeThread || isRevertingCheckpoint) return;
 
       if (hasLiveTurn || isSendBusy || isConnecting) {
-        setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
+        setThreadError(activeThread.id, "Interrupt the current turn before reverting.");
         return;
       }
       const confirmed = await api.dialogs.confirm(buildCheckpointRevertConfirmMessage(turnCount));

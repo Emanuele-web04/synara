@@ -2524,7 +2524,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">apps/web/src/components/chat<");
   });
 
-  it("labels the file-changes revert control as Revert changes, not Undo", async () => {
+  it("labels the file-changes revert control as Revert turn, not Undo", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const userMessageId = MessageId.makeUnsafe("message-user-revert-label");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-revert-label");
@@ -2590,9 +2590,9 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Edited 1 file");
-    expect(markup).toContain('aria-label="Revert changes"');
-    expect(markup).toContain("Revert changes");
+    expect(markup).toContain("Revert turn");
     expect(markup).not.toContain(">Undo<");
+    expect(markup).not.toContain(">Revert changes<");
   });
 
   it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {

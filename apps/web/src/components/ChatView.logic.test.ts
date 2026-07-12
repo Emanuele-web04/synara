@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildCheckpointRevertConfirmMessage,
   buildComposerMenuSelectionKey,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
@@ -28,7 +29,6 @@ import {
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
-  buildCheckpointRevertConfirmMessage,
   resolveRuntimeModeAfterApprovalDecision,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
@@ -1621,13 +1621,20 @@ describe("resolveQueuedSteerGateTransition", () => {
 });
 
 describe("buildCheckpointRevertConfirmMessage", () => {
-  it("warns that turn 0 revert clears the whole conversation", () => {
-    expect(buildCheckpointRevertConfirmMessage(0)).toContain("clear the entire conversation");
-    expect(buildCheckpointRevertConfirmMessage(0)).not.toContain("checkpoint");
+  it("asks before clearing the whole conversation on turn 0", () => {
+    expect(buildCheckpointRevertConfirmMessage(0)).toBe(
+      [
+        "Clear this entire conversation and restore project files to before this thread started?",
+        "This cannot be undone.",
+      ].join("\n"),
+    );
   });
 
-  it("keeps a shorter warning for partial reverts", () => {
-    expect(buildCheckpointRevertConfirmMessage(2)).toContain("turn 2");
-    expect(buildCheckpointRevertConfirmMessage(2)).toContain("discards newer messages");
+  it("asks before discarding newer turns", () => {
+    expect(buildCheckpointRevertConfirmMessage(2)).toBe(
+      ["Discard newer messages and file changes in this thread?", "This cannot be undone."].join(
+        "\n",
+      ),
+    );
   });
 });

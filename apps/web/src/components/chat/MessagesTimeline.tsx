@@ -1581,7 +1581,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {(() => {
-                  // Hold the end-of-turn changes card (Undo / Review) until the
+                  // Hold the end-of-turn changes card (Revert turn / Review) until the
                   // turn settles. While the turn is live the composer's own
                   // live-changes strip owns this surface; showing the card too
                   // would duplicate it and pre-empt the strip mid-turn.
@@ -1687,11 +1687,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              aria-label="Revert changes"
                               title="Revert files and conversation to before this turn"
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >
-                              Revert changes
+                              Revert turn
                               <Undo2Icon className="size-3" />
                             </button>
                           )}
