@@ -4174,11 +4174,17 @@ export function syncServerShellSnapshot(
   }
 
   const derivedThreads = getThreadsFromState(normalizedState);
-  const threads = arraysShallowEqual(state.threads, derivedThreads)
+  const allThreads = arraysShallowEqual(state.threads, derivedThreads)
     ? state.threads
     : derivedThreads;
+  const snapshotThreadsOnly = snapshotThreads
+    .map((shell) => getThreadFromState(normalizedState, shell.id))
+    .filter((thread): thread is Thread => thread !== undefined);
+  const threads = arraysShallowEqual(state.threads, snapshotThreadsOnly)
+    ? state.threads
+    : snapshotThreadsOnly;
   const nextSidebarThreadSummaryById = Object.fromEntries(
-    threads.map((thread) => [
+    allThreads.map((thread) => [
       thread.id,
       buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id]),
     ]),
@@ -4243,7 +4249,18 @@ export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModel
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
+  const r = syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
+  console.log(
+    "[syncServerThreadDetailHotPath]",
+    thread.id,
+    "threadIds",
+    r.threadIds,
+    "threads",
+    r.threads.length,
+    "threadShellById",
+    Object.keys(r.threadShellById ?? {}),
+  );
+  return r;
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {

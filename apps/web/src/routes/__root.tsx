@@ -87,6 +87,7 @@ import { fetchMissingThreadSnapshots } from "../chatRouteRecovery";
 import { createMissingThreadRecoveryController } from "../missingThreadRecovery";
 import {
   classifyDesktopHydrationRecovery,
+  hasClientLiveThreadEvidence,
   hasLiveThreadsWithMissingProjects,
   resolveRepairedShellApplication,
 } from "../lib/desktopProjectRecovery";
@@ -97,6 +98,7 @@ import {
   getShellRefreshEpoch,
   registerShellRefreshRequest,
   registerShellSnapshotApply,
+  requestRepairState,
   requestShellRefresh,
   shouldAcceptShellSnapshotSequence,
   shouldSkipShellThreadMutation,
@@ -813,7 +815,6 @@ function EventRouter() {
   );
   const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
-  const serverThreads = useStore((store) => store.threads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -830,10 +831,8 @@ function EventRouter() {
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
   const retainedThreadIds = useRetainedThreadDetailIds();
-  const serverThreadIds = useMemo(
-    () => new Set(serverThreads.map((thread) => thread.id)),
-    [serverThreads],
-  );
+  const threadIds = useStore((store) => store.threadIds);
+  const serverThreadIds = useMemo(() => new Set(threadIds), [threadIds]);
   const subscribedThreadIds = useMemo(() => {
     const nextThreadIds = new Set<ThreadId>();
     for (const threadId of visibleThreadIds) {
@@ -886,7 +885,9 @@ function EventRouter() {
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
-      threadSnapshotSequenceById.delete(threadId);
+      console.log("[beginThreadSubscription]", threadId);
+      // Keep the detail fence so older shell/repair snapshots do not overwrite
+      // a newer thread detail we already observed.
       pendingThreadEventsById.set(threadId, []);
       threadSnapshotRequestInFlight.delete(threadId);
     };
@@ -945,6 +946,14 @@ function EventRouter() {
     };
 
     const applyShellSnapshot = (snapshot: OrchestrationShellSnapshot): boolean => {
+      console.log(
+        "[applyShellSnapshot]",
+        snapshot.snapshotSequence,
+        snapshot.projects.length,
+        snapshot.threads.length,
+        "threadSnapshotSequenceById",
+        [...threadSnapshotSequenceById.entries()],
+      );
       if (disposed) {
         return false;
       }
@@ -1023,7 +1032,7 @@ function EventRouter() {
           ) {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
-          const repaired = await api.orchestration.repairState();
+          const repaired = await requestRepairState(api);
           if (
             lease !== getRecoveryMutationLease() ||
             disposed ||
@@ -1075,6 +1084,7 @@ function EventRouter() {
     bumpShellRefreshEpoch();
 
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
+      console.log("[reconcileThreadSubscriptions]", threadIds);
       const nextThreadIds = new Set(threadIds);
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
       const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
@@ -1184,6 +1194,16 @@ function EventRouter() {
     };
 
     const flushPendingDomainEvents = () => {
+      console.log(
+        "[flushPendingDomainEvents]",
+        pendingDomainEvents.length,
+        pendingDomainEvents.map((event) => [
+          event.type,
+          event.sequence,
+          (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
+          (event as { payload?: { text?: string } }).payload?.text,
+        ]),
+      );
       if (pendingDomainEvents.length > 0) {
         applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
         pendingDomainEvents = [];
@@ -1248,6 +1268,13 @@ function EventRouter() {
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
+      console.log(
+        "[queueDomainEvent]",
+        event.type,
+        event.sequence,
+        (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
+        (event as { payload?: { text?: string } }).payload?.text,
+      );
       pendingDomainEvents.push(event);
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
@@ -1355,9 +1382,28 @@ function EventRouter() {
       }
     });
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
+      console.log(
+        "[onThreadEvent]",
+        item.kind,
+        (
+          item as {
+            event?: {
+              sequence: number;
+              type: string;
+              payload?: { messageId?: string; text?: string };
+            };
+          }
+        ).event?.sequence,
+        (item as { event?: { payload?: { messageId?: string; text?: string } } }).event?.payload
+          ?.messageId,
+        (item as { event?: { payload?: { text?: string } } }).event?.payload?.text,
+      );
       if (item.kind === "snapshot") {
+        console.log("[onThreadEvent snapshot] snapshotSequence", item.snapshot.snapshotSequence);
         const threadId = item.snapshot.thread.id;
-        threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        const currentSequence = threadSnapshotSequenceById.get(threadId) ?? -1;
+        const nextSequence = Math.max(currentSequence, item.snapshot.snapshotSequence);
+        threadSnapshotSequenceById.set(threadId, nextSequence);
         threadSnapshotRequestInFlight.delete(threadId);
         syncServerThreadDetailHotPath(item.snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
@@ -1367,6 +1413,14 @@ function EventRouter() {
 
       const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      console.log(
+        "[onThreadEvent event] threadId",
+        threadId,
+        "latestThreadSequence",
+        latestThreadSequence,
+        "eventSequence",
+        item.event.sequence,
+      );
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
         appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
@@ -1377,6 +1431,11 @@ function EventRouter() {
         return;
       }
       if (item.event.sequence <= latestThreadSequence) {
+        console.log(
+          "[onThreadEvent event] dropping sequence <= latest",
+          item.event.sequence,
+          latestThreadSequence,
+        );
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
@@ -1556,7 +1615,6 @@ function EventRouter() {
       });
     });
     subscribed = true;
-    void ensureScopedSubscriptions();
     // The shell stream normally delivers the sidebar snapshot. If it fails before
     // the first event, use the same lightweight query instead of the full history.
     const shellBootstrapFallbackTimer = window.setTimeout(() => {
@@ -1636,6 +1694,10 @@ function DesktopProjectBootstrap() {
       threadsHydrated: store.threadsHydrated,
       projects: store.projects,
       threads: store.threads,
+      threadIds: store.threadIds,
+      threadShellById: store.threadShellById,
+      threadSessionById: store.threadSessionById,
+      threadTurnStateById: store.threadTurnStateById,
     }),
   );
   const shellRefreshEpoch = useSyncExternalStore(
@@ -1650,8 +1712,20 @@ function DesktopProjectBootstrap() {
     }
 
     const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () =>
-        classifyDesktopHydrationRecovery(useStore.getState()) === "missing-threads",
+      isStillNeeded: () => {
+        const store = useStore.getState();
+        return (
+          classifyDesktopHydrationRecovery({
+            threadsHydrated: store.threadsHydrated,
+            projects: store.projects,
+            threads: store.threads,
+            threadIds: store.threadIds,
+            threadShellById: store.threadShellById,
+            threadSessionById: store.threadSessionById,
+            threadTurnStateById: store.threadTurnStateById,
+          }) === "missing-threads"
+        );
+      },
       refresh: () => requestShellRefresh(),
     });
     controller.start();
@@ -1669,8 +1743,30 @@ function DesktopProjectBootstrap() {
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
     const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () =>
-        classifyDesktopHydrationRecovery(useStore.getState()) === "repair-projects",
+      isStillNeeded: () => {
+        const store = useStore.getState();
+        const kind = classifyDesktopHydrationRecovery({
+          threadsHydrated: store.threadsHydrated,
+          projects: store.projects,
+          threads: store.threads,
+          threadIds: store.threadIds,
+          threadShellById: store.threadShellById,
+          threadSessionById: store.threadSessionById,
+          threadTurnStateById: store.threadTurnStateById,
+        });
+        console.log(
+          "[isStillNeeded repair-projects]",
+          kind,
+          "threadIds",
+          store.threadIds,
+          "threads",
+          store.threads.length,
+          "threadShellById",
+          Object.keys(store.threadShellById ?? {}),
+        );
+        return kind === "repair-projects";
+      },
+      onAttempt: (info) => console.log("[repair-projects attempt]", info),
       refresh: async () => {
         const lease = getRecoveryMutationLease();
         const api = readNativeApi();
@@ -1681,7 +1777,6 @@ function DesktopProjectBootstrap() {
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
-        const store = useStore.getState();
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
@@ -1690,9 +1785,18 @@ function DesktopProjectBootstrap() {
             return { applied: false, shellThreadCount: 0, reason: "stale" };
           }
           const snapshotApplied = tryApplyShellSnapshot(snapshot);
+          const recoveredState = useStore.getState();
           const recovered =
             snapshotApplied &&
-            classifyDesktopHydrationRecovery(useStore.getState()) !== "repair-projects";
+            classifyDesktopHydrationRecovery({
+              threadsHydrated: recoveredState.threadsHydrated,
+              projects: recoveredState.projects,
+              threads: recoveredState.threads,
+              threadIds: recoveredState.threadIds,
+              threadShellById: recoveredState.threadShellById,
+              threadSessionById: recoveredState.threadSessionById,
+              threadTurnStateById: recoveredState.threadTurnStateById,
+            }) !== "repair-projects";
           return {
             applied: recovered,
             shellThreadCount: snapshot.threads.length,
@@ -1702,14 +1806,23 @@ function DesktopProjectBootstrap() {
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
-        const repaired = await api.orchestration.repairState();
+        const repaired = await requestRepairState(api);
         if (lease !== getRecoveryMutationLease()) {
           return { applied: false, shellThreadCount: 0, reason: "stale" };
         }
         const decision = resolveRepairedShellApplication({
           repaired,
-          observedLiveThreadEvidence: store.threads.length > 0 || snapshot.threads.length > 0,
+          observedLiveThreadEvidence:
+            hasClientLiveThreadEvidence(useStore.getState()) || snapshot.threads.length > 0,
         });
+        console.log(
+          "[repair-projects decision]",
+          decision.action,
+          "liveEvidence",
+          hasClientLiveThreadEvidence(useStore.getState()),
+          "snapshotThreads",
+          snapshot.threads.length,
+        );
         if (decision.action === "confirmed-empty") {
           return {
             applied: true,
@@ -1725,9 +1838,18 @@ function DesktopProjectBootstrap() {
           };
         }
         const snapshotApplied = tryApplyShellSnapshot(decision.shell);
+        const recoveredState = useStore.getState();
         const recovered =
           snapshotApplied &&
-          classifyDesktopHydrationRecovery(useStore.getState()) !== "repair-projects";
+          classifyDesktopHydrationRecovery({
+            threadsHydrated: recoveredState.threadsHydrated,
+            projects: recoveredState.projects,
+            threads: recoveredState.threads,
+            threadIds: recoveredState.threadIds,
+            threadShellById: recoveredState.threadShellById,
+            threadSessionById: recoveredState.threadSessionById,
+            threadTurnStateById: recoveredState.threadTurnStateById,
+          }) !== "repair-projects";
         return {
           applied: recovered,
           shellThreadCount: decision.shell.threads.length,

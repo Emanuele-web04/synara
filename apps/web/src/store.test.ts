@@ -38,6 +38,11 @@ import {
   syncServerThreadDetailHotPath,
   type AppState,
 } from "./store";
+import {
+  hasClientLiveThreadEvidence,
+  resolveRepairedShellApplication,
+} from "./lib/desktopProjectRecovery";
+import { getThreadFromState } from "./threadDerivation";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -3311,6 +3316,57 @@ describe("store read model sync", () => {
     ).toBe("running");
   });
 
+  it("counts normalized hot-path thread state as live evidence and rejects empty repair", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path-evidence");
+    const turnId = TurnId.makeUnsafe("turn-hot-path-evidence");
+    const initialState: AppState = {
+      projects: [],
+      threads: [],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+    };
+
+    const hotPathState = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        id: threadId,
+        title: "Live detail",
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+    );
+
+    expect(hotPathState.threads).toHaveLength(0);
+    expect(hasClientLiveThreadEvidence(hotPathState)).toBe(true);
+
+    const decision = resolveRepairedShellApplication({
+      repaired: {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        projects: [],
+        threads: [],
+      },
+      observedLiveThreadEvidence: hasClientLiveThreadEvidence(hotPathState),
+    });
+    expect(decision).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
+  });
+
   it("retains a protected hot-path thread omitted from an older shell snapshot", () => {
     const threadId = ThreadId.makeUnsafe("thread-omitted-preserve");
     const turnId = TurnId.makeUnsafe("turn-omitted-preserve");
@@ -3373,7 +3429,8 @@ describe("store read model sync", () => {
     expect(next.threadShellById?.[threadId]?.title).toBe("Live title");
     expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
     expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
-    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Live title");
+    expect(next.threads.find((thread) => thread.id === threadId)).toBeUndefined();
+    expect(getThreadFromState(next, threadId)?.title).toBe("Live title");
   });
 
   it("keeps newer shell title when a preserved snapshot row is older", () => {
