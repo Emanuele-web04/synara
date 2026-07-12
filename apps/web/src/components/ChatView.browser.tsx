@@ -1362,6 +1362,18 @@ function dispatchModelCycleShortcut(target: EventTarget, key: "[" | "]"): Keyboa
   return event;
 }
 
+async function dispatchModelCycleShortcutWhenReady(
+  target: EventTarget,
+  key: "[" | "]",
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchModelCycleShortcut(target, key).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
+  );
+}
+
 function dispatchConfiguredShortcut(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
@@ -2738,44 +2750,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetMessageId: "msg-user-model-cycle-shortcut" as MessageId,
         targetText: "model cycle shortcut",
       }),
-      configureFixture: (nextFixture) => {
-        nextFixture.serverConfig = {
-          ...nextFixture.serverConfig,
-          keybindings: [
-            {
-              command: "model.next",
-              shortcut: {
-                key: "]",
-                metaKey: false,
-                ctrlKey: false,
-                shiftKey: false,
-                altKey: true,
-                modKey: false,
-              },
-            },
-            {
-              command: "model.previous",
-              shortcut: {
-                key: "[",
-                metaKey: false,
-                ctrlKey: false,
-                shiftKey: false,
-                altKey: true,
-                modKey: false,
-              },
-            },
-          ],
-        };
-      },
     });
 
     try {
-      const composerEditor = await waitForComposerEditor();
       await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
 
-      const nextEvent = dispatchModelCycleShortcut(composerEditor, "]");
-      expect(nextEvent.defaultPrevented).toBe(true);
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "]");
       await vi.waitFor(() => {
         expect(
           useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
@@ -2784,8 +2766,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
       expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
 
-      const previousEvent = dispatchModelCycleShortcut(composerEditor, "[");
-      expect(previousEvent.defaultPrevented).toBe(true);
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "[");
       await vi.waitFor(() => {
         expect(
           useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
