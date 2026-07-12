@@ -101,6 +101,143 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("reads only Codex options when other provider effort state is present", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      prompt: "",
+      modelOptions: {
+        codex: { reasoningEffort: "xhigh" },
+        cursor: { reasoningEffort: "low" },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort: "xhigh" });
+    expect(state.promptEffort).toBe("xhigh");
+  });
+
+  it("reads only Cursor options when Codex runtime effort state is present", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "claude-opus-4-7",
+      runtimeModel: CURSOR_RUNTIME_MODEL_300K,
+      prompt: "",
+      modelOptions: {
+        codex: { reasoningEffort: "ultra" },
+        cursor: { reasoningEffort: "xhigh" },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort: "xhigh" });
+    expect(state.promptEffort).toBe("xhigh");
+  });
+
+  it("preserves a stored runtime Codex effort for dispatch before discovery resolves", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "ultra",
+      modelOptionsForDispatch: {
+        reasoningEffort: "ultra",
+      },
+    });
+  });
+
+  it("rejects an unsupported effort for a known static Codex model before discovery", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "high",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it.each([
+    {
+      shape: "omits the effort list",
+      runtimeModel: { slug: "gpt-5.4", name: "GPT-5.4" },
+    },
+    {
+      shape: "reports an empty effort list",
+      runtimeModel: {
+        slug: "gpt-5.4",
+        name: "GPT-5.4",
+        supportedReasoningEfforts: [],
+      },
+    },
+  ])("falls back to static Codex efforts when runtime metadata $shape", ({ runtimeModel }) => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      runtimeModel,
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "xhigh",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        reasoningEffort: "xhigh",
+      },
+    });
+  });
+
+  it("drops a stored runtime Codex effort after discovery proves it unsupported", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      runtimeModel: {
+        slug: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "low",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("preserves codex fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "codex",

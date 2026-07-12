@@ -30,8 +30,6 @@ import {
 import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
-import BrowserPanel from "../components/BrowserPanel";
-import { EditorWorkspaceView } from "../components/EditorWorkspaceView";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
@@ -84,16 +82,12 @@ import {
   resolveActivePane,
 } from "../rightDockStore.logic";
 import { RightDock } from "../components/chat/RightDock";
-import { DockTerminalPane } from "../components/chat/DockTerminalPane";
 import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
-import { GitPanel } from "../components/chat/GitPanel";
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
   RIGHT_DOCK_ADD_MENU_KINDS,
   getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
-import { DockExplorerPane } from "../components/chat/DockExplorerPane";
-import { DockFilePane } from "../components/chat/DockFilePane";
 import { readEditorViewState, storeEditorViewState } from "../editorViewState";
 import { basenameOfPath } from "../file-icons";
 import {
@@ -167,6 +161,24 @@ import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
+const BrowserPanel = lazy(() => import("../components/BrowserPanel"));
+const EditorWorkspaceView = lazy(() =>
+  import("../components/EditorWorkspaceView").then((module) => ({
+    default: module.EditorWorkspaceView,
+  })),
+);
+const DockTerminalPane = lazy(() => import("../components/chat/DockTerminalPane"));
+const GitPanel = lazy(() => import("../components/chat/GitPanel"));
+const DockExplorerPane = lazy(() =>
+  import("../components/chat/DockExplorerPane").then((module) => ({
+    default: module.DockExplorerPane,
+  })),
+);
+const DockFilePane = lazy(() =>
+  import("../components/chat/DockFilePane").then((module) => ({
+    default: module.DockFilePane,
+  })),
+);
 // Pre-measure approximation of the dock's 50/50 split (half the viewport minus
 // half a 16rem left sidebar). RightDock measures the actual shell on open and
 // pins the width to exactly half; this only covers the first paint before that
@@ -362,7 +374,13 @@ function SplitPaneEmbeddedPanel(props: {
         onPointerDown={startResize}
       />
       {props.panel === "browser" ? (
-        <BrowserPanel mode="sidebar" threadId={props.threadId} onClosePanel={props.onClosePanel} />
+        <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+          <BrowserPanel
+            mode="sidebar"
+            threadId={props.threadId}
+            onClosePanel={props.onClosePanel}
+          />
+        </Suspense>
       ) : (
         <LazyDiffPanel
           mode="sidebar"
@@ -1975,13 +1993,15 @@ function SingleChatSurface(props: {
       switch (pane.kind) {
         case "browser":
           return (
-            <BrowserPanel
-              mode="sidebar"
-              threadId={props.threadId}
-              onClosePanel={() => closePane(props.threadId, pane.id)}
-              runtimeMode={context.runtimeMode}
-              onRequestLive={requestActiveDockPaneLive}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+              <BrowserPanel
+                mode="sidebar"
+                threadId={props.threadId}
+                onClosePanel={() => closePane(props.threadId, pane.id)}
+                runtimeMode={context.runtimeMode}
+                onRequestLive={requestActiveDockPaneLive}
+              />
+            </Suspense>
           );
         case "diff":
           return (
@@ -2014,38 +2034,46 @@ function SingleChatSurface(props: {
           // mounted (offcanvas is CSS-only), so without this the off-screen terminal
           // would keep WebGL + resize observers alive for nothing.
           return (
-            <DockTerminalPane
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              isActive={context.isActive && dockState.open}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+              <DockTerminalPane
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                isActive={context.isActive && dockState.open}
+              />
+            </Suspense>
           );
         case "git":
           return (
-            <GitPanel
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              onClose={() => closePane(props.threadId, pane.id)}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
+              <GitPanel
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                onClose={() => closePane(props.threadId, pane.id)}
+              />
+            </Suspense>
           );
         case "explorer":
           return (
-            <DockExplorerPane
-              workspaceRoot={workspaceRoot}
-              onReferenceInChat={handleReferenceInChat}
-              onAskWhyInChat={handleAskWhyInChat}
-              onCommentInChat={handleCommentInChat}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
+              <DockExplorerPane
+                workspaceRoot={workspaceRoot}
+                onReferenceInChat={handleReferenceInChat}
+                onAskWhyInChat={handleAskWhyInChat}
+                onCommentInChat={handleCommentInChat}
+              />
+            </Suspense>
           );
         case "file":
           return (
-            <DockFilePane
-              workspaceRoot={workspaceRoot}
-              filePath={pane.filePath}
-              onReferenceInChat={handleReferenceInChat}
-              onAskWhyInChat={handleAskWhyInChat}
-              onCommentInChat={handleCommentInChat}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
+              <DockFilePane
+                workspaceRoot={workspaceRoot}
+                filePath={pane.filePath}
+                onReferenceInChat={handleReferenceInChat}
+                onAskWhyInChat={handleAskWhyInChat}
+                onCommentInChat={handleCommentInChat}
+              />
+            </Suspense>
           );
         case "sidechat":
           if (!pane.threadId) {
@@ -2158,63 +2186,65 @@ function SingleChatSurface(props: {
         <div
           className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
         >
-          <EditorWorkspaceView
-            workspaceRoot={workspaceRoot}
-            projectName={activeProject?.name ?? null}
-            currentProjectId={activeProject?.id ?? null}
-            projectOptions={editorProjectOptions}
-            selectedFilePath={selectedEditorFilePath}
-            expandedDirectories={editorExpandedDirectories}
-            centerMode={editorCenterMode}
-            diffFiles={editorDiffFiles}
-            diffFilesLoading={editorDiffFilesLoading}
-            selectedDiffFilePath={editorDiffPanelState.diffFilePath ?? null}
-            diffOptionsControl={editorDiffOptionsControl}
-            onSelectDiffFile={handleSelectEditorDiffFile}
-            onSelectFile={handleSelectEditorFile}
-            onToggleDirectory={handleToggleEditorDirectory}
-            onCenterModeChange={setEditorCenterMode}
-            onExitEditorView={handleCloseEditorView}
-            onReferenceInChat={handleReferenceInChat}
-            onAskWhyInChat={handleAskWhyInChat}
-            onCommentInChat={handleCommentInChat}
-            onSelectProject={handleSelectEditorProject}
-            diffPanel={
-              <LazyDiffPanel
-                mode="sidebar"
-                threadId={props.threadId}
-                panelState={editorDiffPanelState}
-                onUpdatePanelState={handleUpdateEditorDiffPanelState}
-                liveRefreshEnabled={editorCenterMode === "diff"}
-                // Keep diff data warm while browsing files so switching to the
-                // diff tab renders instantly instead of cold-fetching.
-                queriesEnabled
-                hideHeader
-                onRenderableFilesChange={handleEditorDiffFilesChange}
-                onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
-              />
-            }
-            chatPanel={
-              <SidebarInset
-                className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
-                surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-              >
-                <DeferredChatView
+          <Suspense fallback={<ChatMountSkeleton />}>
+            <EditorWorkspaceView
+              workspaceRoot={workspaceRoot}
+              projectName={activeProject?.name ?? null}
+              currentProjectId={activeProject?.id ?? null}
+              projectOptions={editorProjectOptions}
+              selectedFilePath={selectedEditorFilePath}
+              expandedDirectories={editorExpandedDirectories}
+              centerMode={editorCenterMode}
+              diffFiles={editorDiffFiles}
+              diffFilesLoading={editorDiffFilesLoading}
+              selectedDiffFilePath={editorDiffPanelState.diffFilePath ?? null}
+              diffOptionsControl={editorDiffOptionsControl}
+              onSelectDiffFile={handleSelectEditorDiffFile}
+              onSelectFile={handleSelectEditorFile}
+              onToggleDirectory={handleToggleEditorDirectory}
+              onCenterModeChange={setEditorCenterMode}
+              onExitEditorView={handleCloseEditorView}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+              onSelectProject={handleSelectEditorProject}
+              diffPanel={
+                <LazyDiffPanel
+                  mode="sidebar"
                   threadId={props.threadId}
-                  paneScopeId={EDITOR_CHAT_PANE_SCOPE_ID}
-                  deferMount={false}
-                  surfaceMode="split"
-                  presentationMode="editor"
-                  isFocusedPane
-                  panelState={editorChatPanelState}
-                  onToggleDiff={handleEditorToggleDiff}
-                  onToggleBrowser={noop}
-                  onOpenBrowserUrl={noop}
-                  onOpenTurnDiff={handleEditorOpenTurnDiff}
+                  panelState={editorDiffPanelState}
+                  onUpdatePanelState={handleUpdateEditorDiffPanelState}
+                  liveRefreshEnabled={editorCenterMode === "diff"}
+                  // Keep diff data warm while browsing files so switching to the
+                  // diff tab renders instantly instead of cold-fetching.
+                  queriesEnabled
+                  hideHeader
+                  onRenderableFilesChange={handleEditorDiffFilesChange}
+                  onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
                 />
-              </SidebarInset>
-            }
-          />
+              }
+              chatPanel={
+                <SidebarInset
+                  className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
+                  surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+                >
+                  <DeferredChatView
+                    threadId={props.threadId}
+                    paneScopeId={EDITOR_CHAT_PANE_SCOPE_ID}
+                    deferMount={false}
+                    surfaceMode="split"
+                    presentationMode="editor"
+                    isFocusedPane
+                    panelState={editorChatPanelState}
+                    onToggleDiff={handleEditorToggleDiff}
+                    onToggleBrowser={noop}
+                    onOpenBrowserUrl={noop}
+                    onOpenTurnDiff={handleEditorOpenTurnDiff}
+                  />
+                </SidebarInset>
+              }
+            />
+          </Suspense>
         </div>
       </WorkspaceFileOpenerContext.Provider>
     );

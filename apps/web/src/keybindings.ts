@@ -154,6 +154,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "model.next",
+    shortcut: commandShortcut("]", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "model.previous",
+    shortcut: commandShortcut("[", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "traitsPicker.toggle",
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,

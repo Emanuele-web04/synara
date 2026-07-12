@@ -39,6 +39,11 @@ import {
   type ProviderModelOption,
 } from "../../providerModelOptions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
+import {
+  FAVORITE_MODEL_STORAGE_KEYS,
+  supportsModelFavorites,
+  type FavoriteModelProvider,
+} from "../../lib/modelFavorites";
 import { Skeleton } from "../ui/skeleton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -111,20 +116,7 @@ function providerIconClassName(
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
-const FAVORITE_MODEL_STORAGE_KEYS = {
-  cursor: "synara:cursor-favourite-models:v1",
-  kilo: "synara:kilo-favourite-models:v1",
-  opencode: "synara:opencode-favourite-models:v1",
-  pi: "synara:pi-favourite-models:v1",
-} as const;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
-type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
-
-function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return (
-    provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
-  );
-}
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
 function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {

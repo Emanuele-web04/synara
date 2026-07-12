@@ -933,6 +933,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -966,6 +967,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...approvalRequiredTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -993,6 +995,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "image",
@@ -1020,6 +1023,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1053,6 +1057,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1081,6 +1086,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1112,6 +1118,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1144,6 +1151,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1194,6 +1202,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1232,6 +1241,25 @@ describe("sendTurn", () => {
         threadId: asThreadId("thread_1"),
       }),
     ).rejects.toThrow("Turn input must include text or attachments.");
+  });
+
+  it("disables reasoning summaries for Codex Spark", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Inspect the repository",
+      model: "gpt-5.3-codex-spark",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        model: "gpt-5.3-codex-spark",
+        summary: "none",
+      }),
+    );
   });
 });
 
@@ -1283,7 +1311,28 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
-  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+  it.each([
+    {
+      responseShape: "camelCase",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        additionalSpeedTiers: ["fast"],
+      },
+    },
+    {
+      responseShape: "legacy snake_case",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        default_reasoning_effort: "low",
+        additional_speed_tiers: ["fast"],
+      },
+    },
+  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1320,15 +1369,7 @@ describe("CodexAppServerManager discovery", () => {
       )
       .mockResolvedValue({
         result: {
-          items: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
-              default_reasoning_effort: "medium",
-              additionalSpeedTiers: ["fast"],
-            },
-          ],
+          items: [item],
         },
       });
 
@@ -1341,15 +1382,17 @@ describe("CodexAppServerManager discovery", () => {
     });
     expect(result.models).toEqual([
       {
-        slug: "gpt-5.5",
-        name: "GPT-5.5",
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         supportedReasoningEfforts: [
           { value: "low" },
           { value: "medium" },
           { value: "high" },
           { value: "xhigh" },
+          { value: "max" },
+          { value: "ultra" },
         ],
-        defaultReasoningEffort: "medium",
+        defaultReasoningEffort: "low",
         supportsFastMode: true,
       },
     ]);
@@ -2197,6 +2240,7 @@ describe("respondToRequest", () => {
     expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",

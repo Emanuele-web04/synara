@@ -579,6 +579,7 @@ function spawnCodexAppServer(input: {
     stdio: ["pipe", "pipe", "pipe"],
     shell: prepared.shell,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -1057,6 +1058,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       model?: string;
       serviceTier?: string | null;
       effort?: string;
+      summary: "auto" | "none";
       approvalPolicy?: CodexApprovalPolicy;
       sandboxPolicy?: CodexTurnSandboxPolicy;
       collaborationMode?: {
@@ -1070,6 +1072,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
+      summary: "auto",
       ...resolveCodexTurnOverrides(context),
     };
     const normalizedModel = resolveCodexModelForAccount(
@@ -1078,6 +1081,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     if (normalizedModel) {
       turnStartParams.model = normalizedModel;
+      if (normalizedModel === CODEX_SPARK_MODEL) {
+        turnStartParams.summary = "none";
+      }
     }
     if (input.serviceTier !== undefined) {
       turnStartParams.serviceTier = input.serviceTier;
@@ -3392,6 +3398,7 @@ function assertSupportedCodexCliVersion(input: {
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 
   if (result.error) {

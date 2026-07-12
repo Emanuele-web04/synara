@@ -3,7 +3,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
+// Codex app-server can add model-specific efforts through runtime discovery.
+export type CodexReasoningEffort = string;
 export const CLAUDE_API_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeApiEffort = (typeof CLAUDE_API_EFFORT_OPTIONS)[number];
 export const CLAUDE_PROMPT_MODE_OPTIONS = ["ultrathink"] as const;
@@ -107,6 +108,8 @@ export const ClaudeModelOptions = Schema.Struct({
   thinking: Schema.optional(Schema.Boolean),
   effort: Schema.optional(Schema.Literals(CLAUDE_CODE_EFFORT_OPTIONS)),
   fastMode: Schema.optional(Schema.Boolean),
+  autoCompactWindow: Schema.optional(Schema.String),
+  // Legacy persisted field. Normalization migrates this to autoCompactWindow.
   contextWindow: Schema.optional(Schema.String),
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
@@ -195,6 +198,8 @@ export type ModelCapabilities = {
   readonly supportsThinkingToggle: boolean;
   readonly promptInjectedEffortLevels: readonly string[];
   readonly contextWindowOptions: readonly ContextWindowOption[];
+  readonly autoCompactWindowOptions?: readonly ContextWindowOption[];
+  readonly contextWindowTokens?: number;
   readonly variantOptions?: readonly EffortOption[];
   readonly agentOptions?: readonly EffortOption[];
 };
@@ -340,9 +345,9 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // Shared Claude building blocks. Capability shapes repeat across Claude
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
-const CLAUDE_DUAL_CONTEXT_WINDOW: readonly ContextWindowOption[] = [
+const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
   { value: "200k", label: "200k", isDefault: true },
-  { value: "1m", label: "1M" },
+  { value: "1m", label: "1M (model default)" },
 ];
 
 function claudeApiEffortOption(
@@ -380,7 +385,9 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
-  contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
+  contextWindowOptions: [],
+  autoCompactWindowOptions: CLAUDE_AUTO_COMPACT_WINDOWS,
+  contextWindowTokens: 1_000_000,
 };
 
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
@@ -399,7 +406,9 @@ const CLAUDE_FLAGSHIP_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: true,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: ["ultrathink"],
-  contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
+  contextWindowOptions: [],
+  autoCompactWindowOptions: CLAUDE_AUTO_COMPACT_WINDOWS,
+  contextWindowTokens: 1_000_000,
 };
 
 // Reasoning ladder before xhigh/ultracode landed (Opus 4.6, Sonnet 4.6).
@@ -498,7 +507,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
-        contextWindowOptions: CLAUDE_DUAL_CONTEXT_WINDOW,
+        contextWindowOptions: [],
+        contextWindowTokens: 200_000,
       },
     },
     {
@@ -520,6 +530,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsThinkingToggle: true,
         promptInjectedEffortLevels: [],
         contextWindowOptions: [],
+        contextWindowTokens: 200_000,
       },
     },
   ],

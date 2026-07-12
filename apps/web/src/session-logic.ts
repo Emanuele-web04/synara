@@ -572,7 +572,7 @@ function toActiveTaskListState(activity: OrchestrationThreadActivity): ActiveTas
         status: "pending" | "inProgress" | "completed";
       } => task !== null,
     );
-  if (tasks.length === 0) {
+  if (rawTasks.length > 0 && tasks.length === 0) {
     return null;
   }
   return {
@@ -593,17 +593,6 @@ export function deriveActiveTaskListState(
   const allTaskListActivities = ordered.filter(
     (activity) => activity.kind === "turn.tasks.updated",
   );
-  const settledTurnIds = new Set<TurnId>();
-
-  // A prior-turn task list only stays visible while that originating turn is still unresolved.
-  for (const activity of ordered) {
-    if (!activity.turnId) {
-      continue;
-    }
-    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
-      settledTurnIds.add(activity.turnId);
-    }
-  }
 
   const currentTurnTaskList = latestTurnId
     ? (allTaskListActivities
@@ -612,11 +601,12 @@ export function deriveActiveTaskListState(
         .findLast((taskList) => taskList !== null) ?? null)
     : null;
   if (currentTurnTaskList) {
-    return currentTurnTaskList;
+    return currentTurnTaskList.tasks.length > 0 ? currentTurnTaskList : null;
   }
 
-  // Keep the most recent unfinished prior task list visible so implementation turns
-  // that have started but not emitted their own task update can still show progress.
+  // Task lists describe work state beyond the lifetime of one provider turn. Keep the
+  // latest unfinished list visible after completion, abort, reload, and follow-up turns
+  // until the provider completes every task or sends an explicit empty snapshot.
   const latestPriorTaskList =
     allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
     null;
@@ -624,7 +614,7 @@ export function deriveActiveTaskListState(
     return null;
   }
 
-  if (latestPriorTaskList.turnId && settledTurnIds.has(latestPriorTaskList.turnId)) {
+  if (latestPriorTaskList.tasks.length === 0) {
     return null;
   }
 

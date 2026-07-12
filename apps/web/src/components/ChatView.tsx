@@ -159,13 +159,18 @@ import {
   buildThreadBreadcrumbs,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  hasFileUndoSettled,
   promptStillMatchesActiveHistoryBrowse,
+  type PendingFileUndo,
   type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
@@ -299,6 +304,7 @@ import {
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -1023,13 +1029,13 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
-  const setStickyComposerModelSelection = useComposerDraftStore(
-    (store) => store.setStickyModelSelection,
+  const setComposerDraftModelSelectionAndSticky = useComposerDraftStore(
+    (store) => store.setModelSelectionAndSticky,
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
@@ -1193,6 +1199,7 @@ export default function ChatView({
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -1594,6 +1601,15 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  useEffect(() => {
+    if (
+      pendingFileUndo &&
+      hasFileUndoSettled({ pending: pendingFileUndo, thread: activeThread ?? null })
+    ) {
+      setPendingFileUndo(null);
+      setIsRevertingCheckpoint(false);
+    }
+  }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -2591,9 +2607,8 @@ export default function ChatView({
       };
     }
 
-    return latestTurnSettled
-      ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
+    const liveTurnId = latestTurnSettled ? undefined : activeLatestTurn?.turnId;
+    return deriveActiveTaskListState(threadActivities, liveTurnId);
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
     () =>
@@ -3077,10 +3092,14 @@ export default function ChatView({
       });
     }
     return buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries,
+      turnDiffSummaries: turnDiffSummaries.map((summary) => ({
+        ...summary,
+        checkpointTurnCount:
+          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
+      })),
       messages: messagesForDiffAnchoring,
     });
-  }, [turnDiffSummaries, timelineMessages]);
+  }, [inferredCheckpointTurnCountByTurnId, turnDiffSummaries, timelineMessages]);
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -4255,12 +4274,32 @@ export default function ChatView({
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
+    settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
   // Every close (header toggle or panel action click) stores the cross-chat preference,
   // so a dismissed panel stays closed when switching threads until it is toggled back on.
+  // The same toggle also persists to settings so the preference survives reloads.
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
+  const updateEnvironmentPanelPreference = useCallback(
+    (open: boolean, persist: boolean) => {
+      const update = resolveEnvironmentPanelPreferenceUpdate({ open, persist });
+      setEnvironmentPanelPreferenceOpen(update.userPreferenceOpen);
+      if (update.settingsDefaultOpen !== null) {
+        updateSettings({ environmentPanelDefaultOpen: update.settingsDefaultOpen });
+      }
+    },
+    [updateSettings],
+  );
+  const setEnvironmentPanelOpenPreference = useCallback(
+    (open: boolean) => updateEnvironmentPanelPreference(open, true),
+    [updateEnvironmentPanelPreference],
+  );
+  const closeEnvironmentPanelAfterAction = useCallback(
+    () => updateEnvironmentPanelPreference(false, false),
+    [updateEnvironmentPanelPreference],
+  );
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
     userPreferenceOpen: environmentPanelPreferenceOpen,
@@ -5739,6 +5778,43 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  const onProviderModelSelect = useCallback(
+    (provider: ProviderKind, model: ModelSlug) => {
+      if (!activeThread) return;
+      if (lockedProvider !== null && provider !== lockedProvider) {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider[provider],
+        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
+      });
+      const nextModelSelection: ModelSelection = {
+        provider,
+        model: resolvedModel,
+      };
+      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+      if (provider === "cursor" && !showExpandedCursorModelVariants) {
+        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+          persistSticky: true,
+          model: resolvedModel,
+        });
+      }
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      lockedProvider,
+      scheduleComposerFocus,
+      setComposerDraftModelSelectionAndSticky,
+      setComposerDraftProviderModelOptions,
+      showExpandedCursorModelVariants,
+      customModelsByProvider,
+      modelOptionsByProvider,
+    ],
+  );
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -5796,6 +5872,23 @@ export default function ChatView({
         event.stopPropagation();
         handleModelPickerOpenChange(true);
         scheduleComposerFocus();
+        return;
+      }
+
+      if (command === "model.next" || command === "model.previous") {
+        if (!composerPickerShortcutActive) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = command === "model.next" ? "next" : "previous";
+        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const nextSlug = resolveCycledModelSlug({
+          currentModel: selectedModel,
+          options: providerOptions,
+          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          direction,
+        });
+        if (!nextSlug) return;
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
         return;
       }
 
@@ -5970,6 +6063,11 @@ export default function ChatView({
     scheduleComposerFocus,
     toggleComposerFocus,
     toggleTerminalVisibility,
+    activeThread,
+    selectedProvider,
+    selectedModel,
+    modelOptionsByProvider,
+    onProviderModelSelect,
   ]);
 
   const startComposerVoiceRecording = useCallback(async () => {
@@ -6291,6 +6389,7 @@ export default function ChatView({
           commandId: newCommandId(),
           threadId: activeThread.id,
           turnCount,
+          scope: "thread",
           createdAt: new Date().toISOString(),
         });
       } catch (err) {
@@ -6300,6 +6399,57 @@ export default function ChatView({
         );
       }
       setIsRevertingCheckpoint(false);
+    },
+    [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
+  );
+
+  const onUndoTurnFiles = useCallback(
+    async (turnCounts: readonly number[]) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || isRevertingCheckpoint || turnCounts.length === 0) return;
+
+      if (hasLiveTurn || isSendBusy || isConnecting) {
+        setThreadError(activeThread.id, "Interrupt the current turn before undoing file changes.");
+        return;
+      }
+      const confirmed = await api.dialogs.confirm(
+        [
+          "Undo the latest file changes shown in this card?",
+          "Earlier file changes will remain available to undo.",
+          "Messages and provider conversation history will be kept.",
+          "This action cannot be undone.",
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      const turnCount = Math.max(...turnCounts);
+      const requestedAt = new Date().toISOString();
+      setPendingFileUndo({
+        threadId: activeThread.id,
+        turnCount,
+        existingFailureActivityIds: activeThread.activities
+          .filter((activity) => activity.kind === "checkpoint.revert.failed")
+          .map((activity) => activity.id),
+      });
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.checkpoint.revert",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          turnCount,
+          scope: "files",
+          createdAt: requestedAt,
+        });
+      } catch (err) {
+        setPendingFileUndo(null);
+        setIsRevertingCheckpoint(false);
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to undo file changes.",
+        );
+      }
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
@@ -7520,11 +7670,16 @@ export default function ChatView({
       })),
     ];
     // Sending the first message flips the centered empty landing into a normal
-    // transcript, which would otherwise let the Environment panel's default-open
-    // policy pop it open. Keep it closed on send regardless of whether the user
-    // had opened it in the empty view.
+    // transcript. Clear session-only landing overrides when default-open is enabled;
+    // otherwise keep the transition closed.
     if (isCenteredEmptyLanding) {
-      setEnvironmentPanelPreferenceOpen(false);
+      setEnvironmentPanelPreferenceOpen(
+        resolveEnvironmentPanelPreferenceAfterFirstSend({
+          isCenteredEmptyLanding,
+          settingsDefaultOpen: settings.environmentPanelDefaultOpen,
+          currentPreferenceOpen: environmentPanelPreferenceOpen,
+        }),
+      );
     }
     setOptimisticUserMessages((existing) => [
       ...existing,
@@ -8567,44 +8722,6 @@ export default function ChatView({
     selectedModel,
   ]);
 
-  const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
-      if (!activeThread) return;
-      if (lockedProvider !== null && provider !== lockedProvider) {
-        scheduleComposerFocus();
-        return;
-      }
-      const resolvedModel = resolveCommittedProviderModel({
-        selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
-        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-      });
-      const nextModelSelection: ModelSelection = {
-        provider,
-        model: resolvedModel,
-      };
-      setComposerDraftModelSelection(activeThread.id, nextModelSelection);
-      if (provider === "cursor" && !showExpandedCursorModelVariants) {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
-      }
-      setStickyComposerModelSelection(nextModelSelection);
-      scheduleComposerFocus();
-    },
-    [
-      activeThread,
-      lockedProvider,
-      scheduleComposerFocus,
-      setComposerDraftModelSelection,
-      setComposerDraftProviderModelOptions,
-      setStickyComposerModelSelection,
-      showExpandedCursorModelVariants,
-      customModelsByProvider,
-      modelOptionsByProvider,
-    ],
-  );
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
       const currentPrompt = promptRef.current;
@@ -10181,7 +10298,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelPreferenceOpen(false),
+    onClose: closeEnvironmentPanelAfterAction,
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10191,7 +10308,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelPreferenceOpen,
+        onOpenChange: setEnvironmentPanelOpenPreference,
       }
     : null;
 
@@ -10961,6 +11078,7 @@ export default function ChatView({
                     onOpenAutomation={onOpenAutomation}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
+                    onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

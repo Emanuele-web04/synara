@@ -50,6 +50,13 @@ export interface DiffCheckpointsInput {
   readonly maxOutputBytes?: number;
 }
 
+export interface ReverseCheckpointDiffInput {
+  readonly cwd: string;
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly toCheckpointRef: CheckpointRef;
+  readonly maxOutputBytes?: number;
+}
+
 export interface DeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
@@ -106,6 +113,13 @@ export interface CheckpointStoreShape {
   readonly diffCheckpoints: (
     input: DiffCheckpointsInput,
   ) => Effect.Effect<string, CheckpointStoreError>;
+
+  /**
+   * Reverse only the changes between two checkpoints onto the current workspace.
+   */
+  readonly reverseCheckpointDiff: (
+    input: ReverseCheckpointDiffInput,
+  ) => Effect.Effect<boolean, CheckpointStoreError>;
 
   /**
    * Delete the provided checkpoint refs.

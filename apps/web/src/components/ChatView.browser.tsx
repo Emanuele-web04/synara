@@ -813,6 +813,35 @@ function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithSettledCompletedInlinePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithSettledInlinePlan();
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            activities: thread.activities.map((activity) =>
+              activity.kind === "turn.tasks.updated"
+                ? {
+                    ...activity,
+                    payload: {
+                      tasks: [
+                        { task: "Inspecting ChatView boundaries", status: "completed" },
+                        { task: "Patch the shared checklist receiver", status: "completed" },
+                        { task: "Run final validation", status: "completed" },
+                      ],
+                    },
+                  }
+                : activity,
+            ),
+          }
+        : thread,
+    ),
+  };
+}
+
 // A plan-mode thread whose latest turn has settled and that still has an
 // actionable (unimplemented) proposed plan. This is exactly the state where the
 // live composer shows the plan-follow-up prompt, so it's the setup that used to
@@ -1347,6 +1376,30 @@ function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): vo
       bubbles: true,
       cancelable: true,
     }),
+  );
+}
+
+function dispatchModelCycleShortcut(target: EventTarget, key: "[" | "]"): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code: key === "]" ? "BracketRight" : "BracketLeft",
+    altKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+async function dispatchModelCycleShortcutWhenReady(
+  target: EventTarget,
+  key: "[" | "]",
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchModelCycleShortcut(target, key).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
   );
 }
 
@@ -2719,6 +2772,41 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("cycles the active provider model without opening the picker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-cycle-shortcut" as MessageId,
+        targetText: "model cycle shortcut",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "]");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.5" });
+      });
+      expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "[");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.2" });
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens the composer model picker with configured keybinding labels loaded", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -3433,7 +3521,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
-      await expect.element(page.getByText("Folders on this Mac")).not.toBeInTheDocument();
+      await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
 
       const currentProjectOption = await waitForElement(
         () =>
@@ -4864,7 +4952,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("hides the inline plan card once the latest turn is settled", async () => {
+  it("keeps an unfinished task list visible once the latest turn is settled", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -4874,8 +4962,30 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
-          expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
+          expect(document.body.textContent).toContain("Patch the shared checklist receiver");
           expect(document.body.textContent).not.toContain("1 background agent");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides a completed task list once the latest turn is settled", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledCompletedInlinePlan(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Finished the investigation.");
+          expect(document.body.textContent).not.toContain("3 out of 3 tasks completed");
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );

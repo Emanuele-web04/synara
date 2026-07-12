@@ -252,6 +252,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     contextWindowOptions,
     contextWindow,
     defaultContextWindow,
+    contextWindowDescriptor,
     ultrathinkPromptControlled,
     primarySelectDescriptor,
     fastModeDescriptor,
@@ -349,14 +350,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorContextWindowSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Context"
+            label={contextWindowDescriptor?.label ?? "Context"}
             value={contextWindow ?? defaultContextWindow ?? ""}
             options={contextWindowOptions.map((option) => ({
               value: option.value,
               label: option.label,
               isDefault: option.value === defaultContextWindow,
             }))}
-            onValueChange={(value) => commitTrait({ contextWindow: value })}
+            onValueChange={(value) =>
+              commitTrait({ [contextWindowDescriptor?.id ?? "contextWindow"]: value })
+            }
             onSelectionComplete={onSelectionComplete}
           />
         </>

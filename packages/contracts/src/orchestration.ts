@@ -1160,6 +1160,7 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  scope: Schema.optional(Schema.Literals(["thread", "files"])),
   createdAt: IsoDateTime,
 });
 
@@ -1320,6 +1321,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
+  preserveLatestTurn: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 
@@ -1651,6 +1653,9 @@ const ThreadUserInputResponseRequestedPayload = Schema.Struct({
 export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  scope: Schema.optional(Schema.Literals(["thread", "files"])).pipe(
+    Schema.withDecodingDefault(() => "thread"),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -1712,6 +1717,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
+  preserveLatestTurn: Schema.optional(Schema.Boolean),
 });
 
 export const ThreadActivityAppendedPayload = Schema.Struct({
