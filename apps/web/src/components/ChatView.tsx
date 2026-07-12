@@ -173,6 +173,7 @@ import {
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
+  buildCheckpointRevertConfirmMessage,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -6237,11 +6238,7 @@ export default function ChatView({
         return;
       }
       const confirmed = await api.dialogs.confirm(
-        [
-          `Revert this thread to checkpoint ${turnCount}?`,
-          "This will discard newer messages and turn diffs in this thread.",
-          "This action cannot be undone.",
-        ].join("\n"),
+        buildCheckpointRevertConfirmMessage(turnCount),
       );
       if (!confirmed) {
         return;

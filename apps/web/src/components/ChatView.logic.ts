@@ -1214,3 +1214,19 @@ export function enrichSubagentWorkEntries(
     };
   });
 }
+
+/** Confirm copy for checkpoint revert. turnCount 0 clears the whole chat. */
+export function buildCheckpointRevertConfirmMessage(turnCount: number): string {
+  if (turnCount <= 0) {
+    return [
+      "This will clear the entire conversation and restore project files to how they were before this thread started.",
+      "This cannot be undone.",
+    ].join("\n");
+  }
+
+  return [
+    `Revert this conversation to turn ${turnCount}?`,
+    "This discards newer messages and file changes in this thread.",
+    "This cannot be undone.",
+  ].join("\n");
+}

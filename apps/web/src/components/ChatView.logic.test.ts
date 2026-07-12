@@ -28,6 +28,7 @@ import {
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
+  buildCheckpointRevertConfirmMessage,
   resolveRuntimeModeAfterApprovalDecision,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
@@ -1616,5 +1617,17 @@ describe("resolveQueuedSteerGateTransition", () => {
         now,
       }),
     ).toEqual({ kind: "clear" });
+  });
+});
+
+describe("buildCheckpointRevertConfirmMessage", () => {
+  it("warns that turn 0 revert clears the whole conversation", () => {
+    expect(buildCheckpointRevertConfirmMessage(0)).toContain("clear the entire conversation");
+    expect(buildCheckpointRevertConfirmMessage(0)).not.toContain("checkpoint");
+  });
+
+  it("keeps a shorter warning for partial reverts", () => {
+    expect(buildCheckpointRevertConfirmMessage(2)).toContain("turn 2");
+    expect(buildCheckpointRevertConfirmMessage(2)).toContain("discards newer messages");
   });
 });

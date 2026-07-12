@@ -1687,9 +1687,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
+                              aria-label="Revert changes"
+                              title="Revert files and conversation to before this turn"
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >
-                              Undo
+                              Revert changes
                               <Undo2Icon className="size-3" />
                             </button>
                           )}
