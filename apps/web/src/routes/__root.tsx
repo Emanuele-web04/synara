@@ -85,7 +85,10 @@ import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { fetchMissingThreadSnapshots } from "../chatRouteRecovery";
 import { createMissingThreadRecoveryController } from "../missingThreadRecovery";
-import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
+import {
+  classifyDesktopHydrationRecovery,
+  hasLiveThreadsWithMissingProjects,
+} from "../lib/desktopProjectRecovery";
 import {
   bumpShellRefreshEpoch,
   getShellRefreshEpoch,
@@ -965,31 +968,23 @@ function EventRouter() {
         }
 
         if (fetched.kind === "readModel") {
-          if (
-            !shouldAcceptShellSnapshotSequence(
-              shellSnapshotSequence,
-              fetched.snapshot.snapshotSequence,
-            )
-          ) {
-            return { applied: false, shellThreadCount: 0, reason: "stale" };
-          }
-          const appliedSequence = Math.max(
-            shellSnapshotSequence,
-            fetched.snapshot.snapshotSequence,
+          const liveProjects = fetched.snapshot.projects.filter(
+            (project) => project.deletedAt == null,
           );
-          shellSnapshotSequence = appliedSequence;
-          useStore.getState().syncServerReadModel(fetched.snapshot);
           const liveThreads = fetched.snapshot.threads.filter((thread) => thread.deletedAt == null);
-          markPromotedDraftThreads(new Set(liveThreads.map((thread) => thread.id)));
-          finalizePromotedDraftThreads(
-            new Set(
-              liveThreads
-                .filter((thread) => detailThreadHasStarted(thread))
-                .map((thread) => thread.id),
-            ),
-          );
-          removeOrphanedTerminalsForCurrentState();
-          flushShellBuffer(appliedSequence);
+          const applied = applyShellSnapshot({
+            snapshotSequence: fetched.snapshot.snapshotSequence,
+            updatedAt: fetched.snapshot.updatedAt,
+            projects: liveProjects,
+            threads: liveThreads,
+          });
+          if (!applied) {
+            return {
+              applied: false,
+              shellThreadCount: liveThreads.length,
+              reason: "stale",
+            };
+          }
           return { applied: true, shellThreadCount: liveThreads.length, reason: "ok" };
         }
 
@@ -1558,76 +1553,85 @@ function EventRouter() {
 }
 
 function DesktopProjectBootstrap() {
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  // Boolean selectors keep the recovery machine stable across project upserts
-  // that leave threads empty — remounting would reset the attempt budget.
-  const needsMissingThreadRecovery = useStore(
-    (store) => store.threadsHydrated && store.projects.length > 0 && store.threads.length === 0,
+  // Kind selector keeps the recovery machine stable across upserts that leave
+  // the same recovery class — remounting would reset the attempt budget.
+  const recoveryKind = useStore((store) =>
+    classifyDesktopHydrationRecovery({
+      threadsHydrated: store.threadsHydrated,
+      projects: store.projects,
+      threads: store.threads,
+    }),
   );
-  const needsOrphanProjectRepair = useStore((store) => {
-    if (!store.threadsHydrated || store.projects.length === 0 || store.threads.length === 0) {
-      return false;
-    }
-    const projectIds = new Set(store.projects.map((project) => project.id));
-    return store.threads.some((thread) => !projectIds.has(thread.projectId));
-  });
   const shellRefreshEpoch = useSyncExternalStore(
     subscribeShellRefreshEpoch,
     getShellRefreshEpoch,
     getShellRefreshEpoch,
   );
-  const attemptedOrphanRepairRef = useRef(false);
 
   useEffect(() => {
-    attemptedOrphanRepairRef.current = false;
-  }, [shellRefreshEpoch]);
-
-  useEffect(() => {
-    if (!needsMissingThreadRecovery) {
+    if (recoveryKind !== "missing-threads") {
       return;
     }
 
     const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () => {
-        const state = useStore.getState();
-        return state.projects.length > 0 && state.threads.length === 0;
-      },
+      isStillNeeded: () =>
+        classifyDesktopHydrationRecovery(useStore.getState()) === "missing-threads",
       refresh: () => requestShellRefresh(),
     });
     controller.start();
     return () => {
       controller.cancel();
     };
-  }, [needsMissingThreadRecovery, shellRefreshEpoch]);
+  }, [recoveryKind, shellRefreshEpoch]);
 
   useEffect(() => {
-    const api = readNativeApi();
-    if (!api || !needsOrphanProjectRepair || attemptedOrphanRepairRef.current) {
+    if (recoveryKind !== "repair-projects") {
       return;
     }
-    attemptedOrphanRepairRef.current = true;
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
-    void api.orchestration
-      .getShellSnapshot()
-      .then((snapshot) => {
+    const controller = createMissingThreadRecoveryController({
+      isStillNeeded: () =>
+        classifyDesktopHydrationRecovery(useStore.getState()) === "repair-projects",
+      refresh: async () => {
+        const api = readNativeApi();
+        if (!api) {
+          return { applied: false, shellThreadCount: 0, reason: "unavailable" };
+        }
+        const snapshot = await api.orchestration.getShellSnapshot();
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
-          tryApplyShellSnapshot(snapshot);
-          return snapshot;
+          const applied = tryApplyShellSnapshot(snapshot);
+          return {
+            applied,
+            shellThreadCount: snapshot.threads.length,
+            reason: applied ? "ok" : "stale",
+          };
         }
-        return api.orchestration.repairState().then((repairedSnapshot) => {
-          syncServerReadModel(repairedSnapshot);
-          return repairedSnapshot;
+        const repaired = await api.orchestration.repairState();
+        const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
+        const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
+        const applied = tryApplyShellSnapshot({
+          snapshotSequence: repaired.snapshotSequence,
+          updatedAt: repaired.updatedAt,
+          projects: liveProjects,
+          threads: liveThreads,
         });
-      })
-      .catch(() => {
-        attemptedOrphanRepairRef.current = false;
-      });
-  }, [needsOrphanProjectRepair, shellRefreshEpoch, syncServerReadModel]);
+        return {
+          applied,
+          shellThreadCount: liveThreads.length,
+          reason: applied ? "ok" : "stale",
+        };
+      },
+    });
+    controller.start();
+    return () => {
+      controller.cancel();
+    };
+  }, [recoveryKind, shellRefreshEpoch]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
