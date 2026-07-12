@@ -14,7 +14,7 @@ import { useMemo } from "react";
 
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
-import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useFeatureFlags } from "../featureFlags";
 import {
   providerAgentsQueryOptions,
@@ -147,7 +147,7 @@ export function useProviderModelCatalog(input: {
     () =>
       showExpandedCursorModelVariants
         ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
+        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
     [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
   );
 

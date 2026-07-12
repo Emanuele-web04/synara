@@ -39,6 +39,7 @@ import {
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
+import { canonicalizeCursorModelSelection } from "./cursorModelVariants";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -1501,8 +1502,8 @@ function normalizeModelSelection(
   }
   const inferredClaudeAutoCompactWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
-  const model = normalizeModelSlug(rawModel, provider);
-  if (!model) {
+  const normalizedSlug = normalizeModelSlug(rawModel, provider);
+  if (!normalizedSlug) {
     return null;
   }
   const modelOptions = normalizeProviderModelOptions(
@@ -1534,7 +1535,14 @@ function normalizeModelSelection(
                   : provider === "pi"
                     ? modelOptions?.pi
                     : undefined;
-  return makeModelSelection(provider, model, options);
+  if (provider === "cursor") {
+    const canonical = canonicalizeCursorModelSelection({
+      model: normalizedSlug,
+      options,
+    });
+    return makeModelSelection(provider, canonical.model, canonical.options);
+  }
+  return makeModelSelection(provider, normalizedSlug, options);
 }
 
 // ── Sticky selection sanitization ─────────────────────────────────────

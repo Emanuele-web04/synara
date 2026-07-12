@@ -1,4 +1,4 @@
-import type { ProviderModelDescriptor } from "@synara/contracts";
+import type { CursorModelOptions, ProviderModelDescriptor } from "@synara/contracts";
 
 function uniqueByValue<T extends { readonly value: string }>(values: ReadonlyArray<T>): T[] {
   const seen = new Set<string>();
@@ -54,6 +54,21 @@ function stripCursorParameterizedSuffix(value: string): string {
   return value.trim().replace(/\[[^\]]*\]$/u, "");
 }
 
+function cursorVariantSlugTokens(model: string): string[] {
+  return stripCursorParameterizedSuffix(model)
+    .toLowerCase()
+    .split("-")
+    .filter((token) => token.length > 0);
+}
+
+function cursorVariantHasFastMode(model: string): boolean {
+  return cursorVariantSlugTokens(model).includes("fast");
+}
+
+function cursorVariantHasThinking(model: string): boolean {
+  return cursorVariantSlugTokens(model).includes("thinking");
+}
+
 export function normalizeCursorModelVariantBaseId(model: string | null | undefined): string | null {
   const trimmed = model?.trim();
   if (!trimmed) {
@@ -84,9 +99,73 @@ export function normalizeCursorModelVariantBaseId(model: string | null | undefin
   return base;
 }
 
+/**
+ * Infers Cursor trait options encoded in flat CLI variant ids such as
+ * `grok-4-5-fast-high` so the composer can keep a base model + selectors.
+ */
+export function cursorModelOptionsFromVariantSlug(
+  model: string | null | undefined,
+): CursorModelOptions {
+  const trimmed = model?.trim();
+  if (!trimmed || trimmed.includes("[")) {
+    return {};
+  }
+
+  const reasoningEffort = parseCursorCliReasoningEffort(trimmed);
+  return {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(cursorVariantHasFastMode(trimmed) ? { fastMode: true } : {}),
+    ...(cursorVariantHasThinking(trimmed) ? { thinking: true } : {}),
+  };
+}
+
+/**
+ * Rewrites a Cursor CLI trait variant onto its base slug, preserving effort /
+ * fast / thinking as model options (matching GPT and Claude composer UX).
+ */
+export function canonicalizeCursorModelSelection(input: {
+  model: string;
+  options?: CursorModelOptions | null | undefined;
+}): {
+  model: string;
+  options: CursorModelOptions | undefined;
+} {
+  const trimmedModel = input.model.trim();
+  const baseModel = normalizeCursorModelVariantBaseId(trimmedModel) ?? trimmedModel;
+  const inferredFromSlug = cursorModelOptionsFromVariantSlug(trimmedModel);
+  const explicit = input.options ?? undefined;
+
+  const reasoningEffort = explicit?.reasoningEffort ?? inferredFromSlug.reasoningEffort;
+  const fastMode =
+    explicit?.fastMode !== undefined
+      ? explicit.fastMode
+      : inferredFromSlug.fastMode === true
+        ? true
+        : undefined;
+  const thinking =
+    explicit?.thinking !== undefined
+      ? explicit.thinking
+      : inferredFromSlug.thinking === true
+        ? true
+        : undefined;
+  const contextWindow = explicit?.contextWindow;
+
+  const options: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+
+  return {
+    model: baseModel,
+    options: Object.keys(options).length > 0 ? options : undefined,
+  };
+}
+
 function removeVariantNameSuffix(name: string): string {
   return name
-    .replace(/\s+Fast$/iu, "")
+    .replace(/\s+(?:None|Low|Medium|High|Extra High)$/iu, "")
     .replace(/\s+Thinking$/iu, "")
     .replace(/\s+Fast$/iu, "")
     .replace(/\s+(?:None|Low|Medium|High|Extra High)$/iu, "")
@@ -105,6 +184,9 @@ function defaultEffortForGroup(
     return efforts.includes("medium") ? "medium" : efforts[0];
   }
   if (baseSlug.includes("claude")) {
+    return efforts.includes("high") ? "high" : efforts[0];
+  }
+  if (baseSlug.includes("grok")) {
     return efforts.includes("high") ? "high" : efforts[0];
   }
   return efforts[0];
@@ -172,7 +254,7 @@ export function collapseCursorModelVariants(
   return Array.from(groups.entries()).map(([baseSlug, variants]) => {
     const preferredName =
       variants.find((variant) => variant.slug === baseSlug)?.name ??
-      variants.find((variant) => !variant.slug.endsWith("-fast"))?.name ??
+      variants.find((variant) => !cursorVariantHasFastMode(variant.slug))?.name ??
       variants[0]?.name ??
       baseSlug;
     const efforts = uniqueByValue(
@@ -225,10 +307,15 @@ export function collapseCursorModelVariants(
             ...(defaultEffort ? { defaultReasoningEffort: defaultEffort } : {}),
           }
         : {}),
-      ...(variants.some((variant) => variant.supportsFastMode === true)
+      ...(variants.some(
+        (variant) => variant.supportsFastMode === true || cursorVariantHasFastMode(variant.slug),
+      )
         ? { supportsFastMode: true as const }
         : {}),
-      ...(variants.some((variant) => variant.supportsThinkingToggle === true)
+      ...(variants.some(
+        (variant) =>
+          variant.supportsThinkingToggle === true || cursorVariantHasThinking(variant.slug),
+      )
         ? { supportsThinkingToggle: true as const }
         : {}),
       ...(contextWindowOptions.length > 0

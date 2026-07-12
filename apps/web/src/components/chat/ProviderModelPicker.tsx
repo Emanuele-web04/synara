@@ -8,6 +8,7 @@ import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
+import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
@@ -148,17 +149,24 @@ function resolveSelectedModelLabel(input: {
     return exact.name;
   }
   if (input.provider === "cursor") {
-    const baseModel = stripParameterizedModelSuffix(input.model);
-    const baseMatch = input.options.find(
-      (option) => stripParameterizedModelSuffix(option.slug) === baseModel,
-    );
+    const selectedBase =
+      normalizeCursorModelVariantBaseId(input.model) ?? stripParameterizedModelSuffix(input.model);
+    const baseMatch = input.options.find((option) => {
+      const optionBase =
+        normalizeCursorModelVariantBaseId(option.slug) ??
+        stripParameterizedModelSuffix(option.slug);
+      return optionBase === selectedBase || option.slug === selectedBase;
+    });
     if (baseMatch) {
       return baseMatch.name;
     }
   }
   return formatProviderModelOptionName({
     provider: input.provider,
-    slug: input.model,
+    slug:
+      input.provider === "cursor"
+        ? (normalizeCursorModelVariantBaseId(input.model) ?? input.model)
+        : input.model,
   });
 }
 
@@ -350,17 +358,24 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             favoriteSlugs: favoriteModelSlugSet,
           })
         : groupProviderModelOptions(filteredOptions);
+    const selectedModelValue =
+      activeProvider === provider
+        ? (resolveSelectableModel(provider, props.model, providerOptions) ??
+          (provider === "cursor"
+            ? (normalizeCursorModelVariantBaseId(props.model) ?? props.model)
+            : props.model))
+        : "";
 
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
-          value={activeProvider === provider ? props.model : ""}
+          value={selectedModelValue}
           onValueChange={(value) => handleModelChange(provider, value)}
         >
           <ProviderModelOptionGroupList
             groupedOptions={groupedOptions}
             provider={provider}
-            activeModel={props.model}
+            activeModel={selectedModelValue || props.model}
             isSearching={normalizedModelSearchQuery.length > 0}
             favoriteProvider={favoriteProvider}
             favoriteModelSlugSet={favoriteModelSlugSet}

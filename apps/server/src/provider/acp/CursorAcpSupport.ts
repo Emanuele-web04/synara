@@ -624,10 +624,11 @@ function cursorModelOptionsFromCliModelId(model: string | null | undefined): Cur
 
   const lower = trimmed.toLowerCase();
   const reasoningEffort = parseCursorCliReasoningEffort(lower);
+  const tokens = lower.split("-").filter((token) => token.length > 0);
   return {
     ...(reasoningEffort ? { reasoningEffort } : {}),
-    ...(lower.endsWith("-fast") ? { fastMode: true } : {}),
-    ...(lower.includes("-thinking") ? { thinking: true } : {}),
+    ...(tokens.includes("fast") ? { fastMode: true } : {}),
+    ...(tokens.includes("thinking") ? { thinking: true } : {}),
     ...(isCursorCliOneMillionContextModel(lower) ? { contextWindow: "1m" } : {}),
   };
 }

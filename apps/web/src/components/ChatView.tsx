@@ -520,7 +520,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -2055,7 +2055,7 @@ export default function ChatView({
     () =>
       showExpandedCursorModelVariants
         ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
+        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
     [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
   );
   const cursorModelDiscoveryEnabled =

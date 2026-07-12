@@ -64,7 +64,8 @@ export const FEATURE_FLAGS: readonly FeatureFlag[] = [
     id: "show-expanded-cursor-model-variants",
     kind: "toggle",
     label: "Show Cursor model variants",
-    description: "Show every Cursor CLI model variant as a separate picker row.",
+    description:
+      "Show every Cursor CLI trait variant as its own picker row instead of collapsing to a base model with reasoning/fast selectors.",
     defaultEnabled: DEFAULT_FEATURE_FLAG_STATE["show-expanded-cursor-model-variants"],
   },
 ];

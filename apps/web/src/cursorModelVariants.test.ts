@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canonicalizeCursorModelSelection,
   collapseCursorModelVariants,
+  cursorModelOptionsFromVariantSlug,
   mergeCursorModelVariantsWithBaseControls,
   normalizeCursorModelVariantBaseId,
 } from "./cursorModelVariants";
@@ -16,6 +18,52 @@ describe("normalizeCursorModelVariantBaseId", () => {
       "claude-opus-4-6",
     );
     expect(normalizeCursorModelVariantBaseId("claude-5-sonnet-max-fast")).toBe("claude-sonnet-5");
+    expect(normalizeCursorModelVariantBaseId("grok-4-5-fast-high")).toBe("grok-4-5");
+    expect(normalizeCursorModelVariantBaseId("grok-4.5-high-fast")).toBe("grok-4.5");
+  });
+});
+
+describe("cursorModelOptionsFromVariantSlug", () => {
+  it("extracts reasoning and fast traits from Grok CLI variant ids", () => {
+    expect(cursorModelOptionsFromVariantSlug("grok-4-5-fast-high")).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    expect(cursorModelOptionsFromVariantSlug("grok-4.5-high-fast")).toEqual({
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+  });
+});
+
+describe("canonicalizeCursorModelSelection", () => {
+  it("rewrites Grok Fast High variants onto a base model with selectors", () => {
+    expect(
+      canonicalizeCursorModelSelection({
+        model: "grok-4-5-fast-high",
+      }),
+    ).toEqual({
+      model: "grok-4-5",
+      options: {
+        reasoningEffort: "high",
+        fastMode: true,
+      },
+    });
+  });
+
+  it("keeps explicit options over slug-inferred traits", () => {
+    expect(
+      canonicalizeCursorModelSelection({
+        model: "grok-4-5-fast-high",
+        options: { reasoningEffort: "medium", fastMode: false },
+      }),
+    ).toEqual({
+      model: "grok-4-5",
+      options: {
+        reasoningEffort: "medium",
+        fastMode: false,
+      },
+    });
   });
 });
 
@@ -99,6 +147,51 @@ describe("collapseCursorModelVariants", () => {
           { value: "1m", label: "1M" },
         ],
         defaultContextWindow: "272k",
+      },
+    ]);
+  });
+
+  it("collapses Grok Fast High CLI variants like GPT and Claude", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "grok-4-5-fast-high",
+          name: "Grok 4.5 Fast High",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "grok-4-5-fast-medium",
+          name: "Grok 4.5 Fast Medium",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "medium", label: "Medium" }],
+          defaultReasoningEffort: "medium",
+        },
+        {
+          slug: "grok-4-5-low",
+          name: "Grok 4.5 Low",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "grok-4-5",
+        name: "Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [
+          { value: "high", label: "High", isDefault: true },
+          { value: "medium", label: "Medium" },
+          { value: "low", label: "Low" },
+        ],
+        defaultReasoningEffort: "high",
+        supportsFastMode: true,
       },
     ]);
   });
