@@ -1,10 +1,12 @@
-import { ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import { MessageId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
   buildCheckpointRevertConfirmMessage,
   buildComposerMenuSelectionKey,
+  buildRevertTurnCountByUserMessageId,
+  checkpointRevertCommandAfterConfirm,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -13,6 +15,7 @@ import {
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
+  planCheckpointRevertFromCheckpointTurnCount,
   promptStillMatchesActiveHistoryBrowse,
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
@@ -1621,22 +1624,102 @@ describe("resolveQueuedSteerGateTransition", () => {
 });
 
 describe("buildCheckpointRevertConfirmMessage", () => {
-  it("asks before clearing the whole conversation on turn 0", () => {
+  it("asks before clearing the whole conversation on turn 0 without promising a guaranteed baseline", () => {
     expect(buildCheckpointRevertConfirmMessage(0)).toBe(
       [
-        "Clear this entire conversation and restore project files to how they were before this thread started?",
+        "Clear this conversation and restore the entire workspace to this thread's baseline?",
+        "All later workspace changes may be discarded, including changes made outside this conversation and untracked files.",
         "This cannot be undone.",
       ].join("\n"),
     );
   });
 
-  it("names the keep-until turn for partial reverts", () => {
+  it("warns that later-turn revert discards workspace-wide changes, not thread-only files", () => {
     expect(buildCheckpointRevertConfirmMessage(2)).toBe(
       [
-        "Revert this conversation to turn 2?",
-        "This discards newer messages and file changes in this thread.",
+        "Revert this conversation and workspace to the end of turn 2?",
+        "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
         "This cannot be undone.",
       ].join("\n"),
     );
+  });
+});
+
+describe("planCheckpointRevertFromCheckpointTurnCount", () => {
+  it("maps checkpoint count 1 to target 0 with the clear-conversation warning", () => {
+    const plan = planCheckpointRevertFromCheckpointTurnCount(1);
+    expect(plan.targetTurnCount).toBe(0);
+    expect(plan.confirmMessage).toBe(buildCheckpointRevertConfirmMessage(0));
+    expect(plan.commandIfConfirmed(false)).toBeNull();
+    expect(plan.commandIfConfirmed(true)).toEqual({
+      type: "thread.checkpoint.revert",
+      turnCount: 0,
+    });
+  });
+
+  it("maps checkpoint count 3 to target 2 with the partial-revert warning", () => {
+    const plan = planCheckpointRevertFromCheckpointTurnCount(3);
+    expect(plan.targetTurnCount).toBe(2);
+    expect(plan.confirmMessage).toBe(buildCheckpointRevertConfirmMessage(2));
+    expect(plan.commandIfConfirmed(false)).toBeNull();
+    expect(plan.commandIfConfirmed(true)).toEqual({
+      type: "thread.checkpoint.revert",
+      turnCount: 2,
+    });
+  });
+});
+
+describe("buildRevertTurnCountByUserMessageId", () => {
+  it("maps the corresponding user message to the checkpoint-derived revert target", () => {
+    const userMessageId = MessageId.makeUnsafe("user-1");
+    const assistantMessageId = MessageId.makeUnsafe("assistant-1");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const map = buildRevertTurnCountByUserMessageId({
+      timelineEntries: [
+        {
+          id: "u1",
+          kind: "message",
+          createdAt: "2026-03-17T19:12:27.000Z",
+          message: {
+            id: userMessageId,
+            role: "user",
+            text: "edit",
+            createdAt: "2026-03-17T19:12:27.000Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "a1",
+          kind: "message",
+          createdAt: "2026-03-17T19:12:29.000Z",
+          message: {
+            id: assistantMessageId,
+            role: "assistant",
+            text: "done",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            streaming: false,
+          },
+        },
+      ],
+      turnDiffSummaryByAssistantMessageId: new Map([
+        [
+          assistantMessageId,
+          {
+            turnId,
+            completedAt: "2026-03-17T19:12:30.000Z",
+            assistantMessageId,
+            files: [],
+            checkpointTurnCount: 1,
+          },
+        ],
+      ]),
+      inferredCheckpointTurnCountByTurnId: {},
+    });
+
+    expect(map.get(userMessageId)).toBe(0);
+    expect(checkpointRevertCommandAfterConfirm(map.get(userMessageId)!, true)).toEqual({
+      type: "thread.checkpoint.revert",
+      turnCount: 0,
+    });
   });
 });

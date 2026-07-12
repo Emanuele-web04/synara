@@ -174,6 +174,8 @@ import {
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
   buildCheckpointRevertConfirmMessage,
+  buildRevertTurnCountByUserMessageId,
+  checkpointRevertCommandAfterConfirm,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -3046,38 +3048,15 @@ export default function ChatView({
       messages: messagesForDiffAnchoring,
     });
   }, [turnDiffSummaries, timelineMessages]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  const revertTurnCountByUserMessageId = useMemo(
+    () =>
+      buildRevertTurnCountByUserMessageId({
+        timelineEntries,
+        turnDiffSummaryByAssistantMessageId,
+        inferredCheckpointTurnCountByTurnId,
+      }),
+    [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId],
+  );
 
   const threadWorkspaceCwd = activeProject
     ? resolveSharedThreadWorkspaceCwd({
@@ -6238,7 +6217,8 @@ export default function ChatView({
         return;
       }
       const confirmed = await api.dialogs.confirm(buildCheckpointRevertConfirmMessage(turnCount));
-      if (!confirmed) {
+      const command = checkpointRevertCommandAfterConfirm(turnCount, confirmed);
+      if (!command) {
         return;
       }
 
@@ -6246,10 +6226,9 @@ export default function ChatView({
       setThreadError(activeThread.id, null);
       try {
         await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
+          ...command,
           commandId: newCommandId(),
           threadId: activeThread.id,
-          turnCount,
           createdAt: new Date().toISOString(),
         });
       } catch (err) {
