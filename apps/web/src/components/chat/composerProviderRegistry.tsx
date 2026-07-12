@@ -19,6 +19,7 @@ import {
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
+  normalizeDroidModelOptions,
   normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
@@ -197,6 +198,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeGrokModelOptions(model, providerOptions);
       break;
     }
+    case "droid": {
+      const providerOptions = modelOptions?.droid;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeDroidModelOptions(model, providerOptions);
+      break;
+    }
     case "kilo":
     case "opencode": {
       const providerOptions = provider === "kilo" ? modelOptions?.kilo : modelOptions?.opencode;
@@ -285,6 +292,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("grok", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("grok", input),
+  },
+  droid: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("droid", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("droid", input),
   },
   kilo: {
     getState: (input) => getProviderStateFromCapabilities(input),

@@ -13,6 +13,8 @@ import type {
   CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
+  DroidModelOptions,
+  DroidModelSelection,
   GrokModelOptions,
   GrokModelSelection,
   KiloModelSelection,
@@ -30,6 +32,7 @@ export type ProviderOptions = ProviderModelOptions[ProviderKind];
 export interface ProviderModelOption {
   slug: string;
   name: string;
+  description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
 }
@@ -106,6 +109,7 @@ export function mergeDynamicModelOptions(input: {
   dynamicModels: ReadonlyArray<{
     slug: string;
     name?: string | null | undefined;
+    description?: string | null | undefined;
     upstreamProviderId?: string | null | undefined;
     upstreamProviderName?: string | null | undefined;
   }>;
@@ -144,6 +148,7 @@ export function mergeDynamicModelOptions(input: {
         rawName.toLowerCase() !== normalizedSlug.toLowerCase()
           ? rawName
           : displayNameFallback),
+      ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),
       ...(dynamicModel.upstreamProviderId?.trim()
         ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
         : {}),
@@ -171,6 +176,12 @@ export function mergeDynamicModelOptions(input: {
       : normalizedDynamicOptions;
 
   return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
+}
+
+/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
+export function providerModelCostMultiplierLabel(description?: string): string | null {
+  const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
+  return multiplier ? `${multiplier}×` : null;
 }
 
 export function groupProviderModelOptions(
@@ -286,6 +297,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as GrokModelOptions;
   }
+  if (provider === "droid") {
+    return {
+      ...(modelOptions as DroidModelOptions | undefined),
+      ...patch,
+    } as DroidModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -338,6 +355,11 @@ export function buildModelSelection(
   model: string,
   options?: GrokModelOptions | null | undefined,
 ): GrokModelSelection;
+export function buildModelSelection(
+  provider: "droid",
+  model: string,
+  options?: DroidModelOptions | null | undefined,
+): DroidModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -402,6 +424,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GrokModelOptions,
+          }
+        : { provider, model };
+    case "droid":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DroidModelOptions,
           }
         : { provider, model };
     case "kilo":
