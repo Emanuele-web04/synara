@@ -9,6 +9,7 @@ import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
+import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -75,20 +76,6 @@ function getNavigatorPlatform(): string {
   return [navigatorLike?.platform, navigatorLike?.userAgentData?.platform]
     .filter(Boolean)
     .join(" ");
-}
-
-function getLocalFoldersGroupLabel(homeDir: string | null): string {
-  const platformHints = `${homeDir ?? ""} ${getNavigatorPlatform()}`;
-  if (/^(?:[a-z]:\\|\\\\)/i.test(homeDir ?? "") || /\bwin/i.test(platformHints)) {
-    return "Folders on this PC";
-  }
-  if (
-    /^\/Users\//i.test(homeDir ?? "") ||
-    /\b(?:mac|darwin|iphone|ipad|ipod)\b/i.test(platformHints)
-  ) {
-    return "Folders on this Mac";
-  }
-  return "Folders on this System";
 }
 
 export const ProjectPicker = memo(function ProjectPicker({
@@ -186,7 +173,10 @@ export const ProjectPicker = memo(function ProjectPicker({
       }))
       .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
   }, [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode]);
-  const localFoldersGroupLabel = useMemo(() => getLocalFoldersGroupLabel(homeDir), [homeDir]);
+  const localFoldersGroupLabel = useMemo(
+    () => getLocalFoldersGroupLabel(homeDir, getNavigatorPlatform()),
+    [homeDir],
+  );
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
   const filteredActiveFolderOptions = useMemo(() => {
