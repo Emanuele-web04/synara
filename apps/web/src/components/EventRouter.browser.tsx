@@ -25,6 +25,7 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
+import { useTerminalStateStore } from "../terminalStateStore";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -204,7 +205,6 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   }
   if (tag === ORCHESTRATION_WS_METHODS.repairState) {
     repairStateCallCount += 1;
-    console.log("[resolveWsRpc repairState]", repairStateCallCount, repairStateDeferred);
     if (repairStateDeferred) {
       return "deferred";
     }
@@ -372,7 +372,6 @@ async function mountApp(options?: {
 }
 
 function sendThreadEventPush(event: OrchestrationEvent) {
-  console.log("[sendThreadEventPush]", event.sequence, event.eventId, event.aggregateId);
   if (!wsClient) {
     throw new Error("WebSocket client not connected");
   }
@@ -917,6 +916,7 @@ describe("EventRouter scoped orchestration sync", () => {
       } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
       sendThreadEventPush(bufferedEvent);
+      sendThreadSnapshotPush(THREAD_ID, 1, getThreadDetailFromFixtureSnapshot(THREAD_ID));
 
       let thread;
       await vi.waitFor(
@@ -1034,16 +1034,17 @@ describe("EventRouter scoped orchestration sync", () => {
           (thread) => thread.id === draftThreadId,
         )!,
       });
+      sendThreadSnapshotPush(draftThreadId, 2, getThreadDetailFromFixtureSnapshot(draftThreadId));
 
       await vi.waitFor(
         () => {
           expect(useStore.getState().threads.some((thread) => thread.id === draftThreadId)).toBe(
             true,
           );
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(1);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(2);
+          ).toBe(1);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },
@@ -1228,7 +1229,7 @@ describe("EventRouter scoped orchestration sync", () => {
         await vi.waitFor(
           () => {
             const state = useStore.getState();
-            expect(repairStateCallCount).toBeGreaterThanOrEqual(3);
+            expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
             expect(state.threadIds).toContain(THREAD_ID);
             expect(state.threads.length).toBe(0);
             expect(state.projects.length).toBe(0);
@@ -1312,6 +1313,207 @@ describe("EventRouter scoped orchestration sync", () => {
         expect(state.threadIds).toContain(THREAD_ID);
         expect(state.threads.length).toBe(0);
         expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("rejects a stale detail snapshot after a newer detail fence is established", async () => {
+      const thread = createSnapshot().threads[0]!;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, thread);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 10, {
+          ...thread,
+          title: "stale regression",
+          messages: [],
+        });
+
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+        const state = useStore.getState();
+        expect(state.threadIds).toContain(THREAD_ID);
+        expect(getThreadFromState(state, THREAD_ID)?.title).toBe("Root test thread");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("does not restart the thread stream for a duplicate subscription request", async () => {
+      delayNextThreadSnapshot = true;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
+
+        sendShellEventPush({
+          kind: "thread-upserted",
+          sequence: 2,
+          thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+        });
+
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("replays detail events emitted while the first thread snapshot is pending", async () => {
+      delayNextThreadSnapshot = true;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadEventPush({
+          sequence: 2,
+          eventId: EventId.makeUnsafe("event-pending-replay"),
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          occurredAt: "2026-03-04T12:00:05.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId: THREAD_ID,
+            messageId: MessageId.makeUnsafe("msg-pending-replay"),
+            role: "assistant",
+            text: "pending replay rendered",
+            turnId: TurnId.makeUnsafe("turn-pending-replay"),
+            source: "native",
+            streaming: false,
+            createdAt: "2026-03-04T12:00:05.000Z",
+            updatedAt: "2026-03-04T12:00:05.000Z",
+          },
+        } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>);
+
+        sendThreadSnapshotPush(THREAD_ID, 1, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            const thread = getThreadFromState(state, THREAD_ID);
+            expect(
+              thread?.messages.some((message) => message.text === "pending replay rendered"),
+            ).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("applies an explicit thread removal at the same sequence as the detail fence", async () => {
+      const mounted = await mountApp();
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threads.some((thread) => thread.id === THREAD_ID)).toBe(
+              true,
+            );
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendShellEventPush({
+          kind: "thread-removed",
+          sequence: 12,
+          threadId: THREAD_ID,
+        });
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).not.toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("retains terminal state for a thread preserved by a newer detail fence", async () => {
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+
+        sendShellSnapshotPush({
+          snapshotSequence: 10,
+          projects: [],
+          threads: [],
+          updatedAt: NOW_ISO,
+        });
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            expect(state.threads.length).toBe(0);
+            expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        expect(useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]).toBeDefined();
       } finally {
         await mounted.cleanup();
       }

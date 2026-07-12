@@ -256,6 +256,11 @@ describe("shouldSkipShellThreadMutation", () => {
     expect(shouldSkipShellThreadMutation(3, 3)).toBe(true);
     expect(shouldSkipShellThreadMutation(4, 3)).toBe(true);
   });
+
+  it("allows removal when detail fence is at the same sequence as the event", () => {
+    expect(shouldSkipShellThreadMutation(3, 3, "thread-removed")).toBe(false);
+    expect(shouldSkipShellThreadMutation(4, 3, "thread-removed")).toBe(true);
+  });
 });
 
 describe("shellRefreshEpoch", () => {

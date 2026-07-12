@@ -75,7 +75,7 @@ import {
   subscribeRetainedThreadDetailIdChanges,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
-import { getThreadFromState } from "../threadDerivation";
+import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadSettingsRoute } from "../hooks/usePreloadSettingsRoute";
@@ -880,16 +880,17 @@ function EventRouter() {
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
+    const pendingThreadReplayTargetById = new Map<ThreadId, number>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadReplayRequestInFlight = new Set<ThreadId>();
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
-      console.log("[beginThreadSubscription]", threadId);
       // Keep the detail fence so older shell/repair snapshots do not overwrite
       // a newer thread detail we already observed.
       pendingThreadEventsById.set(threadId, []);
-      threadSnapshotRequestInFlight.delete(threadId);
+      pendingThreadReplayTargetById.delete(threadId);
+      threadSnapshotRequestInFlight.add(threadId);
     };
 
     // Draft routes can subscribe before the server thread exists. Once the shell
@@ -904,7 +905,6 @@ function EventRouter() {
         await api.orchestration.subscribeThread({ threadId });
       } catch {
         // Keep the pending buffer intact and retry on the next shell/detail update.
-      } finally {
         threadSnapshotRequestInFlight.delete(threadId);
       }
     };
@@ -926,11 +926,16 @@ function EventRouter() {
       if (event.kind === "thread-upserted" || event.kind === "thread-removed") {
         const threadId = event.kind === "thread-upserted" ? event.thread.id : event.threadId;
         const detailSequence = threadSnapshotSequenceById.get(threadId);
-        if (shouldSkipShellThreadMutation(detailSequence, event.sequence)) {
+        if (shouldSkipShellThreadMutation(detailSequence, event.sequence, event.kind)) {
           return false;
         }
       }
       applyShellEvent(event);
+      if (event.kind === "thread-removed") {
+        // Treat the removal as a detail fence so a lagging detail snapshot at
+        // the same sequence does not re-apply the removed thread.
+        threadSnapshotSequenceById.set(event.threadId, event.sequence);
+      }
       return true;
     };
 
@@ -946,14 +951,6 @@ function EventRouter() {
     };
 
     const applyShellSnapshot = (snapshot: OrchestrationShellSnapshot): boolean => {
-      console.log(
-        "[applyShellSnapshot]",
-        snapshot.snapshotSequence,
-        snapshot.projects.length,
-        snapshot.threads.length,
-        "threadSnapshotSequenceById",
-        [...threadSnapshotSequenceById.entries()],
-      );
       if (disposed) {
         return false;
       }
@@ -1084,7 +1081,6 @@ function EventRouter() {
     bumpShellRefreshEpoch();
 
     const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
-      console.log("[reconcileThreadSubscriptions]", threadIds);
       const nextThreadIds = new Set(threadIds);
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
       const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
@@ -1095,14 +1091,19 @@ function EventRouter() {
         subscribedThreadIds.add(threadId);
       }
       await Promise.all(
-        additions.map((threadId) =>
-          api.orchestration.subscribeThread({ threadId }).catch(() => undefined),
-        ),
+        additions.map(async (threadId) => {
+          try {
+            await api.orchestration.subscribeThread({ threadId });
+          } catch {
+            threadSnapshotRequestInFlight.delete(threadId);
+          }
+        }),
       );
 
       for (const threadId of removals) {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
+        pendingThreadReplayTargetById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
         threadReplayRequestInFlight.delete(threadId);
         subscribedThreadIds.delete(threadId);
@@ -1164,6 +1165,8 @@ function EventRouter() {
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
+      pendingThreadReplayTargetById.clear();
+      threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
@@ -1173,8 +1176,9 @@ function EventRouter() {
       const draftThreadIds = Object.keys(
         useComposerDraftStore.getState().draftThreadsByThreadId,
       ) as ThreadId[];
+      const state = useStore.getState();
       const activeThreadIds = collectActiveTerminalThreadIds({
-        snapshotThreads: useStore.getState().threads.map((thread) => ({
+        snapshotThreads: getThreadsFromState(state).map((thread) => ({
           id: thread.id,
           deletedAt: null,
           archivedAt: thread.archivedAt ?? null,
@@ -1194,16 +1198,6 @@ function EventRouter() {
     };
 
     const flushPendingDomainEvents = () => {
-      console.log(
-        "[flushPendingDomainEvents]",
-        pendingDomainEvents.length,
-        pendingDomainEvents.map((event) => [
-          event.type,
-          event.sequence,
-          (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
-          (event as { payload?: { text?: string } }).payload?.text,
-        ]),
-      );
       if (pendingDomainEvents.length > 0) {
         applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
         pendingDomainEvents = [];
@@ -1268,13 +1262,6 @@ function EventRouter() {
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
-      console.log(
-        "[queueDomainEvent]",
-        event.type,
-        event.sequence,
-        (event as { payload?: { messageId?: string; text?: string } }).payload?.messageId,
-        (event as { payload?: { text?: string } }).payload?.text,
-      );
       pendingDomainEvents.push(event);
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
@@ -1303,28 +1290,42 @@ function EventRouter() {
       domainEventFlushThrottler.maybeExecute();
     };
 
+    const recordThreadReplayTarget = (threadId: ThreadId, targetSequence: number) => {
+      const current = pendingThreadReplayTargetById.get(threadId);
+      if (current === undefined || targetSequence > current) {
+        pendingThreadReplayTargetById.set(threadId, targetSequence);
+      }
+    };
+
     const replayThreadEvents = async (
       threadId: ThreadId,
       targetSequence?: number,
     ): Promise<void> => {
+      if (targetSequence !== undefined) {
+        recordThreadReplayTarget(threadId, targetSequence);
+      }
       if (disposed || threadReplayRequestInFlight.has(threadId)) {
         return;
       }
       const fromSequence = threadSnapshotSequenceById.get(threadId);
-      if (
-        fromSequence === undefined ||
-        (targetSequence !== undefined && fromSequence >= targetSequence)
-      ) {
+      if (fromSequence === undefined) {
         return;
       }
+      const target = pendingThreadReplayTargetById.get(threadId);
+      if (target === undefined) {
+        return;
+      }
+      if (fromSequence >= target) {
+        pendingThreadReplayTargetById.delete(threadId);
+        return;
+      }
+      pendingThreadReplayTargetById.delete(threadId);
       threadReplayRequestInFlight.add(threadId);
       try {
         const replayedEvents = await api.orchestration.replayEvents(fromSequence);
         for (const event of replayedEvents
           .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
-          .filter(
-            (candidate) => targetSequence === undefined || candidate.sequence <= targetSequence,
-          )
+          .filter((candidate) => candidate.sequence <= target)
           .toSorted((left, right) => left.sequence - right.sequence)) {
           const latestThreadSequence = threadSnapshotSequenceById.get(threadId) ?? fromSequence;
           if (event.sequence <= latestThreadSequence) {
@@ -1335,6 +1336,14 @@ function EventRouter() {
         }
       } finally {
         threadReplayRequestInFlight.delete(threadId);
+        const nextTarget = pendingThreadReplayTargetById.get(threadId);
+        if (
+          nextTarget !== undefined &&
+          nextTarget > (threadSnapshotSequenceById.get(threadId) ?? fromSequence)
+        ) {
+          pendingThreadReplayTargetById.delete(threadId);
+          void replayThreadEvents(threadId, nextTarget);
+        }
       }
     };
 
@@ -1370,57 +1379,33 @@ function EventRouter() {
       if (mutationApplied && item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
       }
-      if (
-        item.kind === "thread-upserted" &&
-        subscribedThreadIds.has(item.thread.id) &&
-        !threadSnapshotSequenceById.has(item.thread.id)
-      ) {
-        void requestThreadSnapshot(item.thread.id);
-      }
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
+        if (!threadSnapshotSequenceById.has(item.thread.id)) {
+          void requestThreadSnapshot(item.thread.id);
+        }
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
-      console.log(
-        "[onThreadEvent]",
-        item.kind,
-        (
-          item as {
-            event?: {
-              sequence: number;
-              type: string;
-              payload?: { messageId?: string; text?: string };
-            };
-          }
-        ).event?.sequence,
-        (item as { event?: { payload?: { messageId?: string; text?: string } } }).event?.payload
-          ?.messageId,
-        (item as { event?: { payload?: { text?: string } } }).event?.payload?.text,
-      );
       if (item.kind === "snapshot") {
-        console.log("[onThreadEvent snapshot] snapshotSequence", item.snapshot.snapshotSequence);
         const threadId = item.snapshot.thread.id;
-        const currentSequence = threadSnapshotSequenceById.get(threadId) ?? -1;
-        const nextSequence = Math.max(currentSequence, item.snapshot.snapshotSequence);
-        threadSnapshotSequenceById.set(threadId, nextSequence);
+        const currentSequence = threadSnapshotSequenceById.get(threadId);
+        if (currentSequence !== undefined && item.snapshot.snapshotSequence <= currentSequence) {
+          // Stale or duplicate detail snapshot: keep the newer detail fence and
+          // do not regress the store.
+          return;
+        }
+        threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         threadSnapshotRequestInFlight.delete(threadId);
         syncServerThreadDetailHotPath(item.snapshot.thread);
         reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
         flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
+        void replayThreadEvents(threadId).catch(() => undefined);
         return;
       }
 
       const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
       const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
-      console.log(
-        "[onThreadEvent event] threadId",
-        threadId,
-        "latestThreadSequence",
-        latestThreadSequence,
-        "eventSequence",
-        item.event.sequence,
-      );
       if (latestThreadSequence === undefined) {
         const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
         appendBounded(pendingThreadEvents, item.event, PENDING_THREAD_EVENT_BUFFER_LIMIT);
@@ -1431,11 +1416,6 @@ function EventRouter() {
         return;
       }
       if (item.event.sequence <= latestThreadSequence) {
-        console.log(
-          "[onThreadEvent event] dropping sequence <= latest",
-          item.event.sequence,
-          latestThreadSequence,
-        );
         return;
       }
       threadSnapshotSequenceById.set(threadId, item.event.sequence);
@@ -1626,7 +1606,7 @@ function EventRouter() {
           if (!threadSnapshotSequenceById.has(threadId)) {
             void requestThreadSnapshot(threadId);
           } else {
-            void replayThreadEvents(threadId).catch(() => undefined);
+            void replayThreadEvents(threadId, Number.MAX_SAFE_INTEGER).catch(() => undefined);
           }
         }
       }
@@ -1754,19 +1734,8 @@ function DesktopProjectBootstrap() {
           threadSessionById: store.threadSessionById,
           threadTurnStateById: store.threadTurnStateById,
         });
-        console.log(
-          "[isStillNeeded repair-projects]",
-          kind,
-          "threadIds",
-          store.threadIds,
-          "threads",
-          store.threads.length,
-          "threadShellById",
-          Object.keys(store.threadShellById ?? {}),
-        );
         return kind === "repair-projects";
       },
-      onAttempt: (info) => console.log("[repair-projects attempt]", info),
       refresh: async () => {
         const lease = getRecoveryMutationLease();
         const api = readNativeApi();
@@ -1815,14 +1784,6 @@ function DesktopProjectBootstrap() {
           observedLiveThreadEvidence:
             hasClientLiveThreadEvidence(useStore.getState()) || snapshot.threads.length > 0,
         });
-        console.log(
-          "[repair-projects decision]",
-          decision.action,
-          "liveEvidence",
-          hasClientLiveThreadEvidence(useStore.getState()),
-          "snapshotThreads",
-          snapshot.threads.length,
-        );
         if (decision.action === "confirmed-empty") {
           return {
             applied: true,

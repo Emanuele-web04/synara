@@ -506,9 +506,7 @@ export class WsTransport {
   }
 
   private startThreadStream(client: RpcClientInstance, threadId: string, input: unknown): void {
-    console.log("[startThreadStream]", threadId);
     const key = `orchestration.thread:${threadId}`;
-    this.stopStream(key);
     const restartThread = () => {
       void this.getClient()
         .then((nextClient) => this.startThreadStream(nextClient, threadId, input))
@@ -529,20 +527,12 @@ export class WsTransport {
     listener: (event: T) => void,
     restart?: (() => void) | undefined,
   ): void {
-    console.log("[startStream]", key, this.streamCleanups.has(key));
     if (this.streamCleanups.has(key)) return;
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
     const cancel = this.runtime.runCallback(
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
-          console.log(
-            "[startStream onExit]",
-            key,
-            exit._tag,
-            Exit.isFailure(exit) ? "cause" : "",
-            Exit.isFailure(exit) ? causeToError(exit.cause).message : "",
-          );
           if (this.streamCleanups.get(key) === cancel) {
             this.streamCleanups.delete(key);
           }

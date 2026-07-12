@@ -4249,18 +4249,7 @@ export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModel
   ) {
     return removeThreadState(state, thread.id);
   }
-  const r = syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
-  console.log(
-    "[syncServerThreadDetailHotPath]",
-    thread.id,
-    "threadIds",
-    r.threadIds,
-    "threads",
-    r.threads.length,
-    "threadShellById",
-    Object.keys(r.threadShellById ?? {}),
-  );
-  return r;
+  return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
