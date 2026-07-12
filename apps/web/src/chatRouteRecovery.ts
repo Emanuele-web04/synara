@@ -24,8 +24,8 @@ function readModelHasProjectsOrThreads(snapshot: OrchestrationReadModel): boolea
   return snapshot.projects.length > 0 || snapshot.threads.length > 0;
 }
 
-function readModelHasThreads(snapshot: OrchestrationReadModel): boolean {
-  return snapshot.threads.length > 0;
+function readModelHasLiveThreads(snapshot: OrchestrationReadModel): boolean {
+  return snapshot.threads.some((thread) => thread.deletedAt == null);
 }
 
 export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
@@ -37,8 +37,9 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
 /**
  * Home/sidebar stuck case: projects hydrated, threads empty.
  * Only pulls shell + full snapshot; never repairState (projects-only rebuild).
- * Only syncs payloads that actually include threads, so a project-only response
- * cannot wipe a concurrent thread upsert.
+ * Only syncs payloads that actually include live threads, so a project-only or
+ * soft-deleted-only response cannot wipe a concurrent thread upsert or latch
+ * recovery as successful.
  */
 export async function refreshMissingThreadSnapshots(api: NativeApi | undefined): Promise<boolean> {
   if (!api) {
@@ -52,7 +53,7 @@ export async function refreshMissingThreadSnapshots(api: NativeApi | undefined):
   }
 
   const readModel = await api.orchestration.getSnapshot();
-  if (readModelHasThreads(readModel)) {
+  if (readModelHasLiveThreads(readModel)) {
     useStore.getState().syncServerReadModel(readModel);
     return true;
   }
@@ -82,7 +83,7 @@ export async function refreshEmptyRouteRestoreSnapshot(
   const readModel = await api.orchestration.getSnapshot();
   if (readModelHasProjectsOrThreads(readModel)) {
     useStore.getState().syncServerReadModel(readModel);
-    if (readModelHasThreads(readModel)) {
+    if (readModelHasLiveThreads(readModel)) {
       return true;
     }
     // A project-only read model can still be repaired into thread projections.
@@ -92,7 +93,7 @@ export async function refreshEmptyRouteRestoreSnapshot(
   if (readModelHasProjectsOrThreads(repairedReadModel)) {
     useStore.getState().syncServerReadModel(repairedReadModel);
   }
-  if (readModelHasThreads(repairedReadModel)) {
+  if (readModelHasLiveThreads(repairedReadModel)) {
     return true;
   }
 
