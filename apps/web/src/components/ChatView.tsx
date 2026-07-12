@@ -6258,42 +6258,57 @@ export default function ChatView({
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
       const commandId = newCommandId();
-      let cancelCompletionWait: (() => void) | undefined;
+      if (scope === "files") {
+        const completion = waitForCheckpointFileRestore({
+          requestCommandId: commandId,
+          subscribe: api.orchestration.onDomainEvent,
+        });
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "thread.checkpoint.files.restore",
+            commandId,
+            threadId: activeThread.id,
+            messageId: messageId!,
+            turnCount,
+            createdAt: new Date().toISOString(),
+          });
+        } catch {
+          // The request may have been accepted before the transport failed.
+          // Keep the destructive-operation gate closed until a durable terminal
+          // event arrives; reconnecting is the explicit escape hatch.
+          setThreadError(
+            activeThread.id,
+            "File restore status is indeterminate. Wait for completion or reconnect before continuing.",
+          );
+        }
+        try {
+          await completion.promise;
+          setThreadError(activeThread.id, null);
+        } catch (err) {
+          setThreadError(
+            activeThread.id,
+            err instanceof Error ? err.message : "Failed to restore file changes.",
+          );
+        }
+        completion.cancel();
+        setIsRevertingCheckpoint(false);
+        return;
+      }
+
       try {
-        const completion =
-          scope === "files"
-            ? waitForCheckpointFileRestore({
-                requestCommandId: commandId,
-                subscribe: api.orchestration.onDomainEvent,
-              })
-            : null;
-        cancelCompletionWait = completion?.cancel;
-        await api.orchestration.dispatchCommand(
-          scope === "files"
-            ? {
-                type: "thread.checkpoint.files.restore",
-                commandId,
-                threadId: activeThread.id,
-                messageId: messageId!,
-                turnCount,
-                createdAt: new Date().toISOString(),
-              }
-            : {
-                type: "thread.checkpoint.revert",
-                commandId,
-                threadId: activeThread.id,
-                turnCount,
-                createdAt: new Date().toISOString(),
-              },
-        );
-        await completion?.promise;
+        await api.orchestration.dispatchCommand({
+          type: "thread.checkpoint.revert",
+          commandId,
+          threadId: activeThread.id,
+          turnCount,
+          createdAt: new Date().toISOString(),
+        });
       } catch (err) {
         setThreadError(
           activeThread.id,
           err instanceof Error ? err.message : "Failed to revert thread state.",
         );
       }
-      cancelCompletionWait?.();
       setIsRevertingCheckpoint(false);
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],

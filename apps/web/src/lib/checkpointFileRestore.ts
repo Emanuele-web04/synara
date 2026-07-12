@@ -1,18 +1,16 @@
 import type { CommandId, OrchestrationEvent } from "@synara/contracts";
 
-const FILE_RESTORE_COMPLETION_TIMEOUT_MS = 120_000;
-
 export function waitForCheckpointFileRestore(input: {
   requestCommandId: CommandId;
   subscribe: (listener: (event: OrchestrationEvent) => void) => () => void;
-  timeoutMs?: number;
 }): { promise: Promise<void>; cancel: () => void } {
+  // Never release the caller's mutation gate based on elapsed time. The server
+  // serializes checkpoint work, so a valid restore can wait behind long captures;
+  // only its correlated durable success/failure proves it is safe to continue.
   let unsubscribe = () => {};
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
 
   const cleanup = () => {
-    if (timeoutId !== undefined) clearTimeout(timeoutId);
     unsubscribe();
   };
   const promise = new Promise<void>((resolve, reject) => {
@@ -32,11 +30,6 @@ export function waitForCheckpointFileRestore(input: {
         resolve();
       }
     });
-    timeoutId = setTimeout(() => {
-      settled = true;
-      cleanup();
-      reject(new Error("Timed out waiting for file changes to be restored."));
-    }, input.timeoutMs ?? FILE_RESTORE_COMPLETION_TIMEOUT_MS);
   });
 
   return {

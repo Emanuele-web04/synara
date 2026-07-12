@@ -15,7 +15,6 @@ function makeHarness() {
       listener = next;
       return () => {};
     },
-    timeoutMs: 10,
   });
   const base = {
     sequence: 1,
@@ -61,14 +60,29 @@ describe("waitForCheckpointFileRestore", () => {
     await expect(failure.wait.promise).rejects.toThrow("Checkpoint is unavailable.");
   });
 
-  it("rejects when no terminal event arrives before the timeout", async () => {
+  it("stays pending regardless of queue time until a terminal event arrives", async () => {
     vi.useFakeTimers();
     const harness = makeHarness();
-    const rejection = expect(harness.wait.promise).rejects.toThrow(
-      "Timed out waiting for file changes to be restored.",
-    );
-    await vi.advanceTimersByTimeAsync(10);
-    await rejection;
+    let settled = false;
+    void harness.wait.promise.finally(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(settled).toBe(false);
+
+    harness.listener({
+      ...harness.base,
+      type: "thread.checkpoint-files-restored",
+      payload: {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("message-1"),
+        turnCount: 0,
+        requestCommandId,
+      },
+    });
+    await expect(harness.wait.promise).resolves.toBeUndefined();
+    expect(settled).toBe(true);
     vi.useRealTimers();
   });
 });
