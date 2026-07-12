@@ -25,6 +25,8 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
@@ -602,7 +604,7 @@ describe("voice helpers", () => {
 });
 
 describe("environment panel visibility", () => {
-  it("opens normal chat threads by default", () => {
+  it("keeps normal chat threads closed by default unless the setting opts in", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
@@ -610,16 +612,35 @@ describe("environment panel visibility", () => {
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
       }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
+      }),
     ).toBe(true);
   });
 
-  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed even when setting is open", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -628,6 +649,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -636,6 +658,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: true,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
   });
@@ -657,6 +680,63 @@ describe("environment panel visibility", () => {
       resolveEnvironmentPanelOpen({
         defaultOpen: false,
         userPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("persists explicit toggles but keeps action-driven closes session-only", () => {
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: true, persist: true })).toEqual({
+      userPreferenceOpen: true,
+      settingsDefaultOpen: true,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: true })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: false,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: null,
+    });
+  });
+
+  it("resolves landing preferences on first send without changing non-landing state", () => {
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: true,
+        currentPreferenceOpen: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: false,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("clears an action-close override so default-open applies after first send", () => {
+    const actionClose = resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false });
+    const afterFirstSend = resolveEnvironmentPanelPreferenceAfterFirstSend({
+      isCenteredEmptyLanding: true,
+      settingsDefaultOpen: true,
+      currentPreferenceOpen: actionClose.userPreferenceOpen,
+    });
+
+    expect(actionClose.settingsDefaultOpen).toBeNull();
+    expect(afterFirstSend).toBeNull();
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        userPreferenceOpen: afterFirstSend,
       }),
     ).toBe(true);
   });

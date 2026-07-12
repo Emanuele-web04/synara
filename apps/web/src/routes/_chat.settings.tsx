@@ -1715,6 +1715,15 @@ function SettingsRouteView() {
       <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
         <SettingsSection title="Environment panel">
           {renderBooleanSettingRow({
+            settingKey: "environmentPanelDefaultOpen",
+            title: "Open by default",
+            description:
+              "Open the chat Environment panel automatically on normal threads. When off, the panel stays closed until you open it. Your last open/close also updates this preference.",
+            resetLabel: "environment panel default open",
+            ariaLabel: "Open the Environment panel by default on normal threads",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
             description: "Show the provider usage row in the chat Environment panel.",
