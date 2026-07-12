@@ -4039,6 +4039,9 @@ export function applyOrchestrationEventsHotPath(
 export function syncServerShellSnapshot(
   state: AppState,
   snapshot: OrchestrationShellSnapshot,
+  options?: {
+    preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+  },
 ): AppState {
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
@@ -4053,13 +4056,41 @@ export function syncServerShellSnapshot(
   );
   const projects = mapProjectsFromShellSnapshot(snapshotProjects, state.projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
+  const preserveIds = !options?.preserveDetailForThreadIds
+    ? null
+    : options.preserveDetailForThreadIds instanceof Set
+      ? options.preserveDetailForThreadIds
+      : new Set(options.preserveDetailForThreadIds);
+
+  // Hot-path detail can outrank an older shell for session/turn; seed those maps
+  // before rebuild so sidebar hydration does not clobber newer live detail.
+  const preservedSessionById: Record<ThreadId, ThreadSession | null> = {};
+  const preservedTurnStateById: Record<ThreadId, ThreadTurnState> = {};
+  if (preserveIds && preserveIds.size > 0) {
+    const previousSessions = state.threadSessionById ?? EMPTY_THREAD_SESSION_BY_ID;
+    const previousTurns = state.threadTurnStateById ?? EMPTY_THREAD_TURN_STATE_BY_ID;
+    for (const threadId of nextThreadIds) {
+      if (!preserveIds.has(threadId)) {
+        continue;
+      }
+      if (Object.hasOwn(previousSessions, threadId)) {
+        preservedSessionById[threadId] = previousSessions[threadId] ?? null;
+      }
+      if (Object.hasOwn(previousTurns, threadId)) {
+        const turnState = previousTurns[threadId];
+        if (turnState) {
+          preservedTurnStateById[threadId] = turnState;
+        }
+      }
+    }
+  }
 
   let normalizedState: AppState = {
     ...state,
     threadIds: [],
     threadShellById: {},
-    threadSessionById: {},
-    threadTurnStateById: {},
+    threadSessionById: preservedSessionById,
+    threadTurnStateById: preservedTurnStateById,
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
@@ -4078,10 +4109,16 @@ export function syncServerShellSnapshot(
 
   for (const thread of snapshotThreads) {
     const previousThread = getThreadFromState(state, thread.id);
-    normalizedState = writeThreadShellProjection(
-      normalizedState,
-      normalizeThreadShellSnapshot(thread, previousThread),
-    );
+    const normalized = normalizeThreadShellSnapshot(thread, previousThread);
+    normalizedState = writeThreadShellProjection(normalizedState, {
+      shell: normalized.shell,
+      session: Object.hasOwn(preservedSessionById, thread.id)
+        ? (preservedSessionById[thread.id] ?? null)
+        : normalized.session,
+      turnState: Object.hasOwn(preservedTurnStateById, thread.id)
+        ? (preservedTurnStateById[thread.id] ?? normalized.turnState)
+        : normalized.turnState,
+    });
   }
 
   const derivedThreads = getThreadsFromState(normalizedState);
@@ -4468,7 +4505,12 @@ export function setThreadWorkspace(
 // ── Zustand store ────────────────────────────────────────────────────
 
 interface AppStore extends AppState {
-  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  syncServerShellSnapshot: (
+    snapshot: OrchestrationShellSnapshot,
+    options?: {
+      preserveDetailForThreadIds?: ReadonlySet<ThreadId> | readonly ThreadId[];
+    },
+  ) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
   syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
@@ -4491,7 +4533,8 @@ interface AppStore extends AppState {
 
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
-  syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
+  syncServerShellSnapshot: (snapshot, options) =>
+    set((state) => syncServerShellSnapshot(state, snapshot, options)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
   syncServerThreadDetailHotPath: (thread) =>
     set((state) => syncServerThreadDetailHotPath(state, thread)),

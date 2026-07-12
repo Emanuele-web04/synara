@@ -936,7 +936,13 @@ function EventRouter() {
         return false;
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
-      syncServerShellSnapshot(snapshot);
+      const preserveDetailForThreadIds: ThreadId[] = [];
+      for (const [threadId, detailSequence] of threadSnapshotSequenceById) {
+        if (detailSequence > snapshot.snapshotSequence) {
+          preserveDetailForThreadIds.push(threadId);
+        }
+      }
+      syncServerShellSnapshot(snapshot, { preserveDetailForThreadIds });
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
       removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
@@ -975,6 +981,50 @@ function EventRouter() {
           const applied = applyShellSnapshot({
             snapshotSequence: fetched.snapshot.snapshotSequence,
             updatedAt: fetched.snapshot.updatedAt,
+            projects: liveProjects,
+            threads: liveThreads,
+          });
+          if (!applied) {
+            return {
+              applied: false,
+              shellThreadCount: liveThreads.length,
+              reason: "stale",
+            };
+          }
+          return { applied: true, shellThreadCount: liveThreads.length, reason: "ok" };
+        }
+
+        if (fetched.kind === "repair-projects") {
+          const repaired = await api.orchestration.repairState();
+          if (disposed || generation !== shellRefreshGeneration) {
+            return { applied: false, shellThreadCount: 0, reason: "stale" };
+          }
+          const liveProjects = repaired.projects.filter((project) => project.deletedAt == null);
+          const liveThreads = repaired.threads.filter((thread) => thread.deletedAt == null);
+          // Empty repair confirms a genuine empty DB — do not wipe a project-only
+          // client shell just to flip classification into repair-projects.
+          if (liveProjects.length === 0 && liveThreads.length === 0) {
+            return {
+              applied: true,
+              shellThreadCount: 0,
+              reason: "confirmed-empty",
+            };
+          }
+          if (
+            hasLiveThreadsWithMissingProjects({
+              projects: liveProjects,
+              threads: liveThreads,
+            })
+          ) {
+            return {
+              applied: false,
+              shellThreadCount: liveThreads.length,
+              reason: "empty",
+            };
+          }
+          const applied = applyShellSnapshot({
+            snapshotSequence: repaired.snapshotSequence,
+            updatedAt: repaired.updatedAt,
             projects: liveProjects,
             threads: liveThreads,
           });
@@ -1626,10 +1676,31 @@ function DesktopProjectBootstrap() {
         const recovered =
           snapshotApplied &&
           classifyDesktopHydrationRecovery(useStore.getState()) !== "repair-projects";
+        if (recovered) {
+          return {
+            applied: true,
+            shellThreadCount: liveThreads.length,
+            reason: "ok",
+          };
+        }
+        // Genuine empty after repair — stop retrying. Incomplete/non-empty
+        // repair-projects keeps the empty reason so the budget can retry.
+        if (
+          snapshotApplied &&
+          liveProjects.length === 0 &&
+          liveThreads.length === 0 &&
+          classifyDesktopHydrationRecovery(useStore.getState()) === "repair-projects"
+        ) {
+          return {
+            applied: true,
+            shellThreadCount: 0,
+            reason: "confirmed-empty",
+          };
+        }
         return {
-          applied: recovered,
+          applied: false,
           shellThreadCount: liveThreads.length,
-          reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
+          reason: snapshotApplied ? "empty" : "stale",
         };
       },
     });
