@@ -1266,13 +1266,13 @@ export function buildRevertTurnCountByUserMessageId(input: {
 /**
  * Confirm copy for checkpoint revert.
  * Filesystem restore is workspace-wide (git restore/clean), not thread-scoped.
- * turnCount 0 clears the whole chat; baseline may fall back to HEAD.
+ * turnCount 0 clears the whole chat; target may be a turn-zero ref or HEAD fallback.
  */
 export function buildCheckpointRevertConfirmMessage(turnCount: number): string {
   if (turnCount === 0) {
     return [
-      "Clear this conversation and restore the entire workspace to this thread's baseline?",
-      "All later workspace changes may be discarded, including changes made outside this conversation and untracked files.",
+      "Clear this conversation and restore the entire workspace to the earliest available checkpoint (or HEAD if none)?",
+      "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
       "This cannot be undone.",
     ].join("\n");
   }
@@ -1293,25 +1293,4 @@ export function checkpointRevertCommandAfterConfirm(
     return null;
   }
   return { type: "thread.checkpoint.revert", turnCount };
-}
-
-/**
- * Mapping → confirm → command seam for a completed turn's checkpoint count.
- */
-export function planCheckpointRevertFromCheckpointTurnCount(checkpointTurnCount: number): {
-  targetTurnCount: number;
-  confirmMessage: string;
-  commandIfConfirmed: (confirmed: boolean) => {
-    type: "thread.checkpoint.revert";
-    turnCount: number;
-  } | null;
-} {
-  const targetTurnCount = checkpointTurnCountToRevertTarget(checkpointTurnCount);
-  const confirmMessage = buildCheckpointRevertConfirmMessage(targetTurnCount);
-  return {
-    targetTurnCount,
-    confirmMessage,
-    commandIfConfirmed: (confirmed) =>
-      checkpointRevertCommandAfterConfirm(targetTurnCount, confirmed),
-  };
 }

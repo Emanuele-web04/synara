@@ -1221,8 +1221,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                       {canRevertAgentWork ? (
                         <MessageActionButton
-                          label="Revert to before this message"
-                          tooltip="Revert to before this message"
+                          label="Revert conversation and workspace to before this message"
+                          tooltip="Revert conversation and workspace to before this message"
                           disabled={isRevertingCheckpoint || isWorking}
                           className={cn(
                             MESSAGE_HOVER_REVEAL_CLASS_NAME,
@@ -1688,6 +1688,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:text-muted-foreground/35"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
                               title="Revert conversation and workspace to before this turn"
+                              aria-label="Revert conversation and workspace to before this turn"
                               disabled={isRevertingCheckpoint || isWorking}
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >

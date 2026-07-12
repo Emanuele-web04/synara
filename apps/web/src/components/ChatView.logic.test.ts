@@ -7,6 +7,7 @@ import {
   buildComposerMenuSelectionKey,
   buildRevertTurnCountByUserMessageId,
   checkpointRevertCommandAfterConfirm,
+  checkpointTurnCountToRevertTarget,
   createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
   derivePromptHistoryFromMessages,
@@ -15,7 +16,6 @@ import {
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
-  planCheckpointRevertFromCheckpointTurnCount,
   promptStillMatchesActiveHistoryBrowse,
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
@@ -1624,11 +1624,11 @@ describe("resolveQueuedSteerGateTransition", () => {
 });
 
 describe("buildCheckpointRevertConfirmMessage", () => {
-  it("asks before clearing the whole conversation on turn 0 without promising a guaranteed baseline", () => {
+  it("asks before clearing the whole conversation on turn 0 without promising a thread baseline", () => {
     expect(buildCheckpointRevertConfirmMessage(0)).toBe(
       [
-        "Clear this conversation and restore the entire workspace to this thread's baseline?",
-        "All later workspace changes may be discarded, including changes made outside this conversation and untracked files.",
+        "Clear this conversation and restore the entire workspace to the earliest available checkpoint (or HEAD if none)?",
+        "All later messages and workspace changes will be discarded, including changes made outside this conversation and untracked files.",
         "This cannot be undone.",
       ].join("\n"),
     );
@@ -1645,24 +1645,28 @@ describe("buildCheckpointRevertConfirmMessage", () => {
   });
 });
 
-describe("planCheckpointRevertFromCheckpointTurnCount", () => {
+describe("checkpoint revert mapping → confirm → dispatch", () => {
   it("maps checkpoint count 1 to target 0 with the clear-conversation warning", () => {
-    const plan = planCheckpointRevertFromCheckpointTurnCount(1);
-    expect(plan.targetTurnCount).toBe(0);
-    expect(plan.confirmMessage).toBe(buildCheckpointRevertConfirmMessage(0));
-    expect(plan.commandIfConfirmed(false)).toBeNull();
-    expect(plan.commandIfConfirmed(true)).toEqual({
+    const targetTurnCount = checkpointTurnCountToRevertTarget(1);
+    expect(targetTurnCount).toBe(0);
+    expect(buildCheckpointRevertConfirmMessage(targetTurnCount)).toBe(
+      buildCheckpointRevertConfirmMessage(0),
+    );
+    expect(checkpointRevertCommandAfterConfirm(targetTurnCount, false)).toBeNull();
+    expect(checkpointRevertCommandAfterConfirm(targetTurnCount, true)).toEqual({
       type: "thread.checkpoint.revert",
       turnCount: 0,
     });
   });
 
   it("maps checkpoint count 3 to target 2 with the partial-revert warning", () => {
-    const plan = planCheckpointRevertFromCheckpointTurnCount(3);
-    expect(plan.targetTurnCount).toBe(2);
-    expect(plan.confirmMessage).toBe(buildCheckpointRevertConfirmMessage(2));
-    expect(plan.commandIfConfirmed(false)).toBeNull();
-    expect(plan.commandIfConfirmed(true)).toEqual({
+    const targetTurnCount = checkpointTurnCountToRevertTarget(3);
+    expect(targetTurnCount).toBe(2);
+    expect(buildCheckpointRevertConfirmMessage(targetTurnCount)).toBe(
+      buildCheckpointRevertConfirmMessage(2),
+    );
+    expect(checkpointRevertCommandAfterConfirm(targetTurnCount, false)).toBeNull();
+    expect(checkpointRevertCommandAfterConfirm(targetTurnCount, true)).toEqual({
       type: "thread.checkpoint.revert",
       turnCount: 2,
     });

@@ -356,7 +356,9 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
-    expect(markup).toContain('aria-label="Revert to before this message"');
+    expect(markup).toContain(
+      'aria-label="Revert conversation and workspace to before this message"',
+    );
     expect(markup).toContain("size-[1.125em]");
   });
 
@@ -413,9 +415,15 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('aria-label="Edit message"');
+    expect(markup).not.toContain(
+      'aria-label="Revert conversation and workspace to before this message"',
+    );
     expect(markup).not.toContain('aria-label="Revert to before this message"');
     expect(markup).not.toContain('aria-label="Revert to this message"');
     expect(markup).not.toContain('title="Edit message"');
+    expect(markup).not.toContain(
+      'title="Revert conversation and workspace to before this message"',
+    );
     expect(markup).not.toContain('title="Revert to before this message"');
     expect(markup).not.toContain('title="Revert to this message"');
   });
@@ -467,7 +475,7 @@ describe("MessagesTimeline", () => {
     expect(editButtonMarkup).not.toContain('disabled=""');
     expect(markup).not.toContain('title="Edit message"');
     expect(markup).toMatch(
-      /<button[^>]*disabled=""[^>]*aria-label="Revert to before this message"/,
+      /<button[^>]*disabled=""[^>]*aria-label="Revert conversation and workspace to before this message"/,
     );
   });
 
@@ -2595,6 +2603,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Edited 1 file");
     expect(markup).toContain("Revert turn");
+    expect(markup).toContain('title="Revert conversation and workspace to before this turn"');
+    expect(markup).toContain('aria-label="Revert conversation and workspace to before this turn"');
     expect(markup).not.toContain(">Undo<");
   });
 
