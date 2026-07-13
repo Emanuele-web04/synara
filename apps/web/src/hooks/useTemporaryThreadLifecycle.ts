@@ -22,10 +22,11 @@ export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): vo
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
-  const initialDraftThread =
-    activeThreadId !== null
-      ? useComposerDraftStore.getState().draftThreadsByThreadId[activeThreadId]
-      : undefined;
+  const initialDraftIsTemporary = useComposerDraftStore(
+    (store) =>
+      activeThreadId !== null &&
+      store.draftThreadsByThreadId[activeThreadId]?.isTemporary === true,
+  );
   const previousThreadStateRef = useRef<{
     threadId: ThreadId | null;
     wasTemporary: boolean;
@@ -33,7 +34,7 @@ export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): vo
     threadId: activeThreadId,
     wasTemporary:
       (activeThreadId ? temporaryThreadIds[activeThreadId] === true : false) ||
-      initialDraftThread?.isTemporary === true,
+      initialDraftIsTemporary,
   });
   const disposingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
 
