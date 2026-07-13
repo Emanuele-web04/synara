@@ -7,6 +7,7 @@ import {
   EventId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationThreadActivity,
   type ProviderKind,
   ThreadId,
   type OrchestrationReadModel,
@@ -1385,6 +1386,13 @@ function normalizeActivities(
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
 }
 
+function withOrchestrationEventSequence(
+  activity: OrchestrationThreadActivity,
+  sequence: number,
+): OrchestrationThreadActivity {
+  return { ...activity, sequence };
+}
+
 function capThreadActivities<TActivity extends Thread["activities"][number]>(
   activities: readonly TActivity[],
 ): TActivity[] {
@@ -2003,6 +2011,7 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "cursor" ||
     providerName === "gemini" ||
     providerName === "grok" ||
+    providerName === "droid" ||
     providerName === "kilo" ||
     providerName === "opencode" ||
     providerName === "pi"
@@ -3698,8 +3707,12 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
+          const sequencedActivity = withOrchestrationEventSequence(
+            event.payload.activity,
+            event.sequence,
+          );
           const nextActivities = normalizeActivities(
-            [...thread.activities, event.payload.activity],
+            [...thread.activities, sequencedActivity],
             thread.activities,
           );
           if (nextActivities === thread.activities) {
@@ -3709,9 +3722,9 @@ function applyOrchestrationEvent(
             ...thread,
             activities: nextActivities,
             updatedAt:
-              (thread.updatedAt ?? thread.createdAt) > event.payload.activity.createdAt
+              (thread.updatedAt ?? thread.createdAt) > sequencedActivity.createdAt
                 ? thread.updatedAt
-                : event.payload.activity.createdAt,
+                : sequencedActivity.createdAt,
           };
         },
         {
@@ -3962,16 +3975,20 @@ function applyThreadActivityEventBatch(
       let nextActivities = thread.activities;
       let updatedAt = thread.updatedAt ?? thread.createdAt;
       for (const event of events) {
+        const sequencedActivity = withOrchestrationEventSequence(
+          event.payload.activity,
+          event.sequence,
+        );
         const normalizedActivities = normalizeActivities(
-          [...nextActivities, event.payload.activity],
+          [...nextActivities, sequencedActivity],
           nextActivities,
         );
         if (normalizedActivities === nextActivities) {
           continue;
         }
         nextActivities = normalizedActivities;
-        if (event.payload.activity.createdAt > updatedAt) {
-          updatedAt = event.payload.activity.createdAt;
+        if (sequencedActivity.createdAt > updatedAt) {
+          updatedAt = sequencedActivity.createdAt;
         }
       }
       if (nextActivities === thread.activities) {

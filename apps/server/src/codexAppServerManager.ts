@@ -39,6 +39,7 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@synara/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
@@ -1129,7 +1130,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
-    context.collabReceiverTurns.clear();
 
     const activeTurnId = context.session.activeTurnId;
     if (context.session.status !== "running" || activeTurnId === undefined) {
@@ -2246,7 +2246,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context,
       notification.params,
     );
-    const isChildConversation = childParentTurnId !== undefined;
+    const activeProviderThreadId = normalizeProviderThreadId(
+      readResumeThreadId({
+        threadId: context.session.threadId,
+        runtimeMode: context.session.runtimeMode,
+        resumeCursor: context.session.resumeCursor,
+      }),
+    );
+    // A child can emit turn/started before its collab tool-call payload has
+    // populated the receiver maps. While a parent turn is live, a notification
+    // from another provider thread must not replace the parent's active turn.
+    const isUnmappedChildConversation =
+      context.session.status === "running" &&
+      context.session.activeTurnId !== undefined &&
+      providerThreadId !== undefined &&
+      activeProviderThreadId !== undefined &&
+      providerThreadId !== activeProviderThreadId;
+    const isChildConversation =
+      childParentTurnId !== undefined ||
+      providerParentThreadId !== undefined ||
+      isUnmappedChildConversation;
     if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
@@ -2824,17 +2843,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall") {
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
       return;
     }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
 
-    const receiverThreadIds =
-      this.readArray(item, "receiverThreadIds")
-        ?.map((value) => (typeof value === "string" ? value : null))
-        .filter((value): value is string => value !== null) ?? [];
+    const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {
       context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
       if (parentProviderThreadId) {

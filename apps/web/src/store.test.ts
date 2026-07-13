@@ -2616,6 +2616,7 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.activities).toHaveLength(1);
     expect(next.threads[0]?.activities[0]).toMatchObject({
       id: activityId,
+      sequence: 2,
       payload: {
         status: "completed",
         detail: "Inspecting apps/web/src/store.ts",
@@ -2659,6 +2660,40 @@ describe("store read model sync", () => {
       sequential.activityByThreadId?.[threadId],
     );
     expect(batched.threads[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
+  });
+
+  it("replaces provider-local activity sequences with durable orchestration sequences", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const events = [
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({ id: "activity-before-restart", sequence: 99 }),
+        },
+        { sequence: 40 },
+      ),
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({ id: "activity-after-restart", sequence: 0 }),
+        },
+        { sequence: 41 },
+      ),
+    ];
+    const initialState = makeState(makeThread());
+
+    const sequential = events.reduce(
+      (state, event) => applyOrchestrationEventsHotPath(state, [event]),
+      initialState,
+    );
+    const batched = applyOrchestrationEventsHotPath(initialState, events);
+
+    expect(sequential.threads[0]?.activities.map((activity) => activity.sequence)).toEqual([
+      40, 41,
+    ]);
+    expect(batched.threads[0]?.activities.map((activity) => activity.sequence)).toEqual([40, 41]);
   });
 
   it("keeps batched activity timestamps equivalent when a generic duplicate is discarded", () => {

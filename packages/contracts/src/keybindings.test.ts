@@ -95,6 +95,18 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedModelPickerToggle.command, "modelPicker.toggle");
 
+    const parsedNextModel = yield* decode(KeybindingRule, {
+      key: "alt+]",
+      command: "model.next",
+    });
+    assert.strictEqual(parsedNextModel.command, "model.next");
+
+    const parsedPreviousModel = yield* decode(KeybindingRule, {
+      key: "alt+[",
+      command: "model.previous",
+    });
+    assert.strictEqual(parsedPreviousModel.command, "model.previous");
+
     const parsedTraitsPickerToggle = yield* decode(KeybindingRule, {
       key: "mod+shift+e",
       command: "traitsPicker.toggle",

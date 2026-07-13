@@ -1268,6 +1268,7 @@ describe("steerTurn", () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.status = "running";
     context.session.activeTurnId = "turn_active";
+    context.collabReceiverTurns.set("child_provider_1", "turn_active");
     sendRequest.mockResolvedValueOnce({
       turnId: "turn_active",
     });
@@ -1293,6 +1294,7 @@ describe("steerTurn", () => {
       ],
       expectedTurnId: "turn_active",
     });
+    expect(context.collabReceiverTurns.get("child_provider_1")).toBe("turn_active");
   });
 
   it("requires turn/steer to return the active turn id", async () => {
@@ -1311,7 +1313,28 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
-  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+  it.each([
+    {
+      responseShape: "camelCase",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        additionalSpeedTiers: ["fast"],
+      },
+    },
+    {
+      responseShape: "legacy snake_case",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        default_reasoning_effort: "low",
+        additional_speed_tiers: ["fast"],
+      },
+    },
+  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1348,15 +1371,7 @@ describe("CodexAppServerManager discovery", () => {
       )
       .mockResolvedValue({
         result: {
-          items: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
-              default_reasoning_effort: "medium",
-              additionalSpeedTiers: ["fast"],
-            },
-          ],
+          items: [item],
         },
       });
 
@@ -1369,15 +1384,17 @@ describe("CodexAppServerManager discovery", () => {
     });
     expect(result.models).toEqual([
       {
-        slug: "gpt-5.5",
-        name: "GPT-5.5",
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         supportedReasoningEfforts: [
           { value: "low" },
           { value: "medium" },
           { value: "high" },
           { value: "xhigh" },
+          { value: "max" },
+          { value: "ultra" },
         ],
-        defaultReasoningEffort: "medium",
+        defaultReasoningEffort: "low",
         supportsFastMode: true,
       },
     ]);
@@ -2405,6 +2422,30 @@ describe("respondToUserInput", () => {
 });
 
 describe("collab child conversation routing", () => {
+  it("tracks the current collabToolCall receiver shape", () => {
+    const { manager, context } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/started",
+      params: {
+        item: {
+          type: "collabToolCall",
+          id: "call_collab_current",
+          receiverThreadId: "child_provider_current",
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+
+    expect(context.collabReceiverTurns.get("child_provider_current")).toBe("turn_parent");
+    expect(context.collabReceiverParents.get("child_provider_current")).toBe("provider_parent");
+  });
+
   it("preserves child notification turn ids and annotates the parent turn", () => {
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 
@@ -2494,6 +2535,75 @@ describe("collab child conversation routing", () => {
       params: {
         threadId: "child_provider_1",
         turn: { id: "turn_child_1", status: "completed" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("suppresses child lifecycle notifications that arrive before receiver mapping", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_parent";
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_unmapped",
+        turn: { id: "turn_child_unmapped" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(context.session.activeTurnId).toBe("turn_parent");
+  });
+
+  it("keeps handling lifecycle notifications from the active provider thread", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "provider_parent",
+        turn: { id: "turn_parent" },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/started",
+        providerThreadId: "provider_parent",
+      }),
+    );
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ status: "running", activeTurnId: "turn_parent" }),
+    );
+  });
+
+  it("suppresses child lifecycle notifications when only the provider parent is known", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_parent");
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1" },
       },
     });
 

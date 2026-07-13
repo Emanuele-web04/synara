@@ -1347,6 +1347,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+          scope: command.scope ?? "thread",
           createdAt: command.createdAt,
         },
       };
@@ -1614,6 +1615,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
           completedAt: command.completedAt,
+          ...(command.preserveLatestTurn ? { preserveLatestTurn: true } : {}),
         },
       };
     }

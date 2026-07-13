@@ -440,7 +440,7 @@ describe("deriveActiveTaskListState", () => {
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 
-  it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
+  it("keeps an unfinished task list visible after its turn completes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "unfinished-plan-from-turn-1",
@@ -469,7 +469,44 @@ describe("deriveActiveTaskListState", () => {
       }),
     ];
 
-    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
+      createdAt: "2026-02-23T00:00:01.000Z",
+      turnId: "turn-1",
+      tasks: [
+        { task: "Inspect theme implementation", status: "pending" },
+        { task: "Patch token plumbing", status: "pending" },
+      ],
+    });
+  });
+
+  it("uses sequence rather than a random activity id for same-millisecond snapshots", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "z-stale",
+        sequence: 10,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "a-final",
+        sequence: 11,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "completed" }] },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))?.tasks).toEqual([
+      { task: "Ship", status: "completed" },
+    ]);
   });
 
   it("treats an empty task update as an explicit clear", () => {
@@ -3489,6 +3526,7 @@ describe("PROVIDER_OPTIONS", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
+    const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
@@ -3498,6 +3536,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
       { value: "grok", label: "Grok", available: true },
+      { value: "droid", label: "Droid", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
@@ -3520,6 +3559,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(grok).toEqual({
       value: "grok",
       label: "Grok",
+      available: true,
+    });
+    expect(droid).toEqual({
+      value: "droid",
+      label: "Droid",
       available: true,
     });
     expect(kilo).toEqual({

@@ -3,7 +3,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
-export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
+// Codex app-server can add model-specific efforts through runtime discovery.
+export type CodexReasoningEffort = string;
 export const CLAUDE_API_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeApiEffort = (typeof CLAUDE_API_EFFORT_OPTIONS)[number];
 export const CLAUDE_PROMPT_MODE_OPTIONS = ["ultrathink"] as const;
@@ -31,13 +32,27 @@ export const PI_THINKING_LEVEL_OPTIONS = [
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
+export const DROID_REASONING_EFFORT_OPTIONS = [
+  "off",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+// Droid exposes effort values dynamically over ACP; keep the static list only
+// as an offline fallback so newly added values survive transport and drafts.
+export type DroidReasoningEffort = string;
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
   | GeminiThinkingLevel
   | `${GeminiThinkingBudget}`
   | PiThinkingLevel
-  | GrokReasoningEffort;
+  | GrokReasoningEffort
+  | DroidReasoningEffort;
 
 export const ProviderOptionChoice = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -131,12 +146,18 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+export const DroidModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type DroidModelOptions = typeof DroidModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -226,6 +247,111 @@ const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
+function droidCapabilities(reasoningEffortLevels: readonly EffortOption[]): ModelCapabilities {
+  return {
+    reasoningEffortLevels,
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+    promptInjectedEffortLevels: [],
+    contextWindowOptions: [],
+  };
+}
+
+const DROID_CLAUDE_XHIGH_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Max" },
+]);
+
+const DROID_CLAUDE_MAX_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "max", label: "Max" },
+]);
+
+const DROID_CLAUDE_BASIC_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off", isDefault: true },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+]);
+
+const DROID_GPT_MEDIUM_CAPABILITIES = droidCapabilities([
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GPT_5_6_CAPABILITIES = droidCapabilities([
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Maximum" },
+]);
+
+const DROID_GPT_PRO_CAPABILITIES = droidCapabilities([
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GPT_HIGH_CAPABILITIES = droidCapabilities([
+  { value: "none", label: "None" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GPT_5_2_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low", isDefault: true },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GEMINI_HIGH_CAPABILITIES = droidCapabilities([
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+]);
+
+const DROID_GEMINI_MINIMAL_CAPABILITIES = droidCapabilities([
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High", isDefault: true },
+]);
+
+const DROID_CORE_HIGH_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "high", label: "High", isDefault: true },
+]);
+
+const DROID_CORE_DEEPSEEK_CAPABILITIES = droidCapabilities([
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "high", label: "High", isDefault: true },
+  { value: "max", label: "Max" },
+]);
+
+const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [{ value: "high", label: "High", isDefault: true }],
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
@@ -514,6 +640,190 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GROK_BUILD_CAPABILITIES,
     },
   ],
+  droid: [
+    {
+      // Factory routes to a model automatically at its lowest (1x) token rate.
+      // Reasoning effort follows the routed model's default, so no picker.
+      slug: "auto",
+      name: "Auto Model",
+      capabilities: droidCapabilities([]),
+    },
+    {
+      slug: "claude-fable-5",
+      name: "Claude Fable 5",
+      capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-8-fast",
+      name: "Claude Opus 4.8 Fast",
+      capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-7-fast",
+      name: "Claude Opus 4.7 Fast",
+      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
+    },
+    {
+      slug: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,
+    },
+    {
+      slug: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-4-5-20251101",
+      name: "Claude Opus 4.5",
+      capabilities: DROID_CLAUDE_BASIC_CAPABILITIES,
+    },
+    {
+      slug: "claude-sonnet-4-5-20250929",
+      name: "Claude Sonnet 4.5",
+      capabilities: DROID_CLAUDE_BASIC_CAPABILITIES,
+    },
+    {
+      slug: "claude-haiku-4-5-20251001",
+      name: "Claude Haiku 4.5",
+      capabilities: DROID_CLAUDE_BASIC_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.5",
+      name: "GPT-5.5",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.5-fast",
+      name: "GPT-5.5 Fast",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      capabilities: DROID_GPT_PRO_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.4",
+      name: "GPT-5.4",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.4-fast",
+      name: "GPT-5.4 Fast",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      capabilities: DROID_GPT_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.3-codex-fast",
+      name: "GPT-5.3 Codex Fast",
+      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.2",
+      name: "GPT-5.2",
+      capabilities: DROID_GPT_5_2_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro",
+      capabilities: DROID_GEMINI_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3.5-flash",
+      name: "Gemini 3.5 Flash",
+      capabilities: DROID_GEMINI_MINIMAL_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash",
+      capabilities: DROID_GEMINI_MINIMAL_CAPABILITIES,
+    },
+    {
+      slug: "glm-5.2",
+      name: "GLM-5.2",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "glm-5.2-fast",
+      name: "GLM-5.2 Fast",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "glm-5.1",
+      name: "GLM-5.1",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "nemotron-3-ultra",
+      name: "Nemotron 3 Ultra",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "kimi-k2.6",
+      name: "Kimi K2.6",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
+      slug: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      capabilities: DROID_CORE_DEEPSEEK_CAPABILITIES,
+    },
+    {
+      slug: "minimax-m3",
+      name: "MiniMax M3",
+      capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
+    },
+    {
+      slug: "minimax-m2.7",
+      name: "MiniMax M2.7",
+      capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -611,6 +921,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   gemini: "auto-gemini-3",
   grok: "grok-build",
+  droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -680,6 +991,44 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  droid: {
+    droid: "claude-opus-4-8",
+    factory: "claude-opus-4-8",
+    opus: "claude-opus-4-8",
+    "opus-4.8": "claude-opus-4-8",
+    "opus-fast": "claude-opus-4-8-fast",
+    "opus-4.8-fast": "claude-opus-4-8-fast",
+    "opus-4.7": "claude-opus-4-7",
+    "opus-4.7-fast": "claude-opus-4-7-fast",
+    "opus-4.6": "claude-opus-4-6",
+    sonnet: "claude-sonnet-5",
+    "sonnet-5": "claude-sonnet-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5-20250929",
+    fable: "claude-fable-5",
+    haiku: "claude-haiku-4-5-20251001",
+    "5.5": "gpt-5.5",
+    "5.5-fast": "gpt-5.5-fast",
+    "5.5-pro": "gpt-5.5-pro",
+    "5.4": "gpt-5.4",
+    "5.4-fast": "gpt-5.4-fast",
+    "5.4-mini": "gpt-5.4-mini",
+    "5.3": "gpt-5.3-codex",
+    "5.3-fast": "gpt-5.3-codex-fast",
+    "gpt-5.3": "gpt-5.3-codex",
+    "gemini-3-pro": "gemini-3.1-pro-preview",
+    "gemini-3.1-pro": "gemini-3.1-pro-preview",
+    "gemini-3.5-flash": "gemini-3.5-flash",
+    "gemini-3-flash": "gemini-3-flash-preview",
+    glm: "glm-5.2",
+    "glm-5.2": "glm-5.2",
+    "glm-5.1": "glm-5.1",
+    nemotron: "nemotron-3-ultra",
+    kimi: "kimi-k2.7-code",
+    "kimi-code": "kimi-k2.7-code",
+    deepseek: "deepseek-v4-pro",
+    minimax: "minimax-m3",
+  },
   grok: {
     grok: "grok-build-0.1",
     build: "grok-build-0.1",
@@ -729,6 +1078,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   cursor: "Cursor",
   gemini: "Gemini",
   grok: "Grok",
+  droid: "Droid",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

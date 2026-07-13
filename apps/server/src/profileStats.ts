@@ -30,6 +30,7 @@ const PROVIDER_KINDS = new Set<ProviderKind>([
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",

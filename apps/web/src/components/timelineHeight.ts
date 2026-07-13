@@ -7,7 +7,7 @@ import type { TurnDiffFileChange } from "../types";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../appSettings";
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
-import { deriveUserMessagePreviewState } from "./chat/userMessagePreview";
+import { resolveCollapsedUserMessageLineEstimate } from "./chat/userMessageCollapse";
 import { hasLeadingUserMedia, resolveUserTurnMarker } from "./chat/userTurnMarker";
 import {
   getChatTranscriptAssistantCharWidthPx,
@@ -280,15 +280,18 @@ export function estimateTimelineMessageHeight(
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
     });
-    const userMessagePreview = deriveUserMessagePreviewState(displayedUserMessage.visibleText);
     const renderedText =
       displayedUserMessage.contexts.length > 0
-        ? [buildInlineTerminalContextText(displayedUserMessage.contexts), userMessagePreview.text]
+        ? [
+            buildInlineTerminalContextText(displayedUserMessage.contexts),
+            displayedUserMessage.visibleText,
+          ]
             .filter((part) => part.length > 0)
             .join(" ")
-        : userMessagePreview.text;
-    const estimatedLines =
+        : displayedUserMessage.visibleText;
+    const fullEstimatedLines =
       renderedText.length > 0 ? estimateWrappedLineCount(renderedText, charsPerLine) : 0;
+    const userMessageEstimate = resolveCollapsedUserMessageLineEstimate(fullEstimatedLines);
     const imageAttachmentCount =
       message.attachments?.filter((attachment) => attachment.type === "image").length ?? 0;
     const assistantSelectionCount =
@@ -342,10 +345,10 @@ export function estimateTimelineMessageHeight(
             ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
             : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)
         : 0;
-    const toggleHeight = userMessagePreview.collapsible ? USER_MESSAGE_TOGGLE_HEIGHT_PX : 0;
+    const toggleHeight = userMessageEstimate.collapsible ? USER_MESSAGE_TOGGLE_HEIGHT_PX : 0;
     return (
       USER_BASE_HEIGHT_PX +
-      estimatedLines * lineHeightPx +
+      userMessageEstimate.renderedLines * lineHeightPx +
       attachmentHeight +
       dispatchChipHeight +
       toggleHeight
