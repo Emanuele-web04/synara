@@ -118,6 +118,8 @@ export function AppSnapCoordinator() {
   // capture listener (which would re-deliver pending captures).
   const playCaptureSoundRef = useRef(settings.appSnapPlaySound);
   playCaptureSoundRef.current = settings.appSnapPlaySound;
+  const enableAppSnapRef = useRef(settings.enableAppSnap);
+  enableAppSnapRef.current = settings.enableAppSnap;
 
   useEffect(() => {
     let disposed = false;
@@ -527,7 +529,7 @@ export function AppSnapCoordinator() {
                 children: "Restart",
                 onClick: () => {
                   void bridge
-                    .setEnabled(true)
+                    .setEnabled(enableAppSnapRef.current)
                     .catch((restartError) =>
                       console.warn("[appsnap] Could not restart native listener", restartError),
                     );
