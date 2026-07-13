@@ -204,6 +204,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
+    id: "behavior:appsnap",
+    section: "behavior",
+    title: "AppSnap",
+    keywords:
+      "Capture the frontmost macOS app window with both Option keys and add it to a recent task. screenshot screen recording input monitoring alt",
+  },
+  {
     id: "behavior:assistant-output",
     section: "behavior",
     title: "Assistant output",

@@ -136,6 +136,10 @@ import {
   formatOutgoingComposerPrompt,
   readFileAsDataUrl,
 } from "../lib/composerSend";
+import {
+  composerImageBlobKey,
+  persistComposerImageBlob,
+} from "../lib/composerImageBlobStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
@@ -1089,6 +1093,7 @@ export default function ChatView({
     ],
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const durablyPersistedComposerImageIds = composerDraft.persistedAttachments;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftPromptHistorySavedDraft = useComposerDraftStore(
     (store) => store.setPromptHistorySavedDraft,
@@ -3383,8 +3388,15 @@ export default function ChatView({
   composerMenuItemsRef.current = composerMenuItems;
   activeComposerMenuItemRef.current = activeComposerMenuItem;
   const nonPersistedComposerImageIdSet = useMemo(
-    () => new Set(nonPersistedComposerImageIds),
-    [nonPersistedComposerImageIds],
+    () => {
+      const durableBlobIds = new Set(
+        durablyPersistedComposerImageIds
+          .filter((attachment) => Boolean(attachment.blobKey))
+          .map((attachment) => attachment.id),
+      );
+      return new Set(nonPersistedComposerImageIds.filter((id) => !durableBlobIds.has(id)));
+    },
+    [durablyPersistedComposerImageIds, nonPersistedComposerImageIds],
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
@@ -5363,6 +5375,15 @@ export default function ChatView({
     let cancelled = false;
     void (async () => {
       if (composerImages.length === 0) {
+        const hasDeferredBlobAttachment =
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[threadId]?.persistedAttachments.some(
+              (attachment) => attachment.blobKey,
+            ) ?? false;
+        if (hasDeferredBlobAttachment) {
+          return;
+        }
         clearComposerDraftPersistedAttachments(threadId);
         return;
       }
@@ -5377,6 +5398,27 @@ export default function ChatView({
         await Promise.all(
           composerImages.map(async (image) => {
             try {
+              if (image.source?.kind === "appsnap") {
+                const existingPersisted = existingPersistedById.get(image.id);
+                const expectedBlobKey = composerImageBlobKey(threadId, image.id);
+                const blobKey =
+                  existingPersisted?.blobKey === expectedBlobKey
+                    ? expectedBlobKey
+                    : await persistComposerImageBlob({
+                        threadId,
+                        imageId: image.id,
+                        file: image.file,
+                      });
+                stagedAttachmentById.set(image.id, {
+                  id: image.id,
+                  name: image.name,
+                  mimeType: image.mimeType,
+                  sizeBytes: image.sizeBytes,
+                  blobKey,
+                  source: image.source,
+                });
+                return;
+              }
               const dataUrl = await readFileAsDataUrl(image.file);
               stagedAttachmentById.set(image.id, {
                 id: image.id,
@@ -5398,7 +5440,7 @@ export default function ChatView({
           return;
         }
         // Stage attachments in persisted draft state first so persist middleware can write them.
-        syncComposerDraftPersistedAttachments(threadId, serialized);
+        void syncComposerDraftPersistedAttachments(threadId, serialized);
       } catch {
         const currentImageIds = new Set(composerImages.map((image) => image.id));
         const fallbackPersistedAttachments = getPersistedAttachmentsForThread();
@@ -5412,7 +5454,7 @@ export default function ChatView({
         if (cancelled) {
           return;
         }
-        syncComposerDraftPersistedAttachments(threadId, fallbackAttachments);
+        void syncComposerDraftPersistedAttachments(threadId, fallbackAttachments);
       }
     })();
     return () => {
@@ -5446,6 +5488,27 @@ export default function ChatView({
         await Promise.all(
           composerPromptHistorySavedDraftImages.map(async (image) => {
             try {
+              if (image.source?.kind === "appsnap") {
+                const existingPersisted = existingPersistedById.get(image.id);
+                const expectedBlobKey = composerImageBlobKey(threadId, image.id);
+                const blobKey =
+                  existingPersisted?.blobKey === expectedBlobKey
+                    ? expectedBlobKey
+                    : await persistComposerImageBlob({
+                        threadId,
+                        imageId: image.id,
+                        file: image.file,
+                      });
+                stagedAttachmentById.set(image.id, {
+                  id: image.id,
+                  name: image.name,
+                  mimeType: image.mimeType,
+                  sizeBytes: image.sizeBytes,
+                  blobKey,
+                  source: image.source,
+                });
+                return;
+              }
               const dataUrl = await readFileAsDataUrl(image.file);
               stagedAttachmentById.set(image.id, {
                 id: image.id,
@@ -5465,7 +5528,7 @@ export default function ChatView({
         if (cancelled) {
           return;
         }
-        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
+        void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
           threadId,
           Array.from(stagedAttachmentById.values()),
         );
@@ -5479,7 +5542,10 @@ export default function ChatView({
         if (cancelled) {
           return;
         }
-        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(threadId, fallbackAttachments);
+        void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
+          threadId,
+          fallbackAttachments,
+        );
       }
     })();
     return () => {

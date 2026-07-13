@@ -5,6 +5,7 @@
 
 import {
   PROVIDER_DISPLAY_NAMES,
+  type DesktopAppSnapState,
   type ProviderKind,
   type ServerProviderStatus,
   type ThreadId,
@@ -242,6 +243,15 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   updated_at: "Recently active",
   created_at: "Newest first",
 } as const;
+
+function appSnapStatusText(state: DesktopAppSnapState | null): string {
+  if (!state) return "Available in the Synara desktop app";
+  if (!state.supported) return state.message ?? "Available on macOS only";
+  if (state.status === "ready") return "Ready · press both Option keys";
+  if (state.status === "disabled") return "Off";
+  if (state.status === "starting") return "Starting listener…";
+  return state.message ?? "Permission setup required";
+}
 
 type InstallBinarySettingsKey =
   | "claudeBinaryPath"
@@ -709,6 +719,7 @@ function SettingsRouteView() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+  const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
@@ -719,6 +730,28 @@ function SettingsRouteView() {
       suggestion.toLowerCase().includes(query),
     );
   }, [settings.terminalFontFamily]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      setAppSnapState(null);
+      return;
+    }
+    let disposed = false;
+    const unsubscribe = bridge.onState((state) => {
+      if (!disposed) setAppSnapState(state);
+    });
+    void bridge
+      .getState()
+      .then((state) => {
+        if (!disposed) setAppSnapState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
 
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
@@ -999,6 +1032,7 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
@@ -1288,6 +1322,59 @@ function SettingsRouteView() {
       title: "Test notification sent",
       description: "Your browser should show the notification.",
     });
+  }
+
+  async function setAppSnapEnabled(nextEnabled: boolean) {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      toastManager.add({
+        type: "warning",
+        title: "AppSnap unavailable",
+        description: "AppSnap requires the Synara desktop app on macOS.",
+      });
+      return;
+    }
+
+    try {
+      if (nextEnabled) {
+        setAppSnapState(await bridge.requestPermissions());
+      }
+      updateSettings({ enableAppSnap: nextEnabled });
+      const state = await bridge.setEnabled(nextEnabled);
+      setAppSnapState(state);
+      if (
+        nextEnabled &&
+        (state.status === "permission-required" || state.status === "error")
+      ) {
+        toastManager.add({
+          type: "warning",
+          title: "Finish AppSnap setup",
+          description: state.message ?? "Allow the required macOS permissions, then try again.",
+        });
+      }
+    } catch (error) {
+      updateSettings({ enableAppSnap: false });
+      toastManager.add({
+        type: "error",
+        title: "AppSnap setup failed",
+        description: error instanceof Error ? error.message : "Could not configure AppSnap.",
+      });
+    }
+  }
+
+  async function recheckAppSnapPermissions() {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    try {
+      await bridge.requestPermissions();
+      setAppSnapState(await bridge.setEnabled(settings.enableAppSnap));
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not check AppSnap permissions",
+        description: error instanceof Error ? error.message : "Permission check failed.",
+      });
+    }
   }
 
   // Rebuild the local project indexes after an older install leaves them out of sync.
@@ -2131,6 +2218,44 @@ function SettingsRouteView() {
 
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
+      <SettingsSection title="App context">
+        <SettingsRow
+          title="AppSnap"
+          description="Press both Option keys while another app is frontmost to capture that window and add it to a recent task. Captures remain in the local draft until removed or sent."
+          status={appSnapStatusText(appSnapState)}
+          resetAction={
+            settings.enableAppSnap !== defaults.enableAppSnap ? (
+              <SettingResetButton
+                label="AppSnap"
+                onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+              {appSnapState?.supported &&
+              settings.enableAppSnap &&
+              appSnapState.status !== "ready" ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void recheckAppSnapPermissions()}
+                >
+                  Check permissions
+                </Button>
+              ) : null}
+              <Switch
+                checked={appSnapState?.supported === true && settings.enableAppSnap}
+                disabled={appSnapState?.supported !== true}
+                onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
+                aria-label="Enable AppSnap"
+              />
+            </div>
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="Runtime behavior">
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",

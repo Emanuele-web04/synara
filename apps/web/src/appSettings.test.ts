@@ -730,6 +730,7 @@ describe("AppSettingsSchema", () => {
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
+      enableAppSnap: false,
       enableAssistantStreaming: true,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
@@ -744,5 +745,18 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
     });
+  });
+
+  it("migrates the former AppSnap feature flag", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
+    ).toMatchObject({
+      enableAppSnap: true,
+    });
+    expect(
+      normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
+    ).not.toHaveProperty("enableAppshots");
   });
 });

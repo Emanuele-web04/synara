@@ -23,6 +23,7 @@ import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
@@ -195,6 +196,7 @@ function RootRouteView() {
           <GlobalShortcutsDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
+          <AppSnapCoordinator />
           <ProviderUpdateNotifications />
           <DesktopProjectBootstrap />
           <Outlet />
