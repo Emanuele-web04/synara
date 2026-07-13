@@ -1,4 +1,6 @@
-export const COLLAPSED_USER_MESSAGE_MAX_CHARS = 600;
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
+
+export { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessageCollapse";
 
 export interface UserMessagePreviewState {
   text: string;

@@ -9,7 +9,6 @@ import { render } from "vitest-browser-react";
 
 import { ChatTranscriptPane } from "./ChatTranscriptPane";
 import { useTranscriptAssistantSelectionAction } from "./useTranscriptAssistantSelectionAction";
-import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
 
 const EMPTY_WORK_GROUPS: Record<string, boolean> = {};
 const EMPTY_TURN_DIFFS = new Map();
@@ -162,7 +161,9 @@ describe("ChatTranscriptPane", () => {
 
   it("expands collapsed user messages from the Show more control", async () => {
     const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
-    const longUserText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
+    // Well past the visual line clamp so the collapsed message measures as
+    // overflowing regardless of viewport width.
+    const longUserText = `${Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")}\n${hiddenTail}`;
 
     const screen = await render(
       <ChatTranscriptPane
@@ -218,7 +219,13 @@ describe("ChatTranscriptPane", () => {
       />,
     );
     try {
-      expect(screen.container.textContent).not.toContain(hiddenTail);
+      // Collapsing is a visual clamp: the tail stays in the DOM but the clamp
+      // wrapper is overflowing (cut off) until the message is expanded.
+      await vi.waitFor(() => {
+        const clampWrapper = screen.container.querySelector('[data-user-message-clamp="true"]');
+        expect(clampWrapper).not.toBeNull();
+        expect(clampWrapper!.scrollHeight).toBeGreaterThan(clampWrapper!.clientHeight);
+      });
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
         "Show more",
       );
@@ -226,7 +233,9 @@ describe("ChatTranscriptPane", () => {
       await page.getByText("Show more").click();
 
       await vi.waitFor(() => {
-        expect(screen.container.textContent).toContain(hiddenTail);
+        const wrapper = screen.container.querySelector("[data-user-message-clamp]");
+        expect(wrapper?.getAttribute("data-user-message-clamp")).toBe("false");
+        expect(wrapper!.scrollHeight).toBeLessThanOrEqual(wrapper!.clientHeight + 1);
       });
       await expect.element(page.getByText("Show less")).toBeInTheDocument();
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(

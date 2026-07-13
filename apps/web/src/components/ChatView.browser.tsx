@@ -1777,7 +1777,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     },
   );
 
-  it("tracks wrapping parity while resizing an existing ChatView across the viewport matrix", async () => {
+  it("keeps collapsed height parity while resizing an existing ChatView", async () => {
     const userText = "x".repeat(3_200);
     const targetMessageId = "msg-user-target-resize" as MessageId;
     const mounted = await mountChatView({
@@ -1819,15 +1819,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const narrowest = byMeasuredWidth[0]!;
       const widest = byMeasuredWidth.at(-1)!;
       expect(narrowest.timelineWidthMeasuredPx).toBeLessThan(widest.timelineWidthMeasuredPx);
-      expect(narrowest.measuredRowHeightPx).toBeGreaterThan(widest.measuredRowHeightPx);
-      expect(narrowest.estimatedHeightPx).toBeGreaterThan(widest.estimatedHeightPx);
+      // Both widths exceed the shared 12-line limit, so resizing must not make
+      // the virtualized estimate grow beyond the visible collapsed row.
+      expect(narrowest.estimatedHeightPx).toBe(widest.estimatedHeightPx);
+      expect(
+        Math.abs(narrowest.measuredRowHeightPx - widest.measuredRowHeightPx),
+      ).toBeLessThanOrEqual(8);
     } finally {
       await mounted.cleanup();
     }
   });
 
   it("tracks additional rendered wrapping when ChatView width narrows between desktop and mobile viewports", async () => {
-    const userText = "x".repeat(2_400);
+    // Short enough to remain below the 12-line collapse at both widths, while
+    // still wrapping onto materially more lines on mobile.
+    const userText = "x".repeat(320);
     const targetMessageId = "msg-user-target-wrap" as MessageId;
     const snapshot = createSnapshotForTargetUser({
       targetMessageId,
