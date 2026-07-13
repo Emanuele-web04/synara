@@ -94,14 +94,15 @@ export function resolveVisibleWindowBounds(input: {
   readonly minimumWidth: number;
   readonly minimumHeight: number;
 }): DesktopWindowBounds {
-  const { savedBounds, displayWorkAreas } = input;
-  if (displayWorkAreas.length === 0) {
+  const { savedBounds } = input;
+  const [firstWorkArea, ...remainingWorkAreas] = input.displayWorkAreas;
+  if (!firstWorkArea) {
     return savedBounds;
   }
 
-  let targetWorkArea = displayWorkAreas[0];
+  let targetWorkArea = firstWorkArea;
   let largestIntersection = intersectionArea(savedBounds, targetWorkArea);
-  for (const workArea of displayWorkAreas.slice(1)) {
+  for (const workArea of remainingWorkAreas) {
     const area = intersectionArea(savedBounds, workArea);
     if (area > largestIntersection) {
       targetWorkArea = workArea;
