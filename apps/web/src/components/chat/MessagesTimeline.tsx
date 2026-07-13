@@ -17,6 +17,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -118,7 +119,6 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -137,13 +137,13 @@ import {
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
-  formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
+  getChatTranscriptUserMessageLineHeightPx,
   getChatTranscriptUserMessageTextStyle,
   USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
@@ -159,7 +159,12 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
-import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import {
+  USER_MESSAGE_COLLAPSED_FADE_LINES,
+  USER_MESSAGE_COLLAPSED_MAX_LINES,
+  userMessageLikelyOverflows,
+} from "./userMessageCollapse";
+import { observeUserMessageOverflow } from "./userMessageOverflowObserver";
 import {
   resolveActiveTrailSnapshot,
   type ActiveTrailSnapshot,
@@ -407,6 +412,7 @@ interface MessagesTimelineProps {
   onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
@@ -463,6 +469,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   activeTurnId,
   isRevertingCheckpoint,
@@ -810,19 +817,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeTurnId, rows]);
-  const userMessageIdByAssistantMessageId = useMemo(() => {
-    const map = new Map<MessageId, MessageId>();
-    let lastUserMessageId: MessageId | null = null;
-    for (const row of rows) {
-      if (row.kind !== "message") continue;
-      if (row.message.role === "user") {
-        lastUserMessageId = row.message.id;
-      } else if (row.message.role === "assistant" && lastUserMessageId) {
-        map.set(row.message.id, lastUserMessageId);
-      }
-    }
-    return map;
-  }, [rows]);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -1055,19 +1049,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
-          const userMessagePreview = deriveUserMessagePreviewState(
-            displayedUserMessage.visibleText,
-            {
-              expanded: expandedUserMessagesById[row.message.id] ?? false,
-            },
-          );
+          const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
-          const showUserText =
-            userMessagePreview.text.trim().length > 0 || terminalContexts.length > 0;
+          const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
           const bubbleIsChipOnly =
             showUserText &&
             terminalContexts.length === 0 &&
-            hasOnlyInlineSkillChips(userMessagePreview.text, row.message.mentions ?? []);
+            hasOnlyInlineSkillChips(userMessageText, row.message.mentions ?? []);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const isEditingThisMessage = editingUserMessageId === row.message.id;
           const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
@@ -1165,29 +1153,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
-                    <UserMessageBody
-                      text={userMessagePreview.text}
-                      mentionReferences={row.message.mentions ?? []}
-                      terminalContexts={terminalContexts}
-                      chatTypographyStyle={userMessageTypographyStyle}
-                      resolvedTheme={resolvedTheme}
-                    />
-                    {userMessagePreview.collapsible && (
-                      <button
-                        type="button"
-                        data-scroll-anchor-ignore
-                        className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
-                        style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                        onClick={() => {
-                          setExpandedUserMessagesById((previous) => ({
-                            ...previous,
-                            [row.message.id]: !(previous[row.message.id] ?? false),
-                          }));
-                        }}
-                      >
-                        {userMessageExpanded ? "Show less" : "Show more"}
-                      </button>
-                    )}
+                    <UserMessageCollapsibleText
+                      text={userMessageText}
+                      expanded={userMessageExpanded}
+                      chatFontSizePx={normalizedChatFontSizePx}
+                      onToggle={() => {
+                        setExpandedUserMessagesById((previous) => ({
+                          ...previous,
+                          [row.message.id]: !(previous[row.message.id] ?? false),
+                        }));
+                      }}
+                    >
+                      <UserMessageBody
+                        text={userMessageText}
+                        mentionReferences={row.message.mentions ?? []}
+                        terminalContexts={terminalContexts}
+                        chatTypographyStyle={userMessageTypographyStyle}
+                        resolvedTheme={resolvedTheme}
+                        markdownCwd={markdownCwd}
+                      />
+                    </UserMessageCollapsibleText>
                   </div>
                 ) : null}
                 {!isEditingThisMessage && (
@@ -1591,12 +1576,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
-                  const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
-                    row.message.id,
-                  );
+                  const checkpointTurnCount = turnSummary.checkpointTurnCount;
+                  const checkpointTurnCounts =
+                    turnSummary.checkpointTurnCounts ??
+                    (checkpointTurnCount === undefined ? [] : [checkpointTurnCount]);
                   const canUndo =
-                    correspondingUserMessageId != null &&
-                    revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                    turnSummary.status !== "missing" &&
+                    turnSummary.status !== "error" &&
+                    turnSummary.checkpointRef !== undefined &&
+                    !turnSummary.checkpointRef.startsWith("provider-diff:") &&
+                    checkpointTurnCounts.length > 0 &&
+                    onUndoTurnFiles !== undefined;
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -1687,7 +1677,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
                             >
                               Undo
                               <Undo2Icon className="size-3" />
@@ -2240,17 +2230,6 @@ function formatInlineWorkSummary(_groupedEntries: TimelineWorkEntry[]): string |
   return null;
 }
 
-const UserMessageTerminalContextInlineLabel = memo(
-  function UserMessageTerminalContextInlineLabel(props: { context: ParsedTerminalContextEntry }) {
-    const tooltipText =
-      props.context.body.length > 0
-        ? `${props.context.header}\n${props.context.body}`
-        : props.context.header;
-
-    return <TerminalContextInlineChip label={props.context.header} tooltipText={tooltipText} />;
-  },
-);
-
 const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
   image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
   userImages: Array<
@@ -2446,12 +2425,86 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
+// Show more/less for long user messages: a visual max-height clamp (with a fade
+// mask) around the fully rendered message instead of the old character slice.
+const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
+  text: string;
+  expanded: boolean;
+  chatFontSizePx: number;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const contentId = useId();
+  const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
+  const collapsed = !props.expanded;
+
+  useLayoutEffect(() => {
+    if (!collapsed) {
+      return undefined;
+    }
+    const element = contentRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const measure = () => {
+      setOverflowing(element.scrollHeight - element.clientHeight > 1);
+    };
+    measure();
+    return observeUserMessageOverflow(element, measure);
+  }, [collapsed, props.text]);
+
+  const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
+  const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
+  const fadeStartPx = clampHeightPx - USER_MESSAGE_COLLAPSED_FADE_LINES * lineHeightPx;
+  const clamped = collapsed && overflowing;
+
+  return (
+    <>
+      <div
+        id={contentId}
+        ref={contentRef}
+        data-user-message-clamp={clamped ? "true" : "false"}
+        className={cn("min-w-0", collapsed && "overflow-hidden")}
+        style={
+          collapsed
+            ? {
+                maxHeight: `${clampHeightPx}px`,
+                ...(clamped
+                  ? {
+                      maskImage: `linear-gradient(to bottom, black ${fadeStartPx}px, transparent 100%)`,
+                    }
+                  : {}),
+              }
+            : undefined
+        }
+      >
+        {props.children}
+      </div>
+      {(clamped || props.expanded) && (
+        <button
+          type="button"
+          data-scroll-anchor-ignore
+          className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
+          style={{ fontSize: `${props.chatFontSizePx}px` }}
+          aria-expanded={props.expanded}
+          aria-controls={contentId}
+          onClick={props.onToggle}
+        >
+          {props.expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
+  );
+});
+
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   mentionReferences: ReadonlyArray<ProviderMentionReference>;
   terminalContexts: ParsedTerminalContextEntry[];
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
+  markdownCwd: string | undefined;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -2459,94 +2512,22 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       props.terminalContexts,
     );
     const inlinePrefix = buildInlineTerminalContextText(props.terminalContexts);
-    const inlineNodes: ReactNode[] = [];
-
-    if (hasEmbeddedInlineLabels) {
-      let cursor = 0;
-
-      for (const context of props.terminalContexts) {
-        const label = formatInlineTerminalContextLabel(context.header);
-        const matchIndex = props.text.indexOf(label, cursor);
-        if (matchIndex === -1) {
-          inlineNodes.length = 0;
-          break;
-        }
-        if (matchIndex > cursor) {
-          inlineNodes.push(
-            ...renderUserMessageInlineText(
-              props.text.slice(cursor, matchIndex),
-              `user-terminal-context-inline-before:${context.header}:${cursor}`,
-              props.resolvedTheme,
-              props.mentionReferences,
-            ),
-          );
-        }
-        inlineNodes.push(
-          <UserMessageTerminalContextInlineLabel
-            key={`user-terminal-context-inline:${context.header}`}
-            context={context}
-          />,
-        );
-        cursor = matchIndex + label.length;
-      }
-
-      if (inlineNodes.length > 0) {
-        if (cursor < props.text.length) {
-          inlineNodes.push(
-            ...renderUserMessageInlineText(
-              props.text.slice(cursor),
-              `user-message-terminal-context-inline-rest:${cursor}`,
-              props.resolvedTheme,
-              props.mentionReferences,
-            ),
-          );
-        }
-
-        return (
-          <div
-            className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
-            style={props.chatTypographyStyle}
-          >
-            {inlineNodes}
-          </div>
-        );
-      }
-    }
-
-    for (const context of props.terminalContexts) {
-      inlineNodes.push(
-        <UserMessageTerminalContextInlineLabel
-          key={`user-terminal-context-inline:${context.header}`}
-          context={context}
-        />,
-      );
-      inlineNodes.push(
-        <span key={`user-terminal-context-inline-space:${context.header}`} aria-hidden="true">
-          {" "}
-        </span>,
-      );
-    }
-
-    if (props.text.length > 0) {
-      inlineNodes.push(
-        ...renderUserMessageInlineText(
-          props.text,
-          "user-message-terminal-context-inline-text",
-          props.resolvedTheme,
-          props.mentionReferences,
-        ),
-      );
-    } else if (inlinePrefix.length === 0) {
+    const markdownText = hasEmbeddedInlineLabels
+      ? props.text
+      : [inlinePrefix, props.text].filter((part) => part.length > 0).join(" ");
+    if (markdownText.length === 0) {
       return null;
     }
-
     return (
-      <div
-        className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+      <ChatMarkdown
+        text={markdownText}
+        cwd={props.markdownCwd}
+        variant="user"
+        mentionReferences={props.mentionReferences}
+        terminalContexts={props.terminalContexts}
+        className="font-system-ui wrap-break-word"
         style={props.chatTypographyStyle}
-      >
-        {inlineNodes}
-      </div>
+      />
     );
   }
 
@@ -2573,18 +2554,19 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     );
   }
 
+  // Plain sent text renders as markdown (same pipeline as assistant messages);
+  // the user variant keeps single newlines, skips math, and renders composer
+  // tokens as chips via the composer-chips remark plugin.
   return (
-    <div
-      className="block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
+    <ChatMarkdown
+      variant="user"
+      text={props.text}
+      cwd={props.markdownCwd}
+      isStreaming={false}
+      mentionReferences={props.mentionReferences}
+      className="font-system-ui"
       style={props.chatTypographyStyle}
-    >
-      {renderUserMessageInlineText(
-        props.text,
-        "user-message-inline",
-        props.resolvedTheme,
-        props.mentionReferences,
-      )}
-    </div>
+    />
   );
 });
 

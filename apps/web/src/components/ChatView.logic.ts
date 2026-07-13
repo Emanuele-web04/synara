@@ -51,6 +51,41 @@ export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
+export interface PendingFileUndo {
+  readonly threadId: ThreadIdType;
+  readonly turnCount: number;
+  readonly existingFailureActivityIds: readonly string[];
+}
+
+export function hasFileUndoSettled(input: {
+  readonly pending: PendingFileUndo;
+  readonly thread: Pick<Thread, "id" | "turnDiffSummaries" | "activities"> | null;
+}): boolean {
+  if (!input.thread || input.thread.id !== input.pending.threadId) {
+    return false;
+  }
+
+  const targetSummary = input.thread.turnDiffSummaries.find(
+    (summary) => summary.checkpointTurnCount === input.pending.turnCount,
+  );
+  if (targetSummary?.files.length === 0) {
+    return true;
+  }
+
+  return input.thread.activities.some((activity) => {
+    if (
+      activity.kind !== "checkpoint.revert.failed" ||
+      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      typeof activity.payload !== "object" ||
+      activity.payload === null ||
+      !("turnCount" in activity.payload)
+    ) {
+      return false;
+    }
+    return activity.payload.turnCount === input.pending.turnCount;
+  });
+}
+
 const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
 
 /**
@@ -317,6 +352,46 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
     !input.isTerminalPrimarySurface &&
     !input.isConstrainedChatLayout
   );
+}
+
+// Build the ordered model list used by model.next / model.previous: favorites first
+// (stable user order), then remaining discovered options. Returns null when cycling is
+// a no-op (fewer than two selectable models).
+export function resolveCycledModelSlug(input: {
+  currentModel: string;
+  options: ReadonlyArray<{ slug: string }>;
+  favoriteSlugs?: ReadonlyArray<string>;
+  direction: "next" | "previous";
+}): string | null {
+  const optionSlugs = new Set(
+    input.options.map((option) => option.slug.trim()).filter((slug) => slug.length > 0),
+  );
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const push = (slug: string) => {
+    const trimmed = slug.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  };
+  for (const favorite of input.favoriteSlugs ?? []) {
+    if (optionSlugs.has(favorite.trim())) {
+      push(favorite);
+    }
+  }
+  for (const option of input.options) {
+    push(option.slug);
+  }
+  if (ordered.length < 2) {
+    return null;
+  }
+  const currentIndex = ordered.indexOf(input.currentModel.trim());
+  if (currentIndex < 0) {
+    return input.direction === "next" ? (ordered[0] ?? null) : (ordered.at(-1) ?? null);
+  }
+  const delta = input.direction === "next" ? 1 : -1;
+  const nextIndex = (currentIndex + delta + ordered.length) % ordered.length;
+  return ordered[nextIndex] ?? null;
 }
 
 export function resolveEnvironmentPanelOpen(input: {

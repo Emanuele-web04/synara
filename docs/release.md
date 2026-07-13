@@ -16,9 +16,9 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - The compatibility release remains GitHub Latest permanently; later clean Synara releases never replace it.
-- Publishes default-channel compatibility metadata plus byte-identical, same-version `synara*.yml` placeholders, then advances the dedicated channel after migration.
-- Mirrors stable versioned desktop payloads and dedicated `synara*.yml` metadata onto the pinned compatibility release.
+  - Stable 0.5.x releases are GitHub Latest; the 0.4.x compatibility release remains historical.
+- Publishes default `latest*.yml` metadata plus byte-identical `synara*.yml` aliases on every stable release so existing packaged binaries keep working.
+- Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
 - Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
@@ -32,26 +32,24 @@ This document covers build-only native validation and publishing desktop release
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
 - Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
-- Runtime channel: `synara`. The default `latest` channel is reserved for the permanent compatibility hop.
+- Runtime channel: `synara`. Stable 0.5.x releases publish both `latest` and `synara` metadata; the 0.4.x compatibility release remains available for historical migration.
 - Repository slug source:
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
-  - the compatibility release also retains `latest-mac.yml`, `latest.yml`, and `latest-linux.yml`
+  - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
 - Enforced upgrade path:
-  - The compatibility version from `scripts/release-update-policy.json` remains GitHub Latest permanently and owns `latest*.yml` plus byte-identical, same-version `synara*.yml` placeholders.
-  - Predecessor installations can therefore see only that compatibility version on their default channel.
-  - The compatibility build migrates local state and then checks the dedicated `synara` channel, whose placeholders report that the compatibility build is already current.
-  - Every clean Synara release is created with `make_latest=false`. Its payloads are uploaded to the pinned compatibility release first, and its three channel manifests are uploaded last.
-  - Re-publishing the compatibility release fails closed once its dedicated-channel manifests advertise a newer version, preventing an accidental channel rollback.
-  - Clean-release preflight also requires all six compatibility/default and dedicated-channel manifests, and both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
+  - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
+  - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a 0.5.x release.
+  - Clean releases do not mirror payloads onto the historical compatibility release, so the 0.4.x line remains immutable.
+  - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
   - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
-  - The workflow merges the per-arch macOS metadata, then copies the merged manifest to `synara-mac.yml` for the compatibility release or renames it for a clean release.
+  - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
   - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact signed archive validated by release build.
 - Local smoke test:

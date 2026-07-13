@@ -1295,29 +1295,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
         yield* waitForRuntimeIdleStop(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
-        const bindingOption = yield* directory.getBinding(input.threadId);
-        const binding = Option.getOrUndefined(bindingOption);
-        if (!binding) {
-          return;
-        }
-        const adapter = yield* registry.getByProvider(binding.provider);
-        const hasActiveSession = yield* adapter.hasSession(input.threadId);
-        if (hasActiveSession) {
-          yield* adapter.stopSession(input.threadId);
-        }
+        // Share the runtime-event binding lock so a delayed session.exited
+        // update cannot restore the stale cursor after this explicit clear.
+        const clearedProvider = yield* withBindingWriteLock(
+          input.threadId,
+          Effect.gen(function* () {
+            const bindingOption = yield* directory.getBinding(input.threadId);
+            const binding = Option.getOrUndefined(bindingOption);
+            if (!binding) {
+              return undefined;
+            }
+            const adapter = yield* registry.getByProvider(binding.provider);
+            const hasActiveSession = yield* adapter.hasSession(input.threadId);
+            if (hasActiveSession) {
+              yield* adapter.stopSession(input.threadId);
+            }
+            yield* directory.upsert({
+              threadId: input.threadId,
+              provider: binding.provider,
+              ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+              ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+              status: "stopped",
+              resumeCursor: null,
+              runtimePayload: binding.runtimePayload,
+            });
+            return binding.provider;
+          }),
+        );
         yield* waitForRuntimeIdleStop(input.threadId);
-        yield* directory.upsert({
-          threadId: input.threadId,
-          provider: binding.provider,
-          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: "stopped",
-          resumeCursor: null,
-          runtimePayload: binding.runtimePayload,
-        });
-        yield* analytics.record("provider.session.resume_cursor_cleared", {
-          provider: binding.provider,
-        });
+        if (clearedProvider !== undefined) {
+          yield* analytics.record("provider.session.resume_cursor_cleared", {
+            provider: clearedProvider,
+          });
+        }
         retireRuntimeIdleGeneration(input.threadId);
       });
 
@@ -1387,9 +1397,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const routed = yield* resolveRoutableSession({
               threadId: input.threadId,
               operation: "ProviderService.rollbackConversation",
-              allowRecovery: true,
+              // Restart-based rollback only needs the persisted binding and must
+              // not replay the stale native cursor merely to close it again.
+              allowRecovery: false,
             });
-            yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
+            if (routed.adapter.capabilities.conversationRollback === "restart-session") {
+              // Some provider protocols can resume but cannot rewind. Clear their
+              // native cursor so edit-and-resend cannot continue from stale history;
+              // ProviderCommandReactor bootstraps the retained transcript next turn.
+              yield* clearSessionResumeCursor({ threadId: input.threadId });
+            } else {
+              const active = routed.isActive
+                ? routed
+                : yield* resolveRoutableSession({
+                    threadId: input.threadId,
+                    operation: "ProviderService.rollbackConversation",
+                    allowRecovery: true,
+                  });
+              yield* active.adapter.rollbackThread(active.threadId, input.numTurns);
+            }
             yield* analytics.record("provider.conversation.rolled_back", {
               provider: routed.adapter.provider,
               turns: input.numTurns,

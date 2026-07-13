@@ -18,18 +18,18 @@ const cleanConfig: ReleaseUpdatePolicyConfig = {
 const defaultManifestNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;
 
 describe("release update policy", () => {
-  it("keeps the compatibility release latest and every clean release off latest", () => {
+  it("publishes stable clean releases to Latest and keeps prereleases off it", () => {
     expect(resolveReleaseUpdatePolicy("0.4.2", { ...cleanConfig, lane: "bridge" })).toMatchObject({
       tag: "v0.4.2",
       lane: "bridge",
-      makeLatest: true,
+      makeLatest: false,
       mirrorToStableChannel: false,
     });
     expect(resolveReleaseUpdatePolicy("v0.5.0", cleanConfig)).toMatchObject({
       tag: "v0.5.0",
       lane: "clean",
-      makeLatest: false,
-      mirrorToStableChannel: true,
+      makeLatest: true,
+      mirrorToStableChannel: false,
       bridgeTag: "v0.4.2",
       channel: "synara",
     });
@@ -52,7 +52,7 @@ describe("release update policy", () => {
     );
   });
 
-  it("renames all clean metadata to platform-specific channel filenames", () => {
+  it("keeps clean release metadata on Latest and dedicated channel filenames", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       mkdirSync(root, { recursive: true });
@@ -60,18 +60,20 @@ describe("release update policy", () => {
         writeFileSync(resolve(root, name), name);
       }
 
-      expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual(
-        channelManifestNames("synara"),
-      );
-      for (const name of channelManifestNames("synara")) {
-        expect(readFileSync(resolve(root, name), "utf8")).toContain("latest");
-      }
+      expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual([
+        ...defaultManifestNames,
+        ...channelManifestNames("synara"),
+      ]);
       for (const name of defaultManifestNames) {
-        expect(existsSync(resolve(root, name))).toBe(false);
+        expect(readFileSync(resolve(root, name), "utf8")).toBe(name);
       }
-      expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow(
-        "Expected 3 update manifests",
-      );
+      for (const [index, channelName] of channelManifestNames("synara").entries()) {
+        const defaultName = defaultManifestNames[index];
+        if (!defaultName) throw new Error(`Missing default manifest mapping for ${channelName}`);
+        expect(readFileSync(resolve(root, channelName), "utf8")).toBe(
+          readFileSync(resolve(root, defaultName), "utf8"),
+        );
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -120,13 +122,13 @@ describe("release update policy", () => {
     }
   });
 
-  it("rejects a compatibility release with missing default metadata", () => {
+  it("rejects a clean Latest release with missing default metadata", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       writeFileSync(resolve(root, "latest-mac.yml"), "bridge");
 
-      expect(() => prepareReleaseUpdateManifests(root, { ...cleanConfig, lane: "bridge" })).toThrow(
-        "Compatibility release is missing update manifests: latest.yml, latest-linux.yml",
+      expect(() => prepareReleaseUpdateManifests(root, cleanConfig)).toThrow(
+        "Latest release is missing update manifests: latest.yml, latest-linux.yml",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

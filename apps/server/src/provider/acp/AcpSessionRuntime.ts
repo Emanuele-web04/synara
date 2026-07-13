@@ -1,3 +1,8 @@
+// FILE: AcpSessionRuntime.ts
+// Purpose: Owns one authenticated ACP process, session setup, configuration, and event stream.
+// Layer: Provider ACP runtime
+// Exports: AcpSessionRuntime and its typed runtime factory contracts.
+
 import { randomUUID } from "node:crypto";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
@@ -6,8 +11,10 @@ import {
   Effect,
   Exit,
   Layer,
+  Option,
   Queue,
   Ref,
+  Schema,
   Scope,
   ServiceMap,
   Stream,
@@ -15,7 +22,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 import {
@@ -29,6 +36,14 @@ import {
   type AcpSessionModeState,
   type AcpToolCallState,
 } from "./AcpRuntimeModel.ts";
+
+const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
+
+type ConfigOptionUpdateWaiter = {
+  readonly configId: string;
+  readonly value: string | boolean;
+  readonly deferred: Deferred.Deferred<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
+};
 
 export interface AcpSpawnInput {
   readonly command: string;
@@ -75,6 +90,8 @@ export interface AcpSessionRuntimeStartResult {
     | EffectAcpSchema.NewSessionResponse
     | EffectAcpSchema.ResumeSessionResponse;
   readonly modelConfigId: string | undefined;
+  /** `session/resume` does not replay transcript updates; `session/load` may. */
+  readonly sessionSetupMethod: "new" | "load" | "resume";
 }
 
 export interface AcpSessionRuntimeShape {
@@ -101,8 +118,10 @@ export interface AcpSessionRuntimeShape {
   // event received during the turn has actually been handled — immune to
   // stream chunk buffering and in-flight handlers, unlike a queue-size probe.
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
+  readonly supportsSessionFork: Effect.Effect<boolean, EffectAcpErrors.AcpError>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
+  readonly getAvailableCommands: Effect.Effect<ReadonlyArray<EffectAcpSchema.AvailableCommand>>;
   readonly prompt: (
     payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
   ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
@@ -115,6 +134,9 @@ export interface AcpSessionRuntimeShape {
     value: string | boolean,
   ) => Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError>;
   readonly setModel: (model: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
+  readonly forkSession: (
+    payload: Omit<EffectAcpSchema.ForkSessionRequest, "sessionId">,
+  ) => Effect.Effect<EffectAcpSchema.ForkSessionResponse, EffectAcpErrors.AcpError>;
   readonly request: (
     method: string,
     payload: unknown,
@@ -176,12 +198,18 @@ const makeAcpSessionRuntime = (
     const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.unbounded<AcpParsedSessionEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
+    const availableCommandsRef = yield* Ref.make<ReadonlyArray<EffectAcpSchema.AvailableCommand>>(
+      [],
+    );
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     // Unique per runtime instance so assistant message ids never collide across
     // server restarts or session resumes (segment index resets to 0 each time).
     const runtimeInstanceId = randomUUID().slice(0, 8);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
+    const configOptionUpdateWaitersRef = yield* Ref.make<ReadonlyArray<ConfigOptionUpdateWaiter>>(
+      [],
+    );
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     // session/load can replay a large history before the consumer attaches; drop
     // those notifications so they never accumulate in the unbounded queue. For
@@ -279,19 +307,62 @@ const makeAcpSessionRuntime = (
     // driven by the callback path, not this queue.)
     yield* Stream.runDrain(acp.raw.notifications).pipe(Effect.forkIn(runtimeScope));
 
+    const resolveConfigOptionUpdateWaiters = (
+      configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    ): Effect.Effect<void> =>
+      Ref.modify(configOptionUpdateWaitersRef, (waiters) => {
+        const resolved: ConfigOptionUpdateWaiter[] = [];
+        const pending: ConfigOptionUpdateWaiter[] = [];
+        for (const waiter of waiters) {
+          const configOption = findSessionConfigOption(configOptions, waiter.configId);
+          if (configOption && configOptionCurrentValueMatches(configOption, waiter.value)) {
+            resolved.push(waiter);
+          } else {
+            pending.push(waiter);
+          }
+        }
+        return [resolved, pending] as const;
+      }).pipe(
+        Effect.flatMap((waiters) =>
+          Effect.forEach(waiters, (waiter) => Deferred.succeed(waiter.deferred, configOptions), {
+            discard: true,
+          }),
+        ),
+      );
+
     yield* acp.handleSessionUpdate((notification) =>
-      Effect.suspend(() =>
-        acceptingSessionUpdates
-          ? handleSessionUpdate({
+      Effect.suspend(() => {
+        const update = notification.update;
+        const rememberCommands =
+          update.sessionUpdate === "available_commands_update"
+            ? Ref.set(availableCommandsRef, update.availableCommands)
+            : Effect.void;
+        const rememberConfigOptions =
+          update.sessionUpdate === "config_option_update"
+            ? Ref.set(configOptionsRef, update.configOptions).pipe(
+                Effect.andThen(resolveConfigOptionUpdateWaiters(update.configOptions)),
+              )
+            : Effect.void;
+        const rememberBoundedState = rememberCommands.pipe(Effect.andThen(rememberConfigOptions));
+        if (!acceptingSessionUpdates) {
+          // Command and configuration inventories are bounded state, not
+          // transcript replay; retain them even while historical session
+          // updates are being suppressed.
+          return rememberBoundedState;
+        }
+        return rememberBoundedState.pipe(
+          Effect.andThen(
+            handleSessionUpdate({
               offer: offerSessionEvent,
               modeStateRef,
               toolCallsRef,
               assistantSegmentRef,
               runtimeInstanceId,
               params: notification,
-            })
-          : Effect.void,
-      ),
+            }),
+          ),
+        );
+      }),
     );
 
     const initializeClientCapabilities = {
@@ -376,6 +447,47 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.ResumeSessionResponse,
     ): Effect.Effect<void> => Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(response));
 
+    const waitForConfigOptionUpdate = (
+      configId: string,
+      value: string | boolean,
+    ): Effect.Effect<
+      ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+      EffectAcpErrors.AcpError
+    > =>
+      Effect.gen(function* () {
+        const deferred = yield* Deferred.make<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>();
+        const waiter: ConfigOptionUpdateWaiter = { configId, value, deferred };
+        yield* Ref.update(configOptionUpdateWaitersRef, (waiters) => [...waiters, waiter]);
+
+        // The notification may have arrived before the empty response was
+        // observed and this waiter was registered. Recheck the retained state
+        // after registration so both event orderings are race-safe.
+        const current = yield* Ref.get(configOptionsRef);
+        const currentOption = findSessionConfigOption(current, configId);
+        if (currentOption && configOptionCurrentValueMatches(currentOption, value)) {
+          yield* Deferred.succeed(deferred, current);
+        }
+
+        const result = yield* Deferred.await(deferred).pipe(
+          Effect.timeoutOption(CONFIG_OPTION_UPDATE_TIMEOUT),
+          Effect.ensuring(
+            Ref.update(configOptionUpdateWaitersRef, (waiters) =>
+              waiters.filter((candidate) => candidate !== waiter),
+            ),
+          ),
+        );
+        if (Option.isNone(result)) {
+          return yield* new EffectAcpErrors.AcpTransportError({
+            detail:
+              "ACP agent returned an empty session/set_config_option response without a matching config_option_update notification",
+            cause: new Error(
+              `Timed out waiting for config option ${JSON.stringify(configId)} to become ${JSON.stringify(value)}`,
+            ),
+          });
+        }
+        return result.value;
+      });
+
     const updateCurrentModeId = (modeId: string): Effect.Effect<void> =>
       Ref.update(modeStateRef, (current) =>
         current ? { ...current, currentModeId: modeId } : current,
@@ -412,7 +524,16 @@ const makeAcpSessionRuntime = (
               return runLoggedRequest(
                 "session/set_config_option",
                 requestPayload,
-                acp.agent.setSessionConfigOption(requestPayload),
+                acp.raw
+                  .request("session/set_config_option", requestPayload)
+                  .pipe(
+                    Effect.flatMap((response) =>
+                      decodeSetSessionConfigOptionResponse(
+                        response,
+                        waitForConfigOptionUpdate(configId, value),
+                      ),
+                    ),
+                  ),
               ).pipe(Effect.tap((response) => updateConfigOptions(response)));
             }),
           ),
@@ -461,16 +582,42 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
       let resumedExistingSession = false;
+      let sessionSetupMethod: AcpSessionRuntimeStartResult["sessionSetupMethod"] = "new";
       if (options.resumeSessionId) {
-        const loadPayload = {
+        const resumePayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
           mcpServers: [],
-        } satisfies EffectAcpSchema.LoadSessionRequest;
-        const resumed = yield* runLoggedRequest(
-          "session/load",
-          loadPayload,
-          acp.agent.loadSession(loadPayload),
+        } satisfies EffectAcpSchema.ResumeSessionRequest;
+        const supportsResume =
+          initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
+        const supportsLoad = initializeResult.agentCapabilities?.loadSession === true;
+        if (!supportsResume && !supportsLoad) {
+          return yield* new EffectAcpErrors.AcpRequestError({
+            code: -32601,
+            errorMessage:
+              "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
+          });
+        }
+        const resumed = yield* (
+          supportsResume
+            ? runLoggedRequest(
+                "session/resume",
+                resumePayload,
+                acp.agent.resumeSession(resumePayload),
+              )
+            : (() => {
+                const loadPayload = {
+                  sessionId: options.resumeSessionId,
+                  cwd: options.cwd,
+                  mcpServers: [],
+                } satisfies EffectAcpSchema.LoadSessionRequest;
+                return runLoggedRequest(
+                  "session/load",
+                  loadPayload,
+                  acp.agent.loadSession(loadPayload),
+                );
+              })()
         ).pipe(Effect.exit);
         if (Exit.isSuccess(resumed)) {
           // A resumed session may keep replaying history after session/load
@@ -479,6 +626,7 @@ const makeAcpSessionRuntime = (
           sessionId = options.resumeSessionId;
           sessionSetupResult = resumed.value;
           resumedExistingSession = true;
+          sessionSetupMethod = supportsResume ? "resume" : "load";
         } else {
           // Fresh fallback session: no replay risk, and agents may emit early
           // session/update from inside session/new — accept from here so those
@@ -495,6 +643,7 @@ const makeAcpSessionRuntime = (
           );
           sessionId = created.sessionId;
           sessionSetupResult = created;
+          sessionSetupMethod = "new";
         }
       } else {
         // Fresh session: accept updates from before session/new so any early
@@ -511,10 +660,13 @@ const makeAcpSessionRuntime = (
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;
+        sessionSetupMethod = "new";
       }
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
-      yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+      yield* Ref.update(configOptionsRef, (current) =>
+        sessionConfigOptionsFromSetup(sessionSetupResult, current),
+      );
       // Fresh sessions accept session/update while session/new is in flight, and
       // those events are already in the queue; resetting the merge/segment state
       // they created would orphan their continuations (new segment ids, unmerged
@@ -529,6 +681,7 @@ const makeAcpSessionRuntime = (
         initializeResult,
         sessionSetupResult,
         modelConfigId: extractModelConfigId(sessionSetupResult),
+        sessionSetupMethod,
       } satisfies AcpStartedState;
       return nextState;
     });
@@ -592,6 +745,7 @@ const makeAcpSessionRuntime = (
       sessionUpdatesEnqueuedCount: Effect.sync(() => sessionUpdatesEnqueued),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
+      getAvailableCommands: Ref.get(availableCommandsRef),
       prompt: (payload) =>
         getStartedState.pipe(
           Effect.flatMap((started) => {
@@ -628,17 +782,48 @@ const makeAcpSessionRuntime = (
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
             }
-            return setConfigOption("mode", modeId).pipe(
+            return Ref.get(configOptionsRef).pipe(
+              Effect.map((options) =>
+                options.find(
+                  (option) =>
+                    option.type === "select" &&
+                    (option.category === "mode" || option.id === "mode") &&
+                    flattenSessionConfigSelectOptions(option.options).some(
+                      (entry) => entry.value === modeId,
+                    ),
+                ),
+              ),
+              Effect.flatMap((modeOption) => setConfigOption(modeOption?.id ?? "mode", modeId)),
               Effect.tap(() => updateCurrentModeId(modeId)),
               Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
             );
           }),
         ),
       setConfigOption,
+      supportsSessionFork: getStartedState.pipe(
+        Effect.map(
+          (started) =>
+            started.initializeResult.agentCapabilities?.sessionCapabilities?.fork != null,
+        ),
+      ),
       setModel: (model) =>
         getStartedState.pipe(
           Effect.flatMap((started) => setConfigOption(started.modelConfigId ?? "model", model)),
           Effect.asVoid,
+        ),
+      forkSession: (payload) =>
+        getStartedState.pipe(
+          Effect.flatMap((started) => {
+            const requestPayload = {
+              ...payload,
+              sessionId: started.sessionId,
+            } satisfies EffectAcpSchema.ForkSessionRequest;
+            return runLoggedRequest(
+              "session/fork",
+              requestPayload,
+              acp.agent.forkSession(requestPayload),
+            );
+          }),
         ),
       request: (method, payload) =>
         runLoggedRequest(method, payload, acp.raw.request(method, payload)),
@@ -646,14 +831,24 @@ const makeAcpSessionRuntime = (
     } satisfies AcpSessionRuntimeShape;
   });
 
-function sessionConfigOptionsFromSetup(
+export function sessionConfigOptionsFromSetup(
   response:
     | {
         readonly configOptions?: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null;
       }
     | undefined,
+  fallback: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [],
 ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
-  return response?.configOptions ?? [];
+  return response?.configOptions ?? fallback;
+}
+
+// Flattens grouped ACP select options so semantic configuration lookup stays provider-agnostic.
+function flattenSessionConfigSelectOptions(
+  options:
+    | ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption>
+    | ReadonlyArray<EffectAcpSchema.SessionConfigSelectGroup>,
+): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
+  return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
 }
 
 function configOptionCurrentValueMatches(
@@ -668,6 +863,36 @@ function configOptionCurrentValueMatches(
     return false;
   }
   return currentValue.trim() === String(value).trim();
+}
+
+export function decodeSetSessionConfigOptionResponse(
+  response: unknown,
+  configUpdate: Effect.Effect<
+    ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    EffectAcpErrors.AcpError
+  >,
+): Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError> {
+  if (isEmptyRecord(response)) {
+    return configUpdate.pipe(Effect.map((configOptions) => ({ configOptions })));
+  }
+  return Schema.decodeUnknownEffect(EffectAcpSchema.SetSessionConfigOptionResponse)(response).pipe(
+    Effect.mapError(
+      (cause) =>
+        new EffectAcpErrors.AcpTransportError({
+          detail: "ACP agent returned an invalid session/set_config_option response",
+          cause,
+        }),
+    ),
+  );
+}
+
+function isEmptyRecord(value: unknown): value is Record<string, never> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
 }
 
 const handleSessionUpdate = ({

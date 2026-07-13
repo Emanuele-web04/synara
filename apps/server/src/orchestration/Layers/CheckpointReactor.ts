@@ -21,6 +21,8 @@ import {
   checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
+  checkpointRefForThreadTurnStartInManagedFamily,
+  isManagedCheckpointRefForThread,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -853,6 +855,176 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const currentTurnCount = thread.checkpoints.reduce(
+      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
+      0,
+    );
+
+    if (event.payload.turnCount > currentTurnCount) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: `Checkpoint turn count ${event.payload.turnCount} exceeds current turn count ${currentTurnCount}.`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    if (event.payload.scope === "files") {
+      const project = yield* getProjectShell(thread.projectId);
+      const checkpointCwd = project
+        ? yield* resolveCheckpointCwd({
+            threadId: event.payload.threadId,
+            thread,
+            project,
+            preferSessionRuntime: true,
+          })
+        : undefined;
+      if (!checkpointCwd) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: "No git workspace is available for file Undo.",
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      const isUndoableCheckpoint = (checkpoint: (typeof thread.checkpoints)[number]) =>
+        checkpoint.status === "ready" &&
+        checkpoint.files.length > 0 &&
+        isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId);
+      const targetCheckpoint = thread.checkpoints.find(
+        (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
+      );
+      if (!targetCheckpoint || !isUndoableCheckpoint(targetCheckpoint)) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: `File changes for turn ${event.payload.turnCount} are unavailable or already undone.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+      const latestUndoableTurnCount = thread.checkpoints.reduce(
+        (latest, checkpoint) =>
+          isUndoableCheckpoint(checkpoint)
+            ? Math.max(latest, checkpoint.checkpointTurnCount)
+            : latest,
+        0,
+      );
+      if (targetCheckpoint.checkpointTurnCount !== latestUndoableTurnCount) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: "Undo newer file changes before undoing this turn.",
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      const turnStartCheckpointRef =
+        checkpointRefForThreadTurnStartInManagedFamily(
+          targetCheckpoint.checkpointRef,
+          event.payload.threadId,
+          targetCheckpoint.turnId,
+        ) ?? checkpointRefForThreadTurnStart(event.payload.threadId, targetCheckpoint.turnId);
+      const hasTurnStartCheckpoint = yield* checkpointStore.hasCheckpointRef({
+        cwd: checkpointCwd,
+        checkpointRef: turnStartCheckpointRef,
+      });
+      const previousCheckpointRef =
+        event.payload.turnCount === 1
+          ? (checkpointRefForThreadTurnInManagedFamily(
+              targetCheckpoint.checkpointRef,
+              event.payload.threadId,
+              0,
+            ) ?? checkpointRefForThreadTurn(event.payload.threadId, 0))
+          : thread.checkpoints.find(
+              (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount - 1,
+            )?.checkpointRef;
+      const fromCheckpointRef = hasTurnStartCheckpoint
+        ? turnStartCheckpointRef
+        : previousCheckpointRef;
+
+      if (!fromCheckpointRef) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: `Starting checkpoint for turn ${event.payload.turnCount} is unavailable.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      const reversed = yield* checkpointStore.reverseCheckpointDiff({
+        cwd: checkpointCwd,
+        fromCheckpointRef,
+        toCheckpointRef: targetCheckpoint.checkpointRef,
+      });
+      if (!reversed) {
+        yield* appendRevertFailureActivity({
+          threadId: event.payload.threadId,
+          turnCount: event.payload.turnCount,
+          detail: `Filesystem checkpoints for turn ${event.payload.turnCount} are unavailable.`,
+          createdAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
+      }
+
+      yield* checkpointStore.captureCheckpoint({
+        cwd: checkpointCwd,
+        checkpointRef: targetCheckpoint.checkpointRef,
+      });
+      yield* Effect.forEach(
+        thread.checkpoints.filter(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount > targetCheckpoint.checkpointTurnCount &&
+            isManagedCheckpointRefForThread(checkpoint.checkpointRef, event.payload.threadId),
+        ),
+        (checkpoint) => {
+          const laterTurnStartCheckpointRef =
+            checkpointRefForThreadTurnStartInManagedFamily(
+              checkpoint.checkpointRef,
+              event.payload.threadId,
+              checkpoint.turnId,
+            ) ?? checkpointRefForThreadTurnStart(event.payload.threadId, checkpoint.turnId);
+          return Effect.all([
+            checkpointStore.copyCheckpointRef({
+              cwd: checkpointCwd,
+              fromCheckpointRef: targetCheckpoint.checkpointRef,
+              toCheckpointRef: checkpoint.checkpointRef,
+            }),
+            checkpointStore.copyCheckpointRef({
+              cwd: checkpointCwd,
+              fromCheckpointRef: targetCheckpoint.checkpointRef,
+              toCheckpointRef: laterTurnStartCheckpointRef,
+            }),
+          ]).pipe(Effect.asVoid);
+        },
+        { discard: true },
+      );
+
+      clearWorkspaceIndexCache(checkpointCwd);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: serverCommandId("checkpoint-files-undone"),
+        threadId: event.payload.threadId,
+        turnId: targetCheckpoint.turnId,
+        completedAt: targetCheckpoint.completedAt,
+        checkpointRef: targetCheckpoint.checkpointRef,
+        status: targetCheckpoint.status,
+        files: [],
+        ...(targetCheckpoint.assistantMessageId
+          ? { assistantMessageId: targetCheckpoint.assistantMessageId }
+          : {}),
+        checkpointTurnCount: targetCheckpoint.checkpointTurnCount,
+        preserveLatestTurn: true,
+        createdAt: now,
+      });
+      return;
+    }
+
     const sessionRuntime = yield* resolveSessionRuntimeForThread(event.payload.threadId);
     if (Option.isNone(sessionRuntime)) {
       yield* appendRevertFailureActivity({
@@ -868,21 +1040,6 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         detail: "Checkpoints are unavailable because this project is not a git repository.",
-        createdAt: now,
-      }).pipe(Effect.catch(() => Effect.void));
-      return;
-    }
-
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-
-    if (event.payload.turnCount > currentTurnCount) {
-      yield* appendRevertFailureActivity({
-        threadId: event.payload.threadId,
-        turnCount: event.payload.turnCount,
-        detail: `Checkpoint turn count ${event.payload.turnCount} exceeds current turn count ${currentTurnCount}.`,
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;

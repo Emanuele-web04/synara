@@ -372,7 +372,7 @@ describe("orchestration projector", () => {
     expect(thread?.session?.status).toBe("running");
   });
 
-  it("keeps latest turn running when an interim provider diff placeholder arrives", async () => {
+  it("keeps latest turn running for interim and explicitly preserving diff events", async () => {
     const createdAt = "2026-02-23T08:00:00.000Z";
     const startedAt = "2026-02-23T08:00:05.000Z";
     const placeholderAt = "2026-02-23T08:00:06.000Z";
@@ -460,6 +460,37 @@ describe("orchestration projector", () => {
 
     expect(afterPlaceholder.threads[0]?.checkpoints).toHaveLength(1);
     expect(afterPlaceholder.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "running",
+      completedAt: null,
+    });
+
+    const afterPreservedDiff = await Effect.runPromise(
+      projectEvent(
+        afterPlaceholder,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: placeholderAt,
+          commandId: "cmd-preserved-diff",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-0",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/0",
+            status: "ready",
+            files: [],
+            assistantMessageId: "assistant-0",
+            completedAt: placeholderAt,
+            preserveLatestTurn: true,
+          },
+        }),
+      ),
+    );
+
+    expect(afterPreservedDiff.threads[0]?.latestTurn).toMatchObject({
       turnId: "turn-1",
       state: "running",
       completedAt: null,

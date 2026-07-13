@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 
 import * as AcpAgent from "../../src/agent.ts";
+import * as AcpError from "../../src/errors.ts";
 
 if (process.env.ACP_MOCK_MALFORMED_OUTPUT === "1") {
   process.stdout.write("{not-json}\n");
@@ -56,6 +57,12 @@ const program = Effect.gen(function* () {
 
   yield* agent.handlePrompt(() =>
     Effect.gen(function* () {
+      if (process.env.ACP_MOCK_PROMPT_ERROR === "1") {
+        return yield* AcpError.AcpRequestError.internalError("Agent error", {
+          detail: "Error: 402 Payment Required",
+        });
+      }
+
       yield* agent.client.requestPermission({
         sessionId,
         options: [

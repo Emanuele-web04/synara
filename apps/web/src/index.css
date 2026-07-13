@@ -912,6 +912,31 @@ label:has(> select#reasoning-effort) select {
   font-family: var(--font-chat-code-family);
 }
 
+/* User-bubble markdown (sent messages). The bubble tint IS the code surface
+   color, so code needs its own contrast step against the bubble, and block
+   margins tighten to read well inside the compact bubble padding. */
+.chat-markdown--user p,
+.chat-markdown--user ul,
+.chat-markdown--user ol,
+.chat-markdown--user blockquote,
+.chat-markdown--user pre,
+.chat-markdown--user table {
+  margin: 0.45rem 0;
+}
+
+.chat-markdown--user :not(pre) > code {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.chat-markdown--user pre,
+.chat-markdown--user .chat-markdown-codeblock {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.chat-markdown--user .chat-markdown-codeblock pre {
+  background: transparent;
+}
+
 .chat-markdown .katex,
 .chat-markdown .katex * {
   color: inherit;
