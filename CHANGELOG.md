@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.1 - 2026-07-13
+
+### Added
+
+- Added Factory Droid as a first-class ACP provider, including runtime model discovery, session import, context-preserving forks and restarts, token multipliers, provider-aware model switching, and Factory branding.
+- Added `Alt+]` / `Alt+[` shortcuts for cycling through available models without leaving the conversation.
+- Kept unfinished task lists visible in the transcript after a turn completes, so follow-up work is easier to resume.
+
+### Changed
+
+- Changed file undo to restore turn-scoped workspace changes without trimming chat history or rolling back the conversation that explains them.
+- Improved cross-platform agent workflows with runtime Codex reasoning options, more reliable Windows CLI launching, platform-aware project folder labels, and graceful Git status checks outside repositories.
+- Softened the file-change header treatment so active diffs are easier to scan.
+- Removed the Windows process regression job from CI.
+
+### Fixed
+
+- Fixed model cycling and runtime-discovered reasoning options so the active provider's available choices remain consistent while a conversation is open.
+- Fixed task-list projection so unfinished work is not hidden when a turn settles.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,086 files.
+- `bun run lint` passed with 184 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed after rerunning outside the sandbox; it reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks; web passed 201 files / 2,481 tests, CLI passed 161 files / 1,770 tests with 2 skipped files and 7 skipped tests, and the remaining packages passed their suites with 1 skipped shared test.
+
 ## 0.5.0 - 2026-07-11
 
 ### Added

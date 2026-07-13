@@ -22,6 +22,58 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.1",
+    date: "Jul 13",
+    features: [
+      {
+        id: "droid-provider",
+        title: "Factory Droid is now a first-class provider",
+        description:
+          "Droid is now available alongside Synara's other agents, with runtime model discovery, session import, token multipliers, and resilient resume and recovery.",
+        details:
+          "Synara now connects to Factory Droid through ACP, discovers models and their switching capabilities at runtime, imports existing Droid sessions, carries context across forks and restarts, and keeps bootstrap, configuration, and turn teardown state coherent. The release also adds the Factory logo and richer Droid token reporting.",
+      },
+      {
+        id: "keyboard-model-cycling",
+        title: "Switch models from the keyboard",
+        description:
+          "Use Alt+] and Alt+[ to cycle through available models without leaving the conversation.",
+        details:
+          "The shortcuts use the active provider's available model options and keep model selection quick during an ongoing workflow.",
+      },
+      {
+        id: "unfinished-task-lists",
+        title: "Unfinished task lists stay visible",
+        description:
+          "Task lists now remain in the transcript after a turn completes, making follow-up work easier to resume.",
+        details:
+          "Runtime task projections preserve unfinished items after completion while keeping finished and resumed task state consistent.",
+      },
+      {
+        id: "file-undo-chat-history",
+        title: "File undo leaves chat history intact",
+        description:
+          "Undoing an agent turn now rolls back its files without deleting the conversation that explains the change.",
+        details:
+          "Turn-scoped checkpoints restore workspace state while preserving transcript history and provider conversation state.",
+      },
+      {
+        id: "cross-platform-agent-polish",
+        title: "Smoother cross-platform agent workflows",
+        description:
+          "Codex model options, Windows launching, project folder labels, and Git status checks now behave more predictably across platforms.",
+        details:
+          "Runtime-discovered Codex reasoning efforts map correctly, the Windows CLI path forwards arguments reliably, project picker labels match the host OS, and Git status handles directories outside repositories gracefully.",
+      },
+      {
+        id: "calmer-file-change-header",
+        title: "File changes are calmer to scan",
+        description:
+          "File-change headers use a softer visual treatment, keeping active work readable without competing with the diff itself.",
+      },
+    ],
+  },
+  {
     version: "0.5.0",
     date: "Jul 11",
     features: [
