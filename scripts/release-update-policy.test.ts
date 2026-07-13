@@ -52,7 +52,7 @@ describe("release update policy", () => {
     );
   });
 
-  it("keeps clean release metadata on the default Latest filenames", () => {
+  it("keeps clean release metadata on Latest and dedicated channel filenames", () => {
     const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
     try {
       mkdirSync(root, { recursive: true });
@@ -60,12 +60,19 @@ describe("release update policy", () => {
         writeFileSync(resolve(root, name), name);
       }
 
-      expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual(defaultManifestNames);
+      expect(prepareReleaseUpdateManifests(root, cleanConfig)).toEqual([
+        ...defaultManifestNames,
+        ...channelManifestNames("synara"),
+      ]);
       for (const name of defaultManifestNames) {
         expect(readFileSync(resolve(root, name), "utf8")).toBe(name);
       }
-      for (const name of channelManifestNames("synara")) {
-        expect(existsSync(resolve(root, name))).toBe(false);
+      for (const [index, channelName] of channelManifestNames("synara").entries()) {
+        const defaultName = defaultManifestNames[index];
+        if (!defaultName) throw new Error(`Missing default manifest mapping for ${channelName}`);
+        expect(readFileSync(resolve(root, channelName), "utf8")).toBe(
+          readFileSync(resolve(root, defaultName), "utf8"),
+        );
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
