@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import type { ComposerImageSource } from "../../lib/composerImageSource";
 import { ComposerImageAttachmentChip } from "./ComposerImageAttachmentChip";
 
 describe("ComposerImageAttachmentChip", () => {
@@ -136,7 +137,7 @@ describe("ComposerImageAttachmentChip", () => {
         capturedAt: "2026-07-12T19:59:33.000Z",
         appName: "Safari",
         windowTitle: "Synara",
-      } as unknown as (typeof import("../../lib/composerImageSource"))["ComposerImageSource"],
+      } as unknown as ComposerImageSource,
     };
     const markup = renderToStaticMarkup(
       <ComposerImageAttachmentChip

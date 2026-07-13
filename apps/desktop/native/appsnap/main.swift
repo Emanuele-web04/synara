@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -21,6 +22,7 @@ do {
     case let .watch(outputDirectory, excludedBundleIdentifier):
         _ = umask(0o077)
         try preparePrivateOutputDirectory(outputDirectory)
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
 
         let coordinator = AppSnapCaptureCoordinator(
             emitter: emitter,

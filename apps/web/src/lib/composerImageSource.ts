@@ -14,10 +14,7 @@ export interface ComposerAppSnapSource {
 
 export type ComposerImageSource = ComposerAppSnapSource;
 
-export type PersistedComposerAppSnapSource = Omit<
-  ComposerAppSnapSource,
-  "appIconDataUrl"
->;
+export type PersistedComposerAppSnapSource = Omit<ComposerAppSnapSource, "appIconDataUrl">;
 
 function normalizeAppIconDataUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 256_000) return null;

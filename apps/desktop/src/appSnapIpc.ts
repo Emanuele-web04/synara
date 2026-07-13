@@ -44,10 +44,7 @@ export function sendAppSnapError(
   webContents?.send(APPSNAP_IPC_CHANNELS.error, error);
 }
 
-export function registerAppSnapIpcHandlers(
-  ipcMain: IpcMain,
-  manager: DesktopAppSnapManager,
-): void {
+export function registerAppSnapIpcHandlers(ipcMain: IpcMain, manager: DesktopAppSnapManager): void {
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.getState);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.getState, async () => manager.refreshState());
 
@@ -57,9 +54,7 @@ export function registerAppSnapIpcHandlers(
   );
 
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.requestPermissions);
-  ipcMain.handle(APPSNAP_IPC_CHANNELS.requestPermissions, async () =>
-    manager.requestPermissions(),
-  );
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.requestPermissions, async () => manager.requestPermissions());
 
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.listPendingCaptures);
   ipcMain.handle(APPSNAP_IPC_CHANNELS.listPendingCaptures, async () =>
@@ -67,10 +62,7 @@ export function registerAppSnapIpcHandlers(
   );
 
   ipcMain.removeHandler(APPSNAP_IPC_CHANNELS.acknowledgeCapture);
-  ipcMain.handle(
-    APPSNAP_IPC_CHANNELS.acknowledgeCapture,
-    async (_event, captureId: unknown) => {
-      if (typeof captureId === "string") manager.acknowledgeCapture(captureId);
-    },
-  );
+  ipcMain.handle(APPSNAP_IPC_CHANNELS.acknowledgeCapture, async (_event, captureId: unknown) => {
+    if (typeof captureId === "string") await manager.acknowledgeCapture(captureId);
+  });
 }

@@ -136,10 +136,7 @@ import {
   formatOutgoingComposerPrompt,
   readFileAsDataUrl,
 } from "../lib/composerSend";
-import {
-  composerImageBlobKey,
-  persistComposerImageBlob,
-} from "../lib/composerImageBlobStore";
+import { composerImageBlobKey, persistComposerImageBlob } from "../lib/composerImageBlobStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
@@ -3387,17 +3384,14 @@ export default function ChatView({
   composerMenuOpenRef.current = composerMenuOpen;
   composerMenuItemsRef.current = composerMenuItems;
   activeComposerMenuItemRef.current = activeComposerMenuItem;
-  const nonPersistedComposerImageIdSet = useMemo(
-    () => {
-      const durableBlobIds = new Set(
-        durablyPersistedComposerImageIds
-          .filter((attachment) => Boolean(attachment.blobKey))
-          .map((attachment) => attachment.id),
-      );
-      return new Set(nonPersistedComposerImageIds.filter((id) => !durableBlobIds.has(id)));
-    },
-    [durablyPersistedComposerImageIds, nonPersistedComposerImageIds],
-  );
+  const nonPersistedComposerImageIdSet = useMemo(() => {
+    const durableBlobIds = new Set(
+      durablyPersistedComposerImageIds
+        .filter((attachment) => Boolean(attachment.blobKey))
+        .map((attachment) => attachment.id),
+    );
+    return new Set(nonPersistedComposerImageIds.filter((id) => !durableBlobIds.has(id)));
+  }, [durablyPersistedComposerImageIds, nonPersistedComposerImageIds]);
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const rememberCustomBinaryPathForDispatch = useCallback(

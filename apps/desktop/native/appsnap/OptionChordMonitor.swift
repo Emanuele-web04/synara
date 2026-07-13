@@ -3,6 +3,8 @@ import Foundation
 
 private let leftOptionKeyCode = CGKeyCode(0x3A)
 private let rightOptionKeyCode = CGKeyCode(0x3D)
+private let leftOptionDeviceFlagMask = CGEventFlags(rawValue: 0x20)
+private let rightOptionDeviceFlagMask = CGEventFlags(rawValue: 0x40)
 private let eventTapRetryInterval = 5.0
 
 private func optionEventTapCallback(
@@ -66,18 +68,13 @@ final class OptionChordMonitor {
             event.getIntegerValueField(.keyboardEventKeycode)
         )
         switch changedKeyCode {
-        case leftOptionKeyCode:
-            leftOptionIsDown.toggle()
-        case rightOptionKeyCode:
-            rightOptionIsDown.toggle()
+        case leftOptionKeyCode, rightOptionKeyCode:
+            leftOptionIsDown = event.flags.contains(leftOptionDeviceFlagMask)
+            rightOptionIsDown = event.flags.contains(rightOptionDeviceFlagMask)
         default:
             return
         }
 
-        // A flagsChanged event does not expose key-down/key-up directly. Each
-        // physical Option key produces one event on press and one on release,
-        // so tracking each side independently is more reliable than querying
-        // CGEventSource key state from inside a passive event tap.
         if !event.flags.contains(.maskAlternate) {
             resetChordState()
             return

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   APPSNAP_RECENT_TARGET_WINDOW_MS,
+  createLatestAppSnapRequestGuard,
   hasPersistedAppSnapCapture,
   resolveAppSnapTarget,
 } from "./appSnap.logic";
@@ -10,6 +11,17 @@ import {
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 const THREAD_B = ThreadId.makeUnsafe("thread-b");
 const available = (threadId: ThreadId) => threadId === THREAD_A || threadId === THREAD_B;
+
+describe("createLatestAppSnapRequestGuard", () => {
+  it("invalidates an older async toggle when a newer request begins", () => {
+    const guard = createLatestAppSnapRequestGuard();
+    const enableRequest = guard.begin();
+    const disableRequest = guard.begin();
+
+    expect(guard.isCurrent(enableRequest)).toBe(false);
+    expect(guard.isCurrent(disableRequest)).toBe(true);
+  });
+});
 
 describe("resolveAppSnapTarget", () => {
   it("uses a task interacted with during the last 60 seconds", () => {
@@ -112,9 +124,7 @@ describe("hasPersistedAppSnapCapture", () => {
       {
         persistedAttachments: [],
         promptHistorySavedDraft: {
-          persistedAttachments: [
-            { source: { kind: "appsnap", captureId: "capture-saved" } },
-          ],
+          persistedAttachments: [{ source: { kind: "appsnap", captureId: "capture-saved" } }],
         },
       },
     ];

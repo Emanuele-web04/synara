@@ -8,6 +8,7 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as Path from "node:path";
 import * as Readline from "node:readline";
+import type { Readable } from "node:stream";
 
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -21,7 +22,32 @@ import {
 
 const MAX_PENDING_CAPTURES = PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
 const MAX_HELPER_STDERR_CHARS = 4_096;
+const MAX_PENDING_CAPTURE_METADATA_BYTES = 512 * 1024;
+const PENDING_CAPTURE_STORAGE_VERSION = 1;
+const PENDING_CAPTURE_FILE_PATTERN = /^pending-([a-f0-9]{64})\.json$/;
+const PENDING_CAPTURE_IMAGE_PATTERN = /^pending-([a-f0-9]{64})\.png$/;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<null, Readable, Readable>;
+
+interface PendingAppSnapCaptureRecord {
+  capture: DesktopAppSnapCapture;
+  imagePath: string;
+  metadataPath: string;
+}
+
+interface StoredPendingAppSnapCapture {
+  version: typeof PENDING_CAPTURE_STORAGE_VERSION;
+  id: string;
+  capturedAt: string;
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  sourceAppName: string | null;
+  sourceBundleIdentifier: string | null;
+  sourceAppIconDataUrl: string | null;
+  sourceWindowTitle: string | null;
+}
 
 type AppSnapHelperMessage =
   | {
@@ -77,6 +103,116 @@ function normalizeOptionalText(value: unknown, maxLength = 512): string | null {
 function normalizeAppIconDataUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 256_000) return null;
   return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
+}
+
+function pendingCaptureStorageKey(captureId: string): string {
+  return Crypto.createHash("sha256").update(captureId).digest("hex");
+}
+
+function pendingCaptureStoragePaths(
+  captureDirectory: string,
+  captureId: string,
+): { imagePath: string; metadataPath: string } {
+  const key = pendingCaptureStorageKey(captureId);
+  const basePath = Path.join(captureDirectory, `pending-${key}`);
+  return {
+    imagePath: `${basePath}.png`,
+    metadataPath: `${basePath}.json`,
+  };
+}
+
+function toStoredPendingCapture(capture: DesktopAppSnapCapture): StoredPendingAppSnapCapture {
+  return {
+    version: PENDING_CAPTURE_STORAGE_VERSION,
+    id: capture.id,
+    capturedAt: capture.capturedAt,
+    name: capture.name,
+    mimeType: "image/png",
+    sizeBytes: capture.sizeBytes,
+    sourceAppName: capture.sourceAppName,
+    sourceBundleIdentifier: capture.sourceBundleIdentifier,
+    sourceAppIconDataUrl: capture.sourceAppIconDataUrl,
+    sourceWindowTitle: capture.sourceWindowTitle,
+  };
+}
+
+function parseStoredPendingCapture(value: unknown): StoredPendingAppSnapCapture | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const id = normalizeOptionalText(candidate.id, 128);
+  const name = normalizeOptionalText(candidate.name, 240);
+  const capturedAt = normalizeOptionalText(candidate.capturedAt, 128);
+  const sizeBytes = candidate.sizeBytes;
+  if (
+    candidate.version !== PENDING_CAPTURE_STORAGE_VERSION ||
+    !id ||
+    !name ||
+    !capturedAt ||
+    !Number.isFinite(Date.parse(capturedAt)) ||
+    candidate.mimeType !== "image/png" ||
+    typeof sizeBytes !== "number" ||
+    !Number.isSafeInteger(sizeBytes) ||
+    sizeBytes <= 0 ||
+    sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+  ) {
+    return null;
+  }
+  return {
+    version: PENDING_CAPTURE_STORAGE_VERSION,
+    id,
+    capturedAt: new Date(capturedAt).toISOString(),
+    name,
+    mimeType: "image/png",
+    sizeBytes,
+    sourceAppName: normalizeOptionalText(candidate.sourceAppName),
+    sourceBundleIdentifier: normalizeOptionalText(candidate.sourceBundleIdentifier),
+    sourceAppIconDataUrl: normalizeAppIconDataUrl(candidate.sourceAppIconDataUrl),
+    sourceWindowTitle: normalizeOptionalText(candidate.sourceWindowTitle),
+  };
+}
+
+async function readRegularFile(
+  filePath: string,
+  maximumBytes: number,
+  expectedBytes?: number,
+): Promise<Buffer> {
+  const file = await FS.promises.open(
+    filePath,
+    FS.constants.O_RDONLY | FS.constants.O_NOFOLLOW | FS.constants.O_NONBLOCK,
+  );
+  try {
+    const stats = await file.stat();
+    if (!stats.isFile()) throw new Error("Expected a regular file.");
+    if (stats.size <= 0) throw new Error("The file is empty.");
+    if (stats.size > maximumBytes) throw new Error("The file is larger than allowed.");
+    if (expectedBytes !== undefined && stats.size !== expectedBytes) {
+      throw new Error("The file size does not match its metadata.");
+    }
+    const bytes = await file.readFile();
+    if (bytes.length !== stats.size) throw new Error("The file changed while it was read.");
+    return bytes;
+  } finally {
+    await file.close();
+  }
+}
+
+async function readValidatedPendingPng(filePath: string, expectedBytes?: number): Promise<Buffer> {
+  const bytes = await readRegularFile(filePath, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES, expectedBytes);
+  if (!bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error("The file is not a valid PNG image.");
+  }
+  return bytes;
+}
+
+async function writePrivateFileAtomically(filePath: string, bytes: Uint8Array): Promise<void> {
+  const temporaryPath = `${filePath}.tmp-${process.pid}-${Crypto.randomUUID()}`;
+  try {
+    await FS.promises.writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o600 });
+    await FS.promises.rename(temporaryPath, filePath);
+    await FS.promises.chmod(filePath, 0o600).catch(() => undefined);
+  } finally {
+    await FS.promises.unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 function isPermission(value: unknown): value is "granted" | "denied" {
@@ -136,8 +272,7 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
       ...(typeof value.sourceAppName === "string" || value.sourceAppName === null
         ? { sourceAppName: value.sourceAppName }
         : {}),
-      ...(typeof value.sourceBundleIdentifier === "string" ||
-      value.sourceBundleIdentifier === null
+      ...(typeof value.sourceBundleIdentifier === "string" || value.sourceBundleIdentifier === null
         ? { sourceBundleIdentifier: value.sourceBundleIdentifier }
         : {}),
       ...(typeof value.sourceAppIconDataUrl === "string" || value.sourceAppIconDataUrl === null
@@ -190,9 +325,7 @@ function isPermissionErrorCode(code: string): boolean {
 }
 
 export class DesktopAppSnapManager {
-  readonly #options: Required<
-    Pick<DesktopAppSnapManagerOptions, "now" | "spawn">
-  > &
+  readonly #options: Required<Pick<DesktopAppSnapManagerOptions, "now" | "spawn">> &
     Omit<DesktopAppSnapManagerOptions, "now" | "spawn">;
   readonly #platform: DesktopAppSnapPlatform;
   #enabled = false;
@@ -200,12 +333,15 @@ export class DesktopAppSnapManager {
   #screenRecordingPermission: DesktopAppSnapPermission = "unknown";
   #status: DesktopAppSnapState["status"];
   #message: string | null;
-  #watchProcess: ChildProcess.ChildProcessWithoutNullStreams | null = null;
-  #permissionProcess: ChildProcess.ChildProcessWithoutNullStreams | null = null;
+  #watchProcess: AppSnapHelperProcess | null = null;
+  #watchOutputLines: Readline.Interface | null = null;
+  #watchReconcilePromise: Promise<void> | null = null;
+  #permissionProcess: AppSnapHelperProcess | null = null;
   #permissionCommandQueue: Promise<void> = Promise.resolve();
   #disposed = false;
   #intentionalWatchStop = false;
-  #pendingCaptures: DesktopAppSnapCapture[] = [];
+  #pendingCaptures: PendingAppSnapCaptureRecord[] = [];
+  #pendingCapturesLoadPromise: Promise<void> | null = null;
   #captureReadQueue: Promise<void> = Promise.resolve();
 
   constructor(options: DesktopAppSnapManagerOptions) {
@@ -260,16 +396,22 @@ export class DesktopAppSnapManager {
     return this.getState();
   }
 
-  listPendingCaptures(): DesktopAppSnapCapture[] {
-    return this.#pendingCaptures.map((capture) => ({
+  async listPendingCaptures(): Promise<DesktopAppSnapCapture[]> {
+    await this.#ensurePendingCapturesLoaded();
+    return this.#pendingCaptures.map(({ capture }) => ({
       ...capture,
       bytes: new Uint8Array(capture.bytes),
     }));
   }
 
-  acknowledgeCapture(captureId: string): void {
+  async acknowledgeCapture(captureId: string): Promise<void> {
     if (captureId.trim().length === 0) return;
-    this.#pendingCaptures = this.#pendingCaptures.filter((capture) => capture.id !== captureId);
+    await this.#ensurePendingCapturesLoaded();
+    const matchingRecords = this.#pendingCaptures.filter(({ capture }) => capture.id === captureId);
+    for (const record of matchingRecords) {
+      await this.#deletePendingCaptureFiles(record);
+    }
+    this.#pendingCaptures = this.#pendingCaptures.filter(({ capture }) => capture.id !== captureId);
   }
 
   dispose(): void {
@@ -278,6 +420,120 @@ export class DesktopAppSnapManager {
     this.#permissionProcess?.kill("SIGTERM");
     this.#permissionProcess = null;
     this.#pendingCaptures = [];
+  }
+
+  async #ensurePendingCapturesLoaded(): Promise<void> {
+    if (!this.#pendingCapturesLoadPromise) {
+      this.#pendingCapturesLoadPromise = this.#loadPendingCaptures();
+    }
+    const loadPromise = this.#pendingCapturesLoadPromise;
+    try {
+      await loadPromise;
+    } catch (error) {
+      if (this.#pendingCapturesLoadPromise === loadPromise) {
+        this.#pendingCapturesLoadPromise = null;
+      }
+      throw error;
+    }
+  }
+
+  async #loadPendingCaptures(): Promise<void> {
+    await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
+    await FS.promises.chmod(this.#options.captureDirectory, 0o700).catch(() => undefined);
+    const entries = await FS.promises.readdir(this.#options.captureDirectory);
+    const records: PendingAppSnapCaptureRecord[] = [];
+    const metadataStorageKeys = new Set(
+      entries.flatMap((entry) => PENDING_CAPTURE_FILE_PATTERN.exec(entry)?.[1] ?? []),
+    );
+
+    for (const entry of entries) {
+      const imageStorageKey = PENDING_CAPTURE_IMAGE_PATTERN.exec(entry)?.[1];
+      if (!imageStorageKey || metadataStorageKeys.has(imageStorageKey)) continue;
+      await FS.promises
+        .unlink(Path.join(this.#options.captureDirectory, entry))
+        .catch(() => undefined);
+    }
+
+    for (const entry of entries) {
+      const match = PENDING_CAPTURE_FILE_PATTERN.exec(entry);
+      if (!match) continue;
+      const storageKey = match[1];
+      const metadataPath = Path.join(this.#options.captureDirectory, entry);
+      const imagePath = Path.join(this.#options.captureDirectory, `pending-${storageKey}.png`);
+      try {
+        const metadataBytes = await readRegularFile(
+          metadataPath,
+          MAX_PENDING_CAPTURE_METADATA_BYTES,
+        );
+        const stored = parseStoredPendingCapture(JSON.parse(metadataBytes.toString("utf8")));
+        if (!stored || pendingCaptureStorageKey(stored.id) !== storageKey) {
+          throw new Error("Pending AppSnap metadata is invalid.");
+        }
+        const bytes = await readValidatedPendingPng(imagePath, stored.sizeBytes);
+        records.push({
+          capture: {
+            id: stored.id,
+            capturedAt: stored.capturedAt,
+            name: stored.name,
+            mimeType: stored.mimeType,
+            sizeBytes: bytes.byteLength,
+            bytes: new Uint8Array(bytes),
+            sourceAppName: stored.sourceAppName,
+            sourceBundleIdentifier: stored.sourceBundleIdentifier,
+            sourceAppIconDataUrl: stored.sourceAppIconDataUrl,
+            sourceWindowTitle: stored.sourceWindowTitle,
+          },
+          imagePath,
+          metadataPath,
+        });
+      } catch (error) {
+        console.warn(
+          `[desktop-appsnap] Removing unreadable pending capture ${entry}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await FS.promises.unlink(imagePath).catch(() => undefined);
+        await FS.promises.unlink(metadataPath).catch(() => undefined);
+      }
+    }
+
+    records.sort(
+      (left, right) =>
+        Date.parse(left.capture.capturedAt) - Date.parse(right.capture.capturedAt) ||
+        left.capture.id.localeCompare(right.capture.id),
+    );
+    const overflow = records.slice(0, Math.max(0, records.length - MAX_PENDING_CAPTURES));
+    for (const record of overflow) {
+      await this.#deletePendingCaptureFiles(record).catch((error) =>
+        console.warn("[desktop-appsnap] Could not remove an overflow pending capture", error),
+      );
+    }
+    this.#pendingCaptures = records.slice(-MAX_PENDING_CAPTURES);
+  }
+
+  async #persistPendingCapture(
+    capture: DesktopAppSnapCapture,
+  ): Promise<PendingAppSnapCaptureRecord> {
+    const paths = pendingCaptureStoragePaths(this.#options.captureDirectory, capture.id);
+    await writePrivateFileAtomically(paths.imagePath, capture.bytes);
+    try {
+      const metadata = Buffer.from(`${JSON.stringify(toStoredPendingCapture(capture))}\n`, "utf8");
+      if (metadata.byteLength > MAX_PENDING_CAPTURE_METADATA_BYTES) {
+        throw new Error("Pending AppSnap metadata exceeds its storage limit.");
+      }
+      await writePrivateFileAtomically(paths.metadataPath, metadata);
+    } catch (error) {
+      await FS.promises.unlink(paths.imagePath).catch(() => undefined);
+      throw error;
+    }
+    return { capture, ...paths };
+  }
+
+  async #deletePendingCaptureFiles(record: PendingAppSnapCaptureRecord): Promise<void> {
+    await FS.promises.unlink(record.imagePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    await FS.promises.unlink(record.metadataPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
   }
 
   #emitState(): void {
@@ -292,6 +548,22 @@ export class DesktopAppSnapManager {
   }
 
   async #reconcileWatchProcess(): Promise<void> {
+    if (this.#watchReconcilePromise) {
+      await this.#watchReconcilePromise;
+      return;
+    }
+    const reconcilePromise = this.#reconcileWatchProcessOnce();
+    this.#watchReconcilePromise = reconcilePromise;
+    try {
+      await reconcilePromise;
+    } finally {
+      if (this.#watchReconcilePromise === reconcilePromise) {
+        this.#watchReconcilePromise = null;
+      }
+    }
+  }
+
+  async #reconcileWatchProcessOnce(): Promise<void> {
     if (this.#disposed || this.#platform !== "macos") return;
     if (!this.#enabled) {
       this.#stopWatchProcess();
@@ -305,10 +577,7 @@ export class DesktopAppSnapManager {
       this.#stopWatchProcess();
       this.#setState(
         "permission-required",
-        permissionRequiredMessage(
-          this.#inputMonitoringPermission,
-          this.#screenRecordingPermission,
-        ),
+        permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
       );
       return;
     }
@@ -321,6 +590,15 @@ export class DesktopAppSnapManager {
     try {
       await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
       await FS.promises.chmod(this.#options.captureDirectory, 0o700).catch(() => undefined);
+      if (
+        this.#disposed ||
+        !this.#enabled ||
+        this.#watchProcess ||
+        this.#inputMonitoringPermission !== "granted" ||
+        this.#screenRecordingPermission !== "granted"
+      ) {
+        return;
+      }
       this.#startWatchProcess();
     } catch (error) {
       this.#setState(
@@ -345,15 +623,21 @@ export class DesktopAppSnapManager {
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     this.#watchProcess = child;
-    this.#wireHelperOutput(child, (message) => this.#handleWatchMessage(message));
+    this.#watchOutputLines = this.#wireHelperOutput(child, (message) =>
+      this.#handleWatchMessage(child, message),
+    );
     child.once("error", (error) => {
       if (this.#watchProcess !== child) return;
       this.#watchProcess = null;
+      this.#watchOutputLines?.close();
+      this.#watchOutputLines = null;
       this.#setState("error", `Could not start AppSnap: ${error.message}`);
     });
     child.once("exit", (code, signal) => {
       if (this.#watchProcess !== child) return;
       this.#watchProcess = null;
+      this.#watchOutputLines?.close();
+      this.#watchOutputLines = null;
       if (this.#disposed || this.#intentionalWatchStop || !this.#enabled) return;
       this.#setState(
         "error",
@@ -365,15 +649,17 @@ export class DesktopAppSnapManager {
   #stopWatchProcess(): void {
     const child = this.#watchProcess;
     this.#watchProcess = null;
+    this.#watchOutputLines?.close();
+    this.#watchOutputLines = null;
     if (!child) return;
     this.#intentionalWatchStop = true;
     child.kill("SIGTERM");
   }
 
   #wireHelperOutput(
-    child: ChildProcess.ChildProcessWithoutNullStreams,
+    child: AppSnapHelperProcess,
     onMessage: (message: AppSnapHelperMessage) => void,
-  ): void {
+  ): Readline.Interface {
     const lines = Readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     lines.on("line", (line) => {
       const message = parseAppSnapHelperMessage(line);
@@ -391,6 +677,7 @@ export class DesktopAppSnapManager {
         console.warn(`[desktop-appsnap] Native helper: ${diagnostic}`);
       }
     });
+    return lines;
   }
 
   async #runPermissionCommand(
@@ -414,7 +701,7 @@ export class DesktopAppSnapManager {
     }
 
     return await new Promise<boolean>((resolve) => {
-      let child: ChildProcess.ChildProcessWithoutNullStreams;
+      let child: AppSnapHelperProcess;
       try {
         child = this.#options.spawn(this.#options.helperPath, [command], {
           stdio: ["ignore", "pipe", "pipe"],
@@ -464,7 +751,8 @@ export class DesktopAppSnapManager {
     });
   }
 
-  #handleWatchMessage(message: AppSnapHelperMessage): void {
+  #handleWatchMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
+    if (this.#disposed || this.#watchProcess !== child) return;
     if (message.type === "ready") {
       this.#inputMonitoringPermission = "granted";
       this.#screenRecordingPermission = "granted";
@@ -512,68 +800,61 @@ export class DesktopAppSnapManager {
       this.#stopWatchProcess();
       this.#setState(
         "permission-required",
-        permissionRequiredMessage(
-          this.#inputMonitoringPermission,
-          this.#screenRecordingPermission,
-        ),
+        permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
       );
     }
     this.#emitCaptureError(message.code, message.message, message.capturedAt, true);
   }
 
-  async #consumeCapture(message: Extract<AppSnapHelperMessage, { type: "captured" }>): Promise<void> {
+  async #consumeCapture(
+    message: Extract<AppSnapHelperMessage, { type: "captured" }>,
+  ): Promise<void> {
     const capturePath = Path.resolve(message.path);
     if (!isPathInsideDirectory(this.#options.captureDirectory, capturePath)) {
       throw new Error("The AppSnap helper returned a capture outside its private directory.");
     }
 
-    try {
-      const stats = await FS.promises.lstat(capturePath);
-      if (!stats.isFile() || stats.isSymbolicLink()) {
-        throw new Error("The AppSnap helper did not return a regular image file.");
-      }
-      if (stats.size <= 0) throw new Error("The captured AppSnap is empty.");
-      if (stats.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        throw new Error("The captured AppSnap exceeds the 10MB image attachment limit.");
-      }
-      const bytes = await FS.promises.readFile(capturePath);
-      if (bytes.length !== stats.size || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
-        throw new Error("The AppSnap helper returned an invalid PNG image.");
-      }
-      const now = this.#options.now();
-      const capture: DesktopAppSnapCapture = {
-        id: normalizeOptionalText(message.id, 128) ?? Crypto.randomUUID(),
-        capturedAt: normalizeDate(message.capturedAt, now),
-        name:
-          normalizeOptionalText(message.name, 240) ??
-          `AppSnap-${now.toISOString().replace(/[:.]/g, "-")}.png`,
-        mimeType: "image/png",
-        sizeBytes: bytes.byteLength,
-        bytes: new Uint8Array(bytes),
-        sourceAppName: normalizeOptionalText(message.sourceAppName),
-        sourceBundleIdentifier: normalizeOptionalText(message.sourceBundleIdentifier),
-        sourceAppIconDataUrl: normalizeAppIconDataUrl(message.sourceAppIconDataUrl),
-        sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
-      };
-      const nextPendingCaptures = [
-        ...this.#pendingCaptures.filter((entry) => entry.id !== capture.id),
-        capture,
-      ];
-      const discardedCapture =
-        nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
-      this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
-      if (discardedCapture) {
-        this.#emitCaptureError(
-          "pending-capture-overflow",
-          `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
-          discardedCapture.capturedAt,
-          false,
-        );
-      }
-      this.#options.onCaptured(capture);
-    } finally {
-      await FS.promises.unlink(capturePath).catch(() => undefined);
+    await this.#ensurePendingCapturesLoaded();
+    const bytes = await readValidatedPendingPng(capturePath);
+    const now = this.#options.now();
+    const capture: DesktopAppSnapCapture = {
+      id: normalizeOptionalText(message.id, 128) ?? Crypto.randomUUID(),
+      capturedAt: normalizeDate(message.capturedAt, now),
+      name:
+        normalizeOptionalText(message.name, 240) ??
+        `AppSnap-${now.toISOString().replace(/[:.]/g, "-")}.png`,
+      mimeType: "image/png",
+      sizeBytes: bytes.byteLength,
+      bytes: new Uint8Array(bytes),
+      sourceAppName: normalizeOptionalText(message.sourceAppName),
+      sourceBundleIdentifier: normalizeOptionalText(message.sourceBundleIdentifier),
+      sourceAppIconDataUrl: normalizeAppIconDataUrl(message.sourceAppIconDataUrl),
+      sourceWindowTitle: normalizeOptionalText(message.sourceWindowTitle),
+    };
+    const pendingRecord = await this.#persistPendingCapture(capture);
+    // Only delete the helper's temporary file once the pending copy durably
+    // owns the capture; deleting it earlier would destroy the only on-disk
+    // copy when persistence fails transiently.
+    await FS.promises.unlink(capturePath).catch(() => undefined);
+    const nextPendingCaptures = [
+      ...this.#pendingCaptures.filter((entry) => entry.capture.id !== capture.id),
+      pendingRecord,
+    ];
+    const discardedRecord =
+      nextPendingCaptures.length > MAX_PENDING_CAPTURES ? nextPendingCaptures[0] : null;
+    this.#pendingCaptures = nextPendingCaptures.slice(-MAX_PENDING_CAPTURES);
+    if (discardedRecord) {
+      await this.#deletePendingCaptureFiles(discardedRecord).catch((error) =>
+        console.warn("[desktop-appsnap] Could not delete an overflow pending capture", error),
+      );
+      this.#emitCaptureError(
+        "pending-capture-overflow",
+        `Synara could retain only the latest ${MAX_PENDING_CAPTURES} AppSnaps while the composer was unavailable. The oldest capture was discarded.`,
+        discardedRecord.capture.capturedAt,
+        false,
+      );
     }
+    this.#options.onCaptured(capture);
   }
 
   #emitCaptureError(

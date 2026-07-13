@@ -660,6 +660,79 @@ describe("composerDraftStore prompt history saved draft", () => {
     expect(savedDraft?.persistedAttachments.map((entry) => entry.id)).toEqual(["img-sync-history"]);
     expect(savedDraft?.nonPersistedImageIds).toEqual([]);
   });
+
+  it("preserves saved-draft AppSnap metadata when persisted storage is unreadable", async () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "appsnap-history-unverified", previewUrl: "blob:history" });
+    const attachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      blobKey: `${threadId}:${image.id}`,
+      source: {
+        kind: "appsnap" as const,
+        captureId: "capture-history-unverified",
+        capturedAt: "2026-07-12T20:00:00.000Z",
+        appName: "ChatGPT",
+        windowTitle: "ChatGPT",
+      },
+    };
+    store.setPrompt(threadId, "saved before browsing history");
+    store.addImage(threadId, image);
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({ threadId, draft, prompt: draft.prompt }),
+    );
+    setLocalStorageItem(COMPOSER_DRAFT_STORAGE_KEY, { version: 2, state: {} }, Schema.Unknown);
+
+    await expect(
+      store.syncPromptHistorySavedDraftPersistedAttachments(threadId, [attachment]),
+    ).resolves.toBe("unverified");
+
+    const savedDraft =
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft;
+    expect(savedDraft?.persistedAttachments).toEqual([attachment]);
+    expect(savedDraft?.nonPersistedImageIds).toEqual([image.id]);
+  });
+
+  it("adds a hydrated AppSnap image back to a prompt-history snapshot", () => {
+    const store = useComposerDraftStore.getState();
+    const originalImage = makeImage({
+      id: "appsnap-history-hydrated",
+      previewUrl: "blob:appsnap-history-original",
+    });
+    store.setPrompt(threadId, "saved before history navigation");
+    store.addImage(threadId, originalImage);
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({ threadId, draft, prompt: draft.prompt }),
+    );
+    useComposerDraftStore.setState((state) => ({
+      draftsByThreadId: {
+        ...state.draftsByThreadId,
+        [threadId]: {
+          ...state.draftsByThreadId[threadId]!,
+          promptHistorySavedDraft: {
+            ...state.draftsByThreadId[threadId]!.promptHistorySavedDraft!,
+            images: [],
+          },
+        },
+      },
+    }));
+
+    const hydratedImage = makeImage({
+      id: originalImage.id,
+      previewUrl: "blob:appsnap-history-restored",
+    });
+    store.addPromptHistorySavedDraftImage(threadId, hydratedImage);
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft?.images,
+    ).toEqual([hydratedImage]);
+  });
 });
 
 describe("composerDraftStore restored source proposed plan", () => {
@@ -1009,11 +1082,11 @@ describe("composerDraftStore syncPersistedAttachments", () => {
         dataUrl: image.previewUrl,
       },
     ]);
-    expect(persisted).toBe(false);
+    expect(persisted).toBe("unverified");
 
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments,
-    ).toEqual([]);
+    ).toHaveLength(1);
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.nonPersistedImageIds,
     ).toEqual([image.id]);
@@ -1056,11 +1129,11 @@ describe("composerDraftStore syncPersistedAttachments", () => {
         },
       },
     ]);
-    expect(persisted).toBe(false);
+    expect(persisted).toBe("unverified");
 
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments,
-    ).toEqual([]);
+    ).toHaveLength(1);
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.nonPersistedImageIds,
     ).toEqual([image.id]);
@@ -1122,11 +1195,59 @@ describe("composerDraftStore syncPersistedAttachments", () => {
         },
       },
     ]);
-    expect(persisted).toBe(true);
+    expect(persisted).toBe("persisted");
 
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments,
     ).toHaveLength(1);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.nonPersistedImageIds,
+    ).toEqual([]);
+  });
+
+  it("verifies AppSnap metadata without rejecting unrelated malformed drafts", async () => {
+    const image = makeImage({
+      id: "appsnap-valid-among-malformed",
+      previewUrl: "blob:appsnap-valid-among-malformed",
+    });
+    const attachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      blobKey: `${threadId}:${image.id}`,
+      source: {
+        kind: "appsnap" as const,
+        captureId: "capture-valid-among-malformed",
+        capturedAt: "2026-07-12T20:00:00.000Z",
+        appName: "ChatGPT",
+        windowTitle: "ChatGPT",
+      },
+    };
+    useComposerDraftStore.getState().addImage(threadId, image);
+    setLocalStorageItem(
+      COMPOSER_DRAFT_STORAGE_KEY,
+      {
+        version: 5,
+        state: {
+          draftsByThreadId: {
+            [threadId]: {
+              prompt: "",
+              attachments: [attachment],
+            },
+            "unrelated-malformed-thread": {
+              prompt: 42,
+              attachments: "not-an-array",
+            },
+          },
+        },
+      },
+      Schema.Unknown,
+    );
+
+    await expect(
+      useComposerDraftStore.getState().syncPersistedAttachments(threadId, [attachment]),
+    ).resolves.toBe("persisted");
     expect(
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.nonPersistedImageIds,
     ).toEqual([]);

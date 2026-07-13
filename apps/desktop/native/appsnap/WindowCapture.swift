@@ -62,9 +62,7 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
         )
     }
 
-    if application.bundleIdentifier == excludedBundleIdentifier ||
-        application.processIdentifier == ProcessInfo.processInfo.processIdentifier
-    {
+    if application.bundleIdentifier == excludedBundleIdentifier {
         return .failure(
             AppSnapFailure(
                 code: "excluded_frontmost_application",
@@ -181,37 +179,59 @@ final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func start() {
+        outputQueue.asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
+            self?.finish(
+                .failure(
+                    AppSnapFailure(
+                        code: "capture_timed_out",
+                        message: "Timed out while preparing or capturing the window."
+                    )
+                )
+            )
+        }
+
         SCShareableContent.getExcludingDesktopWindows(
             true,
             onScreenWindowsOnly: true
         ) { [weak self] content, error in
             guard let self else { return }
-            if let error {
-                self.finish(
-                    .failure(
-                        AppSnapFailure(
-                            code: "shareable_content_unavailable",
-                            message: "Could not read shareable windows: \(error.localizedDescription)"
-                        )
-                    )
-                )
-                return
+            self.outputQueue.async {
+                self.handleShareableContent(content, error: error)
             }
-            guard let window = content?.windows.first(where: {
-                $0.windowID == self.selectedWindow.windowID
-            }) else {
-                self.finish(
-                    .failure(
-                        AppSnapFailure(
-                            code: "window_unavailable",
-                            message: "The selected window disappeared before it could be captured."
-                        )
-                    )
-                )
-                return
-            }
-            self.startStream(for: window)
         }
+    }
+
+    private func handleShareableContent(_ content: SCShareableContent?, error: Error?) {
+        completionLock.lock()
+        let shouldContinue = !completed
+        completionLock.unlock()
+        guard shouldContinue else { return }
+
+        if let error {
+            finish(
+                .failure(
+                    AppSnapFailure(
+                        code: "shareable_content_unavailable",
+                        message: "Could not read shareable windows: \(error.localizedDescription)"
+                    )
+                )
+            )
+            return
+        }
+        guard let window = content?.windows.first(where: {
+            $0.windowID == selectedWindow.windowID
+        }) else {
+            finish(
+                .failure(
+                    AppSnapFailure(
+                        code: "window_unavailable",
+                        message: "The selected window disappeared before it could be captured."
+                    )
+                )
+            )
+            return
+        }
+        startStream(for: window)
     }
 
     private func startStream(for window: SCWindow) {
@@ -239,7 +259,14 @@ final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+
+        completionLock.lock()
+        guard !completed else {
+            completionLock.unlock()
+            return
+        }
         self.stream = stream
+        completionLock.unlock()
 
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: outputQueue)
@@ -267,16 +294,6 @@ final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             )
         }
 
-        outputQueue.asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
-            self?.finish(
-                .failure(
-                    AppSnapFailure(
-                        code: "capture_timed_out",
-                        message: "Timed out waiting for a complete window frame."
-                    )
-                )
-            )
-        }
     }
 
     func stream(
@@ -343,13 +360,10 @@ final class OneFrameWindowCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let activeStream = stream
         completionLock.unlock()
 
-        guard let activeStream else {
-            completion(result)
-            return
+        if let activeStream {
+            activeStream.stopCapture { _ in }
         }
-        activeStream.stopCapture { [completion] _ in
-            completion(result)
-        }
+        completion(result)
     }
 }
 
@@ -448,6 +462,7 @@ final class AppSnapCaptureCoordinator {
     private let emitter: NDJSONEmitter
     private let outputDirectory: URL
     private let excludedBundleIdentifier: String
+    private let captureFeedback = AppSnapCaptureFeedback()
     private let queue = DispatchQueue(label: "dev.synara.appsnap.capture")
     private var activeCapture: OneFrameWindowCapture?
 
@@ -538,16 +553,24 @@ final class AppSnapCaptureCoordinator {
             do {
                 let png = try encodePNGUnderAttachmentLimit(image)
                 let file = try writePrivatePNG(png, id: id, to: outputDirectory)
-                emitter.emitCaptured(
-                    id: id,
-                    capturedAt: capturedAt,
-                    path: file.path,
-                    name: file.name,
-                    sourceAppName: selectedWindow.sourceAppName,
-                    sourceBundleIdentifier: selectedWindow.sourceBundleIdentifier,
-                    sourceAppIconDataURL: selectedWindow.sourceAppIconDataURL,
-                    sourceWindowTitle: selectedWindow.sourceWindowTitle
-                )
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.captureFeedback.play(for: selectedWindow.bounds) { [weak self] in
+                        guard let self else { return }
+                        self.queue.async {
+                            self.emitter.emitCaptured(
+                                id: id,
+                                capturedAt: capturedAt,
+                                path: file.path,
+                                name: file.name,
+                                sourceAppName: selectedWindow.sourceAppName,
+                                sourceBundleIdentifier: selectedWindow.sourceBundleIdentifier,
+                                sourceAppIconDataURL: selectedWindow.sourceAppIconDataURL,
+                                sourceWindowTitle: selectedWindow.sourceWindowTitle
+                            )
+                        }
+                    }
+                }
             } catch let failure as AppSnapFailure {
                 emitter.emitError(failure, capturedAt: capturedAt, id: id)
             } catch {

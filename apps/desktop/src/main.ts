@@ -1399,13 +1399,7 @@ function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
     return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
   }
-  return Path.resolve(
-    __dirname,
-    "..",
-    ".electron-runtime",
-    "appsnap",
-    "synara-appsnap-helper",
-  );
+  return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
@@ -1423,10 +1417,19 @@ function ensureMainWindowForAppSnap(): BrowserWindow | null {
 function canSendAppSnapEvent(window: BrowserWindow | null): window is BrowserWindow {
   return Boolean(
     window &&
-      !window.isDestroyed() &&
-      !window.webContents.isDestroyed() &&
-      !window.webContents.isLoadingMainFrame(),
+    !window.isDestroyed() &&
+    !window.webContents.isDestroyed() &&
+    !window.webContents.isLoadingMainFrame(),
   );
+}
+
+function sendAppSnapEvent(
+  window: BrowserWindow | null,
+  send: (webContents: BrowserWindow["webContents"]) => void,
+): boolean {
+  if (!canSendAppSnapEvent(window)) return false;
+  send(window.webContents);
+  return true;
 }
 
 function initializeDesktopAppSnap(): void {
@@ -1437,23 +1440,30 @@ function initializeDesktopAppSnap(): void {
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
     onState: (state) => {
-      sendAppSnapState(mainWindow?.webContents, state);
+      sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
     },
     onCaptured: (capture) => {
       const window = ensureMainWindowForAppSnap();
-      if (!canSendAppSnapEvent(window)) return;
-      sendAppSnapCaptured(window.webContents, capture);
+      if (sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture))) {
+        return;
+      }
+      // The renderer is still loading: replay the event once the main frame is
+      // ready. The renderer dedupes by capture id, and the capture also stays
+      // in the pending queue as a fallback for the next mount.
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.once("did-finish-load", () => {
+          sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture));
+        });
+      }
     },
     onError: (error, focusApp) => {
       const window = focusApp ? ensureMainWindowForAppSnap() : mainWindow;
-      if (!canSendAppSnapEvent(window)) {
+      if (!sendAppSnapEvent(window, (webContents) => sendAppSnapError(webContents, error))) {
         showDesktopNotification({
           title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
           body: error.message,
         });
-        return;
       }
-      sendAppSnapError(window.webContents, error);
     },
   });
 }
@@ -1496,6 +1506,13 @@ function focusMainWindow(): void {
   }
   if (!mainWindow.isVisible()) {
     mainWindow.show();
+  }
+  if (process.platform === "darwin") {
+    // BrowserWindow.focus() alone does not activate an app while another macOS
+    // application owns focus. AppSnap is an explicit global user gesture, so
+    // bringing Synara forward here is intentional.
+    app.show();
+    app.focus({ steal: true });
   }
   mainWindow.focus();
 }

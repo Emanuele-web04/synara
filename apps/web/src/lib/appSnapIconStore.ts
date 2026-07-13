@@ -8,11 +8,28 @@ const DATABASE_VERSION = 1;
 const ICON_STORE_NAME = "icons";
 const MAX_BUNDLE_IDENTIFIER_LENGTH = 512;
 const MAX_ICON_DATA_URL_LENGTH = 256_000;
+const MAX_STORED_APP_ICONS = 100;
 
 interface StoredAppSnapIcon {
   bundleIdentifier: string;
   dataUrl: string;
   updatedAt: number;
+}
+
+export function selectAppSnapIconEvictionKeys(
+  entries: ReadonlyArray<Pick<StoredAppSnapIcon, "bundleIdentifier" | "updatedAt">>,
+  maximumEntries = MAX_STORED_APP_ICONS,
+): string[] {
+  const overflow = Math.max(0, entries.length - Math.max(0, maximumEntries));
+  if (overflow === 0) return [];
+  return [...entries]
+    .sort(
+      (left, right) =>
+        left.updatedAt - right.updatedAt ||
+        left.bundleIdentifier.localeCompare(right.bundleIdentifier),
+    )
+    .slice(0, overflow)
+    .map((entry) => entry.bundleIdentifier);
 }
 
 function normalizeBundleIdentifier(value: unknown): string | null {
@@ -73,11 +90,19 @@ export async function persistAppSnapIcon(input: {
   const database = await openAppSnapIconDatabase();
   try {
     const transaction = database.transaction(ICON_STORE_NAME, "readwrite");
-    transaction.objectStore(ICON_STORE_NAME).put({
+    const store = transaction.objectStore(ICON_STORE_NAME);
+    store.put({
       bundleIdentifier,
       dataUrl,
       updatedAt: Date.now(),
     } satisfies StoredAppSnapIcon);
+    const entriesRequest = store.getAll();
+    entriesRequest.addEventListener("success", () => {
+      const entries = entriesRequest.result as StoredAppSnapIcon[];
+      for (const key of selectAppSnapIconEvictionKeys(entries)) {
+        store.delete(key);
+      }
+    });
     await waitForTransaction(transaction);
   } finally {
     database.close();

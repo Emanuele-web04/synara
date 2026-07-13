@@ -59,6 +59,7 @@ import {
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
+import { createLatestAppSnapRequestGuard } from "../appSnap.logic";
 import { APP_VERSION } from "../branding";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
@@ -720,6 +721,7 @@ function SettingsRouteView() {
     readBrowserNotificationPermissionState(),
   );
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
@@ -1325,6 +1327,8 @@ function SettingsRouteView() {
   }
 
   async function setAppSnapEnabled(nextEnabled: boolean) {
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) {
       toastManager.add({
@@ -1337,15 +1341,16 @@ function SettingsRouteView() {
 
     try {
       if (nextEnabled) {
-        setAppSnapState(await bridge.requestPermissions());
+        const permissionState = await bridge.requestPermissions();
+        if (!requestGuard.isCurrent(requestId)) return;
+        setAppSnapState(permissionState);
       }
+      if (!requestGuard.isCurrent(requestId)) return;
       updateSettings({ enableAppSnap: nextEnabled });
       const state = await bridge.setEnabled(nextEnabled);
+      if (!requestGuard.isCurrent(requestId)) return;
       setAppSnapState(state);
-      if (
-        nextEnabled &&
-        (state.status === "permission-required" || state.status === "error")
-      ) {
+      if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
         toastManager.add({
           type: "warning",
           title: "Finish AppSnap setup",
@@ -1353,6 +1358,7 @@ function SettingsRouteView() {
         });
       }
     } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
       updateSettings({ enableAppSnap: false });
       toastManager.add({
         type: "error",

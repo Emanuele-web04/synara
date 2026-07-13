@@ -20,6 +20,22 @@ export type ResolvedAppSnapTarget =
   | { kind: "existing"; target: AppSnapThreadTarget }
   | { kind: "fresh" };
 
+export interface LatestAppSnapRequestGuard {
+  begin: () => number;
+  isCurrent: (requestId: number) => boolean;
+}
+
+export function createLatestAppSnapRequestGuard(): LatestAppSnapRequestGuard {
+  let latestRequestId = 0;
+  return {
+    begin: () => {
+      latestRequestId += 1;
+      return latestRequestId;
+    },
+    isCurrent: (requestId) => requestId === latestRequestId,
+  };
+}
+
 interface AppSnapSourceCarrier {
   source?:
     | {
@@ -62,10 +78,7 @@ export function hasPersistedAppSnapCapture(
       entriesContainCapture(draft.persistedAttachments, captureId) ||
       (draft.promptHistorySavedDraft !== null &&
         draft.promptHistorySavedDraft !== undefined &&
-        entriesContainCapture(
-          draft.promptHistorySavedDraft.persistedAttachments,
-          captureId,
-        ))
+        entriesContainCapture(draft.promptHistorySavedDraft.persistedAttachments, captureId))
     ) {
       return true;
     }
