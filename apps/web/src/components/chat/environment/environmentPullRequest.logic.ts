@@ -19,6 +19,15 @@ export interface PullRequestChecksSummary {
   tone: PullRequestChecksTone;
 }
 
+// Single tone → status-color contract for the check rollup, shared by the Environment section
+// icon and the detail panel's summary text so both agree on what "failing"/"pending" looks like.
+export const PULL_REQUEST_CHECKS_TONE_TEXT_CLASS: Record<PullRequestChecksTone, string> = {
+  failure: "text-destructive",
+  pending: "text-warning",
+  success: "text-success",
+  none: "",
+};
+
 // Failure outranks pending so a red state never hides behind "N pending checks".
 export function summarizePullRequestChecks(
   checks: ReadonlyArray<GitPullRequestCheck>,

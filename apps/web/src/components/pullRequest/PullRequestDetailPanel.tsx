@@ -63,14 +63,18 @@ import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   buildFixFindingsPrompt,
   PULL_REQUEST_CHECK_STATUS_LABELS,
+  PULL_REQUEST_CHECKS_TONE_TEXT_CLASS,
   summarizePullRequestChecks,
+  summarizePullRequestComments,
   withStableCheckKeys,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestCheckStatusIcon } from "./PullRequestCheckStatusIcon";
 import { parseFindingComment, type PullRequestCommentSeverity } from "./pullRequestComment.logic";
+import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
+import { PullRequestWarningNote } from "./PullRequestWarningNote";
 
 type DetailTab = "summary" | "timeline" | "code";
 
@@ -535,8 +539,11 @@ export function PullRequestDetailPanel({
                     >
                       {detail.baseBranch}
                     </code>
-                    <span className="ml-1 tabular-nums text-success">+{detail.additions}</span>
-                    <span className="tabular-nums text-destructive">-{detail.deletions}</span>
+                    <PullRequestDiffStat
+                      additions={detail.additions}
+                      deletions={detail.deletions}
+                      className="ml-1"
+                    />
                   </span>
                 </MetaRow>
                 <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -558,21 +565,13 @@ export function PullRequestDetailPanel({
                   )}
                 </MetaRow>
                 <MetaRow icon={<ChatBubbleIcon className="size-3.5" />} label="Comments">
-                  {detail.comments.length === 0
-                    ? "No comments"
-                    : `${detail.comments.length} comment${detail.comments.length === 1 ? "" : "s"}`}
+                  {summarizePullRequestComments(detail.comments.length)}
                 </MetaRow>
                 <MetaRow icon={<CircleCheckIcon className="size-3.5" />} label="Checks">
                   {(() => {
                     const summary = summarizePullRequestChecks(detail.checks);
                     return (
-                      <span
-                        className={cn(
-                          summary.tone === "failure" && "text-destructive",
-                          summary.tone === "pending" && "text-warning",
-                          summary.tone === "success" && "text-success",
-                        )}
-                      >
+                      <span className={PULL_REQUEST_CHECKS_TONE_TEXT_CLASS[summary.tone]}>
                         {summary.label}
                       </span>
                     );
@@ -617,11 +616,11 @@ export function PullRequestDetailPanel({
             <DisclosureSection label="Comments" count={detail.comments.length} defaultOpen={false}>
               <div className="space-y-2">
                 {detail.commentsTruncated || detail.commentsIncomplete ? (
-                  <p className="rounded-md border border-warning/32 bg-warning/4 px-2 py-1.5 text-xs text-warning-foreground">
+                  <PullRequestWarningNote>
                     {detail.commentsIncomplete
                       ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
                       : "More unresolved review comments may be available on GitHub."}
-                  </p>
+                  </PullRequestWarningNote>
                 ) : null}
                 {detail.comments.length === 0 ? (
                   <p className="text-xs text-muted-foreground">No comments yet.</p>
@@ -707,10 +706,12 @@ export function PullRequestDetailPanel({
                 </div>
               ) : null}
               {patchTotals ? (
-                <div className="border-b border-border/60 px-3 py-2 text-xs text-muted-foreground">
-                  {patchTotals.fileCount} files ·{" "}
-                  <span className="text-success">+{patchTotals.additions}</span>{" "}
-                  <span className="text-destructive">-{patchTotals.deletions}</span>
+                <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                  <span>{patchTotals.fileCount} files ·</span>
+                  <PullRequestDiffStat
+                    additions={patchTotals.additions}
+                    deletions={patchTotals.deletions}
+                  />
                 </div>
               ) : null}
               {diffQuery.isPending ? (

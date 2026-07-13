@@ -46,6 +46,7 @@ import {
   buildResolveConflictsPrompt,
   describePullRequestComment,
   PULL_REQUEST_CHECK_STATUS_LABELS,
+  PULL_REQUEST_CHECKS_TONE_TEXT_CLASS,
   summarizePullRequestChecks,
   summarizePullRequestComments,
   summarizePullRequestDiffStat,
@@ -54,27 +55,22 @@ import {
 } from "./environmentPullRequest.logic";
 
 function checksToneIcon(tone: PullRequestChecksTone) {
+  const colorClass = PULL_REQUEST_CHECKS_TONE_TEXT_CLASS[tone];
   switch (tone) {
     case "failure":
       return (
-        <CircleAlertIcon
-          className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "text-destructive")}
-          aria-hidden
-        />
+        <CircleAlertIcon className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, colorClass)} aria-hidden />
       );
     case "pending":
       return (
         <Loader2Icon
-          className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "animate-spin text-warning")}
+          className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "animate-spin", colorClass)}
           aria-hidden
         />
       );
     case "success":
       return (
-        <CircleCheckIcon
-          className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "text-success")}
-          aria-hidden
-        />
+        <CircleCheckIcon className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, colorClass)} aria-hidden />
       );
     default:
       return (

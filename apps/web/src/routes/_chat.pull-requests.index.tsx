@@ -16,9 +16,11 @@ import {
 } from "~/components/chat/chatHeaderControls";
 import { PullRequestAvatar } from "~/components/pullRequest/PullRequestAvatar";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
+import { PullRequestDiffStat } from "~/components/pullRequest/PullRequestDiffStat";
 import { groupPullRequestEntriesByInvolvement } from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestStateGlyph } from "~/components/pullRequest/PullRequestStateGlyph";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
+import { PullRequestWarningNote } from "~/components/pullRequest/PullRequestWarningNote";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
@@ -183,10 +185,7 @@ function PullRequestRow({
       </span>
       <span className="flex shrink-0 flex-col items-end gap-0.5 text-[11px] tabular-nums text-muted-foreground">
         <span>{formatRelativeTime(entry.updatedAt)}</span>
-        <span>
-          <span className="text-success">+{entry.additions}</span>{" "}
-          <span className="text-destructive">-{entry.deletions}</span>
-        </span>
+        <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
       </span>
     </button>
   );
@@ -546,11 +545,11 @@ function PullRequestsRouteView() {
               </p>
             ) : null}
             {listQuery.data?.errors.length ? (
-              <div className="rounded-lg border border-warning/32 bg-warning/4 px-3 py-2 text-xs text-warning-foreground">
+              <PullRequestWarningNote className="rounded-lg px-3 py-2">
                 {listQuery.data.errors.length} project{" "}
                 {listQuery.data.errors.length === 1 ? "repository was" : "repositories were"}{" "}
                 unavailable. Healthy repositories are still shown.
-              </div>
+              </PullRequestWarningNote>
             ) : null}
           </div>
         </main>
