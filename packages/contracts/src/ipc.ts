@@ -70,6 +70,15 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  PullRequestActionInput,
+  PullRequestActionResult,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestsListInput,
+  PullRequestsListResult,
+} from "./pullRequests";
+import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -497,6 +506,12 @@ export interface NativeApi {
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
+  };
+  pullRequests: {
+    list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
+    detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
+    diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
+    action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
   };
   contextMenu: {
     show: <T extends string>(

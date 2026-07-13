@@ -109,6 +109,11 @@ import {
   ProviderSkillsCatalogInput,
 } from "./providerDiscovery";
 import { ProviderCompactThreadInput } from "./provider";
+import {
+  PullRequestActionInput,
+  PullRequestDetailInput,
+  PullRequestsListInput,
+} from "./pullRequests";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -162,6 +167,12 @@ export const WS_METHODS = {
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPullRequestSnapshot: "git.pullRequestSnapshot",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+
+  // Global pull request methods
+  pullRequestsList: "pullRequests.list",
+  pullRequestsDetail: "pullRequests.detail",
+  pullRequestsDiff: "pullRequests.diff",
+  pullRequestsAction: "pullRequests.action",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -317,6 +328,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
   tagRequestBody(WS_METHODS.gitPullRequestSnapshot, GitPullRequestSnapshotInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
+
+  // Global pull requests
+  tagRequestBody(WS_METHODS.pullRequestsList, PullRequestsListInput),
+  tagRequestBody(WS_METHODS.pullRequestsDetail, PullRequestDetailInput),
+  tagRequestBody(WS_METHODS.pullRequestsDiff, PullRequestDetailInput),
+  tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

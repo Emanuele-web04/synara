@@ -188,6 +188,9 @@ layer("GitHubCliLive", (it) => {
         url: "https://github.com/octocat/sample-repo",
         sshUrl: "git@github.com:octocat/sample-repo.git",
       });
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining(["repo", "view", "github.com/octocat/sample-repo"]),
+      );
     }),
   );
 
@@ -704,6 +707,229 @@ layer("GitHubCliLive", (it) => {
       }).pipe(Effect.flip);
 
       assert.equal(error.message.includes("Pull request not found"), true);
+    }),
+  );
+
+  it.effect("lists repository pull requests while skipping malformed entries", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 9,
+            title: "Healthy PR",
+            url: "https://github.com/acme/app/pull/9",
+            author: { login: "octocat" },
+            headRefName: "healthy",
+            baseRefName: "main",
+            state: "OPEN",
+            isDraft: false,
+            additions: 4,
+            deletions: 1,
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            reviewRequests: [
+              { __typename: "User", login: "reviewer" },
+              { __typename: "Team", name: "Platform", slug: "platform" },
+            ],
+            reviews: [],
+            labels: [{ name: "ready", color: "00ff00" }],
+          },
+          { number: "broken" },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const gh = yield* GitHubCli;
+      const result = yield* gh.listRepositoryPullRequests({
+        cwd: "/repo",
+        repository: "acme/app",
+        state: "open",
+        involvement: "reviewing",
+        viewer: "octocat",
+      });
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0]?.title, "Healthy PR");
+      assert.deepStrictEqual(result[0]?.reviewRequestLogins, ["reviewer"]);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "pr",
+        "list",
+        "--repo",
+        "github.com/acme/app",
+        "--search",
+        "review-requested:octocat",
+        "--state",
+        "open",
+        "--limit",
+        "50",
+        "--json",
+        expect.any(String),
+      ]);
+    }),
+  );
+
+  it.effect("filters authored repository lists before applying the limit", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const gh = yield* GitHubCli;
+      yield* gh.listRepositoryPullRequests({
+        cwd: "/repo",
+        repository: "acme/app",
+        state: "merged",
+        involvement: "authored",
+        viewer: "octocat",
+        limit: 50,
+      });
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining([
+          "--repo",
+          "github.com/acme/app",
+          "--author",
+          "octocat",
+          "--state",
+          "merged",
+          "--limit",
+          "50",
+        ]),
+      );
+    }),
+  );
+
+  it.effect("accepts commits with empty or missing headlines and omits the files field", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          number: 9,
+          title: "Empty commit messages",
+          url: "https://github.com/acme/app/pull/9",
+          headRefName: "empty-message",
+          baseRefName: "main",
+          state: "OPEN",
+          createdAt: "2026-07-01T00:00:00Z",
+          updatedAt: "2026-07-02T00:00:00Z",
+          commits: [
+            {
+              oid: "abc",
+              messageHeadline: "",
+              committedDate: "2026-07-01T01:00:00Z",
+            },
+            { oid: "def", committedDate: "2026-07-01T02:00:00Z" },
+          ],
+          reviewRequests: [{ __typename: "Team", name: "Platform", slug: "platform" }],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const gh = yield* GitHubCli;
+      const detail = yield* gh.getPullRequestDetail({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+      });
+      assert.deepStrictEqual(
+        detail.commits.map((commit) => commit.messageHeadline),
+        ["", ""],
+      );
+      assert.deepStrictEqual(detail.reviewers, [
+        { login: "platform", name: "Platform", avatarUrl: null, url: null },
+      ]);
+      expect(mockedRunProcess.mock.calls[0]?.[1]?.at(-1)).not.toContain("files");
+    }),
+  );
+
+  it.effect("loads bounded diffs and runs merge actions", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "diff --git a/a.ts b/a.ts\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: true,
+          stderrTruncated: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      const diff = yield* gh.getPullRequestDiff({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+      });
+      yield* gh.runPullRequestAction({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        action: "merge",
+        mergeMethod: "squash",
+      });
+
+      assert.equal(diff.truncated, true);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining(["pr", "diff", "9", "--repo", "github.com/acme/app", "--patch"]),
+      );
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "pr",
+        "merge",
+        "9",
+        "--repo",
+        "github.com/acme/app",
+        "--squash",
+      ]);
+    }),
+  );
+
+  it.effect("classifies missing and unauthenticated gh failures structurally", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("Command not found: gh"))
+        .mockRejectedValueOnce(new Error("not logged in; run gh auth login"))
+        .mockRejectedValueOnce(new Error("gh: Bad credentials (HTTP 401)"));
+      const gh = yield* GitHubCli;
+      const missing = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
+      const unauthenticated = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
+      const badCredentials = yield* gh.getViewerLogin({ cwd: "/repo" }).pipe(Effect.flip);
+      assert.equal(missing.reason, "not-installed");
+      assert.equal(unauthenticated.reason, "not-authenticated");
+      assert.equal(badCredentials.reason, "not-authenticated");
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "api",
+        "user",
+        "--hostname",
+        "github.com",
+        "--jq",
+        ".login",
+      ]);
+    }),
+  );
+
+  it.effect("rejects invalid repository identities before spawning gh", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const error = yield* gh
+        .getPullRequestDiff({ cwd: "/repo", repository: "owner/repo/extra", number: 1 })
+        .pipe(Effect.flip);
+
+      assert.equal(error.message.includes("Invalid GitHub repository identity"), true);
+      expect(mockedRunProcess).not.toHaveBeenCalled();
     }),
   );
 });

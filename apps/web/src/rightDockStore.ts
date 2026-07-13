@@ -40,7 +40,19 @@ interface RightDockStore {
   updatePane: (
     threadId: ThreadId,
     paneId: string,
-    patch: Partial<Pick<RightDockPane, "diffTurnId" | "diffFilePath" | "filePath" | "threadId">>,
+    patch: Partial<
+      Pick<
+        RightDockPane,
+        | "diffTurnId"
+        | "diffFilePath"
+        | "filePath"
+        | "threadId"
+        | "pullRequestProjectId"
+        | "pullRequestRepository"
+        | "pullRequestNumber"
+        | "pullRequestInitialTab"
+      >
+    >,
   ) => void;
   clearThreadDockState: (threadId: ThreadId) => void;
 }
