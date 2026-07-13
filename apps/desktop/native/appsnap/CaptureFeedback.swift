@@ -3,8 +3,6 @@ import CoreGraphics
 import Foundation
 import QuartzCore
 
-private let screenCaptureSoundPath =
-    "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif"
 private let flashInDuration = 0.035
 private let flashOutDuration = 0.17
 private let flashPeakOpacity: CGFloat = 0.34
@@ -45,24 +43,12 @@ private func appKitFrame(for windowBounds: CGRect) -> CGRect? {
 
 final class AppSnapCaptureFeedback {
     private var flashPanel: NSPanel?
-    private lazy var captureSound: NSSound? = {
-        let soundURL = URL(fileURLWithPath: screenCaptureSoundPath)
-        if FileManager.default.fileExists(atPath: soundURL.path),
-           let sound = NSSound(contentsOf: soundURL, byReference: true)
-        {
-            return sound
-        }
-        return NSSound(named: NSSound.Name("Tink"))
-    }()
 
+    // Visual flash only. The shutter sound is owned by the renderer, where the
+    // user's capture-sound preference gates it; playing audio here too would
+    // double the cue and ignore that setting.
     func play(for windowBounds: CGRect, completion: @escaping () -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
-        if captureSound?.isPlaying == true {
-            captureSound?.stop()
-            captureSound?.currentTime = 0
-        }
-        captureSound?.play()
-
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
               let frame = appKitFrame(for: windowBounds)
         else {

@@ -508,8 +508,9 @@ final class AppSnapCaptureCoordinator {
         let selection = DispatchQueue.main.sync {
             selectFrontmostWindow(excludedBundleIdentifier: excludedBundleIdentifier)
         }
-        emitter.emitTriggered(id: id, capturedAt: capturedAt)
 
+        // Overlapping chords report only the overlap error; emitting `triggered`
+        // first would mis-order protocol semantics for consumers correlating ids.
         guard activeCapture == nil else {
             emitter.emitError(
                 AppSnapFailure(
@@ -521,6 +522,7 @@ final class AppSnapCaptureCoordinator {
             )
             return
         }
+        emitter.emitTriggered(id: id, capturedAt: capturedAt)
 
         guard case let .success(selectedWindow) = selection else {
             if case let .failure(failure) = selection {
@@ -561,11 +563,10 @@ final class AppSnapCaptureCoordinator {
         id: String,
         capturedAt: String
     ) {
-        defer { activeCapture = nil }
-
         switch result {
         case let .failure(failure):
             emitter.emitError(failure, capturedAt: capturedAt, id: id)
+            activeCapture = nil
         case let .success(image):
             do {
                 let png = try encodePNGUnderAttachmentLimit(image)
@@ -585,11 +586,17 @@ final class AppSnapCaptureCoordinator {
                                 sourceAppIconDataURL: selectedWindow.sourceAppIconDataURL,
                                 sourceWindowTitle: selectedWindow.sourceWindowTitle
                             )
+                            // The capture lock guards the whole pipeline through
+                            // the final emit; releasing it earlier would let a
+                            // second chord interleave with the pending feedback
+                            // and captured event.
+                            self.activeCapture = nil
                         }
                     }
                 }
             } catch let failure as AppSnapFailure {
                 emitter.emitError(failure, capturedAt: capturedAt, id: id)
+                activeCapture = nil
             } catch {
                 emitter.emitError(
                     AppSnapFailure(
@@ -599,6 +606,7 @@ final class AppSnapCaptureCoordinator {
                     capturedAt: capturedAt,
                     id: id
                 )
+                activeCapture = nil
             }
         }
     }

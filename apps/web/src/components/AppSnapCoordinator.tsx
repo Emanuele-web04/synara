@@ -62,6 +62,20 @@ function isThreadAvailable(threadId: ThreadId): boolean {
   return Boolean(useComposerDraftStore.getState().draftThreadsByThreadId[threadId]);
 }
 
+// A failed attach attempt can leave a live image in a draft (for example when
+// the metadata sync throws after the image was added). Remove those leftovers
+// before re-attaching so a retry never produces duplicate attachments.
+function removeStaleLiveCaptureImages(captureId: string): void {
+  const draftStore = useComposerDraftStore.getState();
+  for (const [threadId, draft] of Object.entries(draftStore.draftsByThreadId)) {
+    for (const image of draft.images) {
+      if (image.source?.kind === "appsnap" && image.source.captureId === captureId) {
+        draftStore.removeImage(threadId as ThreadId, image.id);
+      }
+    }
+  }
+}
+
 function rememberCaptureId(captureIds: Map<string, true>, captureId: string): boolean {
   if (captureIds.has(captureId)) return false;
   captureIds.set(captureId, true);
@@ -440,6 +454,7 @@ export function AppSnapCoordinator() {
           }
           let persistence: "persisted" | "unverified";
           try {
+            removeStaleLiveCaptureImages(capture.id);
             persistence = await attachCapture(capture);
           } catch (error) {
             toastManager.add({
@@ -493,6 +508,10 @@ export function AppSnapCoordinator() {
       disposed = true;
       unsubscribeCaptured();
       unsubscribeError();
+      // The dedupe map only guards a single subscription (live event vs the
+      // mount-time pending replay). Keeping ids across resubscribes would make
+      // the next pending replay skip captures that were never acknowledged.
+      captureIdsRef.current.clear();
     };
   }, [attachCapture]);
 
