@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.1 - 2026-07-13
+## 0.5.2 - 2026-07-13
 
 ### Added
 
@@ -15,20 +15,23 @@
 - Softened the file-change header treatment so active diffs are easier to scan.
 - Removed the Windows process regression job from CI.
 - Stable 0.5.x releases now publish on GitHub Latest, while 0.4.x remains the historical compatibility line.
+- Superseded the withdrawn 0.5.1 build after its activity-sequence migration could stall startup on large local histories.
 
 ### Fixed
 
 - Fixed model cycling and runtime-discovered reasoning options so the active provider's available choices remain consistent while a conversation is open.
 - Fixed task-list projection so unfinished work is not hidden when a turn settles.
+- Fixed startup on large databases by replacing the quadratic activity-sequence backfill with an indexed linear migration; the recovered 1.1 GB production database retained all 21 projects, 70 threads, 14,683 messages, and 180,862 activities.
+- Fixed stable updater feeds to publish both GitHub Latest metadata and the `synara-*` channel aliases expected by installed desktop builds.
 
 ### Verification
 
-- `bun run fmt:check` passed across 13,086 files.
+- `bun run fmt:check` passed across 13,087 files.
 - `bun run lint` passed with 184 warnings and 0 errors.
 - `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
 - `bun run release:smoke` passed after rerunning outside the sandbox; it reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
 - `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
-- Full `bun run test` passed: 10 Turbo tasks; web passed 201 files / 2,481 tests, CLI passed 161 files / 1,770 tests with 2 skipped files and 7 skipped tests, and the remaining packages passed their suites with 1 skipped shared test.
+- Full `bun run test` passed: 10 Turbo tasks; web passed 201 files / 2,481 tests, CLI passed 162 files / 1,771 tests with 2 skipped files and 7 skipped tests, and the remaining packages passed their suites with 1 skipped shared test.
 
 ## 0.5.0 - 2026-07-11
 
