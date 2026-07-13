@@ -16,6 +16,15 @@ export type ComposerImageSource = ComposerAppSnapSource;
 
 export type PersistedComposerAppSnapSource = Omit<ComposerAppSnapSource, "appIconDataUrl">;
 
+export function isComposerAppSnapCaptureSource(value: unknown, captureId: string): boolean {
+  if (!value || typeof value !== "object" || captureId.length === 0) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    (candidate.kind === "appsnap" || candidate.kind === "appshot") &&
+    candidate.captureId === captureId
+  );
+}
+
 function normalizeAppIconDataUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 256_000) return null;
   return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;

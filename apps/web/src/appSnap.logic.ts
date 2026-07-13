@@ -5,6 +5,8 @@
 
 import type { ThreadId } from "@synara/contracts";
 
+import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
+
 export const APPSNAP_RECENT_TARGET_WINDOW_MS = 60_000;
 
 export interface AppSnapThreadTarget {
@@ -58,10 +60,7 @@ interface AppSnapCaptureDraft {
 }
 
 function isCaptureEntry(entry: AppSnapSourceCarrier, captureId: string): boolean {
-  return (
-    (entry.source?.kind === "appsnap" || entry.source?.kind === "appshot") &&
-    entry.source.captureId === captureId
-  );
+  return isComposerAppSnapCaptureSource(entry.source, captureId);
 }
 
 function entriesContainCapture(

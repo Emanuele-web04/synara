@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
+import { SYNARA_DEVELOPMENT_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -44,7 +45,7 @@ describe("desktop AppSnap platform state", () => {
       platform: "win32",
       helperPath: "C:\\missing\\synara-appsnap-helper.exe",
       captureDirectory: "C:\\tmp\\appsnap",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       onState,
       onCaptured: vi.fn(),
       onError: vi.fn(),
@@ -67,7 +68,7 @@ describe("desktop AppSnap platform state", () => {
       platform: "darwin",
       helperPath: "/tmp/synara-appsnap-helper-that-does-not-exist",
       captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       onState: vi.fn(),
       onCaptured: vi.fn(),
       onError: vi.fn(),
@@ -137,7 +138,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -208,7 +209,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -273,7 +274,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -325,7 +326,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory,
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -365,7 +366,13 @@ describe("AppSnap helper protocol", () => {
       expect(spawn).toHaveBeenCalledTimes(3);
       expect(spawn).toHaveBeenLastCalledWith(
         process.execPath,
-        ["--watch", "--output-dir", captureDirectory, "--excluded-bundle-id", "com.synara.app"],
+        [
+          "--watch",
+          "--output-dir",
+          captureDirectory,
+          "--excluded-bundle-id",
+          SYNARA_DEVELOPMENT_BUNDLE_ID,
+        ],
         expect.any(Object),
       );
     } finally {
@@ -390,7 +397,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory,
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured,
@@ -456,7 +463,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -523,7 +530,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory,
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured,
@@ -590,7 +597,7 @@ describe("AppSnap helper protocol", () => {
       platform: "darwin",
       helperPath: process.execPath,
       captureDirectory,
-      excludedBundleId: "com.synara.app",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       spawn,
       onState: vi.fn(),
       onCaptured,
@@ -633,7 +640,7 @@ describe("AppSnap helper protocol", () => {
         platform: "darwin",
         helperPath: process.execPath,
         captureDirectory,
-        excludedBundleId: "com.synara.app",
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
         onState: vi.fn(),
         onCaptured: vi.fn(),
         onError: vi.fn(),
@@ -657,7 +664,7 @@ describe("AppSnap helper protocol", () => {
         platform: "darwin",
         helperPath: process.execPath,
         captureDirectory,
-        excludedBundleId: "com.synara.app",
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
         onState: vi.fn(),
         onCaptured: vi.fn(),
         onError: vi.fn(),

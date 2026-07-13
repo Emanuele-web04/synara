@@ -752,6 +752,91 @@ describe("composerDraftStore prompt history saved draft", () => {
       useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft?.images,
     ).toEqual([hydratedImage]);
   });
+
+  it("removes stale AppSnap rows before retrying a capture with missing blob bytes", async () => {
+    const liveThreadId = ThreadId.makeUnsafe("thread-appsnap-retry-live");
+    const savedThreadId = ThreadId.makeUnsafe("thread-appsnap-retry-saved");
+    const captureId = "capture-missing-blob";
+    const source = {
+      kind: "appsnap" as const,
+      captureId,
+      capturedAt: "2026-07-14T08:00:00.000Z",
+      appName: "Safari",
+      windowTitle: "Synara",
+    };
+    const staleLiveImage = {
+      ...makeImage({ id: "appsnap-stale-live", previewUrl: "blob:appsnap-stale-live" }),
+      source,
+    };
+    const staleSavedImage = {
+      ...makeImage({ id: "appsnap-stale-saved", previewUrl: "blob:appsnap-stale-saved" }),
+      source,
+    };
+    const unrelatedLiveImage = makeImage({
+      id: "unrelated-live",
+      previewUrl: "blob:unrelated-live",
+      name: "unrelated-live.png",
+    });
+    const unrelatedSavedImage = makeImage({
+      id: "unrelated-saved",
+      previewUrl: "blob:unrelated-saved",
+      name: "unrelated-saved.png",
+    });
+    const persistedAttachment = (image: ComposerImageAttachment) => ({
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+      ...(image.source ? { source: image.source } : {}),
+    });
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(liveThreadId, "live draft");
+    store.addImages(liveThreadId, [staleLiveImage, unrelatedLiveImage]);
+    await store.syncPersistedAttachments(liveThreadId, [
+      persistedAttachment(staleLiveImage),
+      persistedAttachment(unrelatedLiveImage),
+    ]);
+
+    store.setPrompt(savedThreadId, "saved draft");
+    store.addImages(savedThreadId, [staleSavedImage, unrelatedSavedImage]);
+    await store.syncPersistedAttachments(savedThreadId, [
+      persistedAttachment(staleSavedImage),
+      persistedAttachment(unrelatedSavedImage),
+    ]);
+    const savedDraft = useComposerDraftStore.getState().draftsByThreadId[savedThreadId]!;
+    store.setPromptHistorySavedDraft(
+      savedThreadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId: savedThreadId,
+        draft: savedDraft,
+        prompt: savedDraft.prompt,
+      }),
+    );
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[liveThreadId]?.images.map(
+        (image) => image.id,
+      ),
+    ).toEqual([staleLiveImage.id, unrelatedLiveImage.id]);
+
+    store.removeAppSnapCapture(captureId);
+
+    const liveDraft = useComposerDraftStore.getState().draftsByThreadId[liveThreadId]!;
+    expect(liveDraft.images.map((image) => image.id)).toEqual([unrelatedLiveImage.id]);
+    expect(liveDraft.persistedAttachments.map((attachment) => attachment.id)).toEqual([
+      unrelatedLiveImage.id,
+    ]);
+    const promptHistoryDraft =
+      useComposerDraftStore.getState().draftsByThreadId[savedThreadId]?.promptHistorySavedDraft;
+    expect(promptHistoryDraft?.images.map((image) => image.id)).toEqual([
+      unrelatedSavedImage.id,
+    ]);
+    expect(promptHistoryDraft?.persistedAttachments.map((attachment) => attachment.id)).toEqual([
+      unrelatedSavedImage.id,
+    ]);
+  });
 });
 
 describe("composerDraftStore restored source proposed plan", () => {
