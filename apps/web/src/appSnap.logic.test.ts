@@ -5,6 +5,7 @@ import {
   APPSNAP_RECENT_TARGET_WINDOW_MS,
   createLatestAppSnapRequestGuard,
   hasPersistedAppSnapCapture,
+  persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
 } from "./appSnap.logic";
 
@@ -145,5 +146,45 @@ describe("hasPersistedAppSnapCapture", () => {
         "capture-live-only",
       ),
     ).toBe(false);
+  });
+});
+
+describe("persistedAppSnapCaptureBlobKeys", () => {
+  it("collects blob keys for a capture across drafts and prompt-history snapshots", () => {
+    expect(
+      persistedAppSnapCaptureBlobKeys(
+        [
+          {
+            persistedAttachments: [
+              { blobKey: "blob-live", source: { kind: "appsnap", captureId: "capture-1" } },
+              { blobKey: "blob-other", source: { kind: "appsnap", captureId: "capture-2" } },
+            ],
+            promptHistorySavedDraft: {
+              persistedAttachments: [
+                { blobKey: "blob-saved", source: { kind: "appsnap", captureId: "capture-1" } },
+              ],
+            },
+          },
+        ],
+        "capture-1",
+      ),
+    ).toEqual(["blob-live", "blob-saved"]);
+  });
+
+  it("ignores entries without a usable blob key", () => {
+    expect(
+      persistedAppSnapCaptureBlobKeys(
+        [
+          {
+            persistedAttachments: [
+              { source: { kind: "appsnap", captureId: "capture-1" } },
+              { blobKey: "", source: { kind: "appsnap", captureId: "capture-1" } },
+            ],
+            promptHistorySavedDraft: null,
+          },
+        ],
+        "capture-1",
+      ),
+    ).toEqual([]);
   });
 });

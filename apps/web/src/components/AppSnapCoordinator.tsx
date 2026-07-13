@@ -12,6 +12,7 @@ import {
   type AppSnapThreadTarget,
   type TimedAppSnapThreadTarget,
   hasPersistedAppSnapCapture,
+  persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
 } from "../appSnap.logic";
 import {
@@ -31,6 +32,7 @@ import {
   readComposerImageBlob,
 } from "../lib/composerImageBlobStore";
 import { persistAppSnapIcon, readAppSnapIcon } from "../lib/appSnapIconStore";
+import { playAppSnapCaptureSound } from "../lib/appSnapSound";
 import type { ComposerAppSnapSource } from "../lib/composerImageSource";
 import { resolveRecentThreadSplitActivation } from "../recentViewActivation.logic";
 import { useSplitViewStore } from "../splitViewStore";
@@ -100,6 +102,10 @@ export function AppSnapCoordinator() {
   const captureIdsRef = useRef(new Map<string, true>());
   const captureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const blobHydrationInFlightRef = useRef(new Set<string>());
+  // Read through a ref so toggling the sound preference doesn't resubscribe the
+  // capture listener (which would re-deliver pending captures).
+  const playCaptureSoundRef = useRef(settings.appSnapPlaySound);
+  playCaptureSoundRef.current = settings.appSnapPlaySound;
 
   useEffect(() => {
     let disposed = false;
@@ -256,7 +262,15 @@ export function AppSnapCoordinator() {
   const activateExistingTarget = useCallback(
     async (target: AppSnapThreadTarget) => {
       openChatThreadPage(target.threadId);
-      if (focusedTargetRef.current?.threadId === target.threadId) return;
+      // Same thread is only "already active" when the split pane matches too;
+      // a capture aimed at another pane still needs activation below.
+      const focused = focusedTargetRef.current;
+      if (
+        focused?.threadId === target.threadId &&
+        (!target.splitViewId || focused.splitViewId === target.splitViewId)
+      ) {
+        return;
+      }
 
       const splitActivation = resolveRecentThreadSplitActivation({
         view: {
@@ -407,16 +421,22 @@ export function AppSnapCoordinator() {
       if (disposed || !rememberCaptureId(captureIdsRef.current, capture.id)) return;
       captureQueueRef.current = captureQueueRef.current
         .then(async () => {
-          if (
-            hasPersistedAppSnapCapture(
-              Object.values(useComposerDraftStore.getState().draftsByThreadId),
-              capture.id,
-            )
-          ) {
-            await bridge
-              .acknowledgeCapture(capture.id)
-              .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
-            return;
+          const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadId);
+          if (hasPersistedAppSnapCapture(drafts, capture.id)) {
+            // Draft metadata alone is not proof the screenshot survived: only
+            // acknowledge (which deletes the desktop pending file) once the
+            // persisted blob bytes are actually readable. Otherwise fall
+            // through and attach the capture again from the pending bytes.
+            const blobKeys = persistedAppSnapCaptureBlobKeys(drafts, capture.id);
+            const blobs = await Promise.all(
+              blobKeys.map((blobKey) => readComposerImageBlob(blobKey).catch(() => null)),
+            );
+            if (blobs.some((file) => file !== null)) {
+              await bridge
+                .acknowledgeCapture(capture.id)
+                .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
+              return;
+            }
           }
           let persistence: "persisted" | "unverified";
           try {
@@ -447,7 +467,12 @@ export function AppSnapCoordinator() {
         .catch(() => undefined);
     };
 
-    const unsubscribeCaptured = bridge.onCaptured(enqueueCapture);
+    const unsubscribeCaptured = bridge.onCaptured((capture) => {
+      // Shutter cue for live captures only; captures restored from the pending
+      // store on mount happened in the past and should land silently.
+      if (playCaptureSoundRef.current) void playAppSnapCaptureSound();
+      enqueueCapture(capture);
+    });
     const unsubscribeError = bridge.onError((error) => {
       toastManager.add({
         type: "error",

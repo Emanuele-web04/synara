@@ -202,14 +202,44 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
   },
 
-  // ── Behavior ──────────────────────────────────────────────────────────────────
+  // ── AppSnap ───────────────────────────────────────────────────────────────────
   {
-    id: "behavior:appsnap",
-    section: "behavior",
-    title: "AppSnap",
+    id: "appsnap:enable",
+    section: "appsnap",
+    title: "Enable AppSnap",
     keywords:
-      "Capture the frontmost macOS app window with both Option keys and add it to a recent task. screenshot screen recording input monitoring alt",
+      "Capture the frontmost macOS app window with both Option keys and add it to a recent task. appshot screenshot snap window capture alt",
   },
+  {
+    id: "appsnap:shortcut",
+    section: "appsnap",
+    title: "Shortcut",
+    keywords: "Press the left and right Option keys at the same time. hotkey chord alt keys",
+  },
+  {
+    id: "appsnap:destination",
+    section: "appsnap",
+    title: "Destination",
+    keywords:
+      "Snaps join the task you interacted with in the last minute, otherwise a fresh task opens. automatic target composer",
+  },
+  {
+    id: "appsnap:capture-sound",
+    section: "appsnap",
+    title: "Capture sound",
+    keywords: "Play a short shutter cue when a window is captured. sound effect audio mute",
+  },
+  {
+    id: "appsnap:permissions",
+    section: "appsnap",
+    title: "Permission status",
+    keywords:
+      "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
+    // Renders only in the macOS desktop app, so no stable anchor on other platforms.
+    target: null,
+  },
+
+  // ── Behavior ──────────────────────────────────────────────────────────────────
   {
     id: "behavior:assistant-output",
     section: "behavior",

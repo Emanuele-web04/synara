@@ -83,7 +83,13 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
         )
     }
 
+    // The on-screen window list is ordered front to back, so the first
+    // eligible window is the app's visually frontmost one. Multi-window apps
+    // can still expose untitled auxiliary layer-0 windows (overlays, buffers)
+    // above the focused document window, so prefer the frontmost *titled*
+    // window and only fall back to the frontmost untitled candidate.
     let processIdentifier = application.processIdentifier
+    var chosen: (windowID: CGWindowID, bounds: CGRect, title: String?)?
     for candidate in windowInfo {
         guard number(in: candidate, forKey: kCGWindowOwnerPID)?.int32Value == processIdentifier,
               number(in: candidate, forKey: kCGWindowLayer)?.intValue == 0,
@@ -100,22 +106,33 @@ func selectFrontmostWindow(excludedBundleIdentifier: String) -> Result<SelectedW
             continue
         }
 
-        return .success(
-            SelectedWindow(
-                windowID: windowID,
-                bounds: bounds,
-                sourceAppName: application.localizedName,
-                sourceBundleIdentifier: application.bundleIdentifier,
-                sourceAppIconDataURL: appIconDataURL(for: application),
-                sourceWindowTitle: candidate[kCGWindowName as String] as? String
+        let title = candidate[kCGWindowName as String] as? String
+        if let title, !title.isEmpty {
+            chosen = (windowID, bounds, title)
+            break
+        }
+        if chosen == nil {
+            chosen = (windowID, bounds, title)
+        }
+    }
+
+    guard let chosen else {
+        return .failure(
+            AppSnapFailure(
+                code: "no_eligible_window",
+                message: "The frontmost application has no visible, shareable layer-0 window."
             )
         )
     }
 
-    return .failure(
-        AppSnapFailure(
-            code: "no_eligible_window",
-            message: "The frontmost application has no visible, shareable layer-0 window."
+    return .success(
+        SelectedWindow(
+            windowID: chosen.windowID,
+            bounds: chosen.bounds,
+            sourceAppName: application.localizedName,
+            sourceBundleIdentifier: application.bundleIdentifier,
+            sourceAppIconDataURL: appIconDataURL(for: application),
+            sourceWindowTitle: chosen.title
         )
     )
 }

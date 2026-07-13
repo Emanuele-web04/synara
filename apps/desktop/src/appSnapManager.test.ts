@@ -444,6 +444,70 @@ describe("AppSnap helper protocol", () => {
     }
   });
 
+  it("reports capture overlap without stealing app focus", async () => {
+    const checkChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(checkChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory: "/tmp/synara-appsnap-test",
+      excludedBundleId: "com.synara.app",
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError,
+    });
+
+    try {
+      const enable = manager.setEnabled(true);
+      await flushPromises();
+      checkChild.stdout.end(
+        `${JSON.stringify({
+          type: "permissions",
+          inputMonitoring: "granted",
+          screenRecording: "granted",
+        })}\n`,
+      );
+      checkChild.stderr.end();
+      checkChild.emit("close", 0, null);
+      await enable;
+
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "error",
+          code: "capture_in_progress",
+          message: "A previous AppSnap capture is still in progress.",
+        })}\n`,
+      );
+      watchChild.stdout.write(
+        `${JSON.stringify({
+          type: "error",
+          code: "capture_timed_out",
+          message: "Timed out while preparing or capturing the window.",
+        })}\n`,
+      );
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(2));
+
+      expect(onError).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ code: "capture_in_progress" }),
+        false,
+      );
+      expect(onError).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ code: "capture_timed_out" }),
+        true,
+      );
+    } finally {
+      manager.dispose();
+    }
+  });
+
   it("keeps the helper capture file when persisting the pending copy fails", async () => {
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-persist-fail-"));
     const checkChild = createFakeChildProcess();

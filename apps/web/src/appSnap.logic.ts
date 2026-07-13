@@ -37,6 +37,7 @@ export function createLatestAppSnapRequestGuard(): LatestAppSnapRequestGuard {
 }
 
 interface AppSnapSourceCarrier {
+  blobKey?: unknown;
   source?:
     | {
         kind?: unknown;
@@ -56,15 +57,18 @@ interface AppSnapCaptureDraft {
     | undefined;
 }
 
+function isCaptureEntry(entry: AppSnapSourceCarrier, captureId: string): boolean {
+  return (
+    (entry.source?.kind === "appsnap" || entry.source?.kind === "appshot") &&
+    entry.source.captureId === captureId
+  );
+}
+
 function entriesContainCapture(
   entries: ReadonlyArray<AppSnapSourceCarrier>,
   captureId: string,
 ): boolean {
-  return entries.some(
-    (entry) =>
-      (entry.source?.kind === "appsnap" || entry.source?.kind === "appshot") &&
-      entry.source.captureId === captureId,
-  );
+  return entries.some((entry) => isCaptureEntry(entry, captureId));
 }
 
 export function hasPersistedAppSnapCapture(
@@ -84,6 +88,29 @@ export function hasPersistedAppSnapCapture(
     }
   }
   return false;
+}
+
+/** Blob keys backing every persisted draft attachment for a capture id. */
+export function persistedAppSnapCaptureBlobKeys(
+  drafts: Iterable<AppSnapCaptureDraft | undefined>,
+  captureId: string,
+): string[] {
+  if (captureId.length === 0) return [];
+  const blobKeys = new Set<string>();
+  for (const draft of drafts) {
+    if (!draft) continue;
+    const entries = [
+      ...draft.persistedAttachments,
+      ...(draft.promptHistorySavedDraft?.persistedAttachments ?? []),
+    ];
+    for (const entry of entries) {
+      if (!isCaptureEntry(entry, captureId)) continue;
+      if (typeof entry.blobKey === "string" && entry.blobKey.length > 0) {
+        blobKeys.add(entry.blobKey);
+      }
+    }
+  }
+  return [...blobKeys];
 }
 
 function isRecent(atMs: number, captureAtMs: number): boolean {

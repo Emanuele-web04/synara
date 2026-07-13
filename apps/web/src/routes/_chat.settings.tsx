@@ -5,6 +5,7 @@
 
 import {
   PROVIDER_DISPLAY_NAMES,
+  type DesktopAppSnapPermission,
   type DesktopAppSnapState,
   type ProviderKind,
   type ServerProviderStatus,
@@ -75,6 +76,7 @@ import {
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
+import { Kbd, KbdGroup } from "../components/ui/kbd";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -110,6 +112,7 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
+import { playAppSnapCaptureSound } from "../lib/appSnapSound";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -150,6 +153,7 @@ import {
   SETTINGS_TARGETS,
 } from "../settingsNavigation";
 import {
+  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
@@ -249,10 +253,37 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
   if (!state) return "Available in the Synara desktop app";
   if (!state.supported) return state.message ?? "Available on macOS only";
-  if (state.status === "ready") return "Ready · press both Option keys";
+  if (state.status === "ready") return "Listening — press both Option keys to snap";
   if (state.status === "disabled") return "Off";
-  if (state.status === "starting") return "Starting listener…";
+  if (state.status === "starting") return "Starting the capture listener…";
   return state.message ?? "Permission setup required";
+}
+
+const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
+  granted: "Granted",
+  denied: "Denied",
+  "not-determined": "Not requested yet",
+  restricted: "Restricted",
+  unknown: "Unknown",
+};
+
+function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          permission === "granted"
+            ? "bg-emerald-500"
+            : permission === "denied" || permission === "restricted"
+              ? "bg-red-500"
+              : "bg-[color:var(--color-border)]",
+        )}
+      />
+      {APPSNAP_PERMISSION_LABELS[permission]}
+    </span>
+  );
 }
 
 type InstallBinarySettingsKey =
@@ -1050,6 +1081,7 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
+    ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
@@ -2240,46 +2272,142 @@ function SettingsRouteView() {
     </div>
   );
 
-  const renderBehaviorPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="App context">
-        <SettingsRow
-          title="AppSnap"
-          description="Press both Option keys while another app is frontmost to capture that window and add it to a recent task. Captures remain in the local draft until removed or sent."
-          status={appSnapStatusText(appSnapState)}
-          resetAction={
-            settings.enableAppSnap !== defaults.enableAppSnap ? (
-              <SettingResetButton
-                label="AppSnap"
-                onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
+  const renderAppSnapPanel = () => {
+    const supported = appSnapState?.supported === true;
+    const enabled = supported && settings.enableAppSnap;
+    return (
+      <div className="space-y-6">
+        <div className={cn(SETTINGS_CARD_CLASS_NAME, "flex items-start gap-3 px-4 py-3.5")}>
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] text-muted-foreground">
+            <CentralIcon name="screen-capture" className="size-4" />
+          </span>
+          <div className="min-w-0 space-y-1">
+            <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+              Take an AppSnap to show your agent another app's window
+            </p>
+            <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+              Press both <Kbd className="mx-px">⌥ Option</Kbd> keys at once while any app is
+              frontmost. Synara captures that window as an image, brings itself forward, and
+              attaches the snap to a task composer — the capture stays on this device until you send
+              the message.
+            </p>
+            {!supported ? (
+              <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
+                {appSnapState
+                  ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
+                  : "AppSnap requires the Synara desktop app on macOS."}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <SettingsSection title="Capture">
+          <SettingsRow
+            title="Enable AppSnap"
+            description="Run the capture listener in the background while Synara is open."
+            status={appSnapStatusText(appSnapState)}
+            resetAction={
+              settings.enableAppSnap !== defaults.enableAppSnap ? (
+                <SettingResetButton
+                  label="AppSnap"
+                  onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={enabled}
+                disabled={!supported}
+                onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
+                aria-label="Enable AppSnap"
               />
-            ) : null
-          }
-          control={
-            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-              {appSnapState?.supported &&
-              settings.enableAppSnap &&
-              appSnapState.status !== "ready" ? (
+            }
+          />
+
+          <SettingsRow
+            title="Shortcut"
+            description="Press the left and right Option keys at the same time. The chord works while any app is focused, and can't be remapped yet."
+            control={
+              <KbdGroup>
+                <Kbd>⌥ left</Kbd>
+                <span className="text-xs text-muted-foreground">+</span>
+                <Kbd>⌥ right</Kbd>
+              </KbdGroup>
+            }
+          />
+
+          <SettingsRow
+            title="Destination"
+            description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
+            control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          />
+
+          <SettingsRow
+            title="Capture sound"
+            description="Play a short shutter cue when a window is captured."
+            resetAction={
+              settings.appSnapPlaySound !== defaults.appSnapPlaySound ? (
+                <SettingResetButton
+                  label="capture sound"
+                  onClick={() => updateSettings({ appSnapPlaySound: defaults.appSnapPlaySound })}
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                <Button size="xs" variant="outline" onClick={() => void playAppSnapCaptureSound()}>
+                  Preview
+                </Button>
+                <Switch
+                  checked={settings.appSnapPlaySound}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ appSnapPlaySound: Boolean(checked) })
+                  }
+                  aria-label="Play a sound when an AppSnap is captured"
+                />
+              </div>
+            }
+          />
+        </SettingsSection>
+
+        {supported ? (
+          <SettingsSection title="macOS permissions">
+            <SettingsRow
+              title="Input Monitoring"
+              description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
+              }
+            />
+            <SettingsRow
+              title="Screen Recording"
+              description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
+              }
+            />
+            <SettingsRow
+              title="Permission status"
+              description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+              control={
                 <Button
                   type="button"
                   size="xs"
                   variant="outline"
                   onClick={() => void recheckAppSnapPermissions()}
                 >
-                  Check permissions
+                  Recheck permissions
                 </Button>
-              ) : null}
-              <Switch
-                checked={appSnapState?.supported === true && settings.enableAppSnap}
-                disabled={appSnapState?.supported !== true}
-                onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
-                aria-label="Enable AppSnap"
-              />
-            </div>
-          }
-        />
-      </SettingsSection>
+              }
+            />
+          </SettingsSection>
+        ) : null}
+      </div>
+    );
+  };
 
+  const renderBehaviorPanel = () => (
+    <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
@@ -3480,6 +3608,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "appsnap":
+        return renderAppSnapPanel();
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":

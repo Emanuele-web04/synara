@@ -324,6 +324,10 @@ function isPermissionErrorCode(code: string): boolean {
   );
 }
 
+function isBenignCaptureErrorCode(code: string): boolean {
+  return code === "capture_in_progress" || code === "capture-in-progress";
+}
+
 export class DesktopAppSnapManager {
   readonly #options: Required<Pick<DesktopAppSnapManagerOptions, "now" | "spawn">> &
     Omit<DesktopAppSnapManagerOptions, "now" | "spawn">;
@@ -754,8 +758,9 @@ export class DesktopAppSnapManager {
   #handleWatchMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
     if (this.#disposed || this.#watchProcess !== child) return;
     if (message.type === "ready") {
+      // `ready` only proves the event tap installed, i.e. Input Monitoring.
+      // Screen Recording state is owned by permission checks and capture errors.
       this.#inputMonitoringPermission = "granted";
-      this.#screenRecordingPermission = "granted";
       this.#setState("ready", null);
       return;
     }
@@ -803,7 +808,14 @@ export class DesktopAppSnapManager {
         permissionRequiredMessage(this.#inputMonitoringPermission, this.#screenRecordingPermission),
       );
     }
-    this.#emitCaptureError(message.code, message.message, message.capturedAt, true);
+    // Benign overlap errors surface as a toast without yanking Synara to the
+    // foreground while the user is still working in the captured app.
+    this.#emitCaptureError(
+      message.code,
+      message.message,
+      message.capturedAt,
+      !isBenignCaptureErrorCode(message.code),
+    );
   }
 
   async #consumeCapture(

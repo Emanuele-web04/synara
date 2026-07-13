@@ -194,6 +194,8 @@ export const AppSettingsSchema = Schema.Struct({
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Local desktop preference: play the shutter cue when an AppSnap lands in a composer.
+  appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
