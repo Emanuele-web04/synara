@@ -1,14 +1,8 @@
 // FILE: release-update-policy.ts
-// Purpose: Enforces the permanent compatibility hop and prepares channel manifests.
+// Purpose: Keeps the historical 0.4.x compatibility line separate while stable 0.5.x
+// releases publish through GitHub's Latest updater feed.
 
-import {
-  constants,
-  copyFileSync,
-  existsSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-} from "node:fs";
+import { constants, copyFileSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export type ReleaseLane = "bridge" | "clean";
@@ -101,8 +95,8 @@ export function resolveReleaseUpdatePolicy(
     version,
     tag: `v${version}`,
     isPrerelease: requested.isPrerelease,
-    makeLatest: normalizedConfig.lane === "bridge",
-    mirrorToStableChannel: normalizedConfig.lane === "clean" && !requested.isPrerelease,
+    makeLatest: normalizedConfig.lane === "clean" && !requested.isPrerelease,
+    mirrorToStableChannel: false,
     lane: normalizedConfig.lane,
     bridgeTag: `v${normalizedConfig.bridgeVersion}`,
     channel: normalizedConfig.channel,
@@ -144,32 +138,9 @@ export function prepareReleaseUpdateManifests(
     return [...sourceNames, ...destinationNames];
   }
 
-  const renamed: string[] = [];
-  for (const [index, sourceName] of sourceNames.entries()) {
-    const sourcePath = resolve(assetDirectory, sourceName);
-    if (!existsSync(sourcePath)) continue;
-    const destinationName = destinationNames[index];
-    if (!destinationName) throw new Error(`Missing channel manifest mapping for ${sourceName}.`);
-    const destinationPath = resolve(assetDirectory, destinationName);
-    if (existsSync(destinationPath)) {
-      throw new Error(`Refusing to overwrite existing update manifest: ${destinationName}`);
-    }
-    renameSync(sourcePath, destinationPath);
-    renamed.push(destinationName);
+  const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
+  if (missing.length > 0) {
+    throw new Error(`Latest release is missing update manifests: ${missing.join(", ")}`);
   }
-
-  const remainingDefaultManifests = readdirSync(assetDirectory).filter((name) =>
-    /^latest(?:-mac|-linux)?\.yml$/.test(name),
-  );
-  if (remainingDefaultManifests.length > 0) {
-    throw new Error(
-      `Clean releases cannot publish default-channel manifests: ${remainingDefaultManifests.join(", ")}`,
-    );
-  }
-  if (renamed.length !== sourceNames.length) {
-    throw new Error(
-      `Expected ${sourceNames.length} update manifests, prepared ${renamed.length}: ${renamed.join(", ")}`,
-    );
-  }
-  return renamed;
+  return [...sourceNames];
 }
