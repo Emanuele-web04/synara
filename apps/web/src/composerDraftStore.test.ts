@@ -1154,6 +1154,49 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     removeLocalStorageItem(COMPOSER_DRAFT_STORAGE_KEY);
   });
 
+  it("serializes overlapping attachment syncs for the same thread", async () => {
+    const firstImage = makeImage({
+      id: "appsnap-sync-first",
+      previewUrl: "blob:appsnap-sync-first",
+      name: "appsnap-sync-first.png",
+    });
+    const secondImage = makeImage({
+      id: "appsnap-sync-second",
+      previewUrl: "blob:appsnap-sync-second",
+      name: "appsnap-sync-second.png",
+    });
+    const attachmentFor = (image: ComposerImageAttachment) => ({
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    });
+    const store = useComposerDraftStore.getState();
+    store.addImages(threadId, [firstImage, secondImage]);
+
+    const firstSync = store.syncPersistedAttachments(threadId, [attachmentFor(firstImage)]);
+    const secondSync = store.syncPersistedAttachments(threadId, [
+      attachmentFor(firstImage),
+      attachmentFor(secondImage),
+    ]);
+
+    expect(
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.persistedAttachments.map((attachment) => attachment.id),
+    ).toEqual([firstImage.id]);
+    await expect(Promise.all([firstSync, secondSync])).resolves.toEqual([
+      "unverified",
+      "unverified",
+    ]);
+    expect(
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.persistedAttachments.map((attachment) => attachment.id),
+    ).toEqual([firstImage.id, secondImage.id]);
+  });
+
   it("treats malformed persisted draft storage as empty", async () => {
     const image = makeImage({
       id: "img-persisted",

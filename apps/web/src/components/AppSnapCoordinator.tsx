@@ -11,6 +11,7 @@ import { useAppSettings } from "../appSettings";
 import {
   type AppSnapThreadTarget,
   type TimedAppSnapThreadTarget,
+  didAppSnapHydrationInputsChange,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
@@ -59,7 +60,10 @@ function isThreadAvailable(threadId: ThreadId): boolean {
   const state = useStore.getState();
   if (state.sidebarThreadSummaryById[threadId]) return true;
   if (state.threads.some((thread) => thread.id === threadId)) return true;
-  return Boolean(useComposerDraftStore.getState().draftThreadsByThreadId[threadId]);
+  const draftState = useComposerDraftStore.getState();
+  return Boolean(
+    draftState.draftsByThreadId[threadId] || draftState.draftThreadsByThreadId[threadId],
+  );
 }
 
 function rememberCaptureId(captureIds: Map<string, true>, captureId: string): boolean {
@@ -215,7 +219,7 @@ export function AppSnapCoordinator() {
       );
     });
     const unsubscribe = useComposerDraftStore.subscribe((state, previousState) => {
-      if (state.draftsByThreadId !== previousState.draftsByThreadId) {
+      if (didAppSnapHydrationInputsChange(state.draftsByThreadId, previousState.draftsByThreadId)) {
         void hydratePersistedAppSnaps();
       }
     });

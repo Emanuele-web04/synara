@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   APPSNAP_RECENT_TARGET_WINDOW_MS,
   createLatestAppSnapRequestGuard,
+  didAppSnapHydrationInputsChange,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
@@ -21,6 +22,65 @@ describe("createLatestAppSnapRequestGuard", () => {
 
     expect(guard.isCurrent(enableRequest)).toBe(false);
     expect(guard.isCurrent(disableRequest)).toBe(true);
+  });
+});
+
+describe("didAppSnapHydrationInputsChange", () => {
+  it("ignores prompt-only draft updates that preserve attachment references", () => {
+    const images: unknown[] = [];
+    const persistedAttachments: unknown[] = [];
+    const previous = {
+      [THREAD_A]: { images, persistedAttachments, promptHistorySavedDraft: null },
+    };
+    const current = {
+      [THREAD_A]: { images, persistedAttachments, promptHistorySavedDraft: null },
+    };
+
+    expect(didAppSnapHydrationInputsChange(current, previous)).toBe(false);
+  });
+
+  it("detects live and prompt-history attachment changes", () => {
+    const sharedImages: unknown[] = [];
+    const sharedAttachments: unknown[] = [];
+    const savedDraft = {
+      images: sharedImages,
+      persistedAttachments: sharedAttachments,
+    };
+    const previous = {
+      [THREAD_A]: {
+        images: sharedImages,
+        persistedAttachments: sharedAttachments,
+        promptHistorySavedDraft: savedDraft,
+      },
+    };
+
+    expect(
+      didAppSnapHydrationInputsChange(
+        {
+          [THREAD_A]: {
+            images: sharedImages,
+            persistedAttachments: [{}],
+            promptHistorySavedDraft: savedDraft,
+          },
+        },
+        previous,
+      ),
+    ).toBe(true);
+    expect(
+      didAppSnapHydrationInputsChange(
+        {
+          [THREAD_A]: {
+            images: sharedImages,
+            persistedAttachments: sharedAttachments,
+            promptHistorySavedDraft: {
+              images: [{}],
+              persistedAttachments: sharedAttachments,
+            },
+          },
+        },
+        previous,
+      ),
+    ).toBe(true);
   });
 });
 

@@ -340,6 +340,7 @@ export class DesktopAppSnapManager {
   #watchProcess: AppSnapHelperProcess | null = null;
   #watchOutputLines: Readline.Interface | null = null;
   #watchReconcilePromise: Promise<void> | null = null;
+  #watchReconcileRequested = false;
   #permissionProcess: AppSnapHelperProcess | null = null;
   #permissionCommandQueue: Promise<void> = Promise.resolve();
   #disposed = false;
@@ -552,18 +553,30 @@ export class DesktopAppSnapManager {
   }
 
   async #reconcileWatchProcess(): Promise<void> {
+    this.#watchReconcileRequested = true;
     if (this.#watchReconcilePromise) {
       await this.#watchReconcilePromise;
+      if (this.#watchReconcileRequested) {
+        await this.#reconcileWatchProcess();
+      }
       return;
     }
-    const reconcilePromise = this.#reconcileWatchProcessOnce();
-    this.#watchReconcilePromise = reconcilePromise;
-    try {
-      await reconcilePromise;
-    } finally {
-      if (this.#watchReconcilePromise === reconcilePromise) {
+    const reconcilePromise = (async () => {
+      while (this.#watchReconcileRequested) {
+        this.#watchReconcileRequested = false;
+        await this.#reconcileWatchProcessOnce();
+      }
+    })();
+    let trackedPromise: Promise<void>;
+    trackedPromise = reconcilePromise.finally(() => {
+      if (this.#watchReconcilePromise === trackedPromise) {
         this.#watchReconcilePromise = null;
       }
+    });
+    this.#watchReconcilePromise = trackedPromise;
+    await trackedPromise;
+    if (this.#watchReconcileRequested) {
+      await this.#reconcileWatchProcess();
     }
   }
 

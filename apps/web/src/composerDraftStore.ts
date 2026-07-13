@@ -105,6 +105,35 @@ const composerDebouncedStorage = createDebouncedStorage(
   typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
   COMPOSER_PERSIST_DEBOUNCE_MS,
 );
+const composerAttachmentPersistenceQueueByThreadId = new Map<string, Promise<void>>();
+
+function enqueueComposerAttachmentPersistence<Result>(
+  threadId: ThreadId,
+  operation: () => Promise<Result> | Result,
+): Promise<Result> {
+  const previous = composerAttachmentPersistenceQueueByThreadId.get(threadId);
+  let result: Promise<Result>;
+  if (previous) {
+    result = previous.then(operation, operation);
+  } else {
+    try {
+      result = Promise.resolve(operation());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  composerAttachmentPersistenceQueueByThreadId.set(threadId, settled);
+  void settled.then(() => {
+    if (composerAttachmentPersistenceQueueByThreadId.get(threadId) === settled) {
+      composerAttachmentPersistenceQueueByThreadId.delete(threadId);
+    }
+  });
+  return result;
+}
 
 // Flush pending composer draft writes before page unload to prevent data loss.
 if (typeof window !== "undefined") {
@@ -3960,42 +3989,44 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         if (threadId.length === 0) {
           return Promise.resolve("rejected");
         }
-        const previousAttachments =
-          get().draftsByThreadId[threadId]?.promptHistorySavedDraft?.persistedAttachments ?? [];
-        const supersededBlobAttachments = findSupersededComposerImageBlobAttachments(
-          previousAttachments,
-          attachments,
-        );
-        const attachmentIdSet = new Set(attachments.map((attachment) => attachment.id));
-        set((state) => {
-          const current = state.draftsByThreadId[threadId];
-          const savedDraft = current?.promptHistorySavedDraft ?? null;
-          if (!current || !savedDraft) {
-            return state;
-          }
-          const nextSavedDraft: ComposerPromptHistorySavedDraft = {
-            ...savedDraft,
-            persistedAttachments: attachments,
-            nonPersistedImageIds: savedDraft.images
-              .map((image) => image.id)
-              .filter((id) => !attachmentIdSet.has(id)),
-          };
-          const nextDraft: ComposerThreadDraftState = {
-            ...current,
-            promptHistorySavedDraft: nextSavedDraft,
-          };
-          const nextDraftsByThreadId = { ...state.draftsByThreadId };
-          if (shouldRemoveDraft(nextDraft)) {
-            delete nextDraftsByThreadId[threadId];
-          } else {
-            nextDraftsByThreadId[threadId] = nextDraft;
-          }
-          return { draftsByThreadId: nextDraftsByThreadId };
+        return enqueueComposerAttachmentPersistence(threadId, () => {
+          const previousAttachments =
+            get().draftsByThreadId[threadId]?.promptHistorySavedDraft?.persistedAttachments ?? [];
+          const supersededBlobAttachments = findSupersededComposerImageBlobAttachments(
+            previousAttachments,
+            attachments,
+          );
+          const attachmentIdSet = new Set(attachments.map((attachment) => attachment.id));
+          set((state) => {
+            const current = state.draftsByThreadId[threadId];
+            const savedDraft = current?.promptHistorySavedDraft ?? null;
+            if (!current || !savedDraft) {
+              return state;
+            }
+            const nextSavedDraft: ComposerPromptHistorySavedDraft = {
+              ...savedDraft,
+              persistedAttachments: attachments,
+              nonPersistedImageIds: savedDraft.images
+                .map((image) => image.id)
+                .filter((id) => !attachmentIdSet.has(id)),
+            };
+            const nextDraft: ComposerThreadDraftState = {
+              ...current,
+              promptHistorySavedDraft: nextSavedDraft,
+            };
+            const nextDraftsByThreadId = { ...state.draftsByThreadId };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadId[threadId];
+            } else {
+              nextDraftsByThreadId[threadId] = nextDraft;
+            }
+            return { draftsByThreadId: nextDraftsByThreadId };
+          });
+          deletePersistedComposerImageBlobs(supersededBlobAttachments);
+          return Promise.resolve().then(() =>
+            verifyPromptHistorySavedDraftPersistedAttachments(threadId, attachments, set),
+          );
         });
-        deletePersistedComposerImageBlobs(supersededBlobAttachments);
-        return Promise.resolve().then(() =>
-          verifyPromptHistorySavedDraftPersistedAttachments(threadId, attachments, set),
-        );
       },
       setTerminalContexts: (threadId, contexts) => {
         if (threadId.length === 0) {
@@ -4959,35 +4990,39 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         if (threadId.length === 0) {
           return Promise.resolve("rejected");
         }
-        const previousAttachments = get().draftsByThreadId[threadId]?.persistedAttachments ?? [];
-        const supersededBlobAttachments = findSupersededComposerImageBlobAttachments(
-          previousAttachments,
-          attachments,
-        );
-        const attachmentIdSet = new Set(attachments.map((attachment) => attachment.id));
-        set((state) => {
-          const current = state.draftsByThreadId[threadId];
-          if (!current) {
-            return state;
-          }
-          const nextDraft: ComposerThreadDraftState = {
-            ...current,
-            // Stage attempted attachments so persist middleware can try writing them.
-            persistedAttachments: attachments,
-            nonPersistedImageIds: current.nonPersistedImageIds.filter(
-              (id) => !attachmentIdSet.has(id),
-            ),
-          };
-          const nextDraftsByThreadId = { ...state.draftsByThreadId };
-          if (shouldRemoveDraft(nextDraft)) {
-            delete nextDraftsByThreadId[threadId];
-          } else {
-            nextDraftsByThreadId[threadId] = nextDraft;
-          }
-          return { draftsByThreadId: nextDraftsByThreadId };
+        return enqueueComposerAttachmentPersistence(threadId, () => {
+          const previousAttachments = get().draftsByThreadId[threadId]?.persistedAttachments ?? [];
+          const supersededBlobAttachments = findSupersededComposerImageBlobAttachments(
+            previousAttachments,
+            attachments,
+          );
+          const attachmentIdSet = new Set(attachments.map((attachment) => attachment.id));
+          set((state) => {
+            const current = state.draftsByThreadId[threadId];
+            if (!current) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...current,
+              // Stage attempted attachments so persist middleware can try writing them.
+              persistedAttachments: attachments,
+              nonPersistedImageIds: current.nonPersistedImageIds.filter(
+                (id) => !attachmentIdSet.has(id),
+              ),
+            };
+            const nextDraftsByThreadId = { ...state.draftsByThreadId };
+            if (shouldRemoveDraft(nextDraft)) {
+              delete nextDraftsByThreadId[threadId];
+            } else {
+              nextDraftsByThreadId[threadId] = nextDraft;
+            }
+            return { draftsByThreadId: nextDraftsByThreadId };
+          });
+          deletePersistedComposerImageBlobs(supersededBlobAttachments);
+          return Promise.resolve().then(() =>
+            verifyPersistedAttachments(threadId, attachments, set),
+          );
         });
-        deletePersistedComposerImageBlobs(supersededBlobAttachments);
-        return Promise.resolve().then(() => verifyPersistedAttachments(threadId, attachments, set));
       },
       copyTransferableComposerState: (sourceThreadId, targetThreadId) => {
         if (sourceThreadId.length === 0 || targetThreadId.length === 0) {

@@ -59,6 +59,48 @@ interface AppSnapCaptureDraft {
     | undefined;
 }
 
+interface AppSnapHydrationDraft {
+  images: ReadonlyArray<unknown>;
+  persistedAttachments: ReadonlyArray<unknown>;
+  promptHistorySavedDraft?:
+    | {
+        images: ReadonlyArray<unknown>;
+        persistedAttachments: ReadonlyArray<unknown>;
+      }
+    | null
+    | undefined;
+}
+
+export function didAppSnapHydrationInputsChange(
+  current: Readonly<Record<string, AppSnapHydrationDraft | undefined>>,
+  previous: Readonly<Record<string, AppSnapHydrationDraft | undefined>>,
+): boolean {
+  const threadIds = new Set([...Object.keys(current), ...Object.keys(previous)]);
+  for (const threadId of threadIds) {
+    const currentDraft = current[threadId];
+    const previousDraft = previous[threadId];
+    if (!currentDraft || !previousDraft) return true;
+    if (
+      currentDraft.images !== previousDraft.images ||
+      currentDraft.persistedAttachments !== previousDraft.persistedAttachments
+    ) {
+      return true;
+    }
+    const currentSavedDraft = currentDraft.promptHistorySavedDraft;
+    const previousSavedDraft = previousDraft.promptHistorySavedDraft;
+    if (Boolean(currentSavedDraft) !== Boolean(previousSavedDraft)) return true;
+    if (
+      currentSavedDraft &&
+      previousSavedDraft &&
+      (currentSavedDraft.images !== previousSavedDraft.images ||
+        currentSavedDraft.persistedAttachments !== previousSavedDraft.persistedAttachments)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isCaptureEntry(entry: AppSnapSourceCarrier, captureId: string): boolean {
   return isComposerAppSnapCaptureSource(entry.source, captureId);
 }
