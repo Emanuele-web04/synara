@@ -1,4 +1,4 @@
-# Recap: Discord Support Link
+# Recap: Support Link Cleanup
 
 > Generated: 2026-07-13 | Scope: 3 files
 
@@ -6,7 +6,7 @@
 
 ## Summary
 
-The public support links incorrectly sent Synara users to the `t3-code-discussion` channel in Theo's Discord server. The README and marketing footer now direct users to Synara's GitHub Issues page, the project's active support surface.
+The public support links now direct Synara users to the project's GitHub Issues page, the active support surface for questions and bug reports.
 
 ---
 
@@ -24,7 +24,7 @@ The public support links incorrectly sent Synara users to the `t3-code-discussio
 
 ### Problem
 
-Both public Discord links used invite `jn4EGJjrvv`, which belongs to Theo's Typesafe Cult and opens its `t3-code-discussion` channel. No Synara-owned Discord invite exists elsewhere in the repository, so presenting that destination as Synara support was misleading.
+Both public support links pointed to an unowned destination. Presenting that destination as Synara support was misleading.
 
 ### Approach
 
@@ -38,7 +38,7 @@ The links were replaced with the repository's GitHub Issues page because Issues 
 
 ### Tradeoffs & Edge Cases
 
-GitHub Issues is less conversational than Discord, but it is the only verified Synara-owned support surface currently available. If a dedicated Synara Discord server is created later, both links can be updated to its permanent invite.
+GitHub Issues is less conversational than chat, but it is the verified Synara-owned support surface currently available.
 
 ---
 
@@ -57,4 +57,4 @@ flowchart TD
 
 ## High School Explanation
 
-The old sign said “Synara help,” but it pointed into somebody else's club room. We changed both signs so they now point to Synara's own GitHub Issues page, where users can report a problem or ask for help without ending up in the wrong community.
+The old support sign pointed to the wrong place. We changed both signs so they now point to Synara's own GitHub Issues page, where users can report a problem or ask for help.

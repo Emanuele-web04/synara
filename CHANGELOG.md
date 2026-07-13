@@ -14,6 +14,7 @@
 - Improved cross-platform agent workflows with runtime Codex reasoning options, more reliable Windows CLI launching, platform-aware project folder labels, and graceful Git status checks outside repositories.
 - Softened the file-change header treatment so active diffs are easier to scan.
 - Removed the Windows process regression job from CI.
+- Stable 0.5.x releases now publish on GitHub Latest, while 0.4.x remains the historical compatibility line.
 
 ### Fixed
 
