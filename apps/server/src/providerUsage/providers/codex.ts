@@ -36,6 +36,15 @@ const CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credi
 
 type CodexAuth = { kind: "oauth"; accessToken: string; accountId?: string } | { kind: "api-key" };
 
+function codexApiHeaders(auth: Extract<CodexAuth, { kind: "oauth" }>): Record<string, string> {
+  return {
+    Authorization: `Bearer ${auth.accessToken}`,
+    Accept: "application/json",
+    "User-Agent": "Synara",
+    ...(auth.accountId ? { "ChatGPT-Account-Id": auth.accountId } : {}),
+  };
+}
+
 function authFilePaths(ctx: ProviderUsageContext): string[] {
   const paths: string[] = [];
   if (ctx.env.CODEX_HOME) {
@@ -226,13 +235,10 @@ export async function consumeCodexRateLimitResetCredit(input: {
     response = await fetch(CONSUME_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${input.auth.accessToken}`,
+        ...codexApiHeaders(input.auth),
         "Content-Type": "application/json",
-        Accept: "application/json",
         "OpenAI-Beta": "codex-1",
         originator: "synara",
-        "User-Agent": "Synara",
-        ...(input.auth.accountId ? { "ChatGPT-Account-Id": input.auth.accountId } : {}),
       },
       body: JSON.stringify({ redeem_request_id: input.idempotencyKey }),
     });
@@ -254,12 +260,7 @@ export async function consumeCodexRateLimitResetCredit(input: {
   try {
     const usageResult = await fetchJson({
       url: USAGE_URL,
-      headers: {
-        Authorization: `Bearer ${input.auth.accessToken}`,
-        Accept: "application/json",
-        "User-Agent": "Synara",
-        ...(input.auth.accountId ? { "ChatGPT-Account-Id": input.auth.accountId } : {}),
-      },
+      headers: codexApiHeaders(input.auth),
     });
     if (usageResult.ok && usageResult.json) {
       const parsed = parseCodexUsage({
@@ -295,12 +296,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
     try {
       const result = await fetchJson({
         url: USAGE_URL,
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-          Accept: "application/json",
-          "User-Agent": "Synara",
-          ...(auth.accountId ? { "ChatGPT-Account-Id": auth.accountId } : {}),
-        },
+        headers: codexApiHeaders(auth),
       });
       if (isAuthFailureStatus(result.status)) {
         return needsAuthSnapshot("codex", ctx.nowMs, SOURCE);

@@ -135,19 +135,6 @@ export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
-export const ServerProviderUsageSnapshot = Schema.Struct({
-  provider: ProviderKind,
-  updatedAt: IsoDateTime,
-  limits: Schema.Array(ServerProviderUsageLimit),
-  usageLines: Schema.Array(ServerProviderUsageLine),
-  source: TrimmedNonEmptyString,
-  status: Schema.optional(ProviderUsageStatus),
-  planName: Schema.optional(TrimmedNonEmptyString),
-  detail: Schema.optional(TrimmedNonEmptyString),
-  rateLimitResetCredits: Schema.optional(CodexRateLimitResetCredits),
-});
-export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
-
 // Codex rate-limit reset credit types
 export const CodexResetCredit = Schema.Struct({
   status: Schema.String,
@@ -182,6 +169,19 @@ export type ServerConsumeCodexResetCreditInput = typeof ServerConsumeCodexResetC
 
 export const ServerConsumeCodexResetCreditResult = CodexRateLimitResetResult;
 export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexResetCreditResult.Type;
+
+export const ServerProviderUsageSnapshot = Schema.Struct({
+  provider: ProviderKind,
+  updatedAt: IsoDateTime,
+  limits: Schema.Array(ServerProviderUsageLimit),
+  usageLines: Schema.Array(ServerProviderUsageLine),
+  source: TrimmedNonEmptyString,
+  status: Schema.optional(ProviderUsageStatus),
+  planName: Schema.optional(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
+  rateLimitResetCredits: Schema.optional(CodexRateLimitResetCredits),
+});
+export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,
