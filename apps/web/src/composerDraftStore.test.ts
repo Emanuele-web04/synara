@@ -816,9 +816,9 @@ describe("composerDraftStore prompt history saved draft", () => {
     );
 
     expect(
-      useComposerDraftStore.getState().draftsByThreadId[liveThreadId]?.images.map(
-        (image) => image.id,
-      ),
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[liveThreadId]?.images.map((image) => image.id),
     ).toEqual([staleLiveImage.id, unrelatedLiveImage.id]);
 
     store.removeAppSnapCapture(captureId);
@@ -830,9 +830,7 @@ describe("composerDraftStore prompt history saved draft", () => {
     ]);
     const promptHistoryDraft =
       useComposerDraftStore.getState().draftsByThreadId[savedThreadId]?.promptHistorySavedDraft;
-    expect(promptHistoryDraft?.images.map((image) => image.id)).toEqual([
-      unrelatedSavedImage.id,
-    ]);
+    expect(promptHistoryDraft?.images.map((image) => image.id)).toEqual([unrelatedSavedImage.id]);
     expect(promptHistoryDraft?.persistedAttachments.map((attachment) => attachment.id)).toEqual([
       unrelatedSavedImage.id,
     ]);
