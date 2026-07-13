@@ -1653,7 +1653,7 @@ export const makeWsRpcLayer = () =>
                     auth,
                     idempotencyKey: input.idempotencyKey,
                   }),
-                catch: () => new Error("Failed to consume reset credit"), //
+                catch: () => new Error("Failed to consume reset credit"),
               });
             }),
             "Failed to consume Codex reset credit",
