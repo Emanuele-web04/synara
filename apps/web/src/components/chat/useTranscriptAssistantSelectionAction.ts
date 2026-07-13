@@ -2,7 +2,7 @@
 // Purpose: Own the assistant highlight -> floating action -> composer insertion flow for transcript selections.
 // Layer: Chat transcript interaction controller
 
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import {
   useCallback,
   useEffect,

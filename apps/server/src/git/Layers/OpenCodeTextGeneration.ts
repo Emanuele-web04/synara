@@ -12,10 +12,10 @@ import type {
   OpenCodeModelSelection,
   OpenCodeModelOptions,
   ProviderStartOptions,
-} from "@t3tools/contracts";
-import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
+import { getModelSelectionStringOptionValue } from "@synara/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -380,7 +380,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               cliSpec: config.cliSpec,
             });
             const sessionCreateInput = {
-              title: `T3 Code ${input.operation}`,
+              title: `Synara ${input.operation}`,
               model: {
                 providerID: providerId,
                 id: modelId,

@@ -22,8 +22,214 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.2",
+    date: "Jul 13",
+    features: [
+      {
+        id: "droid-provider",
+        title: "Factory Droid is now a first-class provider",
+        description:
+          "Droid is now available alongside Synara's other agents, with runtime model discovery, session import, token multipliers, and resilient resume and recovery.",
+        details:
+          "Synara now connects to Factory Droid through ACP, discovers models and their switching capabilities at runtime, imports existing Droid sessions, carries context across forks and restarts, and keeps bootstrap, configuration, and turn teardown state coherent. The release also adds the Factory logo and richer Droid token reporting.",
+      },
+      {
+        id: "large-history-startup",
+        title: "Large conversation histories start reliably",
+        description:
+          "Synara now upgrades large local histories without leaving the project list stuck on its loading screen.",
+        details:
+          "The activity-sequence backfill now builds one indexed lookup instead of repeatedly scanning the entire event history. A database with more than 180,000 activities completes the recovery in seconds while preserving every project, thread, message, and activity.",
+      },
+      {
+        id: "keyboard-model-cycling",
+        title: "Switch models from the keyboard",
+        description:
+          "Use Alt+] and Alt+[ to cycle through available models without leaving the conversation.",
+        details:
+          "The shortcuts use the active provider's available model options and keep model selection quick during an ongoing workflow.",
+      },
+      {
+        id: "unfinished-task-lists",
+        title: "Unfinished task lists stay visible",
+        description:
+          "Task lists now remain in the transcript after a turn completes, making follow-up work easier to resume.",
+        details:
+          "Runtime task projections preserve unfinished items after completion while keeping finished and resumed task state consistent.",
+      },
+      {
+        id: "file-undo-chat-history",
+        title: "File undo leaves chat history intact",
+        description:
+          "Undoing an agent turn now rolls back its files without deleting the conversation that explains the change.",
+        details:
+          "Turn-scoped checkpoints restore workspace state while preserving transcript history and provider conversation state.",
+      },
+      {
+        id: "cross-platform-agent-polish",
+        title: "Smoother cross-platform agent workflows",
+        description:
+          "Codex model options, Windows launching, project folder labels, and Git status checks now behave more predictably across platforms.",
+        details:
+          "Runtime-discovered Codex reasoning efforts map correctly, the Windows CLI path forwards arguments reliably, project picker labels match the host OS, and Git status handles directories outside repositories gracefully.",
+      },
+      {
+        id: "calmer-file-change-header",
+        title: "File changes are calmer to scan",
+        description:
+          "File-change headers use a softer visual treatment, keeping active work readable without competing with the diff itself.",
+      },
+    ],
+  },
+  {
+    version: "0.5.0",
+    date: "Jul 11",
+    features: [
+      {
+        id: "synara-identity",
+        title: "Synara, all the way through",
+        description:
+          "The app now uses one identity everywhere, from its desktop installation and command line to packages, settings, diagnostics, and release artifacts.",
+        details:
+          "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Synara namespace. The 0.4.2 bridge preserves renderer state during the origin change.",
+      },
+      {
+        id: "claude-context-and-resume",
+        title: "Claude keeps context under control",
+        description:
+          "Claude sessions now report live context usage, warn before compaction, switch model and context settings in place, and resume with their safeguards intact.",
+        details:
+          "The adapter combines SDK context controls with accumulated token usage, preserves the effective context window across responses, keeps fallback reroutes pinned until you choose another model, and stores resume state without forcing unnecessary provider restarts.",
+      },
+      {
+        id: "provider-task-progress",
+        title: "Agent task progress stays visible",
+        description:
+          "Claude task tools and Codex task events now appear through one shared progress stream, so resumable work is easier to follow while it runs.",
+        details:
+          "Claude TaskCreate, TaskUpdate, TaskGet, TaskList, and TodoWrite results are normalized into the shared runtime task list and persisted in the resume cursor. Codex task events and provider summaries use the same projection, with coverage for reconnects and resumed sessions.",
+      },
+      {
+        id: "codex-stream-reliability",
+        title: "Codex reasoning and streams are easier to trust",
+        description:
+          "Codex reasoning summaries, context compaction, task updates, and noisy app-server output are handled more reliably, keeping live transcripts clearer during long turns.",
+        details:
+          "The app-server bridge now ignores non-protocol stdout safely, preserves provider-authored reasoning summaries, normalizes runtime events, and hardens resume and ingestion paths so progress is not lost between streamed updates.",
+      },
+      {
+        id: "faster-recovery",
+        title: "Chat startup and recovery are lighter",
+        description:
+          "Chat dock panels load on demand, deleted projects remain safe client tombstones, and browser profile migrations repair database sidecars transactionally instead of leaving partial state behind.",
+        details:
+          "The chat route measures LCP while deferring secondary panels, while project deletion and desktop profile repair now preserve predictable local state through reloads, retries, and interrupted migrations.",
+      },
+      {
+        id: "safer-release-updates",
+        title: "Desktop updates have stronger guardrails",
+        description:
+          "Release automation now validates compatibility-feed manifests and protects the packaged desktop from unsafe bundle swaps across update and startup paths.",
+        details:
+          "The release workflow verifies the pinned updater lane, keeps clean releases off the compatibility channel, repairs update-feed metadata, and hardens desktop startup when an app.asar swap is detected.",
+      },
+    ],
+  },
+  {
+    version: "0.4.2",
+    date: "Jul 9",
+    features: [
+      {
+        id: "synara-identity-bridge",
+        title: "Synara is preparing a seamless identity upgrade",
+        description:
+          "Launch this version at least once before installing the next Synara release so your drafts, pins, theme, browser state, and other local interface preferences move with you.",
+        details:
+          "This bridge writes a validated Synara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
+      },
+      {
+        id: "claude-usage-reliability",
+        title: "Claude threads use far fewer tokens and restart less",
+        description:
+          "Long Claude conversations now track their 1M-token context window per thread, compact automatically, and switch models without restarting the session — ending runaway usage.",
+        details:
+          "Each thread tracks its own context window and warns as usage approaches the limit. After a safeguard reroute, the fallback model stays pinned until you explicitly pick another model, and model or context-window changes apply in-session instead of tearing the session down.",
+      },
+      {
+        id: "desktop-update-verification",
+        title: "Desktop updates now verify their own installs",
+        description:
+          "Synara checks that an update actually installed after restart, detects failed installs, and recovers instead of silently staying on the old version.",
+        details:
+          "A durable install marker survives restarts and tracks handoff state, an install watchdog recovers from hung installs, and on macOS dedicated diagnostics capture updater state to make failures actionable.",
+      },
+      {
+        id: "studio-and-migration-fixes",
+        title: "Studio shortcut and migration fixes",
+        description:
+          "The new-chat keyboard shortcut now routes correctly inside Studio, composer drafts survive the storage migration, and incomplete legacy home imports repair themselves.",
+        details:
+          "Renderer storage migration is guaranteed to run before app hydration, the legacy environment identity is restored from the bridge marker, and checkpoint metadata is canonicalized while keeping existing persisted refs readable.",
+      },
+    ],
+  },
+  {
+    version: "0.4.1",
+    date: "Jul 9",
+    features: [
+      {
+        id: "studio-workspace",
+        title: "A dedicated Studio workspace for agent-led work",
+        description:
+          "Studio gives long-running, agent-led work its own focused space, keeping it distinct from your regular chats while making it quick to start or revisit.",
+        details:
+          "Studio projects, threads, routing, sidebar rows, empty-state entry points, and restore behavior now share a clear workspace boundary. The release also hardens cross-kind project ownership so a regular chat and a Studio thread cannot accidentally reuse the same container.",
+      },
+      {
+        id: "studio-outputs",
+        title: "Studio outputs are collected where you need them",
+        description:
+          "Files, generated images, and other agent outputs from Studio are surfaced in the Environment panel so finished work is easier to find and open.",
+        details:
+          "The server records Studio output activity and generated-image metadata, then projects it into a dedicated Environment section with resilient display helpers and targeted coverage for output ordering and presentation.",
+      },
+      {
+        id: "worktree-setup",
+        title: "Starting work in a worktree is more transparent",
+        description:
+          "Project actions now make worktree setup visible, so you can understand what is being prepared before a new workspace-backed thread starts.",
+        details:
+          "New setup steps and timeline states expose progress and failure more clearly, while the underlying scaffold path self-heals and keeps project/worktree ownership consistent through retries and restores.",
+      },
+      {
+        id: "restore-and-routing-reliability",
+        title: "Returning to a chat or Studio is more reliable",
+        description:
+          "Synara is more careful about restoring the right destination after reloads, segment switches, reconnects, and partially completed project creation.",
+        details:
+          "Routing now prefers canonical containers, waits for snapshot hydration where needed, fails closed on ambiguous thread kinds, and guards against overlapping fresh-chat creation so drafts and active work land in the intended surface.",
+      },
+      {
+        id: "steadier-live-transcripts",
+        title: "Live transcripts stay steadier during active work",
+        description:
+          "Transcript rendering and active-turn behavior have been refined to keep ongoing agent work easier to follow without needless scroll or layout churn.",
+        details:
+          "The session orchestration and timeline paths were refactored with focused coverage for worktree setup, transcript rows, sidebar visibility, and workspace handoffs, preserving predictable behavior as sessions stream and reconnect.",
+      },
+      {
+        id: "provider-and-windows-hardening",
+        title: "Safer provider startup and Windows launching",
+        description:
+          "Authentication preparation and provider launch handling are more robust, including a fix for launching Codex on Windows.",
+        details:
+          "The release prepares the Codex auth overlay before dependent startup paths run, hardens process environment handling, and includes the Windows launcher repair alongside broader orchestration and projection reliability work.",
+      },
+    ],
+  },
+  {
     version: "0.4.0",
-    date: "Jul 2026",
+    date: "Jul 6",
     features: [
       {
         id: "dynamic-island",
@@ -48,6 +254,208 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "The in-composer mic button is now universal across all 8 providers. Non-Codex providers use a local whisper.cpp sidecar for offline transcription — your audio never leaves your machine. Hold right-Option anywhere to open a floating dictation popup that inserts text at your cursor.",
         details:
           "Codex continues to use the existing ChatGPT transcription endpoint. Non-Codex providers route through whisper-cli (per-request spawn, no persistent process). Audio is resampled from 24kHz to 16kHz for whisper. Models are downloaded on first use (~75MB) and verified via SHA256. Mac users install whisper-cli via Homebrew; Windows/Linux bundling is a follow-up CI task. Enable in Settings > Behavior > Voice dictation.",
+      },
+      {
+        id: "prompt-history-attachments",
+        title: "Prompt history keeps drafts and attachments together",
+        description:
+          "Browsing your previous prompts no longer strips the attachments from the draft you are building, so history navigation is safer for image- and file-heavy follow-ups.",
+        details:
+          "Composer draft history now preserves attachment state while you move through previous prompts, resets stale navigation state more carefully, and avoids duplicate optimistic history entries after sends.",
+      },
+      {
+        id: "pr-environment-panel",
+        title: "Pull request context is clearer in the Environment panel",
+        description:
+          "Threads attached to GitHub pull requests now surface richer PR context, including merged-state handling and more readable review/check previews.",
+        details:
+          "The PR snapshot path now captures pull request data for the Environment panel, handles merged PRs more predictably, trims long review previews, dedupes GitHub field requests, and tightens merge-head formatting.",
+      },
+      {
+        id: "claude-rate-limits",
+        title: "Claude rate limits fail more gracefully",
+        description:
+          "When Claude reports usage or rate-limit trouble, Synara now presents the condition more calmly instead of turning it into a generic provider failure.",
+        details:
+          "Provider usage handling now narrows usage summary types more safely and treats Claude usage limit responses as a recoverable, user-facing state with focused parser and resilience coverage.",
+      },
+      {
+        id: "desktop-stderr-resilience",
+        title: "Desktop restarts handle broken stderr pipes",
+        description:
+          "The desktop app is less likely to crash or get noisy when a restarted child process loses its stderr pipe during shutdown or relaunch.",
+        details:
+          "Desktop process restart handling now tolerates broken stderr writes, including the EPIPE path that could appear while the app was restarting provider or server processes.",
+      },
+      {
+        id: "release-polish",
+        title: "Small reliability fixes across agents and PR flows",
+        description:
+          "This release rounds off recent agent-session and pull-request work with tighter assertions, safer formatting, and cleaner edge-case behavior.",
+        details:
+          "The release includes automation migration lineage assertion fixes, PR snapshot review follow-up fixes, provider usage type narrowing, and general cleanup from the prompt-history and PR environment-panel review loops.",
+      },
+    ],
+  },
+  {
+    version: "0.3.9",
+    date: "Jul 5",
+    features: [
+      {
+        id: "thread-export-zip",
+        title: "Export a thread as a ZIP",
+        description:
+          "Type `/export` in a saved, idle chat to download a portable archive with the full thread projection and a readable Markdown transcript.",
+        details:
+          "The export route streams `thread.json` and `transcript.md` through the server with shared eligibility checks, desktop-friendly CORS/error handling, large-thread history hydration, and browser download support from both typed slash commands and the command menu.",
+      },
+      {
+        id: "archived-profile-stats",
+        title: "Archived stats survive cleanup",
+        description:
+          "Deleting or purging old threads no longer erases their lifetime contribution to profile stats, so cleanup keeps your usage history intact.",
+        details:
+          "Thread deletion now snapshots profile aggregates before purging rows, merges archived stats back into profile queries, preserves command receipts, cleans checkpoint refs carefully, and includes a migration plus purge/retention regression coverage.",
+      },
+      {
+        id: "active-turn-working-header",
+        title: "Active turns show steady work timing",
+        description:
+          "While an agent is working, the transcript now keeps a stable 'Working for' header at the top of the active turn instead of relying only on a transient shimmer row.",
+        details:
+          "MessagesTimeline now inserts a stable active-turn header for duration display while preserving the existing setup shimmer, making live turns easier to scan and less jumpy during layout updates.",
+      },
+      {
+        id: "terminal-shutdown-escalation",
+        title: "Terminal shutdown is more reliable",
+        description:
+          "Synara is better at shutting down stubborn terminal process trees without returning early while child processes are still alive.",
+        details:
+          "TerminalManager now routes shutdown through a dedicated process-tree killer with SIGTERM-to-SIGKILL escalation, cancellation when processes exit cleanly, nested process activity coverage, and tests for disposal timing.",
+      },
+      {
+        id: "acp-resume-message-ids",
+        title: "Resumed ACP replies stay distinct",
+        description:
+          "ACP-backed sessions are less likely to lose assistant replies after a restart or resume because fallback assistant message IDs no longer collide across runtime instances.",
+        details:
+          "A per-runtime instance ID is included in fallback ACP assistant item IDs, preventing resumed sessions with the same provider session ID and segment index from overwriting earlier transcript messages.",
+      },
+      {
+        id: "git-writing-model-picker",
+        title: "Git writing respects OpenCode and Kilo models",
+        description:
+          "Git commit, diff summary, and PR text generation now honor runtime-discovered OpenCode and Kilo model selections from Settings.",
+        details:
+          "Settings now persists discovered Git-writing model options, git actions pass the chosen provider/model through the shared contracts, and query cache keys include the text-generation selection so generated commit/PR text routes to the intended backend.",
+      },
+    ],
+  },
+  {
+    version: "0.3.8",
+    date: "Jul 3",
+    features: [
+      {
+        id: "grok-resume-replay-resilience",
+        title: "Grok resume handles long sessions more safely",
+        description:
+          "Grok and other ACP-backed sessions are better at resuming after compaction or reconnects without replaying messages into the wrong runtime or growing memory unexpectedly.",
+        details:
+          "ACP resume now drops replay before the event consumer is attached, seeds compaction quiet windows from response timing, hardens provider/runtime ingestion, and covers JSON-RPC/session-runtime edge cases that previously made resume replay fragile.",
+      },
+      {
+        id: "worktree-setup-status",
+        title: "Worktree setup failures recover cleanly",
+        description:
+          "When a worktree setup step fails, Synara now shows the failed setup state, keeps the timeline from looking stuck, and resets the local dispatch when you send again.",
+        details:
+          "ChatView and timeline setup snapshots now carry explicit setup step status, targeted cleanup for failed local dispatches, and focused browser/unit coverage for new-turn reset and setup rows.",
+      },
+      {
+        id: "automation-sent-label",
+        title: "Automation messages are labeled",
+        description:
+          "Prompts sent by an automation now carry a lightweight 'Sent via Automation' label above the bubble, so you can tell at a glance which turns you typed and which a scheduled or heartbeat run kicked off.",
+        details:
+          "User turns dispatched by the automation engine now persist a `dispatchOrigin` on the message end to end (command → event → projection → snapshot), and the transcript renders a clock-marked chip that mirrors the existing steering label.",
+      },
+      {
+        id: "approval-choice-polish",
+        title: "Approval prompts are easier to answer",
+        description:
+          "Pending approvals now use a clearer shared choice-row layout, with steadier panel behavior and browser coverage for allow/deny decisions.",
+        details:
+          "ComposerPendingApprovalPanel now shares ComposerChoiceRow structure with pending inputs, tracks decision actions in browser tests, and trims duplicated action styling.",
+      },
+      {
+        id: "startup-keepalive-gating",
+        title: "Startup does less surprise work",
+        description:
+          "Synara avoids unnecessary provider refresh work during startup and gates Claude keepalive behavior more carefully, so opening the app is calmer and less likely to fight credential checks.",
+        details:
+          "Server startup no longer runs provider refresh eagerly, Claude keepalive respects auth-state timing, provider usage hooks handle inactive summaries more predictably, and related settings/server query invalidation paths have tests.",
+      },
+      {
+        id: "collapsed-work-timing",
+        title: "Folded work rows report time more accurately",
+        description:
+          "Collapsed transcript segments now show a 'Worked for' duration that spans the whole folded section, not just a single row inside it.",
+        details:
+          "Timeline duration grouping now tracks folded row boundaries and tests the aggregate timing behavior so compact transcripts better match what actually happened.",
+      },
+    ],
+  },
+  {
+    version: "0.3.7",
+    date: "Jul 2",
+    features: [
+      {
+        id: "update-download-progress",
+        title: "Update downloads show their progress",
+        description:
+          "When Synara is downloading a desktop update, the sidebar update button now shows a live percent badge so you can tell whether it is moving or nearly ready.",
+        details:
+          "The desktop update helper now clamps reported download percentages, hides them outside active downloads, and covers edge cases for null, negative, oversized, and fractional progress values.",
+      },
+      {
+        id: "claude-auth-status-stability",
+        title: "Claude auth checks are less jumpy",
+        description:
+          "Claude sessions are less likely to be marked logged out during refresh-token races, especially when health checks and the macOS credential keepalive run near the same time.",
+        details:
+          "`claude auth status` is now serialized through a shared lock, retried once for structured false negatives, and can fall back to verified local credential metadata before showing an unauthenticated state.",
+      },
+      {
+        id: "checkpoint-baseline-resilience",
+        title: "Turn checkpoints are harder to confuse",
+        description:
+          "Synara preserves the first pre-turn snapshot more carefully, so transcript diffs and restore points better match what was on disk when you pressed send.",
+        details:
+          "Checkpoint capture now has single-flight behavior per repo/ref, a bounded capture timeout, first-writer-wins `skipIfExists` baselines, and extra recovery when a startup or backup path missed the original message baseline.",
+      },
+      {
+        id: "chat-sidebar-polish",
+        title: "The sidebar chat list behaves more naturally",
+        description:
+          "The Chats section now lives with the rest of the scrollable sidebar content, has a familiar disclosure chevron, and keeps the footer focused on account/update controls.",
+        details:
+          "Sidebar chat collapse state now exposes `aria-expanded`, reuses the shared disclosure chevron, and separates chat rows from the footer while preserving sort and new-chat actions.",
+      },
+      {
+        id: "first-send-environment-panel",
+        title: "First sends keep the workspace calm",
+        description:
+          "Starting from an empty chat no longer opens the Environment panel by surprise after the first message turns the landing view into a transcript.",
+        details:
+          "ChatView now records a closed environment-panel preference when sending from the centered empty landing, preventing the default-open policy from popping the panel into a just-started conversation.",
+      },
+      {
+        id: "provider-health-parser-coverage",
+        title: "Provider health parsing is easier to trust",
+        description:
+          "Provider CLI output handling and Claude auth interpretation now have clearer, isolated parsing paths with more focused tests around failure and metadata cases.",
+        details:
+          "Generic CLI-output helpers moved out of ProviderHealth, Claude auth parsing moved into a pure module, and new tests cover auth JSON markers, credential summaries, the auth-status lock, checkpoint single-flight behavior, and provider health edge cases.",
       },
     ],
   },
@@ -1207,7 +1615,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "synara-home-migration",
         title: "Synara is now the default home",
         description:
-          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.dpcode` or `~/.t3` data on first launch.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports data from previous installations on first launch.",
       },
       {
         id: "desktop-platform-polish",
@@ -1570,9 +1978,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "legacy-import-recovery",
-        title: "Legacy T3 imports heal themselves",
+        title: "Legacy imports heal themselves",
         description:
-          "A new migration reconciles older imported T3 Code databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
+          "A new migration reconciles older imported databases whose migration history skipped required schema changes, preventing missing-column crashes after import.",
       },
       {
         id: "runtime-idle-cleanup",

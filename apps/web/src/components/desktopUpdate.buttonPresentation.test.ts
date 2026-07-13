@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState } from "@synara/contracts";
 
 import { getDesktopUpdateButtonPresentation } from "./desktopUpdate.logic";
 
@@ -17,6 +17,7 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  installFailureCount: 0,
   releaseUrl: null,
 };
 
@@ -88,6 +89,23 @@ describe("desktop update button presentation timeline", () => {
     });
     expect(below).toEqual({
       label: "Preparing",
+      secondaryLabel: null,
+    });
+  });
+
+  it("shows Retry after an install failed across a restart", () => {
+    expect(
+      getDesktopUpdateButtonPresentation({
+        ...baseState,
+        status: "error",
+        availableVersion: "1.2.0",
+        downloadedVersion: null,
+        errorContext: "install",
+        canRetry: true,
+        installFailureCount: 1,
+      }),
+    ).toEqual({
+      label: "Retry",
       secondaryLabel: null,
     });
   });

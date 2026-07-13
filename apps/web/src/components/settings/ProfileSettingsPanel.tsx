@@ -1,13 +1,13 @@
 // FILE: ProfileSettingsPanel.tsx
 // Purpose: Local-first profile / stats dashboard rendered inside Settings → Profile. Core
-// stats render instantly from a fast SQL RPC; lifetime/peak token figures stream in from a
-// second DB-backed RPC and upgrade the token tiles in place. Centered, low-chrome layout
+// stats render instantly from a fast SQL RPC; lifetime/peak token figures and the tokens/day
+// heatmap stream in from a second DB-backed RPC. Centered, low-chrome layout
 // with an explicit edit mode for the local name + handle.
 // Layer: web profile feature (settings panel body).
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@t3tools/contracts";
+import { type ProfileStats, type ProfileTokenStats, type ProviderKind } from "@synara/contracts";
 import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
@@ -17,6 +17,11 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ActivityHeatmap } from "../profile/ActivityHeatmap";
+import {
+  selectProfileHeatmap,
+  selectProfileModelUsage,
+  selectProfileTopProvider,
+} from "../profile/profileSelectors";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
 import { useProfileHandle } from "../profile/useProfileHandle";
@@ -79,7 +84,10 @@ function ProfileContent({
   const { color: avatarColor, setColor: setAvatarColor } = useProfileAvatarColor();
   const { image: avatarImage, setImage: setAvatarImage } = useProfileAvatarImage();
 
-  const heatmapCells = stats.activity.heatmap;
+  // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
+  const heatmap = selectProfileHeatmap(stats, tokenStats);
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
+  const modelUsage = selectProfileModelUsage(stats, tokenStats);
   const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
   const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
 
@@ -136,16 +144,20 @@ function ProfileContent({
       {/* Heatmap */}
       <section className="flex min-w-0 flex-col gap-3">
         <h3 className="text-sm font-medium">Activity</h3>
-        <ActivityHeatmap
-          cells={heatmapCells}
-          fill
-          radius={4}
-          gap={3}
-          tooltip
-          tooltipUnit="prompts"
-          showMonths
-          monthsPosition="bottom"
-        />
+        {tokensPending ? (
+          <Skeleton className="h-28 w-full rounded-lg" />
+        ) : (
+          <ActivityHeatmap
+            cells={heatmap.cells}
+            fill
+            radius={5}
+            gap={3}
+            tooltip
+            tooltipUnit={heatmap.unit}
+            showMonths
+            monthsPosition="bottom"
+          />
+        )}
       </section>
 
       {/* Insights + plugins */}
@@ -156,11 +168,9 @@ function ProfileContent({
             <InsightRow
               label="Most used provider"
               value={
-                stats.insights.topProvider
-                  ? `${formatProviderLabel(stats.insights.topProvider)}${
-                      stats.insights.topProviderPercent !== null
-                        ? ` · ${stats.insights.topProviderPercent}%`
-                        : ""
+                topProvider.provider
+                  ? `${formatProviderLabel(topProvider.provider)}${
+                      topProvider.percent !== null ? ` · ${topProvider.percent}%` : ""
                     }`
                   : "—"
               }
@@ -224,9 +234,9 @@ function ProfileContent({
       {/* Model usage */}
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-medium">Model usage</h3>
-        {stats.providerModels.length > 0 ? (
+        {modelUsage.entries.length > 0 ? (
           <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
-            {stats.providerModels.slice(0, 6).map((entry) => (
+            {modelUsage.entries.slice(0, 6).map((entry) => (
               <ModelUsageRow
                 key={`${entry.provider}:${entry.model}`}
                 provider={entry.provider}
@@ -332,6 +342,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Gemini";
     case "grok":
       return "Grok";
+    case "droid":
+      return "Droid";
     case "kilo":
       return "Kilo";
     case "opencode":

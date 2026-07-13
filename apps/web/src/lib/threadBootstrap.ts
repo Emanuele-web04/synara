@@ -13,8 +13,8 @@ import {
   type RuntimeMode,
   type ThreadEnvironmentMode,
   type ThreadId,
-} from "@t3tools/contracts";
-import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,

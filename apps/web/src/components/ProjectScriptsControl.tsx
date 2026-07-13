@@ -2,7 +2,7 @@ import type {
   ProjectScript,
   ProjectScriptIcon,
   ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   BugIcon,
   ChevronDownIcon,
@@ -11,18 +11,9 @@ import {
   ListChecksIcon,
   PlayIcon,
   PlusIcon,
-  SearchIcon,
   SettingsIcon,
 } from "~/lib/icons";
-import React, {
-  type FormEvent,
-  type KeyboardEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
 
 import {
   keybindingValueForCommand,
@@ -44,11 +35,14 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
-import { Button, headerButtonDarkBorderClassName } from "./ui/button";
+import { Button } from "./ui/button";
 import {
-  CHAT_HEADER_CONTROL_CLASS_NAME,
-  CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-  CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+  CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+  CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
+  ChatHeaderButton,
+  ChatHeaderIconButton,
+  ChatHeaderSplitDivider,
+  ChatHeaderSplitGroup,
 } from "./chat/chatHeaderControls";
 import {
   Dialog,
@@ -59,7 +53,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { Group, GroupSeparator } from "./ui/group";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "./ui/menu";
@@ -85,7 +78,7 @@ function ScriptIcon({
 }) {
   if (icon === "test") return <FlaskConicalIcon className={className} />;
   if (icon === "lint") return <ListChecksIcon className={className} />;
-  if (icon === "configure") return <SearchIcon className={className} />;
+  if (icon === "configure") return <SettingsIcon className={className} />;
   if (icon === "build") return <HammerIcon className={className} />;
   if (icon === "debug") return <BugIcon className={className} />;
   return <PlayIcon className={className} />;
@@ -104,7 +97,7 @@ interface ProjectScriptsControlProps {
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
   showInlineControls?: boolean;
-  openAddActionNonce?: number;
+  hideInlineLabel?: boolean;
   onRunScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
   onUpdateScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void> | void;
@@ -167,7 +160,7 @@ export default function ProjectScriptsControl({
   keybindings,
   preferredScriptId = null,
   showInlineControls = true,
-  openAddActionNonce,
+  hideInlineLabel = false,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -184,7 +177,6 @@ export default function ProjectScriptsControl({
   const [keybinding, setKeybinding] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const lastOpenAddActionNonceRef = useRef<number | undefined>(openAddActionNonce);
 
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {
@@ -194,8 +186,8 @@ export default function ProjectScriptsControl({
     return primaryProjectScript(scripts);
   }, [preferredScriptId, scripts]);
   const isEditing = editingScriptId !== null;
-  const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground focus-visible:bg-[var(--sidebar-accent)] focus-visible:text-foreground data-highlighted:hover:bg-[var(--sidebar-accent)] data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-[var(--sidebar-accent)] data-highlighted:focus-visible:text-foreground";
+  const actionMenuItemClassName =
+    "group grid min-h-9 grid-cols-[1rem_minmax(0,1fr)_1.5rem] items-center gap-2 rounded-xl px-2.5 py-1.5 text-[13px] leading-none data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:bg-[var(--color-background-button-secondary-hover)] focus-visible:text-foreground data-highlighted:hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-[var(--color-background-button-secondary-hover)] data-highlighted:focus-visible:text-foreground [&>svg]:mx-0 [&>svg]:size-4";
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab") return;
@@ -277,19 +269,6 @@ export default function ProjectScriptsControl({
     setDialogOpen(true);
   };
 
-  // Allow parent surfaces like the compact header menu to open the shared
-  // "Add action" dialog without duplicating script form logic.
-  useEffect(() => {
-    if (openAddActionNonce === undefined) return;
-    if (lastOpenAddActionNonceRef.current === undefined) {
-      lastOpenAddActionNonceRef.current = openAddActionNonce;
-      return;
-    }
-    if (openAddActionNonce === lastOpenAddActionNonceRef.current) return;
-    lastOpenAddActionNonceRef.current = openAddActionNonce;
-    openAddDialog();
-  }, [openAddActionNonce]);
-
   const confirmDeleteScript = useCallback(() => {
     if (!editingScriptId) return;
     setDeleteConfirmOpen(false);
@@ -300,42 +279,41 @@ export default function ProjectScriptsControl({
   return (
     <>
       {showInlineControls && primaryScript ? (
-        <Group aria-label="Project scripts">
-          <Button
-            size="xs"
-            variant="outline"
+        <ChatHeaderSplitGroup label="Project actions">
+          <ChatHeaderButton
             className={cn(
-              headerButtonDarkBorderClassName,
-              CHAT_HEADER_CONTROL_CLASS_NAME,
-              CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+              CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+              "min-w-0 gap-1.5 px-2.5",
+              hideInlineLabel ? "px-2" : "max-w-44",
             )}
             onClick={() => onRunScript(primaryScript)}
+            aria-label={`Run ${primaryScript.name}`}
             title={`Run ${primaryScript.name}`}
           >
-            <ScriptIcon icon={primaryScript.icon} />
-            <span className="sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+            <ScriptIcon icon={primaryScript.icon} className="size-3.5 shrink-0" />
+            <span
+              className={cn(
+                "max-w-32 truncate font-normal",
+                hideInlineLabel ? "sr-only" : "hidden sm:inline",
+              )}
+            >
               {primaryScript.name}
             </span>
-          </Button>
-          <GroupSeparator className="hidden @sm/header-actions:block" />
+          </ChatHeaderButton>
+          <ChatHeaderSplitDivider />
           <Menu highlightItemOnHover={false}>
             <MenuTrigger
               render={
-                <Button
-                  size="icon-xs"
-                  variant="outline"
-                  className={cn(
-                    headerButtonDarkBorderClassName,
-                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                  )}
-                  aria-label="Script actions"
+                <ChatHeaderIconButton
+                  label="Script actions"
+                  tone="outline"
+                  className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
                 />
               }
             >
-              <ChevronDownIcon className="size-4" />
+              <ChevronDownIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup align="end">
+            <MenuPopup align="end" className="min-w-64" sideOffset={8}>
               {scripts.map((script) => {
                 const shortcutLabel = shortcutLabelForCommand(
                   keybindings,
@@ -344,14 +322,14 @@ export default function ProjectScriptsControl({
                 return (
                   <MenuItem
                     key={script.id}
-                    className={`group ${dropdownItemClassName}`}
+                    className={actionMenuItemClassName}
                     onClick={() => onRunScript(script)}
                   >
-                    <ScriptIcon icon={script.icon} className="size-4" />
-                    <span className="truncate">
+                    <ScriptIcon icon={script.icon} className="size-4 text-muted-foreground" />
+                    <span className="min-w-0 truncate">
                       {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
                     </span>
-                    <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
+                    <span className="flex min-w-0 items-center justify-end">
                       {shortcutLabel && (
                         <MenuShortcut className="ms-0 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
                           {shortcutLabel}
@@ -361,7 +339,7 @@ export default function ProjectScriptsControl({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        className="absolute right-0 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
+                        className="size-6 rounded-lg opacity-50 transition-opacity sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100 sm:group-focus-visible:pointer-events-auto sm:group-focus-visible:opacity-100"
                         aria-label={`Edit ${script.name}`}
                         onPointerDown={(event) => {
                           event.preventDefault();
@@ -379,13 +357,25 @@ export default function ProjectScriptsControl({
                   </MenuItem>
                 );
               })}
-              <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
-                <PlusIcon className="size-4" />
-                Add action
+              <MenuItem className={actionMenuItemClassName} onClick={openAddDialog}>
+                <PlusIcon className="size-4 text-muted-foreground" />
+                <span className="col-span-2 min-w-0 truncate">Add action</span>
               </MenuItem>
             </MenuPopup>
           </Menu>
-        </Group>
+        </ChatHeaderSplitGroup>
+      ) : showInlineControls ? (
+        <ChatHeaderButton
+          className={cn("gap-1.5 px-2.5", hideInlineLabel && "px-2")}
+          onClick={openAddDialog}
+          aria-label="Add action"
+          title="Add action"
+        >
+          <PlusIcon className="size-3.5" />
+          <span className={cn("font-normal", hideInlineLabel ? "sr-only" : "hidden sm:inline")}>
+            Add action
+          </span>
+        </ChatHeaderButton>
       ) : null}
 
       <Dialog

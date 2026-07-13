@@ -21,8 +21,8 @@ import {
   type RuntimeMode,
   type ThreadId,
   TurnId,
-} from "@t3tools/contracts";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -1492,6 +1492,7 @@ export function makeCursorAdapter(
         const child = yield* childProcessSpawner.spawn(
           ChildProcess.make(prepared.command, prepared.args, {
             shell: prepared.shell,
+            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
             env,
           }),
         );

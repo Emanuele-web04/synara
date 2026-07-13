@@ -6,14 +6,14 @@ import type {
   ProviderModelDescriptor,
   ServerProviderAuthStatus,
   ServerProviderStatusState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   DEFAULT_GEMINI_MODEL_CAPABILITIES,
   GEMINI_2_5_MODEL_CAPABILITIES,
   GEMINI_3_MODEL_CAPABILITIES,
   geminiCapabilitiesForModel,
-} from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/shared/model";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
@@ -250,6 +250,7 @@ export const probeGeminiCapabilities = (input: {
           env,
           shell: prepared.shell,
           windowsHide: prepared.windowsHide,
+          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
           stdio: ["pipe", "pipe", "pipe"],
         });
 

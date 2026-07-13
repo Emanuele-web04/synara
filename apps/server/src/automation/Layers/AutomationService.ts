@@ -20,7 +20,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
   type ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -967,6 +967,7 @@ export const AutomationServiceLive = Layer.effect(
                 ? { providerOptions: definition.providerOptions }
                 : {}),
               dispatchMode: "queue",
+              dispatchOrigin: "automation",
               runtimeMode: definition.runtimeMode,
               interactionMode: definition.interactionMode,
               createdAt: now,
@@ -1053,6 +1054,7 @@ export const AutomationServiceLive = Layer.effect(
             modelSelection: definition.modelSelection,
             ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
             dispatchMode: "queue",
+            dispatchOrigin: "automation",
             runtimeMode: definition.runtimeMode,
             interactionMode: definition.interactionMode,
             createdAt: now,

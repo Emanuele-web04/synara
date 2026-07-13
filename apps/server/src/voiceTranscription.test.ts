@@ -4,7 +4,7 @@
 // Exports: Vitest cases
 // Depends on: voiceTranscription utility and mocked fetch responses.
 
-import type { ServerVoiceTranscriptionInput } from "@t3tools/contracts";
+import type { ServerVoiceTranscriptionInput } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription";

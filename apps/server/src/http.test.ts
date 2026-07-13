@@ -6,7 +6,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, FileSystem, Path } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
+import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
 
 import { clearEditorIconInFlightCache } from "./editorAppIcons";
 import { createHttpRequestHandler, isLegacyTokenAuthorized } from "./http";
@@ -14,6 +14,7 @@ import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
   deriveServerPaths,
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultStudioWorkspaceRoot,
   type ServerConfigShape,
 } from "./config";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
@@ -50,7 +51,7 @@ const projectFaviconResolver: ProjectFaviconResolverShape = {
 };
 
 async function makeConfig(overrides: Partial<ServerConfigShape> = {}): Promise<ServerConfigShape> {
-  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-http-test-"));
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-http-test-"));
   tempDirs.push(baseDir);
   const derivedPaths = await Effect.runPromise(
     deriveServerPaths(baseDir, undefined).pipe(Effect.provide(NodeServices.layer)),
@@ -62,6 +63,7 @@ async function makeConfig(overrides: Partial<ServerConfigShape> = {}): Promise<S
     cwd: baseDir,
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
+    studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     ...derivedPaths,
     staticDir: undefined,
@@ -187,7 +189,7 @@ function makeAuthDescriptor() {
     policy: "loopback-browser" as const,
     bootstrapMethods: ["one-time-token" as const],
     sessionMethods: ["browser-session-cookie" as const, "bearer-session-token" as const],
-    sessionCookieName: "t3_session",
+    sessionCookieName: "synara_session",
   };
 }
 
@@ -315,7 +317,7 @@ describe("createHttpRequestHandler", () => {
   });
 
   it("serves static files and SPA fallback", async () => {
-    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-static-test-"));
+    const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-static-test-"));
     tempDirs.push(staticDir);
     fs.writeFileSync(path.join(staticDir, "index.html"), "<main>app</main>");
     fs.writeFileSync(path.join(staticDir, "asset.txt"), "asset");
@@ -372,7 +374,7 @@ describe("createHttpRequestHandler", () => {
     const config = await makeConfig({ devUrl: new URL("http://localhost:5173/") });
     const handler = await makeHandler(config, {
       serverAuth: makeFakeServerAuth(),
-      cookieName: "t3_session",
+      cookieName: "synara_session",
     });
 
     await withServer(handler, async (origin) => {
@@ -393,7 +395,7 @@ describe("createHttpRequestHandler", () => {
     const config = await makeConfig();
     const handler = await makeHandler(config, {
       serverAuth: makeFakeServerAuth(),
-      cookieName: "t3_session",
+      cookieName: "synara_session",
     });
 
     await withServer(handler, async (origin) => {
@@ -404,7 +406,7 @@ describe("createHttpRequestHandler", () => {
       });
 
       expect(response.status).toBe(200);
-      expect(response.headers.get("set-cookie")).toContain("t3_session=session-token");
+      expect(response.headers.get("set-cookie")).toContain("synara_session=session-token");
       await expect(response.json()).resolves.toMatchObject({
         authenticated: true,
         sessionMethod: "browser-session-cookie",

@@ -28,6 +28,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "diff.toggle",
   "composer.focus.toggle",
   "modelPicker.toggle",
+  "model.next",
+  "model.previous",
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",

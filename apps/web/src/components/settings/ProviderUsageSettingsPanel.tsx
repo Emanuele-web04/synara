@@ -3,12 +3,12 @@
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
 // Usage is fetched read-only from each CLI's stored credentials by the server.
 
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import {
   PROVIDER_USAGE_PROVIDERS,
   providerUsageDisplayName,
   providerUsageNeedsAuthDetail,
-} from "@t3tools/shared/providerUsage";
+} from "@synara/shared/providerUsage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
@@ -19,7 +19,7 @@ import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
 import { SettingsCard } from "~/components/settings/SettingsPanelPrimitives";
 import { Button } from "~/components/ui/button";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
-import { RotateCcwIcon } from "~/lib/icons";
+import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import { deriveAccountRateLimits, type ProviderRateLimit } from "~/lib/rateLimits";
 import {
@@ -107,6 +107,12 @@ function ProviderUsageCard({
 
         {status === "ok" && hasUsage ? (
           <>
+            {usageSummary.usageNotice ? (
+              <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-600 dark:text-amber-300/90">
+                <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                <span>{usageSummary.usageNotice}</span>
+              </p>
+            ) : null}
             {meterRows.length > 0 ? (
               <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}

@@ -2,6 +2,8 @@
 // Purpose: Schemas for the local profile-stats RPCs that power the Profile page and
 // the shareable activity card. All metrics are backed by Synara's local DB
 // projections; no provider archive or cloud data is part of this contract.
+// Metrics are lifetime totals: deleting a thread or project from the app never
+// subtracts the work it already contributed to the profile.
 // Layer: shared contracts (schema-only, no runtime logic)
 
 import { Schema } from "effect";
@@ -40,6 +42,17 @@ export const ProfileProviderUsage = Schema.Struct({
   percent: Schema.Number,
 });
 export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
+
+// Token-based model mix. Tokens are attributed to the model selected for the
+// turn that processed them (thread selection is only a legacy-data fallback),
+// so switching models mid-thread keeps each model's share accurate.
+export const ProfileTokenModelUsage = Schema.Struct({
+  provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  model: TrimmedNonEmptyString,
+  tokens: NonNegativeInt,
+  percent: Schema.Number,
+});
+export type ProfileTokenModelUsage = typeof ProfileTokenModelUsage.Type;
 
 export const ProfileSkillUsage = Schema.Struct({
   name: TrimmedNonEmptyString,
@@ -92,6 +105,8 @@ export const ProfileActiveHours = Schema.Struct({
 export type ProfileActiveHours = typeof ProfileActiveHours.Type;
 
 export const ProfileInsights = Schema.Struct({
+  // Ranked by turn count. Token-based ranking lives on ProfileTokenStats; clients
+  // prefer it when available (see selectProfileTopProvider on the web).
   topProvider: Schema.NullOr(ProviderKind),
   topProviderPercent: Schema.NullOr(Schema.Number),
   topReasoning: Schema.NullOr(Schema.String),
@@ -142,7 +157,15 @@ export const ProfileTokenStats = Schema.Struct({
   peakDayTokens: Schema.NullOr(NonNegativeInt),
   peakDay: Schema.NullOr(TrimmedNonEmptyString),
   providers: Schema.Array(ProviderKind),
+  // Providers with recorded turns but no token telemetry (their adapters never
+  // emit context-window updates); excluded from token-based rankings.
   unavailableProviders: Schema.Array(ProviderKind),
+  // Most-used provider by tokens processed, among providers with token telemetry.
+  topProvider: Schema.NullOr(ProviderKind),
+  topProviderPercent: Schema.NullOr(Schema.Number),
+  // Per-model token shares; clients prefer this over the turn-based
+  // ProfileStats.providerModels when token telemetry is available.
+  models: Schema.Array(ProfileTokenModelUsage),
   heatmapMetric: Schema.Literal("tokens"),
   heatmap: Schema.Array(ProfileHeatmapCell),
 });

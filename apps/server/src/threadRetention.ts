@@ -8,13 +8,22 @@ import {
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery";
+import {
+  AutomationRepository,
+  type AutomationRepositoryShape,
+} from "./persistence/Services/AutomationRepository";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
+
+// Marks thread.delete commands issued by the retention sweep. Retention only
+// hides threads from the app; deletion flows use this prefix to tell retention
+// hides apart from explicit user deletes (which purge the thread's data).
+export const THREAD_RETENTION_COMMAND_ID_PREFIX = "thread-retention:";
 
 export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
 export const THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS = 5 * 60 * 1000;
@@ -56,6 +65,26 @@ function isThreadBusy(thread: RetentionThread): boolean {
     return true;
   }
   return false;
+}
+
+function listRetentionProtectedThreadIds(
+  automationRepository: AutomationRepositoryShape,
+): Effect.Effect<ReadonlySet<ThreadId>, unknown> {
+  return automationRepository.list({ includeArchived: false }).pipe(
+    Effect.map((result) => {
+      const protectedThreadIds = new Set<ThreadId>();
+      for (const definition of result.definitions) {
+        if (
+          definition.enabled &&
+          definition.mode === "heartbeat" &&
+          definition.targetThreadId !== null
+        ) {
+          protectedThreadIds.add(definition.targetThreadId);
+        }
+      }
+      return protectedThreadIds;
+    }),
+  );
 }
 
 function chunkThreadIds(
@@ -110,12 +139,14 @@ const publishRetentionMaintenance = Effect.fn("publishRetentionMaintenance")(fun
 export function getInactiveThreadIdsForRetention(
   readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
+  protectedThreadIds: ReadonlySet<ThreadId> = new Set(),
 ): ThreadId[] {
   const cutoffMs = nowMs - THREAD_RETENTION_UNUSED_MS;
   const inactiveThreadIds: ThreadId[] = [];
 
   for (const thread of readModel.threads) {
     if ("deletedAt" in thread && thread.deletedAt !== null) continue;
+    if (protectedThreadIds.has(thread.id)) continue;
     if (thread.isPinned === true) continue;
     if (isThreadBusy(thread)) continue;
     const lastActivityMs = getThreadLastActivityMs(thread);
@@ -129,9 +160,15 @@ export function getInactiveThreadIdsForRetention(
 export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(function* (
   orchestrationEngine: OrchestrationEngineShape,
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
+  automationRepository: AutomationRepositoryShape,
 ) {
   const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-  const inactiveThreadIds = getInactiveThreadIdsForRetention(shellSnapshot);
+  const protectedThreadIds = yield* listRetentionProtectedThreadIds(automationRepository);
+  const inactiveThreadIds = getInactiveThreadIdsForRetention(
+    shellSnapshot,
+    Date.now(),
+    protectedThreadIds,
+  );
   const totalCandidateCount = inactiveThreadIds.length;
   let deletedCount = 0;
 
@@ -154,7 +191,9 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
           orchestrationEngine
             .dispatch({
               type: "thread.delete",
-              commandId: CommandId.makeUnsafe(`thread-retention:${randomUUID()}`),
+              commandId: CommandId.makeUnsafe(
+                `${THREAD_RETENTION_COMMAND_ID_PREFIX}${randomUUID()}`,
+              ),
               threadId,
             })
             .pipe(
@@ -197,14 +236,25 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
   orchestrationEngine: OrchestrationEngineShape,
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
+  const automationRepository = yield* AutomationRepository;
   // Give startup/projection bootstrap a short settling window, then run one
   // hide pass promptly so desktop installs do not need to stay open for 24 hours.
   yield* Effect.gen(function* () {
     yield* Effect.sleep(THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS);
-    yield* runThreadRetentionSweep(orchestrationEngine, projectionSnapshotQuery);
+    yield* runThreadRetentionSweep(
+      orchestrationEngine,
+      projectionSnapshotQuery,
+      automationRepository,
+    );
     yield* Effect.forever(
       Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(
-        Effect.flatMap(() => runThreadRetentionSweep(orchestrationEngine, projectionSnapshotQuery)),
+        Effect.flatMap(() =>
+          runThreadRetentionSweep(
+            orchestrationEngine,
+            projectionSnapshotQuery,
+            automationRepository,
+          ),
+        ),
       ),
       { disableYield: true },
     );

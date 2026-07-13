@@ -1,4 +1,4 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
@@ -8,11 +8,12 @@ import {
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import type { TimelineEntry } from "../../session-logic";
-import type { TurnDiffSummary } from "../../types";
+import type { TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 function makeSummary(
   overrides: Omit<Partial<TurnDiffSummary>, "turnId"> & { turnId: string },
@@ -226,6 +227,30 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(second).not.toBe(first);
     expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("reuses worktree-setup rows until a step status or open state changes", () => {
+    const makeRow = (
+      status: "active" | "done",
+      open: boolean,
+    ): Extract<MessagesTimelineRow, { kind: "worktree-setup" }> => ({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      open,
+      steps: [{ id: "create-worktree", label: "Creating branch and worktree", status }],
+    });
+
+    const first = computeStableMessagesTimelineRows([makeRow("active", true)], emptyStableRows());
+    const unchanged = computeStableMessagesTimelineRows([makeRow("active", true)], first);
+    expect(unchanged).toBe(first);
+
+    const statusChanged = computeStableMessagesTimelineRows([makeRow("done", true)], unchanged);
+    expect(statusChanged).not.toBe(unchanged);
+    expect(statusChanged.result[0]).not.toBe(unchanged.result[0]);
+
+    const openChanged = computeStableMessagesTimelineRows([makeRow("done", false)], statusChanged);
+    expect(openChanged).not.toBe(statusChanged);
+    expect(openChanged.result[0]).not.toBe(statusChanged.result[0]);
   });
 
   it("replaces work rows when the activity kind changes", () => {
@@ -444,10 +469,12 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       turnDiffSummaries: [
         makeSummary({
           turnId: "turn-files",
+          checkpointTurnCount: 1,
           files: [{ path: "a.ts", additions: 1, deletions: 0 }],
         }),
         makeSummary({
           turnId: "turn-final",
+          checkpointTurnCount: 2,
           files: [{ path: "b.ts", additions: 0, deletions: 1 }],
         }),
       ],
@@ -470,6 +497,85 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       "a.ts",
       "b.ts",
     ]);
+    expect(result.get(MessageId.makeUnsafe("a-final"))?.checkpointTurnCounts).toEqual([1, 2]);
+  });
+
+  it("preserves Undo metadata when an empty placeholder follows file changes", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({ turnId: "turn-files", checkpointTurnCount: 1 }),
+        makeSummary({
+          turnId: "turn-empty-placeholder",
+          status: "missing",
+          checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-empty"),
+          files: [],
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-empty-placeholder"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-empty-placeholder"),
+        },
+      ],
+    });
+
+    const summary = result.get(MessageId.makeUnsafe("a-empty-placeholder"));
+    expect(summary?.checkpointTurnCounts).toEqual([1]);
+    expect(summary?.status).toBe("ready");
+    expect(summary?.checkpointRef).toBe(CheckpointRef.makeUnsafe("checkpoint-turn-files"));
+  });
+
+  it("excludes no-change and placeholder mini-turns from merged Undo targets", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({ turnId: "turn-files", checkpointTurnCount: 1 }),
+        makeSummary({ turnId: "turn-no-files", checkpointTurnCount: 2, files: [] }),
+        makeSummary({
+          turnId: "turn-placeholder",
+          checkpointTurnCount: 3,
+          checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-3"),
+        }),
+        makeSummary({
+          turnId: "turn-missing",
+          checkpointTurnCount: 4,
+          status: "missing",
+          checkpointRef: CheckpointRef.makeUnsafe("checkpoint-turn-missing"),
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-no-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-no-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-placeholder"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-placeholder"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-missing"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-missing"),
+        },
+      ],
+    });
+
+    expect(result.has(MessageId.makeUnsafe("a-placeholder"))).toBe(false);
+    expect(result.get(MessageId.makeUnsafe("a-missing"))?.checkpointTurnCounts).toEqual([]);
   });
 
   it("keeps separate cards for response segments split by user messages", () => {
@@ -601,11 +707,88 @@ describe("resolveAssistantMessageCopyState", () => {
   });
 });
 
+describe("resolveAssistantMessageDisplayText", () => {
+  it("suppresses the empty placeholder when the turn visibly completed an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        collapsedTurnItems: [
+          {
+            kind: "work",
+            id: "generated-image",
+            entry: {
+              id: "generated-image",
+              createdAt: "2026-07-08T10:00:00.000Z",
+              label: "Generated image",
+              tone: "tool",
+              itemType: "image_generation",
+              activityKind: "tool.completed",
+            },
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the placeholder when a settled turn produced no visible content", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("does not mistake an unfinished or failed image tool row for produced content", () => {
+    const imageEntry = {
+      id: "generated-image",
+      createdAt: "2026-07-08T10:00:00.000Z",
+      label: "Generating image",
+      tone: "tool" as const,
+      itemType: "image_generation" as const,
+      activityKind: "tool.started",
+    };
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [imageEntry],
+      }),
+    ).toBe("(empty response)");
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [
+          { ...imageEntry, activityKind: "tool.completed", tone: "error" as const },
+        ],
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("preserves real assistant text even when the same turn generated an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "Here is your image.", streaming: false },
+        inlineWorkEntries: [
+          {
+            id: "generated-image",
+            createdAt: "2026-07-08T10:00:00.000Z",
+            label: "Generated image",
+            tone: "tool",
+            itemType: "image_generation",
+            activityKind: "tool.completed",
+          },
+        ],
+      }),
+    ).toBe("Here is your image.");
+  });
+});
+
 describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
   const baseInput = {
     isWorking: false,
+    worktreeSetup: null as WorktreeSetupSnapshot | null,
+    worktreeSetupOpen: false,
     activeTurnStartedAt: null as string | null,
     turnDiffSummaryByAssistantMessageId: new Map(),
     revertTurnCountByUserMessageId: new Map(),
@@ -718,7 +901,66 @@ describe("deriveMessagesTimelineRows", () => {
       "work:w2",
     ]);
     expect(terminal!.inlineWorkEntries).toBeUndefined();
+    // Timed from the user message, not from the last intermediate narration.
+    expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("folds settled reasoning traces into the terminal turn disclosure", () => {
+    const reasoning = workEntry("reasoning-1", "2026-01-01T00:00:02Z", "Reasoning trace");
+    if (reasoning.kind === "work") {
+      reasoning.entry = {
+        ...reasoning.entry,
+        detail: "Inspecting apps/web/src/store.ts",
+        toolTitle: "Reasoning trace",
+      };
+    }
+
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        reasoning,
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(collapsedSignature(terminal!)).toEqual(["work:reasoning-1"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
+    // Mirrors a provider failure + retry: the first attempt's assistant message
+    // completes 22m20s in, the retry answers 40s later. The disclosure folds
+    // the whole run, so the timer must cover it too — not just the retry tail.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
+        assistantEntry("a1", "2026-01-01T00:22:20Z", {
+          turnId: "t1",
+          text: "The provider run failed",
+          completedAt: "2026-01-01T00:22:20Z",
+        }),
+        workEntry("w2", "2026-01-01T00:22:30Z", "retry work"),
+        assistantEntry("a2", "2026-01-01T00:23:00Z", {
+          turnId: "t2",
+          text: "All done",
+          completedAt: "2026-01-01T00:23:00Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a2");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
+    expect(terminal!.collapsedWorkElapsed).toBe("23m");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {
@@ -896,5 +1138,56 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
+  });
+
+  const worktreeSetupSnapshot = (): WorktreeSetupSnapshot => ({
+    steps: [
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ],
+  });
+
+  it("appends an open worktree-setup row and suppresses the generic working shimmer", () => {
+    const setup = worktreeSetupSnapshot();
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      worktreeSetup: setup,
+      worktreeSetupOpen: true,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    const setupRow = rows.at(-1);
+    expect(setupRow).toMatchObject({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      open: true,
+      steps: setup.steps,
+    });
+    expect(rows.some((row) => row.kind === "working")).toBe(false);
+  });
+
+  it("restores the working shimmer while the worktree-setup row animates closed", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      worktreeSetup: worktreeSetupSnapshot(),
+      worktreeSetupOpen: false,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "worktree-setup", "working"]);
+    expect(rows.find((row) => row.kind === "worktree-setup")).toMatchObject({ open: false });
+  });
+
+  it("omits the worktree-setup row entirely once the snapshot is gone", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "working"]);
   });
 });

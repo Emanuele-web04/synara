@@ -8,6 +8,7 @@ import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQu
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
+import { StudioOutputReactorLive } from "./orchestration/Layers/StudioOutputReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
@@ -26,6 +27,7 @@ import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
@@ -54,8 +56,12 @@ export function makeServerRuntimeServicesLayer() {
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
@@ -63,12 +69,17 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
+    Layer.provideMerge(checkpointStoreLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
+    Layer.provideMerge(studioOutputReactorLayer),
   );
   const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
+    Layer.provideMerge(profileStatsArchiveLayer),
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
@@ -115,6 +126,7 @@ export function makeServerRuntimeServicesLayer() {
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    AutomationRepositoryLive,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

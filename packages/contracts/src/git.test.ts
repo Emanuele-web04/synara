@@ -49,15 +49,23 @@ describe("GitResolvePullRequestResult", () => {
       pullRequest: {
         number: 42,
         title: "PR threads",
-        url: "https://github.com/pingdotgg/codething-mvp/pull/42",
+        url: "https://github.com/example-org/sample-repo/pull/42",
         baseBranch: "main",
         headBranch: "feature/pr-threads",
         state: "open",
+        isDraft: true,
+        mergeability: "conflicting",
+        additions: 38,
+        deletions: 36,
+        changedFiles: 3,
       },
     });
 
     expect(parsed.pullRequest.number).toBe(42);
     expect(parsed.pullRequest.headBranch).toBe("feature/pr-threads");
+    expect(parsed.pullRequest.isDraft).toBe(true);
+    expect(parsed.pullRequest.mergeability).toBe("conflicting");
+    expect(parsed.pullRequest.additions).toBe(38);
   });
 });
 
@@ -82,6 +90,21 @@ describe("GitRunStackedActionInput", () => {
     });
 
     expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
+  });
+
+  it("accepts an optional textGenerationModelSelection for provider routing", () => {
+    const parsed = decodeRunStackedActionInput({
+      actionId: "action-3",
+      cwd: "/repo",
+      action: "commit",
+      textGenerationModelSelection: {
+        provider: "opencode",
+        model: "openrouter/gpt-oss-120b",
+      },
+    });
+
+    expect(parsed.textGenerationModelSelection?.provider).toBe("opencode");
+    expect(parsed.textGenerationModelSelection?.model).toBe("openrouter/gpt-oss-120b");
   });
 });
 

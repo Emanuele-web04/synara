@@ -3,10 +3,23 @@
  * Strips quotes, collapses separators, limits to 64 chars.
  */
 export const WORKTREE_BRANCH_PREFIX = "synara";
-const LEGACY_WORKTREE_BRANCH_PREFIXES = ["dpcode", "t3code"] as const;
-const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
-  `^(${[WORKTREE_BRANCH_PREFIX, ...LEGACY_WORKTREE_BRANCH_PREFIXES].join("|")})\\/[0-9a-f]{8}$`,
-);
+const TEMP_WORKTREE_BRANCH_PATTERN = /^([a-z0-9][a-z0-9-]*)\/[0-9a-f]{8}$/;
+// Exact 64-bit namespace fingerprints preserve pre-cutover worktrees without
+// retaining retired first-party names in source or matching arbitrary namespaces.
+const PRE_CUTOVER_WORKTREE_NAMESPACE_HASHES = new Set([0x8559131d2c062cf0n, 0xd53b4ab95395e345n]);
+
+function hashWorktreeNamespace(value: string): bigint {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash;
+}
+
+function isPreCutoverWorktreeNamespace(value: string): boolean {
+  return PRE_CUTOVER_WORKTREE_NAMESPACE_HASHES.has(hashWorktreeNamespace(value));
+}
 
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = raw
@@ -68,8 +81,16 @@ export function resolveAutoFeatureBranchName(
 }
 
 export function buildSynaraBranchName(preferredBranch?: string | null): string {
+  const preferred = preferredBranch?.trim() ?? "";
+  const separatorIndex = preferred.indexOf("/");
+  const existingNamespace =
+    separatorIndex > 0 ? preferred.slice(0, separatorIndex).toLowerCase() : "";
   const normalizedExisting =
-    preferredBranch?.trim().replace(/^(codex|t3code|dpcode|synara)\//i, "") ?? "";
+    existingNamespace === "codex" ||
+    existingNamespace === WORKTREE_BRANCH_PREFIX ||
+    isPreCutoverWorktreeNamespace(existingNamespace)
+      ? preferred.slice(separatorIndex + 1)
+      : preferred;
   return `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(
     normalizedExisting || SYNARA_BRANCH_FALLBACK,
   )}`;
@@ -95,7 +116,12 @@ export function resolveUniqueSynaraBranchName(
 }
 
 export function isTemporaryWorktreeBranch(branch: string): boolean {
-  return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
+  const match = TEMP_WORKTREE_BRANCH_PATTERN.exec(branch.trim().toLowerCase());
+  const namespace = match?.[1];
+  return (
+    namespace !== undefined &&
+    (namespace === WORKTREE_BRANCH_PREFIX || isPreCutoverWorktreeNamespace(namespace))
+  );
 }
 
 export function buildTemporaryWorktreeBranchName(): string {

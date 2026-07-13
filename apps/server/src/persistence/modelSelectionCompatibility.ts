@@ -3,15 +3,29 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
+import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+
 type ModelProviderKind =
   | "codex"
   | "claudeAgent"
   | "cursor"
   | "gemini"
   | "grok"
+  | "droid"
   | "kilo"
   | "opencode"
   | "pi";
+
+const NON_DROID_MODEL_SLUGS = new Set(
+  Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
+    provider === "droid" ? [] : models.map((model) => model.slug.toLowerCase()),
+  ),
+);
+const DROID_ONLY_MODEL_SLUGS = new Set(
+  MODEL_OPTIONS_BY_PROVIDER.droid
+    .map((model) => model.slug.toLowerCase())
+    .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -50,6 +64,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
+  if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
+    return "droid";
+  }
   if (lowerLabel.includes("codex")) {
     return "codex";
   }
@@ -63,6 +80,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "cursor" ||
     provider === "gemini" ||
     provider === "grok" ||
+    provider === "droid" ||
     provider === "kilo" ||
     provider === "opencode" ||
     provider === "pi"
@@ -76,6 +94,11 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     }
   }
   const lowerModel = model.toLowerCase();
+  // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
+  // only Factory-exclusive built-ins are safe to attribute to Droid.
+  if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {
+    return "droid";
+  }
   if (lowerModel.includes("claude")) {
     return "claudeAgent";
   }
@@ -139,7 +162,7 @@ export function normalizePersistedModelSelection(input: unknown): unknown {
     return input;
   }
 
-  // Newer T3 Code writes provider-less selections as { instanceId, model } and
+  // Newer Synara writes provider-less selections as { instanceId, model } and
   // option rows as [{ id, value }]; Synara stores canonical provider/options objects.
   return normalizeLegacyModelSelection({
     provider: input.provider ?? input.instanceId,

@@ -6,7 +6,7 @@ import {
   type ResolvedKeybindingsConfig,
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
@@ -151,6 +151,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "modelPicker.toggle",
     shortcut: commandShortcut("m", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "model.next",
+    shortcut: commandShortcut("]", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "model.previous",
+    shortcut: commandShortcut("[", { altKey: true, modKey: false }),
     whenAst: whenNotTerminalFocus,
   },
   {

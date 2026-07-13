@@ -2,7 +2,8 @@ import type {
   ProviderKind,
   ServerListProviderUsageInput,
   ServerStopLocalServerInput,
-} from "@t3tools/contracts";
+  ThreadId,
+} from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
@@ -20,11 +21,14 @@ export const serverQueryKeys = {
   localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
-  allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  allProviderUsage: (provider?: ProviderKind | null) =>
+    ["server", "allProviderUsage", provider ?? null] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
+  studioThreadOutputs: (threadId: ThreadId | null) =>
+    ["server", "studioThreadOutputs", threadId] as const,
 };
 
 export const serverMutationKeys = {
@@ -128,6 +132,33 @@ export function sidebarLocalServersQueryOptions(input: {
   });
 }
 
+const STUDIO_THREAD_OUTPUTS_STALE_TIME_MS = 10_000;
+
+/**
+ * Outbox files attributed server-side to one Studio chat. Domain events invalidate this
+ * query after checkpoint and non-Git file-change updates.
+ */
+export function studioThreadOutputsQueryOptions(input: {
+  threadId: ThreadId | null;
+  enabled?: boolean;
+}) {
+  const threadId = input.threadId;
+  return queryOptions({
+    queryKey: serverQueryKeys.studioThreadOutputs(threadId),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!threadId) {
+        return { entries: [] };
+      }
+      return api.studio.listThreadOutputs({ threadId });
+    },
+    enabled: (input.enabled ?? true) && threadId !== null,
+    staleTime: STUDIO_THREAD_OUTPUTS_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
 export function serverStopLocalServerMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
     mutationKey: serverMutationKeys.stopLocalServer(),
@@ -144,10 +175,11 @@ export function serverStopLocalServerMutationOptions(input: { queryClient: Query
 export function serverProviderUsageSnapshotQueryOptions(input: {
   provider: ProviderKind | null | undefined;
   homePath?: string | null;
+  enabled?: boolean;
 }) {
   return queryOptions({
     queryKey: serverQueryKeys.providerUsage(input.provider, input.homePath),
-    enabled: input.provider !== null && input.provider !== undefined,
+    enabled: (input.enabled ?? true) && input.provider !== null && input.provider !== undefined,
     staleTime: 30_000,
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
@@ -206,22 +238,24 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
-// Live remaining-usage for every supported provider at once, powering Settings and active usage UI.
+// Live remaining-usage for every provider in Settings or a single provider in active usage UI.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean
     | {
         enabled?: boolean;
+        provider?: ProviderKind | null;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const provider = typeof input === "boolean" ? null : (input.provider ?? null);
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(),
+    queryKey: serverQueryKeys.allProviderUsage(provider),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(),
+    queryFn: async () => fetchAllProviderUsage(provider ? { provider } : {}),
   });
 }

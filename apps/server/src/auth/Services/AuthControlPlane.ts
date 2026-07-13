@@ -3,7 +3,7 @@ import type {
   AuthClientSession,
   AuthPairingLink,
   AuthSessionId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Data, DateTime, Duration, Effect, ServiceMap } from "effect";
 import type { SessionRole } from "./SessionCredentialService";
 
@@ -65,5 +65,5 @@ export interface AuthControlPlaneShape {
 }
 
 export class AuthControlPlane extends ServiceMap.Service<AuthControlPlane, AuthControlPlaneShape>()(
-  "t3/auth/Services/AuthControlPlane",
+  "synara/auth/Services/AuthControlPlane",
 ) {}

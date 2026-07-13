@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { MessageId } from "@t3tools/contracts";
+import { MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { page } from "vitest/browser";
 import { Profiler, useCallback, useRef, useState, type ProfilerOnRenderCallback } from "react";
@@ -92,6 +92,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          worktreeSetup={null}
           followLiveOutput={false}
           listRef={listRef}
           markdownCwd={undefined}
@@ -173,6 +174,7 @@ describe("ChatTranscriptPane", () => {
         hasMessages
         isRevertingCheckpoint={false}
         isWorking={false}
+        worktreeSetup={null}
         followLiveOutput={false}
         listRef={{ current: null }}
         markdownCwd={undefined}
@@ -250,6 +252,7 @@ describe("ChatTranscriptPane", () => {
         hasMessages
         isRevertingCheckpoint={false}
         isWorking={false}
+        worktreeSetup={null}
         followLiveOutput={false}
         listRef={{ current: null }}
         markdownCwd={undefined}

@@ -1,5 +1,5 @@
-import { ModelSelection, ThreadId } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import { ModelSelection, ThreadId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import "../../index.css";
 
 import { page } from "vitest/browser";
@@ -26,6 +26,7 @@ async function mountMenu(props?: {
 
   draftsByThreadId[threadId] = {
     prompt: props?.prompt ?? "",
+    promptHistorySavedDraft: null,
     images: [],
     files: [],
     nonPersistedImageIds: [],

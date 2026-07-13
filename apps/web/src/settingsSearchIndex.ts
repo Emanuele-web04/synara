@@ -67,11 +67,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show the standalone Chats list in the sidebar footer chats not tied to a project. sidebar section",
   },
   {
+    id: "general:studio-section",
+    section: "general",
+    title: "Studio",
+    keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
+  },
+  {
     id: "general:workspace-section",
     section: "general",
     title: "Workspace",
     keywords:
       "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible. sidebar section",
+  },
+  {
+    id: "general:environment-default-open",
+    section: "general",
+    title: "Open by default",
+    keywords:
+      "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
   },
   {
     id: "general:environment-usage",
@@ -84,6 +97,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "Repository",
     keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
+  },
+  {
+    id: "general:environment-pull-request",
+    section: "general",
+    title: "Pull request",
+    keywords:
+      "Show the open pull request CI checks and review comments in the chat Environment panel. pr fix github",
   },
   {
     id: "general:environment-editor",

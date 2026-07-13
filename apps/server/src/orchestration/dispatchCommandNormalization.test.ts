@@ -11,12 +11,15 @@ import {
   type ClientOrchestrationCommand,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 import type { FileSystem, Path } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { makeDispatchCommandNormalizer } from "./dispatchCommandNormalization";
+import {
+  makeDispatchCommandNormalizer,
+  type DispatchCommandNormalizerResult,
+} from "./dispatchCommandNormalization";
 
 function projectCreateCommand(
   overrides: Partial<Extract<ClientOrchestrationCommand, { type: "project.create" }>> = {},
@@ -34,7 +37,67 @@ function projectCreateCommand(
   };
 }
 
+// Runs the normalized command's deferred `prepareWorkspaceRoot` effect (if any), mirroring
+// what the wsRpc dispatchCommand handler does after a successful `orchestrationEngine.dispatch`.
+async function runPrepareWorkspaceRoot<E>(result: DispatchCommandNormalizerResult<E>) {
+  if (result.prepareWorkspaceRoot) {
+    await Effect.runPromise(result.prepareWorkspaceRoot);
+  }
+}
+
 describe("makeDispatchCommandNormalizer", () => {
+  it("returns a deferred prepare effect instead of scaffolding during normalization", async () => {
+    const preparedRoots: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareChatWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+
+    // Normalization alone must not have scaffolded anything yet.
+    expect(preparedRoots).toEqual([]);
+    expect(result.prepareWorkspaceRoot).not.toBeNull();
+
+    await runPrepareWorkspaceRoot(result);
+
+    // Only after the caller explicitly runs the deferred effect does scaffolding happen.
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
+  });
+
+  it("retries the deferred prepare effect on transient failures before succeeding", async () => {
+    let callCount = 0;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareChatWorkspaceRoot: () =>
+        Effect.suspend(() => {
+          callCount += 1;
+          if (callCount < 3) {
+            return Effect.fail(new Error("transient FS error"));
+          }
+          return Effect.void;
+        }),
+    });
+
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    expect(result.prepareWorkspaceRoot).not.toBeNull();
+
+    await runPrepareWorkspaceRoot(result);
+
+    expect(callCount).toBe(3);
+  });
+
   it("prepares managed date/slug chat workspace roots", async () => {
     const preparedRoots: string[] = [];
     const normalizer = makeDispatchCommandNormalizer<Error>({
@@ -49,7 +112,8 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    await runPrepareWorkspaceRoot(result);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
   });
@@ -68,7 +132,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(
+    const first = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           kind: "project",
@@ -76,19 +140,87 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
       }),
     );
-    await Effect.runPromise(
+    await runPrepareWorkspaceRoot(first);
+    const second = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           workspaceRoot: "/Users/tester/Documents/Synara",
         }),
       }),
     );
+    await runPrepareWorkspaceRoot(second);
 
     expect(preparedRoots).toEqual([]);
   });
 
+  it("prepares the Studio workspace root itself", async () => {
+    const preparedRoots: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareChatWorkspaceRoot: () => Effect.void,
+      prepareStudioWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const result = await Effect.runPromise(
+      normalizer({
+        command: projectCreateCommand({
+          kind: "studio",
+          title: "Studio",
+          workspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        }),
+      }),
+    );
+    await runPrepareWorkspaceRoot(result);
+
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio"]);
+  });
+
+  it("prepares nested Studio workspace roots but not ordinary projects under Studio", async () => {
+    const preparedRoots: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareStudioWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const first = await Effect.runPromise(
+      normalizer({
+        command: projectCreateCommand({
+          kind: "studio",
+          workspaceRoot: "/Users/tester/Documents/Synara/Studio/Outbox",
+        }),
+      }),
+    );
+    await runPrepareWorkspaceRoot(first);
+    const second = await Effect.runPromise(
+      normalizer({
+        command: projectCreateCommand({
+          kind: "project",
+          workspaceRoot: "/Users/tester/Documents/Synara/Studio/SomeProject",
+        }),
+      }),
+    );
+    await runPrepareWorkspaceRoot(second);
+
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio/Outbox"]);
+  });
+
   it("rolls back attachment files written before a later upload fails", async () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-dispatch-normalize-"));
+    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-dispatch-normalize-"));
     const fileSystem = {
       makeDirectory: (dir: string, options?: { readonly recursive?: boolean }) =>
         Effect.sync(() => {

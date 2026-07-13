@@ -5,7 +5,7 @@
 // Layer: web profile feature.
 
 import { type CSSProperties, useMemo } from "react";
-import type { ProfileHeatmapCell } from "@t3tools/contracts";
+import type { ProfileHeatmapCell } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { formatCompact, formatShortDate } from "./profileFormatting";
@@ -238,7 +238,11 @@ export function ActivityHeatmap({
               }
               return (
                 <Tooltip key={slot.cell.day}>
-                  <TooltipTrigger render={<div className={cellClassName} style={cellStyle} />} />
+                  {/* delay={0}: heatmap tooltips open instantly on hover (no Base UI 600ms default). */}
+                  <TooltipTrigger
+                    delay={0}
+                    render={<div className={cellClassName} style={cellStyle} />}
+                  />
                   <TooltipPopup side="top" sideOffset={6}>
                     {heatmapTooltipText(slot.cell, tooltipUnit)}
                   </TooltipPopup>

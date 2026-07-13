@@ -16,7 +16,7 @@ import {
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -165,4 +165,4 @@ export interface ProjectionTurnRepositoryShape {
 export class ProjectionTurnRepository extends ServiceMap.Service<
   ProjectionTurnRepository,
   ProjectionTurnRepositoryShape
->()("t3/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}
+>()("synara/persistence/Services/ProjectionTurns/ProjectionTurnRepository") {}

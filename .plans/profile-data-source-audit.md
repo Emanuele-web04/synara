@@ -21,7 +21,7 @@ the app already resolves those sources.
 - The **token archives** are read via `config.homeDir`: codex = `codexHomePath || process.env.CODEX_HOME
   || homeDir/.codex`; claude = `homeDir/.claude/projects` (see `apps/server/src/providerUsageSnapshot.ts`).
   Because `homeDir` is always the OS home, BOTH dev and prod read the GLOBAL `~/.codex` and `~/.claude`.
-- The dev runner sets `SYNARA_HOME/DPCODE_HOME/T3CODE_HOME=baseDir` but does NOT set `CODEX_HOME` or
+- The dev runner sets `SYNARA_HOME/SYNARA_HOME/SYNARA_HOME=baseDir` but does NOT set `CODEX_HOME` or
   `CLAUDE_CONFIG_DIR`; the dev baseDir has no `.codex`/`.claude` of its own. So dev's own Codex/Claude
   sessions ALSO land in the global `~/.codex`/`~/.claude`.
 - The Usage panel passes a `homePath` (the `codexHomePath` setting = `settings.providers.codex.homePath`)

@@ -60,7 +60,7 @@ import {
 import { parseBareComposerLink } from "~/lib/linkChips";
 import { type TerminalContextDraft } from "~/lib/terminalContext";
 import { shouldCollapsePastedText } from "~/lib/composerPastedText";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
@@ -501,6 +501,7 @@ export interface ComposerPromptEditorHandle {
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   };
 }
@@ -911,6 +912,7 @@ function ComposerPromptEditorInner({
     value,
     cursor: initialCursor,
     expandedCursor: expandCollapsedComposerCursor(value, initialCursor),
+    selectionCollapsed: true,
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
@@ -923,8 +925,25 @@ function ComposerPromptEditorInner({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // Disabling the editor (e.g. while a turn dispatch is connecting) turns off
+  // contenteditable, which drops browser focus to <body>. Remember whether the
+  // composer owned focus at disable time and hand it back once re-enabled, so
+  // sending a message never silently kicks the user out of the input.
+  const restoreFocusOnEnableRef = useRef(false);
   useEffect(() => {
-    editor.setEditable(!disabled);
+    if (disabled) {
+      const rootElement = editor.getRootElement();
+      restoreFocusOnEnableRef.current = Boolean(
+        rootElement && document.activeElement === rootElement,
+      );
+      editor.setEditable(false);
+      return;
+    }
+    editor.setEditable(true);
+    if (restoreFocusOnEnableRef.current) {
+      restoreFocusOnEnableRef.current = false;
+      editor.getRootElement()?.focus();
+    }
   }, [disabled, editor]);
 
   useLayoutEffect(() => {
@@ -945,6 +964,7 @@ function ComposerPromptEditorInner({
       value,
       cursor: normalizedCursor,
       expandedCursor: expandCollapsedComposerCursor(value, normalizedCursor),
+      selectionCollapsed: true,
       terminalContextIds: terminalContexts.map((context) => context.id),
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
@@ -993,6 +1013,7 @@ function ComposerPromptEditorInner({
         value: snapshotRef.current.value,
         cursor: boundedCursor,
         expandedCursor: expandCollapsedComposerCursor(snapshotRef.current.value, boundedCursor),
+        selectionCollapsed: true,
         terminalContextIds: snapshotRef.current.terminalContextIds,
       };
       onChangeRef.current(
@@ -1022,10 +1043,13 @@ function ComposerPromptEditorInner({
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   } => {
     let snapshot = snapshotRef.current;
     editor.getEditorState().read(() => {
+      const selection = $getSelection();
+      const selectionCollapsed = !$isRangeSelection(selection) || selection.isCollapsed();
       const nextValue = $getRoot().getTextContent();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
@@ -1045,6 +1069,7 @@ function ComposerPromptEditorInner({
         value: nextValue,
         cursor: nextCursor,
         expandedCursor: nextExpandedCursor,
+        selectionCollapsed,
         terminalContextIds,
       };
     });
@@ -1076,6 +1101,8 @@ function ComposerPromptEditorInner({
 
   const handleEditorChange = useCallback((editorState: EditorState) => {
     editorState.read(() => {
+      const selection = $getSelection();
+      const selectionCollapsed = !$isRangeSelection(selection) || selection.isCollapsed();
       const nextValue = $getRoot().getTextContent();
       const fallbackCursor = clampCollapsedComposerCursor(nextValue, snapshotRef.current.cursor);
       const nextCursor = clampCollapsedComposerCursor(
@@ -1108,6 +1135,7 @@ function ComposerPromptEditorInner({
         value: nextValue,
         cursor: nextCursor,
         expandedCursor: nextExpandedCursor,
+        selectionCollapsed,
         terminalContextIds,
       };
       const cursorAdjacentToMention =
@@ -1201,7 +1229,7 @@ export const ComposerPromptEditor = forwardRef<
   const initialMentionReferencesRef = useRef(normalizedMentionReferences);
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
-      namespace: "t3tools-composer-editor",
+      namespace: "synara-composer-editor",
       editable: true,
       nodes: [...COMPOSER_NODE_CLASSES],
       editorState: () => {

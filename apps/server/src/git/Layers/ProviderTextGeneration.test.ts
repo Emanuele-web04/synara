@@ -146,6 +146,28 @@ describe("ProviderTextGenerationLive", () => {
     expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
   });
 
+  it("routes explicit Kilo model selections through Kilo text generation", async () => {
+    const { layer, codex, kilo, opencode } = makeProviderTextGenerationTestLayer();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        yield* textGeneration.generateDiffSummary({
+          cwd: "/repo",
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            provider: "kilo",
+            model: "kilo/kilo-auto/free",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(kilo.generateDiffSummary).toHaveBeenCalledTimes(1);
+    expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
+    expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+  });
+
   it("routes explicit OpenCode model selections and preserves provider options", async () => {
     const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 

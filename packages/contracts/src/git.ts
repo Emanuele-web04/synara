@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
-import { ProviderStartOptions } from "./orchestration";
+import { ModelSelection, ProviderStartOptions } from "./orchestration";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
@@ -44,6 +44,10 @@ const GitPrStepStatus = Schema.Literals(["created", "opened_existing", "skipped_
 const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
+// GitHub's mergeability is eventually consistent: "unknown" is a real transient state
+// while GitHub recomputes after a push, not a decode fallback to branch on.
+export const GitPullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
+export type GitPullRequestMergeability = typeof GitPullRequestMergeability.Type;
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
 const GitHandoffThreadMode = Schema.Literals(["local", "worktree"]);
 
@@ -73,8 +77,44 @@ const GitResolvedPullRequest = Schema.Struct({
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
   state: GitPullRequestState,
+  isDraft: Schema.Boolean,
+  mergeability: GitPullRequestMergeability,
+  // Null when `gh` did not report diff sizes, so the UI can hide the stat instead of
+  // rendering a misleading "+0 −0".
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+  changedFiles: Schema.NullOr(NonNegativeInt),
 });
 export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
+
+// Normalized CI check state combining GitHub CheckRun conclusions and commit status states.
+export const GitPullRequestCheckStatus = Schema.Literals([
+  "pending",
+  "success",
+  "failure",
+  "skipped",
+  "neutral",
+  "cancelled",
+]);
+export type GitPullRequestCheckStatus = typeof GitPullRequestCheckStatus.Type;
+
+export const GitPullRequestCheck = Schema.Struct({
+  name: TrimmedNonEmptyStringSchema,
+  status: GitPullRequestCheckStatus,
+  url: Schema.NullOr(Schema.String),
+});
+export type GitPullRequestCheck = typeof GitPullRequestCheck.Type;
+
+// Root comment of an unresolved review thread (resolved threads and replies are excluded).
+export const GitPullRequestComment = Schema.Struct({
+  id: TrimmedNonEmptyStringSchema,
+  author: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  body: Schema.String,
+  path: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  url: Schema.NullOr(Schema.String),
+  createdAt: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type GitPullRequestComment = typeof GitPullRequestComment.Type;
 
 // RPC Inputs
 
@@ -110,6 +150,7 @@ export const GitSummarizeDiffInput = Schema.Struct({
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
 });
 export type GitSummarizeDiffInput = typeof GitSummarizeDiffInput.Type;
 
@@ -127,6 +168,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
@@ -155,6 +197,12 @@ export const GitPullRequestRefInput = Schema.Struct({
   reference: GitPullRequestReference,
 });
 export type GitPullRequestRefInput = typeof GitPullRequestRefInput.Type;
+
+export const GitPullRequestSnapshotInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  reference: GitPullRequestReference,
+});
+export type GitPullRequestSnapshotInput = typeof GitPullRequestSnapshotInput.Type;
 
 export const GitPreparePullRequestThreadInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -244,6 +292,11 @@ const GitStatusPr = Schema.Struct({
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
   state: GitStatusPrState,
+  isDraft: Schema.Boolean,
+  mergeability: GitPullRequestMergeability,
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+  changedFiles: Schema.NullOr(NonNegativeInt),
 });
 
 export const GitStatusResult = Schema.Struct({
@@ -352,6 +405,16 @@ export const GitResolvePullRequestResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
 });
 export type GitResolvePullRequestResult = typeof GitResolvePullRequestResult.Type;
+
+// Live CI + review-comment snapshot for one PR (drives the Environment panel PR section).
+export const GitPullRequestSnapshotResult = Schema.Struct({
+  pullRequest: GitResolvedPullRequest,
+  checks: Schema.Array(GitPullRequestCheck),
+  comments: Schema.Array(GitPullRequestComment),
+  commentsTruncated: Schema.Boolean,
+  commentsError: Schema.NullOr(Schema.String),
+});
+export type GitPullRequestSnapshotResult = typeof GitPullRequestSnapshotResult.Type;
 
 export const GitPreparePullRequestThreadResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,

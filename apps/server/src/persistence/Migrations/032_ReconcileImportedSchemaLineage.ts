@@ -1,14 +1,14 @@
 /**
- * Reconciles schema after a legacy ~/.t3 import where the imported
+ * Reconciles schema after importing a database from a predecessor lineage whose
  * `effect_sql_migrations` tracker already records IDs 17-31 under unrelated
- * T3 Code names. Because the migrator skips by ID, the renumbered Synara
- * migrations 17-31 never run on those imports, leaving columns like
+ * names. Because the migrator skips by ID, Synara migrations 17-31 never run
+ * on those imports, leaving columns like
  * `env_mode` missing and crashing the server on first query.
  *
- * Migration #023 previously held this self-healing logic, but legacy DBs
- * also have a row for ID 23 (T3 Code's `ProjectionThreadShellSummary`),
+ * Migration #023 previously held this self-healing logic, but predecessor DBs
+ * also have a row for ID 23 belonging to an unrelated migration,
  * so the migrator skipped it too. This migration was renumbered past the
- * T3 Code migrations known at the time, but legacy trackers eventually
+ * Synara migrations known at the time, but predecessor trackers eventually
  * outran it as well (SYN-99). `reconcileMigrationLineage` in Migrations.ts
  * now repairs foreign trackers before the migrator runs, so this migration
  * is guaranteed to execute on legacy imports regardless of the imported

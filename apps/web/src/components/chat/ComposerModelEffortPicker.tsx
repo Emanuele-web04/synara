@@ -12,7 +12,7 @@ import {
   type ProviderModelOptions,
   type ServerProviderStatus,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { memo, useCallback, useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon } from "~/lib/icons";

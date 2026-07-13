@@ -8,13 +8,13 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultEffort,
   getModelCapabilities,
   normalizeModelSlug,
   trimOrNull,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
 
 function runtimeEffortLabel(value: string): string {
@@ -92,10 +92,12 @@ export function getRuntimeAwareModelCapabilities(input: {
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  // Providers with dynamic catalogs, including Droid, expose model-specific effort ladders here.
   if (
     (input.provider !== "codex" &&
       input.provider !== "cursor" &&
       input.provider !== "grok" &&
+      input.provider !== "droid" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&
       input.provider !== "pi") ||

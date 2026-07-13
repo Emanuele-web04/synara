@@ -3,29 +3,59 @@
 // Layer: Browser storage helper
 // Exports: sidebar UI state read/write helpers.
 
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
 export type SidebarUiState = {
   chatSectionExpanded: boolean;
-  chatThreadListExpanded: boolean;
-  expandedProjectThreadListCwds: string[];
+  chatThreadListExtraPages: number;
+  projectThreadListExtraPagesByCwd: Record<string, number>;
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
   lastThreadRoute: LastThreadRoute | null;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   chatSectionExpanded: false,
-  chatThreadListExpanded: false,
-  expandedProjectThreadListCwds: [],
+  chatThreadListExtraPages: 0,
+  projectThreadListExtraPagesByCwd: {},
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
 };
 
+// Persisted paging is a request, not a promise: render-time clamping trims it to the real
+// thread count, so the cap here only guards against absurd/corrupted stored values.
+const MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES = 1000;
+
 export function normalizeSidebarProjectThreadListCwd(cwd: string): string {
   return normalizeWorkspaceRootForComparison(cwd);
+}
+
+function sanitizeThreadListExtraPages(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(Math.max(0, Math.floor(value)), MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES);
+}
+
+function sanitizeProjectThreadListExtraPagesByCwd(
+  value: Record<string, unknown> | undefined,
+): Record<string, number> {
+  const extraPagesByCwd: Record<string, number> = {};
+  for (const [cwd, rawExtraPages] of Object.entries(value ?? {})) {
+    if (typeof cwd !== "string") {
+      continue;
+    }
+    const normalizedCwd = normalizeSidebarProjectThreadListCwd(cwd);
+    const extraPages = sanitizeThreadListExtraPages(rawExtraPages);
+    if (normalizedCwd.length === 0 || extraPages <= 0) {
+      continue;
+    }
+    // Duplicate cwds that normalize to the same key keep the deepest paging.
+    extraPagesByCwd[normalizedCwd] = Math.max(extraPagesByCwd[normalizedCwd] ?? 0, extraPages);
+  }
+  return extraPagesByCwd;
 }
 
 export function readSidebarUiState(): SidebarUiState {
@@ -41,6 +71,9 @@ export function readSidebarUiState(): SidebarUiState {
 
     const parsed = JSON.parse(raw) as {
       chatSectionExpanded?: boolean;
+      chatThreadListExtraPages?: number;
+      projectThreadListExtraPagesByCwd?: Record<string, unknown>;
+      /** Legacy (pre-paging) all-or-nothing "Show more" flags, migrated to one extra page. */
       chatThreadListExpanded?: boolean;
       expandedProjectThreadListCwds?: string[];
       dismissedThreadStatusKeyByThreadId?: Record<string, string>;
@@ -63,17 +96,28 @@ export function readSidebarUiState(): SidebarUiState {
           }
         : null;
 
+    const projectThreadListExtraPagesByCwd = sanitizeProjectThreadListExtraPagesByCwd(
+      parsed.projectThreadListExtraPagesByCwd,
+    );
+    // Legacy state expanded whole lists at once; the closest paged equivalent is one extra page.
+    for (const legacyCwd of parsed.expandedProjectThreadListCwds ?? []) {
+      if (typeof legacyCwd !== "string") {
+        continue;
+      }
+      const normalizedCwd = normalizeSidebarProjectThreadListCwd(legacyCwd);
+      if (normalizedCwd.length === 0 || projectThreadListExtraPagesByCwd[normalizedCwd]) {
+        continue;
+      }
+      projectThreadListExtraPagesByCwd[normalizedCwd] = 1;
+    }
+
     return {
       chatSectionExpanded: parsed.chatSectionExpanded === true,
-      chatThreadListExpanded: parsed.chatThreadListExpanded === true,
-      expandedProjectThreadListCwds: [
-        ...new Set(
-          (parsed.expandedProjectThreadListCwds ?? [])
-            .filter((cwd): cwd is string => typeof cwd === "string")
-            .map((cwd) => normalizeSidebarProjectThreadListCwd(cwd))
-            .filter((cwd) => cwd.length > 0),
-        ),
-      ],
+      chatThreadListExtraPages:
+        parsed.chatThreadListExtraPages === undefined && parsed.chatThreadListExpanded === true
+          ? 1
+          : sanitizeThreadListExtraPages(parsed.chatThreadListExtraPages),
+      projectThreadListExtraPagesByCwd,
       dismissedThreadStatusKeyByThreadId: Object.fromEntries(
         Object.entries(parsed.dismissedThreadStatusKeyByThreadId ?? {}).filter(
           ([threadId, statusKey]) =>
@@ -100,14 +144,10 @@ export function persistSidebarUiState(input: SidebarUiState): void {
       SIDEBAR_UI_STATE_STORAGE_KEY,
       JSON.stringify({
         chatSectionExpanded: input.chatSectionExpanded,
-        chatThreadListExpanded: input.chatThreadListExpanded,
-        expandedProjectThreadListCwds: [
-          ...new Set(
-            input.expandedProjectThreadListCwds
-              .map((cwd) => normalizeSidebarProjectThreadListCwd(cwd))
-              .filter((cwd) => cwd.length > 0),
-          ),
-        ],
+        chatThreadListExtraPages: sanitizeThreadListExtraPages(input.chatThreadListExtraPages),
+        projectThreadListExtraPagesByCwd: sanitizeProjectThreadListExtraPagesByCwd(
+          input.projectThreadListExtraPagesByCwd,
+        ),
         dismissedThreadStatusKeyByThreadId: Object.fromEntries(
           Object.entries(input.dismissedThreadStatusKeyByThreadId).filter(
             ([threadId, statusKey]) => threadId.length > 0 && statusKey.length > 0,

@@ -1,9 +1,10 @@
 import type {
   GitReadWorkingTreeDiffInput,
   GitStackedAction,
+  ModelSelection,
   NativeApi,
   ProviderStartOptions,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { buildPatchCacheKey } from "./diffRendering";
@@ -32,6 +33,7 @@ export const gitQueryKeys = {
   diffSummary: (
     cacheScope: string | null,
     model: string | null,
+    modelSelectionKey: string | null,
     codexHomePath: string | null,
     providerOptionsKey: string | null,
     patchKey: string | null,
@@ -41,6 +43,7 @@ export const gitQueryKeys = {
       "diff-summary",
       cacheScope,
       model,
+      modelSelectionKey,
       codexHomePath,
       providerOptionsKey,
       patchKey,
@@ -150,6 +153,40 @@ export function gitResolvePullRequestQueryOptions(input: {
   });
 }
 
+// Refresh cadence for the Environment panel PR section: cheap enough to poll while the
+// panel is open, and event-based git invalidation covers pushes from this client.
+const GIT_PR_SNAPSHOT_STALE_TIME_MS = 30_000;
+const GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS = 60_000;
+
+export function gitPullRequestSnapshotQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
+    queryKey: ["git", "pull-request", input.cwd, "snapshot", input.reference] as const,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference) {
+        throw new Error("Pull request snapshot is unavailable.");
+      }
+      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
+    staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
+    // Once the snapshot itself reports the PR merged/closed, stop polling it — the cached
+    // git status can lag behind and would otherwise keep the interval alive.
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.pullRequest.state !== "open"
+        ? false
+        : GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: (query) =>
+      !query.state.data || query.state.data.pullRequest.state === "open",
+    refetchOnReconnect: true,
+  });
+}
+
 export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
@@ -180,6 +217,7 @@ export function gitSummarizeDiffQueryOptions(input: {
   cacheScope?: string | null;
   patch: string | null;
   model?: string | null;
+  modelSelection?: ModelSelection | null;
   codexHomePath?: string | null;
   providerOptions?: ProviderStartOptions | null;
   enabled?: boolean;
@@ -192,11 +230,13 @@ export function gitSummarizeDiffQueryOptions(input: {
       : null;
 
   const providerOptionsKey = input.providerOptions ? JSON.stringify(input.providerOptions) : null;
+  const modelSelectionKey = input.modelSelection ? JSON.stringify(input.modelSelection) : null;
 
   return queryOptions({
     queryKey: gitQueryKeys.diffSummary(
       input.cacheScope ?? input.cwd,
       input.model ?? null,
+      modelSelectionKey,
       input.codexHomePath ?? null,
       providerOptionsKey,
       patchKey,
@@ -211,6 +251,7 @@ export function gitSummarizeDiffQueryOptions(input: {
         patch: normalizedPatch,
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
+        ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
     },
@@ -331,6 +372,7 @@ export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
   model?: string | null;
+  modelSelection?: ModelSelection | null;
   codexHomePath?: string | null;
   providerOptions?: ProviderStartOptions | null;
 }) {
@@ -358,6 +400,7 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(filePaths ? { filePaths } : {}),
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
+        ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       }),
   });

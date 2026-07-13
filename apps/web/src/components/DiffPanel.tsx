@@ -4,7 +4,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ThreadId, type TurnId } from "@t3tools/contracts";
+import { ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";

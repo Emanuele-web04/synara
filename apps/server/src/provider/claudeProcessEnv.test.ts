@@ -8,6 +8,7 @@ import {
   buildClaudeProcessEnv,
   hasUsableClaudeCliCredentials,
   hasUsableClaudeCliCredentialsContent,
+  readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
 } from "./claudeProcessEnv.ts";
 
@@ -45,6 +46,18 @@ describe("claudeProcessEnv", () => {
     });
 
     assert.equal(result.ANTHROPIC_API_KEY, "api-key-auth");
+  });
+
+  it("aligns subprocess HOME with the credential home it checks", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        HOME: "/wrong-home",
+      },
+      homeDir: "/home/tester",
+      hasClaudeCliCredentials: true,
+    });
+
+    assert.equal(result.HOME, "/home/tester");
   });
 
   it("keeps direct credentials for explicitly configured Claude-compatible backends", () => {
@@ -96,6 +109,23 @@ describe("claudeProcessEnv", () => {
         1_000,
       ),
       true,
+    );
+  });
+
+  it("reads subscription metadata from usable Claude OAuth credentials", () => {
+    assert.deepEqual(
+      readClaudeCliCredentialsContentSummary(
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "local-access-token",
+            refreshToken: "refresh-token",
+            expiresAt: 2_000,
+            subscriptionType: "max",
+          },
+        }),
+        1_000,
+      ),
+      { usable: true, subscriptionType: "max" },
     );
   });
 

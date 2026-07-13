@@ -11,20 +11,34 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { Effect, Layer, FileSystem, Path } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, FileSystem, Option, Path, Semaphore } from "effect";
 
-import { CheckpointInvariantError } from "../Errors.ts";
+import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@synara/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+
+// Individual git commands are already bounded by GitCore's default timeout;
+// this aggregate cap exists to unstick the shared in-flight capture slot if a
+// step without its own bound (e.g. temp-dir filesystem work) hangs. It exceeds
+// the worst per-command-capped chain, so it never truncates a capture the
+// per-command timeouts would allow.
+const CHECKPOINT_CAPTURE_TIMEOUT_MS = 180_000;
 
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitCore;
+  const captureLock = yield* Semaphore.make(1);
+  const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
+
+  // Normalize the cwd so captures for the same repo reached via differently
+  // written paths (trailing slash, relative segments) share one in-flight slot.
+  const captureKey = (input: { readonly cwd: string; readonly checkpointRef: CheckpointRef }) =>
+    `${path.resolve(input.cwd)}\0${input.checkpointRef}`;
 
   const resolveHeadCommit = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
     git
@@ -88,12 +102,22 @@ const makeCheckpointStore = Effect.gen(function* () {
         Effect.catch(() => Effect.succeed(false)),
       );
 
-  const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+  const captureCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.captureCheckpoint";
 
+      // Checked inside the single-flight owner (see captureCheckpoint) so the
+      // existence probe and the capture cannot interleave with another capture
+      // for the same (cwd, checkpointRef).
+      if (input.skipIfExists) {
+        const existingCommit = yield* resolveCheckpointCommit(input.cwd, input.checkpointRef);
+        if (existingCommit !== null) {
+          return;
+        }
+      }
+
       yield* Effect.acquireUseRelease(
-        fs.makeTempDirectory({ prefix: "t3-fs-checkpoint-" }),
+        fs.makeTempDirectory({ prefix: "synara-fs-checkpoint-" }),
         (tempDir) =>
           Effect.gen(function* () {
             const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
@@ -101,9 +125,9 @@ const makeCheckpointStore = Effect.gen(function* () {
               ...process.env,
               GIT_INDEX_FILE: tempIndexPath,
               GIT_AUTHOR_NAME: "Synara",
-              GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+              GIT_AUTHOR_EMAIL: "synara@users.noreply.github.com",
               GIT_COMMITTER_NAME: "Synara",
-              GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+              GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
             };
 
             const headExists = yield* hasHeadCommit(input.cwd);
@@ -139,7 +163,7 @@ const makeCheckpointStore = Effect.gen(function* () {
               });
             }
 
-            const message = `t3 checkpoint ref=${input.checkpointRef}`;
+            const message = `Synara checkpoint ref=${input.checkpointRef}`;
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,
@@ -173,6 +197,67 @@ const makeCheckpointStore = Effect.gen(function* () {
                 cause: error,
               }),
             ),
+        }),
+      );
+    });
+
+  const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
+    Effect.gen(function* () {
+      const key = captureKey(input);
+      const registration = yield* captureLock.withPermits(1)(
+        Effect.gen(function* () {
+          const existing = inFlightCaptures.get(key);
+          if (existing) {
+            return { owner: false as const, deferred: existing };
+          }
+          const deferred = yield* Deferred.make<void, CheckpointStoreError>();
+          inFlightCaptures.set(key, deferred);
+          return { owner: true as const, deferred };
+        }),
+      );
+
+      if (!registration.owner) {
+        return yield* Deferred.await(registration.deferred);
+      }
+
+      // Let the git capture remain interruptible, but always notify waiters
+      // and clear the shared in-flight slot before this owner fiber exits.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            restore(
+              captureCheckpointOnce(input).pipe(
+                Effect.timeoutOption(CHECKPOINT_CAPTURE_TIMEOUT_MS),
+                Effect.flatMap((completed) =>
+                  Option.isSome(completed)
+                    ? Effect.void
+                    : Effect.fail(
+                        new CheckpointInvariantError({
+                          operation: "CheckpointStore.captureCheckpoint",
+                          detail: `Checkpoint capture timed out after ${CHECKPOINT_CAPTURE_TIMEOUT_MS}ms.`,
+                        }),
+                      ),
+                ),
+              ),
+            ),
+          );
+          // Waiters joined an in-flight capture they do not control; replaying the
+          // owner's raw interrupt cause would make callers treat it as their own
+          // fiber being interrupted. Surface a typed error instead.
+          const waiterExit =
+            Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+              ? Exit.fail(
+                  new CheckpointInvariantError({
+                    operation: "CheckpointStore.captureCheckpoint",
+                    detail: "Checkpoint capture was interrupted before completion.",
+                  }),
+                )
+              : exit;
+          yield* Deferred.done(registration.deferred, waiterExit);
+          yield* captureLock.withPermits(1)(Effect.sync(() => inFlightCaptures.delete(key)));
+          if (Exit.isFailure(exit)) {
+            return yield* Effect.failCause(exit.cause);
+          }
         }),
       );
     });
@@ -278,6 +363,88 @@ const makeCheckpointStore = Effect.gen(function* () {
       return result.stdout;
     });
 
+  const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.reverseCheckpointDiff";
+      const fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
+      const toCommitOid = yield* resolveCheckpointCommit(input.cwd, input.toCheckpointRef);
+
+      if (!fromCommitOid || !toCommitOid) {
+        return false;
+      }
+
+      const diff = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: [
+          "diff",
+          "--patch",
+          "--binary",
+          "--full-index",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+          fromCommitOid,
+          toCommitOid,
+        ],
+        maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      if (diff.stdout.length === 0) {
+        return true;
+      }
+
+      const changedPaths = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["diff", "--name-only", "--no-renames", "-z", fromCommitOid, toCommitOid],
+        maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      const affectedPaths = changedPaths.stdout.split("\0").filter((entry) => entry.length > 0);
+
+      return yield* Effect.acquireUseRelease(
+        fs.makeTempDirectory({ prefix: "synara-checkpoint-undo-" }),
+        (tempDir) =>
+          Effect.gen(function* () {
+            const patchPath = path.join(tempDir, "turn.patch");
+            yield* fs.writeFileString(patchPath, diff.stdout);
+            yield* git.execute({
+              operation,
+              cwd: input.cwd,
+              args: ["apply", "--reverse", "--whitespace=nowarn", "--", patchPath],
+            });
+            if (affectedPaths.length > 0) {
+              const resetExit = yield* Effect.exit(
+                git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["reset", "--quiet", fromCommitOid, "--", ...affectedPaths],
+                }),
+              );
+              if (Exit.isFailure(resetExit)) {
+                yield* git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["apply", "--whitespace=nowarn", "--", patchPath],
+                });
+                return yield* Effect.failCause(resetExit.cause);
+              }
+            }
+            return true;
+          }),
+        (tempDir) => fs.remove(tempDir, { recursive: true }),
+      ).pipe(
+        Effect.catchTag("PlatformError", (error) =>
+          Effect.fail(
+            new CheckpointInvariantError({
+              operation,
+              detail: "Failed to prepare the checkpoint patch for undo.",
+              cause: error,
+            }),
+          ),
+        ),
+      );
+    });
+
   const deleteCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
@@ -302,6 +469,7 @@ const makeCheckpointStore = Effect.gen(function* () {
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    reverseCheckpointDiff,
     deleteCheckpointRefs,
   } satisfies CheckpointStoreShape;
 });

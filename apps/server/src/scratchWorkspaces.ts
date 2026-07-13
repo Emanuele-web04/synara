@@ -11,8 +11,8 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { ThreadId } from "@t3tools/contracts";
-import { SCRATCH_WORKSPACES_DIRNAME } from "@t3tools/shared/threadWorkspace";
+import type { ThreadId } from "@synara/contracts";
+import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
 function scratchWorkspaceSegment(threadId: ThreadId): string {
   const raw = String(threadId);

@@ -2,7 +2,7 @@
 // Purpose: Verify tree-aware split view state operations: drop creation, perpendicular subdivision,
 // pane focus/ratio mutations, deleted-thread collapse semantics, and v1 -> v2 persisted-state migration.
 
-import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { collectLeaves, findParentSplitNode } from "./splitView.logic";
@@ -104,7 +104,7 @@ describe("splitViewStore", () => {
     expect(splitView.focusedPaneId).toBe(root.first.id);
   });
 
-  it("keeps writing split views to the DPCode v1 storage key so persisted state can migrate", async () => {
+  it("keeps writing split views to the Synara v1 storage key so persisted state can migrate", async () => {
     vi.resetModules();
     globalThis.localStorage = createMemoryStorage();
     const { useSplitViewStore: freshSplitViewStore } = await import("./splitViewStore");

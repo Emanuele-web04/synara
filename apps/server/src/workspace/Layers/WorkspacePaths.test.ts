@@ -13,7 +13,7 @@ const TestLayer = Layer.empty.pipe(
 
 const makeTempDir = Effect.fn(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
-  return yield* fileSystem.makeTempDirectoryScoped({ prefix: "dpcode-workspace-paths-" });
+  return yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-workspace-paths-" });
 });
 
 const writeTextFile = Effect.fn(function* (cwd: string, relativePath: string, contents = "") {

@@ -2,9 +2,9 @@
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
 // Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
-// Depends on: @t3tools/contracts tool lifecycle item types
+// Depends on: @synara/contracts tool lifecycle item types
 
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type { ToolLifecycleItemType } from "@synara/contracts";
 
 export function normalizeCompactToolLabel(value: string): string {
   return value
@@ -359,15 +359,6 @@ function isInspectCommandTool(tool: string): boolean {
     FIND_COMMAND_TOOLS.has(tool) ||
     LIST_COMMAND_TOOLS.has(tool)
   );
-}
-
-// Whether a shell command is a read-only inspection (read/search/find/list).
-// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
-// timeline search icon stays in sync with the derived command label.
-export function isInspectCommand(rawCommand: string): boolean {
-  const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
-  const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
-  return isInspectCommandTool(tool);
 }
 
 // Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.

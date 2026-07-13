@@ -1,4 +1,4 @@
-import { MessageId, ThreadId } from "@t3tools/contracts";
+import { MessageId, ThreadId } from "@synara/contracts";
 import type { LegendListRef } from "@legendapp/list/react";
 import { createRef, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -19,6 +19,7 @@ function renderTranscriptPaneMarkup(
       hasMessages
       isRevertingCheckpoint={false}
       isWorking={false}
+      worktreeSetup={null}
       followLiveOutput={false}
       listRef={createRef<LegendListRef | null>()}
       markdownCwd={undefined}

@@ -11,11 +11,11 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
-  disableDpCodeBrowserPluginInCodexConfig,
+  disableCodexConfigSections,
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
@@ -363,7 +363,7 @@ describe("classifyCodexStderrLine", () => {
 
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -386,7 +386,6 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
         homePath: tempDir,
         platform: "darwin",
@@ -398,7 +397,7 @@ describe("buildCodexProcessEnv", () => {
         "SSH_AUTH_SOCK",
         "MY_COMPANY_PROXY_KEY",
       ]);
-      expect(env.CODEX_HOME).toBe(tempDir);
+      expect(env.CODEX_HOME).toContain("codex-home-overlay");
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
@@ -415,7 +414,6 @@ describe("buildCodexProcessEnv", () => {
         PATH: "/usr/bin",
         CODEX_HOME: "/tmp/.codex",
         AZURE_OPENAI_API_KEY: "existing-secret",
-        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
       readEnvironment,
@@ -430,7 +428,6 @@ describe("buildCodexProcessEnv", () => {
       env: {
         SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
-        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
     });
@@ -443,15 +440,15 @@ describe("buildCodexProcessEnv", () => {
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
-        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/t3.sock" },
+        env: { SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock" },
         platform: "darwin",
       }),
-    ).toBe("/tmp/codex-browser-use/t3.sock");
+    ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
-  it("disables the local dpcode-browser plugin in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+  it("applies durable section suppressions inside Synara's Codex overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -459,9 +456,20 @@ describe("buildCodexProcessEnv", () => {
           '[plugins."github@openai-curated"]',
           "enabled = true",
           "",
-          '[plugins."dpcode-browser@local"]',
+          '[plugins."historical-plugin@local"]',
           "enabled = true",
         ].join("\n"),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
         "utf8",
       );
 
@@ -477,7 +485,86 @@ describe("buildCodexProcessEnv", () => {
         throw new Error("Expected CODEX_HOME to be set.");
       }
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
-        '[plugins."dpcode-browser@local"]\nenabled = false',
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = true',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("seeds markerless suppressions for conflicting local browser plugins", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      const conflictingHeader = '[plugins."bridge-browser@local"]';
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [conflictingHeader, "enabled = true", "", '[plugins."other@local"]', "enabled = true"].join(
+          "\n",
+        ),
+        "utf8",
+      );
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      const overlayConfig = readFileSync(path.join(overlayHome, "config.toml"), "utf8");
+      expect(overlayConfig).toContain(`${conflictingHeader}\nenabled = false`);
+      expect(overlayConfig).toContain('[plugins."other@local"]\nenabled = true');
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).toContain(
+        `${conflictingHeader}\nenabled = true`,
+      );
+      const suppressionMarker = JSON.parse(
+        readFileSync(path.join(overlayHome, "synara-config-suppressions-v1.json"), "utf8"),
+      ) as { sectionHeaders?: string[] };
+      expect(suppressionMarker.sectionHeaders).toContain(conflictingHeader);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a recorded suppression after its plugin disappears from source config", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(
+        path.join(overlayHome, "synara-config-suppressions-v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          sectionHeaders: ['[plugins."historical-plugin@local"]'],
+        })}\n`,
+        "utf8",
+      );
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        '[plugins."historical-plugin@local"]\nenabled = false',
+      );
+      expect(readFileSync(path.join(tempDir, "config.toml"), "utf8")).not.toContain(
+        "historical-plugin@local",
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -486,8 +573,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale real files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -514,8 +601,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale auth.json files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceAuthPath = path.join(tempDir, "auth.json");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -543,8 +630,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("preserves real generated image directories in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
       const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");
@@ -572,9 +659,14 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("adds a disabled dpcode-browser plugin section when Codex config does not contain one", () => {
-    expect(disableDpCodeBrowserPluginInCodexConfig('model = "gpt-5.5"')).toContain(
-      '[plugins."dpcode-browser@local"]\nenabled = false',
+  it("disables only explicitly recorded plugin sections", () => {
+    expect(
+      disableCodexConfigSections(
+        '[plugins."historical-plugin@local"]\nenabled = true\n\n[plugins."other@local"]\nenabled = true',
+        ['[plugins."historical-plugin@local"]'],
+      ),
+    ).toBe(
+      '[plugins."historical-plugin@local"]\nenabled = false\n\n[plugins."other@local"]\nenabled = true',
     );
   });
 });
@@ -591,6 +683,48 @@ describe("handleStdoutLine", () => {
       context,
       "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)",
     );
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores human-readable diagnostics leaked onto app-server stdout", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["Reasoning trace", "Reasoning summary", "Command execution"]) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores multiline and standalone JSON leaked from command output", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+    const handleStdoutLine = (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine.bind(manager);
+
+    for (const line of ["{", "[", '{"scripts": {', "{}", "[]", '{"name":"synara"}']) {
+      handleStdoutLine(context, line);
+    }
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed JSON-looking fragments without poisoning the session", () => {
+    const { manager, context, emitEvent } = createProcessOutputHarness();
+
+    (
+      manager as unknown as {
+        handleStdoutLine: (context: unknown, line: string) => void;
+      }
+    ).handleStdoutLine(context, '{"method":"item/started"');
 
     expect(emitEvent).not.toHaveBeenCalled();
   });
@@ -799,6 +933,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -832,6 +967,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...approvalRequiredTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -859,6 +995,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "image",
@@ -886,6 +1023,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -919,6 +1057,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -947,6 +1086,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -978,6 +1118,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1010,6 +1151,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1060,6 +1202,7 @@ describe("sendTurn", () => {
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -1099,6 +1242,25 @@ describe("sendTurn", () => {
       }),
     ).rejects.toThrow("Turn input must include text or attachments.");
   });
+
+  it("disables reasoning summaries for Codex Spark", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Inspect the repository",
+      model: "gpt-5.3-codex-spark",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "turn/start",
+      expect.objectContaining({
+        model: "gpt-5.3-codex-spark",
+        summary: "none",
+      }),
+    );
+  });
 });
 
 describe("steerTurn", () => {
@@ -1106,6 +1268,7 @@ describe("steerTurn", () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
     context.session.status = "running";
     context.session.activeTurnId = "turn_active";
+    context.collabReceiverTurns.set("child_provider_1", "turn_active");
     sendRequest.mockResolvedValueOnce({
       turnId: "turn_active",
     });
@@ -1131,6 +1294,7 @@ describe("steerTurn", () => {
       ],
       expectedTurnId: "turn_active",
     });
+    expect(context.collabReceiverTurns.get("child_provider_1")).toBe("turn_active");
   });
 
   it("requires turn/steer to return the active turn id", async () => {
@@ -1149,7 +1313,28 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
-  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+  it.each([
+    {
+      responseShape: "camelCase",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        additionalSpeedTiers: ["fast"],
+      },
+    },
+    {
+      responseShape: "legacy snake_case",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        default_reasoning_effort: "low",
+        additional_speed_tiers: ["fast"],
+      },
+    },
+  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1186,15 +1371,7 @@ describe("CodexAppServerManager discovery", () => {
       )
       .mockResolvedValue({
         result: {
-          items: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
-              default_reasoning_effort: "medium",
-              additionalSpeedTiers: ["fast"],
-            },
-          ],
+          items: [item],
         },
       });
 
@@ -1207,15 +1384,17 @@ describe("CodexAppServerManager discovery", () => {
     });
     expect(result.models).toEqual([
       {
-        slug: "gpt-5.5",
-        name: "GPT-5.5",
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         supportedReasoningEfforts: [
           { value: "low" },
           { value: "medium" },
           { value: "high" },
           { value: "xhigh" },
+          { value: "max" },
+          { value: "ultra" },
         ],
-        defaultReasoningEffort: "medium",
+        defaultReasoningEffort: "low",
         supportsFastMode: true,
       },
     ]);
@@ -2063,6 +2242,7 @@ describe("respondToRequest", () => {
     expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
       threadId: "thread_1",
       ...fullAccessTurnOverrides,
+      summary: "auto",
       input: [
         {
           type: "text",
@@ -2242,6 +2422,30 @@ describe("respondToUserInput", () => {
 });
 
 describe("collab child conversation routing", () => {
+  it("tracks the current collabToolCall receiver shape", () => {
+    const { manager, context } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/started",
+      params: {
+        item: {
+          type: "collabToolCall",
+          id: "call_collab_current",
+          receiverThreadId: "child_provider_current",
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+
+    expect(context.collabReceiverTurns.get("child_provider_current")).toBe("turn_parent");
+    expect(context.collabReceiverParents.get("child_provider_current")).toBe("provider_parent");
+  });
+
   it("preserves child notification turn ids and annotates the parent turn", () => {
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 
@@ -2331,6 +2535,75 @@ describe("collab child conversation routing", () => {
       params: {
         threadId: "child_provider_1",
         turn: { id: "turn_child_1", status: "completed" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("suppresses child lifecycle notifications that arrive before receiver mapping", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_parent";
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_unmapped",
+        turn: { id: "turn_child_unmapped" },
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+    expect(context.session.activeTurnId).toBe("turn_parent");
+  });
+
+  it("keeps handling lifecycle notifications from the active provider thread", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "provider_parent",
+        turn: { id: "turn_parent" },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/started",
+        providerThreadId: "provider_parent",
+      }),
+    );
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ status: "running", activeTurnId: "turn_parent" }),
+    );
+  });
+
+  it("suppresses child lifecycle notifications when only the provider parent is known", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_parent");
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1" },
       },
     });
 

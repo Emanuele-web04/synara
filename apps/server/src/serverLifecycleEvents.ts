@@ -1,11 +1,12 @@
 import { Effect, Layer, PubSub, Ref, ServiceMap, Stream } from "effect";
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 
 export interface ServerLifecycleWelcomePayload {
   readonly cwd: string;
   readonly homeDir: string;
   readonly chatWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
   readonly projectName: string;
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;
@@ -60,7 +61,7 @@ export interface ServerLifecycleEventsShape {
 export class ServerLifecycleEvents extends ServiceMap.Service<
   ServerLifecycleEvents,
   ServerLifecycleEventsShape
->()("t3/serverLifecycleEvents") {}
+>()("synara/serverLifecycleEvents") {}
 
 export const ServerLifecycleEventsLive = Layer.effect(
   ServerLifecycleEvents,

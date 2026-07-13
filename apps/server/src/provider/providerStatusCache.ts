@@ -6,7 +6,7 @@
  *
  * @module providerStatusCache
  */
-import { ServerProviderStatus } from "@t3tools/contracts";
+import { ServerProviderStatus } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 
 const PROVIDER_STATUS_CACHE_IDS = [
@@ -15,6 +15,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",

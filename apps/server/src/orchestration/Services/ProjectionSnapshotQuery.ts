@@ -17,9 +17,11 @@ import type {
   OrchestrationThreadShell,
   CheckpointRef,
   ProjectId,
+  ProjectKind,
   ThreadId,
   ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+  TurnId,
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 
@@ -37,19 +39,34 @@ export interface ProjectionSnapshotSequence {
 export interface ProjectionThreadCheckpointContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
+  readonly projectKind: ProjectKind;
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+  /** Completed file-change payloads, newest first, when explicitly requested by the caller. */
+  readonly fileChangeActivityPayloads?: ReadonlyArray<unknown>;
+}
+
+export interface ProjectionThreadCheckpointContextOptions {
+  /** Include the narrow activity payload set used to attribute files in non-Git workspaces. */
+  readonly includeFileChangeActivityPayloads?: boolean;
+}
+
+export interface ProjectionGeneratedImageActivityRecord {
+  readonly kind: string;
+  readonly payload: unknown;
 }
 
 export interface ProjectionFullThreadDiffContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
+  readonly projectKind: ProjectKind;
   readonly workspaceRoot: string;
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly latestCheckpointTurnCount: number;
+  readonly baselineCheckpointRef: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;
 }
 
@@ -124,7 +141,21 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadCheckpointContext: (
     threadId: ThreadId,
+    options?: ProjectionThreadCheckpointContextOptions,
   ) => Effect.Effect<Option.Option<ProjectionThreadCheckpointContext>, ProjectionRepositoryError>;
+
+  /**
+   * Read the durable generated-image records for one turn. This narrow query is
+   * intentionally independent of the bounded thread-detail activity window so
+   * long turns and server restarts can still materialize transcript references.
+   */
+  readonly listGeneratedImageActivitiesByTurn: (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) => Effect.Effect<
+    ReadonlyArray<ProjectionGeneratedImageActivityRecord>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the narrow context needed to diff a whole thread through one checkpoint.
@@ -156,6 +187,13 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**
+   * Read a single active thread detail snapshot by id with the full message history.
+   */
+  readonly getThreadDetailForExportById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread detail snapshot and its projection cursor in one transaction.
    */
   readonly getThreadDetailSnapshotById: (
@@ -169,4 +207,4 @@ export interface ProjectionSnapshotQueryShape {
 export class ProjectionSnapshotQuery extends ServiceMap.Service<
   ProjectionSnapshotQuery,
   ProjectionSnapshotQueryShape
->()("t3/orchestration/Services/ProjectionSnapshotQuery") {}
+>()("synara/orchestration/Services/ProjectionSnapshotQuery") {}

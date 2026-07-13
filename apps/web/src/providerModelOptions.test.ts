@@ -10,6 +10,8 @@ import {
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  mergeDynamicModelOptions,
+  providerModelCostMultiplierLabel,
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
@@ -44,6 +46,57 @@ describe("formatProviderModelOptionName", () => {
   });
 });
 
+describe("mergeDynamicModelOptions", () => {
+  it("preserves runtime descriptions without inventing them for custom models", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "droid",
+      staticOptions: [{ slug: "custom:model", name: "Custom model", isCustom: true }],
+      dynamicModels: [
+        {
+          slug: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          description: " 0.4x Factory token rate ",
+        },
+        { slug: "custom:model", name: "Custom model" },
+      ],
+    });
+
+    expect(options).toEqual([
+      {
+        slug: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        description: "0.4x Factory token rate",
+      },
+      { slug: "custom:model", name: "Custom model" },
+    ]);
+  });
+
+  it("treats the live Droid catalog as authoritative and drops invalid custom slugs", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "droid",
+        staticOptions: [
+          { slug: "retired-model", name: "Retired" },
+          { slug: "made-up-model", name: "Made up", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      }),
+    ).toEqual([{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }]);
+  });
+});
+
+describe("providerModelCostMultiplierLabel", () => {
+  it("formats live provider multipliers without hardcoding their values", () => {
+    expect(providerModelCostMultiplierLabel("0.38x Factory token rate")).toBe("0.38×");
+    expect(providerModelCostMultiplierLabel("12x Factory token rate")).toBe("12×");
+  });
+
+  it("ignores descriptions that do not begin with a multiplier", () => {
+    expect(providerModelCostMultiplierLabel("Launch Pricing")).toBeNull();
+    expect(providerModelCostMultiplierLabel()).toBeNull();
+  });
+});
+
 describe("buildProviderOptionPatch", () => {
   it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
     expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
@@ -57,6 +110,9 @@ describe("buildProviderOptionPatch", () => {
   it("passes through non-Gemini option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
+    });
+    expect(buildProviderOptionPatch("droid", "reasoningEffort", "high")).toEqual({
+      reasoningEffort: "high",
     });
     expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
       reasoningEffort: "high",

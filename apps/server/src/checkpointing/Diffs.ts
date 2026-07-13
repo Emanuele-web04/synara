@@ -3,7 +3,7 @@
 // Layer: Server checkpointing helper
 // Exports: turn diff file parsers used by checkpoint capture and provider live-diff ingestion
 
-import type { OrchestrationCheckpointFile } from "@t3tools/contracts";
+import type { OrchestrationCheckpointFile } from "@synara/contracts";
 import { parsePatchFiles } from "@pierre/diffs";
 
 export interface TurnDiffFileSummary {

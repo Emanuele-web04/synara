@@ -3,7 +3,7 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { MessageId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -508,6 +508,49 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Steering conversation");
     expect(markup).toContain("mb-1.5");
+  });
+
+  it("renders a 'Sent via Automation' chip above automation-dispatched user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-automation-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-automation-user"),
+              role: "user",
+              text: "hello",
+              dispatchOrigin: "automation",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent via Automation");
+    expect(markup).not.toContain("Steering conversation");
   });
 
   it("pushes the steering chip higher when the user message has chips or photos", async () => {
@@ -1377,6 +1420,179 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tool 3");
     expect(markup).toContain("Tool 6");
     expect(markup).toContain("+2 more tool calls");
+  });
+
+  it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-live");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-reasoning-trace",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "reasoning-trace",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              turnId: activeTurnId,
+              label: "Reasoning trace",
+              toolTitle: "Reasoning trace",
+              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-mcp-tool",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.200Z",
+            entry: {
+              id: "mcp-tool",
+              createdAt: "2026-03-17T19:12:28.200Z",
+              turnId: activeTurnId,
+              label: "MCP tool call",
+              toolTitle: "MCP tool call",
+              toolName: "mcp__docs__search",
+              itemType: "mcp_tool_call",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-reasoning-summary",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.300Z",
+            entry: {
+              id: "reasoning-summary",
+              createdAt: "2026-03-17T19:12:28.300Z",
+              turnId: activeTurnId,
+              label: "Reasoning summary",
+              toolTitle: "Reasoning summary",
+              preview: "Updating the adapter",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-command-execution",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.400Z",
+            entry: {
+              id: "command-execution",
+              createdAt: "2026-03-17T19:12:28.400Z",
+              turnId: activeTurnId,
+              label: "Ran command",
+              toolTitle: "Ran command",
+              itemType: "command_execution",
+              preview: "Running the focused tests",
+              tone: "tool",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(3);
+    expect(markup.match(/data-work-entry-icon="true"/g) ?? []).toHaveLength(1);
+    expect(markup).toContain(">Thinking<");
+    expect(markup).toContain("Inspecting apps/web/src/store.ts");
+    expect(markup).not.toContain("Reasoning trace Inspecting");
+  });
+
+  it("keeps Thinking when a new local send has no server turn id yet", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const previousTurnId = TurnId.makeUnsafe("turn-previous");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={null}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-user-previous",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:20.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-previous"),
+              role: "user",
+              text: "Previous request",
+              createdAt: "2026-03-17T19:12:20.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-reasoning-previous",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:21.000Z",
+            entry: {
+              id: "reasoning-previous",
+              createdAt: "2026-03-17T19:12:21.000Z",
+              turnId: previousTurnId,
+              label: "Reasoning",
+              toolTitle: "Reasoning",
+              tone: "info",
+            },
+          },
+          {
+            id: "entry-assistant-previous",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:22.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-previous"),
+              role: "assistant",
+              turnId: previousTurnId,
+              text: "Previous answer",
+              createdAt: "2026-03-17T19:12:22.000Z",
+              completedAt: "2026-03-17T19:12:23.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-user-current",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-current"),
+              role: "user",
+              text: "Current request",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain(">Thinking<");
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {
@@ -2423,6 +2639,10 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [
@@ -2438,6 +2658,7 @@ describe("MessagesTimeline", () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2448,6 +2669,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");

@@ -3,8 +3,8 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
-import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
 import {
   Cause,
   Deferred,
@@ -200,7 +200,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     return nextCommandReadModel;
   }).pipe(
     Effect.catchCause((cause) =>
-      Effect.logError("failed to refresh orchestration read model after project repair").pipe(
+      Effect.logError("failed to refresh orchestration command read model").pipe(
         Effect.annotateLogs({
           cause: Cause.pretty(cause),
         }),
@@ -210,7 +210,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               commandId: "repair-local-state",
               commandType: ORCHESTRATION_WS_METHODS.repairState,
               detail:
-                "Project repair completed, but the refreshed local snapshot could not be loaded.",
+                "Projection state changed, but the refreshed command snapshot could not be loaded.",
             }),
           ),
         ),
@@ -467,42 +467,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       yield* Effect.forEach(
         committedCommand.committedEvents,
         (event) =>
-          isProjectMetadataEvent(event)
-            ? Effect.void
-            : Effect.gen(function* () {
-                const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
-                if (isDeferredProjectionDirty) {
-                  yield* scheduleDeferredProjectionCatchUp({
-                    eventType: event.type,
-                    sequence: event.sequence,
-                  });
-                  return;
-                }
+          Effect.gen(function* () {
+            const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
+            if (isDeferredProjectionDirty) {
+              yield* scheduleDeferredProjectionCatchUp({
+                eventType: event.type,
+                sequence: event.sequence,
+              });
+              return;
+            }
 
-                const deferredProjectionOutcome = yield* projectionPipeline
-                  .projectDeferredEvent(event)
-                  .pipe(
-                    Effect.matchCause({
-                      onFailure: (cause) => ({ _tag: "failure" as const, cause }),
-                      onSuccess: () => ({ _tag: "success" as const }),
-                    }),
-                  );
+            const deferredProjectionOutcome = yield* projectionPipeline
+              .projectDeferredEvent(event)
+              .pipe(
+                Effect.matchCause({
+                  onFailure: (cause) => ({ _tag: "failure" as const, cause }),
+                  onSuccess: () => ({ _tag: "success" as const }),
+                }),
+              );
 
-                if (deferredProjectionOutcome._tag === "success") {
-                  return;
-                }
+            if (deferredProjectionOutcome._tag === "success") {
+              return;
+            }
 
-                yield* Ref.set(deferredProjectionDirty, true);
-                yield* Effect.logWarning("deferred orchestration projector failed", {
-                  sequence: event.sequence,
-                  eventType: event.type,
-                  cause: Cause.pretty(deferredProjectionOutcome.cause),
-                });
-                yield* scheduleDeferredProjectionCatchUp({
-                  eventType: event.type,
-                  sequence: event.sequence,
-                });
-              }),
+            yield* Ref.set(deferredProjectionDirty, true);
+            yield* Effect.logWarning("deferred orchestration projector failed", {
+              sequence: event.sequence,
+              eventType: event.type,
+              cause: Cause.pretty(deferredProjectionOutcome.cause),
+            });
+            yield* scheduleDeferredProjectionCatchUp({
+              eventType: event.type,
+              sequence: event.sequence,
+            });
+          }),
         { concurrency: 1 },
       );
       for (const event of committedCommand.committedEvents) {
@@ -634,6 +632,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // code should use ProjectionSnapshotQuery directly instead of depending on
   // the command engine to own a hydrated read model.
   const getReadModel = () => Effect.sync(() => commandReadModel);
+  const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
+    maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
@@ -779,6 +779,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     getReadModel,
+    refreshCommandReadModel,
     readEvents,
     dispatch,
     repairState,

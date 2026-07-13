@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
 
 import {
   CommandId,
@@ -17,7 +16,7 @@ import {
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -28,7 +27,14 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
+import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
+import { realpathNearestExisting } from "./realpathNearestExisting";
+import { listStudioThreadOutputs } from "./studioOutputs";
+import {
+  ensureStudioWorkspaceInstructionsFiles,
+  STUDIO_WORKSPACE_SUBDIRECTORIES,
+} from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
@@ -42,6 +48,7 @@ import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNo
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
@@ -63,6 +70,10 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+
+// Relative subdirectories scaffolded under a freshly created chat container workspace root.
+// The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
+const CHAT_WORKSPACE_SUBDIRECTORIES = ["work", "outputs"] as const;
 
 interface ProcessTableRow {
   readonly pid: number;
@@ -274,7 +285,7 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
     case "thread.deleted":
       return true;
     default:
-      return event.aggregateKind === "thread";
+      return event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event);
   }
 }
 
@@ -398,34 +409,61 @@ export const makeWsRpcLayer = () =>
             message: `Project path is not a directory: ${normalizedWorkspaceRoot}`,
           });
         }
-        try {
-          return realpathSync.native(normalizedWorkspaceRoot);
-        } catch {
-          return normalizedWorkspaceRoot;
-        }
+        return yield* realpathNearestExisting(normalizedWorkspaceRoot).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
       });
-      const prepareChatWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
-        for (const dirname of ["work", "outputs"]) {
+      // One mkdir loop shared by every container kind; the relative directory set is the
+      // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
+      // Claude Outbox layout). Keeping a single implementation keeps error handling and
+      // idempotency identical across kinds.
+      const prepareWorkspaceSubdirectories = Effect.fnUntraced(function* (
+        workspaceRoot: string,
+        relativeDirnames: readonly string[],
+      ) {
+        for (const dirname of relativeDirnames) {
           const childPath = path.join(workspaceRoot, dirname);
           yield* fileSystem.makeDirectory(childPath, { recursive: true }).pipe(
             Effect.mapError(
               (cause) =>
                 new WsRpcError({
-                  message: `Failed to create chat workspace directory: ${childPath}`,
+                  message: `Failed to create workspace directory: ${childPath}`,
                   cause,
                 }),
             ),
           );
         }
       });
+      const prepareChatWorkspaceRoot = (workspaceRoot: string) =>
+        prepareWorkspaceSubdirectories(workspaceRoot, CHAT_WORKSPACE_SUBDIRECTORIES);
+      // Instruction files are best-effort: they steer agents toward the Outbox layout but
+      // must never fail (or retry-loop) the container create that scaffolds the folders.
+      const prepareStudioWorkspaceRoot = (workspaceRoot: string) =>
+        prepareWorkspaceSubdirectories(workspaceRoot, STUDIO_WORKSPACE_SUBDIRECTORIES).pipe(
+          Effect.andThen(
+            ensureStudioWorkspaceInstructionsFiles(workspaceRoot).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("failed to write studio workspace instructions", {
+                  workspaceRoot,
+                  cause,
+                }),
+              ),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+          ),
+        );
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
         chatWorkspaceRoot: config.chatWorkspaceRoot,
+        studioWorkspaceRoot: config.studioWorkspaceRoot,
         fileSystem,
         path,
         canonicalizeProjectWorkspaceRoot,
         prepareChatWorkspaceRoot,
+        prepareStudioWorkspaceRoot,
       });
 
       const importThread = makeImportThreadHandler({
@@ -504,6 +542,7 @@ export const makeWsRpcLayer = () =>
           cwd: config.cwd,
           homeDir: config.homeDir,
           chatWorkspaceRoot: config.chatWorkspaceRoot,
+          studioWorkspaceRoot: config.studioWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
@@ -577,10 +616,18 @@ export const makeWsRpcLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
-              const normalizedCommand = yield* normalizeDispatchCommand({ command });
-              return yield* runtimeStartup.enqueueCommand(
+              const { command: normalizedCommand, prepareWorkspaceRoot } =
+                yield* normalizeDispatchCommand({ command });
+              const result = yield* runtimeStartup.enqueueCommand(
                 orchestrationEngine.dispatch(normalizedCommand),
               );
+              // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
+              // AFTER the decider has accepted the command. A rejected dispatch (e.g. a
+              // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
+              if (prepareWorkspaceRoot) {
+                yield* prepareWorkspaceRoot;
+              }
+              return result;
             }),
             "Failed to dispatch orchestration command",
           ),
@@ -727,6 +774,53 @@ export const makeWsRpcLayer = () =>
               onDroppedEvents: failLiveUiStreamForSnapshotResync,
             }),
           ),
+        [WS_METHODS.studioListThreadOutputs]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              // Self-heal the Studio folder tree: an accepted create whose deferred scaffold
+              // failed (crash, transient FS error) must not leave Studio without its Outbox
+              // forever. mkdir -p is idempotent and cheap, and this endpoint only fires while
+              // a Studio chat's environment panel is actually open. Failures degrade to the
+              // empty-list behavior.
+              yield* prepareStudioWorkspaceRoot(config.studioWorkspaceRoot).pipe(
+                Effect.catch(() => Effect.void),
+              );
+              // Checkpoints cover Git workspaces; file-change activities preserve the same
+              // attribution in the default non-Git Studio root. Unknown/non-Studio ids stay empty.
+              const context = yield* projectionReadModelQuery.getThreadCheckpointContext(
+                input.threadId,
+                { includeFileChangeActivityPayloads: true },
+              );
+              if (Option.isNone(context) || context.value.projectKind !== "studio") {
+                return { entries: [] };
+              }
+              const workspaceCwd = resolveThreadWorkspaceCwd({
+                thread: {
+                  projectId: context.value.projectId,
+                  envMode: context.value.envMode,
+                  worktreePath: context.value.worktreePath,
+                },
+                projects: [
+                  {
+                    id: context.value.projectId,
+                    kind: context.value.projectKind,
+                    workspaceRoot: context.value.workspaceRoot,
+                  },
+                ],
+              });
+              if (!workspaceCwd) {
+                return { entries: [] };
+              }
+              return yield* listStudioThreadOutputs({
+                workspaceRoot: workspaceCwd,
+                checkpoints: context.value.checkpoints,
+                ...(context.value.fileChangeActivityPayloads
+                  ? { fileChangeActivityPayloads: context.value.fileChangeActivityPayloads }
+                  : {}),
+              });
+            }),
+            "Failed to list studio thread outputs",
+          ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>
@@ -768,6 +862,11 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
+        [WS_METHODS.gitPullRequestSnapshot]: (input) =>
+          rpcEffect(
+            gitManager.pullRequestSnapshot(input),
+            "Failed to load pull request checks and comments",
+          ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           rpcEffect(
             gitManager

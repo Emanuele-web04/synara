@@ -20,8 +20,8 @@ import {
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
-} from "@t3tools/contracts";
-import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
+} from "@synara/contracts";
+import { isExplicitRelativePath, isWindowsAbsolutePath } from "@synara/shared/path";
 import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;

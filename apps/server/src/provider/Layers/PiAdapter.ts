@@ -30,7 +30,7 @@ import {
   type ThreadTokenUsageSnapshot,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";

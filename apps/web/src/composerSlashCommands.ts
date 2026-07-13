@@ -1,10 +1,10 @@
-import type { GitBranch, ProviderKind } from "@t3tools/contracts";
+import type { GitBranch, ProviderKind } from "@synara/contracts";
 import {
   BUILT_IN_COMPOSER_SLASH_COMMANDS,
   isBuiltInComposerSlashCommandName,
   normalizeComposerSlashCommandName,
   type BuiltInComposerSlashCommand,
-} from "@t3tools/shared/composerSlashCommands";
+} from "@synara/shared/composerSlashCommands";
 import { rankProviderDiscoveryItems } from "./lib/providerDiscovery";
 
 export { BUILT_IN_COMPOSER_SLASH_COMMANDS };
@@ -72,16 +72,24 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return command === "automation" || (provider === "codex" && command === "review");
+  return (
+    command === "automation" ||
+    command === "export" ||
+    (provider === "codex" && command === "review")
+  );
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
   provider: ProviderKind,
   command: string,
+  options: { readonly availableAppCommands?: ReadonlySet<string> } = {},
 ): boolean {
   const normalizedCommand = normalizeComposerSlashCommandName(command);
+  const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
-    normalizedCommand === "automation" || (provider === "codex" && normalizedCommand === "review")
+    normalizedCommand === "automation" ||
+    (normalizedCommand === "export" && appCommandIsAvailable) ||
+    (provider === "codex" && normalizedCommand === "review")
   );
 }
 
@@ -161,6 +169,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "fast",
     label: "/fast",
     description: "Turn fast mode on or off for this thread",
+    source: "app",
+  },
+  export: {
+    command: "export",
+    label: "/export",
+    description: "Download this thread as a ZIP archive (thread.json + transcript.md)",
     source: "app",
   },
   automation: {
@@ -340,6 +354,7 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferExportCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
@@ -367,12 +382,16 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
           // creates a Synara split/context clone before the provider sees the first turn.
+          // /export is app-level too — Synara owns the thread transcript, so the download
+          // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));

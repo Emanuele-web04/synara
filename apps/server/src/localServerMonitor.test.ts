@@ -224,7 +224,7 @@ describe("localServerMonitor", () => {
         {
           ppid: 12064,
           commandLine:
-            "node /Users/emanueledipietro/Developer/dpcode-website/node_modules/.bin/next dev",
+            "node /Users/emanueledipietro/Developer/synara-website/node_modules/.bin/next dev",
         },
       ],
       [

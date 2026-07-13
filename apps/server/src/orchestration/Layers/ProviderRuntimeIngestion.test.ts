@@ -8,7 +8,7 @@ import type {
   ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -19,7 +19,7 @@ import {
   ProviderItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -33,7 +33,10 @@ import {
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  collectPersistedGeneratedImagePaths,
+  ProviderRuntimeIngestionLive,
+} from "./ProviderRuntimeIngestion.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -166,7 +169,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   async function createHarness() {
-    const workspaceRoot = makeTempDir("t3-provider-project-");
+    const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
@@ -542,7 +545,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it("appends generated-image markdown to the assistant message for the turn", async () => {
+  it("appends generated-image markdown to the turn's assistant message when the turn settles", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-image");
     const imagePath = "/tmp/provider-thread/call.png";
@@ -611,6 +614,15 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
     });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-image"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      status: "completed",
+    });
 
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.messages.some(
@@ -625,6 +637,219 @@ describe("ProviderRuntimeIngestion", () => {
       (message) => message.id === "assistant:answer-image",
     );
     expect(assistantMessage?.streaming).toBe(false);
+  });
+
+  it("prefers a persisted Studio copy over its provider-home image source", () => {
+    expect(
+      collectPersistedGeneratedImagePaths([
+        {
+          kind: "studio.outputs.captured",
+          payload: {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/generated.png" }],
+              generatedImage: {
+                sourcePath: "/codex/generated.png",
+                fullPath: "/studio/Outbox/Images/generated.png",
+              },
+            },
+          },
+        },
+        {
+          kind: "tool.completed",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: { kind: "codex.generated_image", path: "/codex/generated.png" },
+          },
+        },
+      ]),
+    ).toEqual(["/studio/Outbox/Images/generated.png"]);
+  });
+
+  it("recovers generated-image references from persisted turn activities", async () => {
+    // Simulates a server restart after the image activity was projected: this
+    // ingestion instance has no matching entry in its in-memory pending cache.
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-image-persisted-recovery");
+    const imagePath = "/tmp/provider-thread/persisted-recovery.png";
+    const createdAt = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-persisted-recovery-turn-started"),
+      provider: "codex",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-persisted-recovery-answer-complete"),
+      provider: "codex",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("persisted-recovery-answer"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message) =>
+          message.id === "assistant:persisted-recovery-answer" && message.streaming === false,
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("cmd-persisted-generated-image-activity"),
+        threadId: asThreadId("thread-1"),
+        activity: {
+          id: asEventId("activity-persisted-generated-image"),
+          tone: "tool",
+          kind: "tool.completed",
+          summary: "Generated image",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: {
+              kind: "codex.generated_image",
+              path: imagePath,
+              callId: "persisted-recovery",
+            },
+          },
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-persisted-recovery-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      status: "completed",
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:persisted-recovery-answer" &&
+          message.text.includes(`![Generated image](${imagePath})`),
+      ),
+    );
+    expect(
+      thread.messages.find((message) => message.id === "assistant:persisted-recovery-answer")?.text,
+    ).toContain(`![Generated image](${imagePath})`);
+  });
+
+  it("attaches generated images to the empty terminal assistant message, not collapsed commentary", async () => {
+    // Regression: Codex emits commentary, then the image artifact, then a distinct
+    // *intentionally empty* final assistant item (the artifact is the answer). The
+    // image must end up on the terminal message the transcript keeps visible — an
+    // image attached to commentary is folded into the "Worked for…" disclosure and
+    // the visible row renders "(empty response)".
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-image-empty-final");
+    const imagePath = "/tmp/provider-thread/empty-final.png";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-empty-final-turn-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-empty-final-commentary-delta"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("commentary"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Generating the image now…",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-empty-final-commentary-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("commentary"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+
+    await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message) => message.id === "assistant:commentary" && message.streaming === false,
+      ),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-empty-final-image-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("image-call"),
+      payload: {
+        itemType: "image_generation",
+        status: "completed",
+        title: "Generated image",
+        detail: imagePath,
+        data: { kind: "codex.generated_image", path: imagePath, callId: "image-call" },
+      },
+    });
+    // The empty final item: no deltas, no fallback detail — mirrors the real trace.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-empty-final-answer-complete"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("final-answer"),
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-empty-final-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      status: "completed",
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) =>
+          message.id === "assistant:final-answer" &&
+          message.text.includes(`![Generated image](${imagePath})`) &&
+          message.streaming === false,
+      ),
+    );
+
+    // The terminal message owns the image; commentary stays untouched and no
+    // synthetic image-only message was created.
+    const commentary = thread.messages.find((message) => message.id === "assistant:commentary");
+    expect(commentary?.text).toBe("Generating the image now…");
+    const messagesWithImage = thread.messages.filter((message) =>
+      message.text.includes(`![Generated image](${imagePath})`),
+    );
+    expect(messagesWithImage.map((message) => message.id)).toEqual(["assistant:final-answer"]);
   });
 
   it("does not re-emit message-sent events when the same image_generation completion replays", async () => {
@@ -688,6 +913,15 @@ describe("ProviderRuntimeIngestion", () => {
     };
 
     harness.emit(imageEvent);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-replay-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      status: "completed",
+    });
 
     await waitForThread(harness.engine, (entry) =>
       entry.messages.some(
@@ -994,6 +1228,510 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(false);
     expect(thread.messages).toHaveLength(0);
+  });
+
+  it("projects only completed Codex reasoning with a readable summary", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const detail = `**${"Verify the protocol mapping ".repeat(12).trim()}**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->`;
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-reasoning-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-stale-reasoning-summary-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "Stale streamed summary",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail,
+      },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity: ProviderRuntimeTestActivity) => {
+        if (activity.id !== stableActivityId || typeof activity.payload !== "object") {
+          return false;
+        }
+        return (activity.payload as { status?: unknown }).status === "completed";
+      }),
+    );
+    const reasoningActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+    );
+
+    expect(reasoningActivities).toHaveLength(1);
+    expect(reasoningActivities[0]).toMatchObject({
+      kind: "task.progress",
+      tone: "tool",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail,
+        data: { toolCallId: "reasoning-1" },
+      },
+    });
+  });
+
+  it("buffers Codex summary deltas into one completed reasoning activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const baseEvent = {
+      provider: "codex" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-reasoning"),
+      itemId: asItemId("reasoning-buffered-1"),
+    };
+
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Inspect",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-2"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: " the protocol**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-reasoning-delta-3"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 1,
+        delta: "**Update the adapter**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "item.completed",
+      eventId: asEventId("evt-buffered-reasoning-completed"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+      },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-buffered-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+    const reasoningActivities = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+    );
+
+    expect(reasoningActivities).toHaveLength(1);
+    expect(reasoningActivities[0]).toMatchObject({
+      kind: "task.progress",
+      tone: "tool",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail: "**Inspect the protocol**\n\n<!-- -->\n\n**Update the adapter**\n\n<!-- -->",
+        data: { toolCallId: "reasoning-buffered-1" },
+      },
+    });
+  });
+
+  it("settles buffered Codex reasoning when a turn is aborted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-aborted-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted-reasoning"),
+      itemId: asItemId("reasoning-aborted-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this partial summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-aborted-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-aborted-reasoning"),
+      payload: { state: "interrupted" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-aborted-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this partial summary**\n\n<!-- -->",
+      },
+    });
+  });
+
+  it("marks buffered Codex reasoning failed when the turn completes with an error", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-failed-turn-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-failed-reasoning"),
+      itemId: asItemId("reasoning-failed-turn-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this failed turn summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-failed-turn-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-failed-reasoning"),
+      payload: { state: "failed", errorMessage: "turn failed" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-failed-turn-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this failed turn summary**\n\n<!-- -->",
+      },
+    });
+  });
+
+  it("settles and clears buffered Codex reasoning on runtime errors", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-errored-reasoning-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-errored-reasoning"),
+      itemId: asItemId("reasoning-errored-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Preserve this failed summary**\n\n<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-errored-reasoning-terminal"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-errored-reasoning"),
+      payload: { message: "app-server exited" },
+    });
+
+    const stableActivityId = "provider-reasoning:thread-1:reasoning-errored-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toMatchObject({
+      summary: "Reasoning trace",
+      payload: {
+        status: "failed",
+        detail: "**Preserve this failed summary**\n\n<!-- -->",
+      },
+    });
+  });
+
+  it("omits empty completed Codex reasoning just like thread/read", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-empty-reasoning-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-empty-reasoning-raw-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        streamKind: "reasoning_text",
+        contentIndex: 0,
+        delta: "private raw trace",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-empty-reasoning-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      itemId: asItemId("empty-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail: "<!-- -->",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-empty-reasoning-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-empty-reasoning"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-empty-reasoning-turn-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not project non-Codex or unidentified reasoning lifecycle rows", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-pi-reasoning-started"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("pi-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-pi-reasoning-completed"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("pi-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-codex-reasoning-without-item-id"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-filter-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-reasoning-filter-turn-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("persists a compact per-model token breakdown on turn.completed activities", async () => {
+    const harness = await createHarness();
+
+    harness.setProviderSession({
+      threadId: asThreadId("thread-1"),
+      provider: "claudeAgent",
+      status: "running",
+      runtimeMode: "approval-required",
+      createdAt: "2026-03-01T10:00:00.000Z",
+      updatedAt: "2026-03-01T10:00:00.000Z",
+      activeTurnId: asTurnId("turn-1"),
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-model-usage"),
+      provider: "claudeAgent",
+      createdAt: "2026-03-01T10:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: {
+        state: "completed",
+        modelUsage: {
+          "claude-fable-5": {
+            inputTokens: 100,
+            outputTokens: 40,
+            cacheReadInputTokens: 800,
+            cacheCreationInputTokens: 60,
+            webSearchRequests: 0,
+            costUSD: 0.12,
+            contextWindow: 200000,
+          },
+          "claude-haiku-4-5": {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+            contextWindow: 200000,
+          },
+        },
+      },
+    } as ProviderRuntimeEvent);
+
+    const thread = await waitForThread(harness.engine, (candidate) =>
+      candidate.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-model-usage",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) => candidate.id === "evt-turn-completed-model-usage",
+    );
+    // Zero-usage models are dropped; cache reads/writes fold into inputTokens.
+    expect(activity).toMatchObject({
+      kind: "turn.completed",
+      payload: {
+        state: "completed",
+        modelUsage: {
+          "claude-fable-5": { inputTokens: 960, outputTokens: 40, totalTokens: 1000 },
+        },
+      },
+    });
+    const persistedModelUsage = (
+      activity?.payload as { modelUsage?: Record<string, unknown> } | undefined
+    )?.modelUsage;
+    expect(Object.keys(persistedModelUsage ?? {})).toEqual(["claude-fable-5"]);
   });
 
   it("projects MCP tool progress into thread activity with preserved tool metadata", async () => {
@@ -3565,6 +4303,41 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("suppresses identical consecutive context window updates", async () => {
+    const harness = await createHarness();
+    const now = "2026-07-09T00:00:00.000Z";
+    const makeUsageEvent = (eventId: string, usedTokens: number) => ({
+      type: "thread.token-usage.updated" as const,
+      eventId: asEventId(eventId),
+      provider: "claudeAgent" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        usage: {
+          usedTokens,
+          lastUsedTokens: usedTokens,
+          maxTokens: 200_000,
+          inputTokens: usedTokens,
+          outputTokens: 0,
+        },
+      },
+    });
+
+    harness.emit(makeUsageEvent("evt-context-first", 4_000));
+    harness.emit(makeUsageEvent("evt-context-duplicate", 4_000));
+    harness.emit(makeUsageEvent("evt-context-changed", 4_001));
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const contextActivities = readModel.threads
+      .find((thread) => thread.id === "thread-1")
+      ?.activities.filter((activity) => activity.kind === "context-window.updated");
+    expect(contextActivities?.map((activity) => activity.id).toSorted()).toEqual([
+      "evt-context-changed",
+      "evt-context-first",
+    ]);
+  });
+
   it("projects percent-only context window updates into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -3827,6 +4600,55 @@ describe("ProviderRuntimeIngestion", () => {
         candidate.summary === "Compacting conversation...",
     );
     expect(activity?.tone).toBe("info");
+  });
+
+  it("projects context compaction completion and failure into thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-compaction-completed"),
+      provider: "grok",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        itemType: "context_compaction",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-compaction-failed"),
+      provider: "grok",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        itemType: "context_compaction",
+        status: "failed",
+        detail: "Compaction was interrupted",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "context-compaction" &&
+          activity.summary === "Context compaction failed",
+      ),
+    );
+
+    const completed = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) =>
+        candidate.kind === "context-compaction" && candidate.summary === "Context compacted",
+    );
+    expect(completed?.tone).toBe("info");
+    const failed = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) =>
+        candidate.kind === "context-compaction" &&
+        candidate.summary === "Context compaction failed",
+    );
+    expect(failed?.tone).toBe("error");
   });
 
   it("projects Codex task lifecycle chunks into thread activities", async () => {

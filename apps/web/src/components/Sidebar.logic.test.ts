@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -26,12 +25,15 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
-  pruneExpandedProjectThreadListsForCollapsedProjects,
+  pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
+  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
@@ -44,7 +46,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -66,6 +68,16 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("resolvePendingSidebarViewSelection", () => {
+  it("optimistically follows a destination segment", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "studio")).toBe("studio");
+  });
+
+  it("clears the optimistic segment when the user returns to the active view", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
@@ -219,14 +231,9 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 
 describe("resolveSettingsBackTarget", () => {
   it("keeps fresh draft chats available as settings back targets", () => {
-    const availableThreadIds = buildSettingsBackAvailableThreadIds({
-      sidebarThreadSummaryById: {
-        "thread-latest": {},
-      },
-      draftThreadsByThreadId: {
-        "thread-draft": {},
-      },
-    });
+    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the
+    // segment's draft thread ids form the restorable set.
+    const availableThreadIds = new Set(["thread-latest", "thread-draft"]);
 
     expect(
       resolveSettingsBackTarget({
@@ -286,12 +293,15 @@ describe("resolveSettingsBackTarget", () => {
   });
 });
 
-describe("pruneExpandedProjectThreadListsForCollapsedProjects", () => {
-  it("clears remembered show-more state when a project is collapsed", () => {
-    const current = new Set(["/Users/tester/Code/one", "/Users/tester/Code/two"]);
+describe("pruneProjectThreadListPagingForCollapsedProjects", () => {
+  it("clears remembered show-more paging when a project is collapsed", () => {
+    const current = new Map([
+      ["/Users/tester/Code/one", 2],
+      ["/Users/tester/Code/two", 1],
+    ]);
 
-    const next = pruneExpandedProjectThreadListsForCollapsedProjects({
-      expandedProjectThreadListCwds: current,
+    const next = pruneProjectThreadListPagingForCollapsedProjects({
+      threadListExtraPagesByProjectCwd: current,
       projects: [
         { cwd: "/Users/tester/Code/one", expanded: false },
         { cwd: "/Users/tester/Code/two", expanded: true },
@@ -299,19 +309,102 @@ describe("pruneExpandedProjectThreadListsForCollapsedProjects", () => {
       normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
     });
 
-    expect([...next]).toEqual(["/Users/tester/Code/two"]);
+    expect([...next]).toEqual([["/Users/tester/Code/two", 1]]);
   });
 
-  it("preserves the existing set when no collapsed project needs pruning", () => {
-    const current = new Set(["/Users/tester/Code/one"]);
+  it("preserves the existing map when no collapsed project needs pruning", () => {
+    const current = new Map([["/Users/tester/Code/one", 1]]);
 
-    const next = pruneExpandedProjectThreadListsForCollapsedProjects({
-      expandedProjectThreadListCwds: current,
+    const next = pruneProjectThreadListPagingForCollapsedProjects({
+      threadListExtraPagesByProjectCwd: current,
       projects: [{ cwd: "/Users/tester/Code/one", expanded: true }],
       normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
     });
 
     expect(next).toBe(current);
+  });
+});
+
+describe("resolveSidebarThreadListPaging", () => {
+  it("keeps the base preview with no paging affordances when everything fits", () => {
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 4,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: 0,
+      }),
+    ).toEqual({
+      effectiveExtraPages: 0,
+      previewLimit: 5,
+      canShowMore: false,
+      canShowLess: false,
+    });
+  });
+
+  it("adds one page per show-more click and offers show-less only after the first", () => {
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 12,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: 0,
+      }),
+    ).toEqual({
+      effectiveExtraPages: 0,
+      previewLimit: 5,
+      canShowMore: true,
+      canShowLess: false,
+    });
+
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 12,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: 1,
+      }),
+    ).toEqual({
+      effectiveExtraPages: 1,
+      previewLimit: 10,
+      canShowMore: true,
+      canShowLess: true,
+    });
+  });
+
+  it("clamps oversized requested paging to what the list can actually use", () => {
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 12,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: 9,
+      }),
+    ).toEqual({
+      effectiveExtraPages: 2,
+      previewLimit: 15,
+      canShowMore: false,
+      canShowLess: true,
+    });
+  });
+
+  it("ignores negative and non-finite requested paging", () => {
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 12,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: -3,
+      }).effectiveExtraPages,
+    ).toBe(0);
+    expect(
+      resolveSidebarThreadListPaging({
+        totalCount: 12,
+        baseLimit: 5,
+        pageSize: 5,
+        requestedExtraPages: Number.NaN,
+      }).effectiveExtraPages,
+    ).toBe(0);
   });
 });
 
@@ -432,7 +525,7 @@ describe("add-project error helpers", () => {
 
   it("explains root-absolute add-project paths that probably missed the home directory", () => {
     expect(
-      describeAddProjectError("Failed to create project directory: /Developer/Testing/t3code"),
+      describeAddProjectError("Failed to create project directory: /Developer/Testing/synara"),
     ).toContain("/Users/<name>/Developer");
   });
 
@@ -878,7 +971,6 @@ describe("getVisibleThreadsForProject", () => {
     const result = getVisibleThreadsForProject({
       threads,
       activeThreadId: ThreadId.makeUnsafe("thread-8"),
-      isThreadListExpanded: false,
       previewLimit: 6,
     });
 
@@ -894,7 +986,7 @@ describe("getVisibleThreadsForProject", () => {
     ]);
   });
 
-  it("returns all threads when the list is expanded", () => {
+  it("returns all threads when the preview limit covers the whole list", () => {
     const threads = Array.from({ length: 8 }, (_, index) =>
       makeThread({
         id: ThreadId.makeUnsafe(`thread-${index + 1}`),
@@ -904,11 +996,10 @@ describe("getVisibleThreadsForProject", () => {
     const result = getVisibleThreadsForProject({
       threads,
       activeThreadId: ThreadId.makeUnsafe("thread-8"),
-      isThreadListExpanded: true,
-      previewLimit: 6,
+      previewLimit: 8,
     });
 
-    expect(result.hasHiddenThreads).toBe(true);
+    expect(result.hasHiddenThreads).toBe(false);
     expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
       threads.map((thread) => thread.id),
     );
@@ -928,7 +1019,6 @@ describe("getRenderedThreadsForSidebarProject", () => {
       project: makeProject({ expanded: false }),
       threads,
       activeThreadId: ThreadId.makeUnsafe("thread-4"),
-      isThreadListExpanded: false,
       previewLimit: 2,
     });
 
@@ -1016,7 +1106,6 @@ describe("getVisibleSidebarEntriesForPreview", () => {
         },
       ],
       activeEntryId: undefined,
-      isExpanded: false,
       previewLimit: 2,
     });
 
@@ -1050,7 +1139,6 @@ describe("getVisibleSidebarEntriesForPreview", () => {
     const result = getVisibleSidebarEntriesForPreview({
       entries,
       activeEntryId: ThreadId.makeUnsafe("thread-third-root"),
-      isExpanded: false,
       previewLimit: 2,
     });
 
@@ -1102,8 +1190,9 @@ describe("getVisibleSidebarThreadIds", () => {
       projects,
       threads,
       activeThreadId: ThreadId.makeUnsafe("thread-4"),
-      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
       previewLimit: 2,
+      previewPageSize: 2,
       threadSortOrder: "created_at",
     });
 
@@ -1138,11 +1227,9 @@ describe("getVisibleSidebarThreadIds", () => {
         }),
       ],
       activeThreadId: undefined,
-      expandedThreadListsByProject: new Set<ProjectId>([
-        ProjectId.makeUnsafe("project-1"),
-        ProjectId.makeUnsafe("project-2"),
-      ]),
+      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
       previewLimit: 10,
+      previewPageSize: 5,
       threadSortOrder: "created_at",
     });
 
@@ -1175,9 +1262,10 @@ describe("getVisibleSidebarThreadIds", () => {
         }),
       ],
       activeThreadId: ThreadId.makeUnsafe("thread-child"),
-      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
       expandedSubagentParentIds: new Set<ThreadId>([ThreadId.makeUnsafe("thread-parent")]),
       previewLimit: 6,
+      previewPageSize: 5,
       threadSortOrder: "created_at",
     });
 
@@ -1210,9 +1298,10 @@ describe("getVisibleSidebarThreadIds", () => {
         }),
       ],
       activeThreadId: ThreadId.makeUnsafe("thread-child"),
-      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      threadListExtraPagesByProjectId: new Map<ProjectId, number>(),
       expandedSubagentParentIds: new Set<ThreadId>(),
       previewLimit: 6,
+      previewPageSize: 5,
       threadSortOrder: "created_at",
     });
 
@@ -1403,6 +1492,27 @@ function makeSidebarThreadSummary(
   };
 }
 
+describe("partitionSidebarThreadsByProjectIds", () => {
+  it("splits Studio threads from the regular Threads surface by project id", () => {
+    const projectThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-project"),
+      projectId: ProjectId.makeUnsafe("project-app"),
+    });
+    const studioThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-studio"),
+      projectId: ProjectId.makeUnsafe("project-studio"),
+    });
+
+    const partitioned = partitionSidebarThreadsByProjectIds(
+      [projectThread, studioThread],
+      new Set([ProjectId.makeUnsafe("project-studio")]),
+    );
+
+    expect(partitioned.nonStudioThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
+    expect(partitioned.studioThreads.map((thread) => thread.id)).toEqual(["thread-studio"]);
+  });
+});
+
 describe("deriveSidebarProjectData", () => {
   it("keeps pinned threads in the total project thread count", () => {
     const project = makeProject();
@@ -1425,10 +1535,11 @@ describe("deriveSidebarProjectData", () => {
       ]),
       pinnedThreadIds: [pinnedThread.id],
       expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
+      threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
       previewLimit: 5,
+      previewPageSize: 5,
     });
 
     expect(data.get(project.id)).toMatchObject({
@@ -1465,10 +1576,11 @@ describe("deriveSidebarProjectData", () => {
       ]),
       pinnedThreadIds: [],
       expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
+      threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
       previewLimit: 5,
+      previewPageSize: 5,
     });
 
     expect(data.get(project.id)?.visibleEntries).toEqual([
@@ -1506,10 +1618,11 @@ describe("deriveSidebarProjectData", () => {
       ]),
       pinnedThreadIds: [],
       expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
+      threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: threadThree.id,
       previewLimit: 1,
+      previewPageSize: 1,
     });
 
     expect(data.get(project.id)).toMatchObject({
@@ -1536,14 +1649,61 @@ describe("deriveSidebarProjectData", () => {
       sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne]),
       pinnedThreadIds: [],
       expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
+      threadListExtraPagesByProjectCwd: new Map(),
       normalizeProjectCwd: (cwd) => cwd,
       activeSidebarThreadId: undefined,
       previewLimit: 5,
+      previewPageSize: 5,
       resolveThreadStatus: () => null,
     });
 
     expect(data.get(project.id)?.projectStatus).toBeNull();
+  });
+
+  it("pages the thread preview five rows at a time and clamps stale paging", () => {
+    const project = makeProject({ cwd: "/Users/tester/Code/demo" });
+    const threads = Array.from({ length: 12 }, (_, index) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+        createdAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        updatedAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const derive = (requestedExtraPages: number) =>
+      deriveSidebarProjectData({
+        projects: [project],
+        sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId(threads),
+        pinnedThreadIds: [],
+        expandedParentThreadIds: new Set(),
+        threadListExtraPagesByProjectCwd: new Map([[project.cwd, requestedExtraPages]]),
+        normalizeProjectCwd: (cwd) => cwd,
+        activeSidebarThreadId: undefined,
+        previewLimit: 5,
+        previewPageSize: 5,
+      }).get(project.id);
+
+    expect(derive(0)).toMatchObject({
+      threadListExtraPages: 0,
+      canShowMoreThreads: true,
+      canShowLessThreads: false,
+    });
+    expect(derive(0)?.visibleEntries).toHaveLength(5);
+
+    expect(derive(1)).toMatchObject({
+      threadListExtraPages: 1,
+      canShowMoreThreads: true,
+      canShowLessThreads: true,
+    });
+    expect(derive(1)?.visibleEntries).toHaveLength(10);
+
+    // Stale persisted paging beyond the real thread count clamps to the last useful page.
+    expect(derive(7)).toMatchObject({
+      threadListExtraPages: 2,
+      canShowMoreThreads: false,
+      canShowLessThreads: true,
+    });
+    expect(derive(7)?.visibleEntries).toHaveLength(12);
   });
 });
 

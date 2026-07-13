@@ -9,9 +9,9 @@ import {
   ThreadId,
   type ThreadMarker,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/contracts";
+import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -34,8 +34,12 @@ import {
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import {
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 import { isFileReadToolEntry } from "~/lib/workEntryClassification";
-import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -44,10 +48,13 @@ import {
   CheckIcon,
   ChangesIcon,
   CircleAlertIcon,
+  CircleCheckIcon,
   CircleQuestionIcon,
+  ClockIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
+  LoaderIcon,
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
@@ -59,6 +66,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   WebSearchIcon,
+  WorktreeIcon,
   ZapIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
@@ -81,6 +89,11 @@ import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
+  hasLeadingUserMedia,
+  resolveUserTurnMarker,
+  type UserTurnMarkerKind,
+} from "./userTurnMarker";
+import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
@@ -88,6 +101,7 @@ import {
   type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import {
@@ -98,7 +112,12 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
-import { isAgentActivityWorkEntry } from "./agentActivity.logic";
+import {
+  formatAgentActivityEntryPreview,
+  isAgentActivityWorkEntry,
+  isCodexActivityStatusWorkEntry,
+  isReasoningUpdateWorkEntry,
+} from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -202,18 +221,32 @@ export interface MessagesTimelineController {
 // target agent-task rows specifically; both render the shared central robot glyph.
 const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
-// Keeps the steer marker visually attached to the whole sent-message stack.
+// Keeps the origin/steer marker visually attached to the whole sent-message stack.
+// Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
+// which the timelineHeight estimator also uses — keep presentation-only concerns here.
+const USER_TURN_MARKER_PRESENTATION: Record<
+  UserTurnMarkerKind,
+  { readonly Icon: LucideIcon; readonly label: string }
+> = {
+  automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  steer: { Icon: SteerIcon, label: "Steering conversation" },
+};
+
 function UserDispatchModeChip({
   dispatchMode,
+  dispatchOrigin,
   hasLeadingMedia,
 }: {
   dispatchMode: TimelineMessage["dispatchMode"];
+  dispatchOrigin: TimelineMessage["dispatchOrigin"];
   hasLeadingMedia: boolean;
 }) {
-  if (dispatchMode !== "steer") {
+  const markerKind = resolveUserTurnMarker({ dispatchMode, dispatchOrigin });
+  if (!markerKind) {
     return null;
   }
 
+  const { Icon, label } = USER_TURN_MARKER_PRESENTATION[markerKind];
   return (
     <div
       className={cn(
@@ -221,8 +254,8 @@ function UserDispatchModeChip({
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
-      <SteerIcon className="size-3 shrink-0 text-muted-foreground/75" />
-      <span>Steering conversation</span>
+      <Icon className="size-3 shrink-0 text-muted-foreground/75" />
+      <span>{label}</span>
     </div>
   );
 }
@@ -269,11 +302,85 @@ function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLE
   return null;
 }
 
+// Per-step status glyph for the worktree setup stepper. Mirrors the active
+// task-list card: spinner while active, check when done, hollow node pending.
+function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"] }) {
+  if (status === "done") {
+    // Foreground (black) check, same box as the spinner so done/active nodes match.
+    return <CircleCheckIcon className="size-2.5 text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "active") {
+    // Spinner sized to match the pending nodes, in foreground (black) so the
+    // active step reads as the current work rather than an accent flourish.
+    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "error") {
+    return <CircleAlertIcon className="size-2.5 text-destructive" />;
+  }
+  // Lucide circles render at ~83% of their box, so an 8px ring matches the
+  // visible diameter of the size-2.5 spinner/check glyphs.
+  return <span className="block size-2 rounded-full border border-[color:var(--color-border)]" />;
+}
+
+// Transient "Preparing worktree..." panel: a compact bordered card with a
+// git-branch header and a connected stepper. Hugs its content so it reads as a
+// status chip rather than a full-width block.
+function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+  return (
+    <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
+      <div className="flex items-center gap-2">
+        <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
+        <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
+          Preparing worktree...
+        </span>
+      </div>
+      <ol className="mt-2 flex flex-col">
+        {steps.map((step, index) => {
+          const isLast = index === steps.length - 1;
+          return (
+            <li key={step.id} className="relative flex items-center gap-2.5 py-[3px]">
+              {isLast ? null : (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute left-[6.5px] top-1/2 h-full w-px",
+                    step.status === "done"
+                      ? "bg-[var(--color-text-foreground)]"
+                      : "bg-[color:var(--color-border)]",
+                  )}
+                />
+              )}
+              <span className="relative z-10 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-primary)]">
+                <WorktreeSetupStepGlyph status={step.status} />
+              </span>
+              <span
+                className={cn(
+                  "text-[13px] leading-5",
+                  step.status === "active" || step.status === "done"
+                    ? "text-[var(--color-text-foreground)]"
+                    : step.status === "error"
+                      ? "text-destructive"
+                      : "text-[var(--color-text-foreground-tertiary)] opacity-70",
+                )}
+              >
+                {step.label}
+                {step.status === "error" ? " — failed" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
+  worktreeSetup?: WorktreeSetupSnapshot | null;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
@@ -301,6 +408,7 @@ interface MessagesTimelineProps {
   onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
@@ -337,6 +445,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  worktreeSetup = null,
   followLiveOutput = false,
   listRef,
   controllerRef,
@@ -356,6 +465,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   activeTurnId,
   isRevertingCheckpoint,
@@ -478,11 +588,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [bottomSpacerHeightPx],
   );
 
+  const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         isWorking,
+        worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
+        worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
         activeTurnId,
         activeTurnStartedAt,
@@ -492,6 +605,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timelineEntries,
       isWorking,
+      presentedWorktreeSetup,
       activeTurnInProgress,
       activeTurnId,
       activeTurnStartedAt,
@@ -659,7 +773,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
-      if (row.kind !== "working") return row.id;
+      if (row.kind !== "working" && row.kind !== "worktree-setup") return row.id;
     }
     return null;
   }, [rows]);
@@ -699,19 +813,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeTurnId, rows]);
-  const userMessageIdByAssistantMessageId = useMemo(() => {
-    const map = new Map<MessageId, MessageId>();
-    let lastUserMessageId: MessageId | null = null;
-    for (const row of rows) {
-      if (row.kind !== "message") continue;
-      if (row.message.role === "user") {
-        lastUserMessageId = row.message.id;
-      } else if (row.message.role === "assistant" && lastUserMessageId) {
-        map.set(row.message.id, lastUserMessageId);
-      }
-    }
-    return map;
-  }, [rows]);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -838,7 +939,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
+        row.kind === "work" ||
+          row.kind === "working-header" ||
+          (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -962,11 +1065,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
-          const hasLeadingMedia =
-            renderedAssistantSelections.length > 0 ||
-            renderedFileComments.length > 0 ||
-            renderedPastedTexts.length > 0 ||
-            userImages.length > 0;
+          const hasLeadingMedia = hasLeadingUserMedia({
+            imageCount: userImages.length,
+            fileCount: userFiles.length,
+            assistantSelectionCount: renderedAssistantSelections.length,
+            fileCommentCount: renderedFileComments.length,
+            pastedTextCount: renderedPastedTexts.length,
+          });
           const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
@@ -979,6 +1084,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 <UserDispatchModeChip
                   dispatchMode={row.message.dispatchMode}
+                  dispatchOrigin={row.message.dispatchOrigin}
                   hasLeadingMedia={hasLeadingMedia}
                 />
                 {renderedAssistantSelections.length > 0 && (
@@ -1128,7 +1234,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageText = resolveAssistantMessageDisplayText(row);
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
@@ -1393,16 +1499,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
-                <div data-assistant-message-id={row.message.id}>
-                  <ChatMarkdown
-                    text={messageText}
-                    cwd={markdownCwd}
-                    isStreaming={Boolean(row.message.streaming)}
-                    style={chatTypographyStyle}
-                    onImageExpand={onImageExpand}
-                    markers={messageMarkers}
-                  />
-                </div>
+                {messageText !== null ? (
+                  <div data-assistant-message-id={row.message.id}>
+                    <ChatMarkdown
+                      text={messageText}
+                      cwd={markdownCwd}
+                      isStreaming={Boolean(row.message.streaming)}
+                      style={chatTypographyStyle}
+                      onImageExpand={onImageExpand}
+                      markers={messageMarkers}
+                    />
+                  </div>
+                ) : null}
                 {renderWorkDisplay(inlineWorkDisplay, "inline")}
                 {inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
@@ -1473,12 +1581,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
-                  const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
-                    row.message.id,
-                  );
+                  const checkpointTurnCount = turnSummary.checkpointTurnCount;
+                  const checkpointTurnCounts =
+                    turnSummary.checkpointTurnCounts ??
+                    (checkpointTurnCount === undefined ? [] : [checkpointTurnCount]);
                   const canUndo =
-                    correspondingUserMessageId != null &&
-                    revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                    turnSummary.status !== "missing" &&
+                    turnSummary.status !== "error" &&
+                    turnSummary.checkpointRef !== undefined &&
+                    !turnSummary.checkpointRef.startsWith("provider-diff:") &&
+                    checkpointTurnCounts.length > 0 &&
+                    onUndoTurnFiles !== undefined;
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -1536,7 +1649,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
                           fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}
@@ -1569,7 +1682,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
                             >
                               Undo
                               <Undo2Icon className="size-3" />
@@ -1653,29 +1766,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "working-header" && (
+        <div>
+          {/* Non-collapsible twin of the settled "Worked for" header: same label
+              tone, size, and full-width divider, but counting up live. -ml-0.5
+              optically aligns the leading "W" with the reply text below. */}
+          <div
+            className="-ml-0.5 pb-2 text-muted-foreground/70"
+            style={{ fontSize: chatTypographyStyle.fontSize }}
+          >
+            Working for{" "}
+            {nowIso ? (
+              (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+            ) : (
+              <WorkingTimer createdAt={row.createdAt} />
+            )}
+          </div>
+          <div className="h-px w-full bg-border" />
+        </div>
+      )}
+
       {row.kind === "working" && (
         <div
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {row.createdAt ? (
-            <>
-              Working for{" "}
-              {nowIso ? (
-                (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </>
-          ) : (
-            "Working..."
-          )}
+          Thinking
         </div>
+      )}
+
+      {row.kind === "worktree-setup" && (
+        <DisclosureRegion open={row.open}>
+          <div className="pt-0.5 pb-1">
+            <WorktreeSetupCard steps={row.steps} />
+          </div>
+        </DisclosureRegion>
       )}
     </div>
   );
 
-  if (!hasMessages && !isWorking) {
+  // Transient rows (for example failed first-send worktree setup) must be able
+  // to render even when there are no persisted chat messages yet.
+  const hasRenderableTranscriptContent = hasMessages || rows.length > 0;
+  if (!hasRenderableTranscriptContent && !isWorking) {
     if (emptyStateContent) {
       return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
     }
@@ -1863,6 +1996,60 @@ function useMessageSendEnterAnimations(
   );
 
   return enteringRowIds;
+}
+
+interface WorktreeSetupPresentation {
+  snapshot: WorktreeSetupSnapshot;
+  open: boolean;
+}
+
+// Keeps the transient worktree-setup card mounted through one shared-disclosure
+// close animation after ChatView clears the snapshot, mirroring
+// useSettledTurnCollapseTransitions' rAF-flip + delayed-cleanup shape.
+function useWorktreeSetupPresentation(
+  worktreeSetup: WorktreeSetupSnapshot | null,
+): WorktreeSetupPresentation | null {
+  const [presented, setPresented] = useState<WorktreeSetupPresentation | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
+  const cleanupTimeoutRef = useRef<number | null>(null);
+
+  const clearCloseTimers = useCallback(() => {
+    if (closeFrameRef.current !== null) {
+      window.cancelAnimationFrame(closeFrameRef.current);
+      closeFrameRef.current = null;
+    }
+    if (cleanupTimeoutRef.current !== null) {
+      window.clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (worktreeSetup) {
+      clearCloseTimers();
+      setPresented((current) =>
+        current?.open && current.snapshot === worktreeSetup
+          ? current
+          : { snapshot: worktreeSetup, open: true },
+      );
+      return;
+    }
+    if (!presented?.open || closeFrameRef.current !== null) {
+      return;
+    }
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = null;
+      setPresented((current) => (current?.open ? { ...current, open: false } : current));
+      cleanupTimeoutRef.current = window.setTimeout(() => {
+        cleanupTimeoutRef.current = null;
+        setPresented(null);
+      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    });
+  }, [worktreeSetup, presented, clearCloseTimers]);
+
+  useLayoutEffect(() => clearCloseTimers, [clearCloseTimers]);
+
+  return presented;
 }
 
 // Keeps newly folded turn details mounted for one shared-disclosure close
@@ -2457,20 +2644,10 @@ function extractFilePathFromDetail(detail: string): string | null {
   return null;
 }
 
-function workEntryPreview(
-  workEntry: Pick<
-    TimelineWorkEntry,
-    | "detail"
-    | "command"
-    | "rawCommand"
-    | "preview"
-    | "changedFiles"
-    | "requestKind"
-    | "itemType"
-    | "subagents"
-    | "subagentAction"
-  >,
-): string | null {
+function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
+  if (isReasoningUpdateWorkEntry(workEntry)) {
+    return formatAgentActivityEntryPreview(workEntry);
+  }
   const isFileRelated =
     workEntry.requestKind === "file-read" ||
     workEntry.requestKind === "file-change" ||
@@ -2582,8 +2759,13 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Render command, agent-task, and file-change rows at the tighter compact density.
+// Render command, agent-task, file-change, and file-read rows at the tighter
+// compact density so every tool-call line shares one height regardless of whether
+// it carries a disclosure chevron.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  if (isCodexActivityStatusWorkEntry(workEntry)) {
+    return true;
+  }
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
   // inspections like `cat` now use the file-read search icon).
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
@@ -2595,7 +2777,10 @@ function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
     EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon
+    EntryIcon === SkillCubeIcon ||
+    // File-read / inspect rows (e.g. `Read …`) surface the search icon and have no
+    // disclosure chevron; keep them at the same compact height as command rows.
+    EntryIcon === SearchIcon
   );
 }
 
@@ -2775,13 +2960,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onOpenAutomation,
   } = props;
   const compact = density === "compact";
+  const isCodexStatusRow = isCodexActivityStatusWorkEntry(workEntry);
   const EntryIcon = workEntryIcon(workEntry);
   // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
   // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
   // composer and markdown links so every site reference looks identical.
   const webFetchUrl = extractWebFetchUrl(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs discoverable
-  // for command rows and app-backed tool rows.
+  // Standard tool rows keep one discoverable left glyph. Codex status rows
+  // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
   const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
@@ -2796,7 +2982,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const preview = workEntryPreview(workEntry);
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
-    : combineWorkEntryDisplayText(heading, preview);
+    : isReasoningUpdateWorkEntry(workEntry) && preview
+      ? preview
+      : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -3083,20 +3271,23 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center",
-                  WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                  compact ? "size-4" : "size-5",
-                )}
-                data-tool-icon={leftIconKind}
-              >
-                {webFetchUrl ? (
-                  <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
-                ) : (
-                  <LeftIcon className={compact ? "size-3.5" : "size-4"} />
-                )}
-              </span>
+              {!isCodexStatusRow ? (
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center",
+                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                    compact ? "size-4" : "size-5",
+                  )}
+                  data-tool-icon={leftIconKind}
+                  data-work-entry-icon="true"
+                >
+                  {webFetchUrl ? (
+                    <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                  ) : (
+                    <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                  )}
+                </span>
+              ) : null}
               <div
                 className={cn(
                   "min-w-0 overflow-hidden",
@@ -3135,6 +3326,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                     )}
+                    data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>

@@ -1,3 +1,7 @@
+// FILE: AcpJsonRpcConnection.test.ts
+// Purpose: Verifies ACP session negotiation, lifecycle, and event normalization.
+// Layer: Provider ACP runtime tests
+
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -5,7 +9,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Fiber, Stream } from "effect";
 import { describe, expect } from "vitest";
 
 import { AcpSessionRuntime, type AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
@@ -46,7 +50,7 @@ describe("AcpSessionRuntime", () => {
               parameterizedModelPicker: true,
             },
           },
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
           requestLogger: (event) =>
             Effect.sync(() => {
@@ -58,6 +62,198 @@ describe("AcpSessionRuntime", () => {
       Effect.provide(NodeServices.layer),
     );
   });
+
+  it.effect("loads a resumed session and still prompts normally", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionId).toBe("mock-session-1");
+
+      // Resumed sessions drop session/update until a consumer attaches, so the
+      // events stream must be taken before prompting (mirrors the adapters,
+      // which fork the drain right after start()).
+      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+        Effect.forkChild,
+      );
+      const promptResult = yield* runtime.prompt({
+        prompt: [{ type: "text", text: "hi" }],
+      });
+      expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+
+      // The session/load replay chunk emitted before the consumer attached is
+      // dropped; only the prompt's own events arrive.
+      const notes = Array.from(yield* Fiber.join(eventsFiber));
+      expect(notes.map((note) => note._tag)).toEqual([
+        "PlanUpdated",
+        "AssistantItemStarted",
+        "ContentDelta",
+        "AssistantItemCompleted",
+      ]);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("prefers session/resume when the agent advertises it", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionSetupMethod).toBe("resume");
+      expect(requestEvents.some((event) => event.method === "session/resume")).toBe(true);
+      expect(requestEvents.some((event) => event.method === "session/load")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: { SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("does not call session/load when the agent does not advertise it", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start().pipe(Effect.exit);
+      expect(Exit.isFailure(started)).toBe(true);
+      expect(requestEvents.some((event) => event.method === "session/load")).toBe(false);
+      expect(requestEvents.some((event) => event.method === "session/new")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: { SYNARA_ACP_SUPPORT_SESSION_LOAD: "0" },
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("resolves semantic mode config ids and exposes commands and forks", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+      expect(yield* runtime.supportsSessionFork).toBe(true);
+      yield* runtime.setMode("code");
+      const commands = yield* runtime.getAvailableCommands;
+      const forked = yield* runtime.forkSession({ cwd: process.cwd(), mcpServers: [] });
+
+      expect(commands).toEqual([{ name: "compact", description: "Compact the current context" }]);
+      expect(forked.sessionId).toBe("mock-session-fork-1");
+      const modeRequest = requestEvents.find(
+        (event) => event.method === "session/set_config_option" && event.status === "started",
+      );
+      expect(modeRequest?.payload).toMatchObject({
+        configId: "autonomy_level",
+        value: "code",
+      });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
+              SYNARA_ACP_EMIT_AVAILABLE_COMMANDS: "1",
+              SYNARA_ACP_MODE_CONFIG_ID: "autonomy_level",
+            },
+          },
+          cwd: process.cwd(),
+          clientCapabilities: { _meta: { parameterizedModelPicker: true } },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect(
+    "assigns distinct fallback assistant item ids across separate runtime instances",
+    () => {
+      const runtimeLayer = AcpSessionRuntime.layer({
+        spawn: {
+          command: bunExe,
+          args: [mockAgentPath],
+        },
+        cwd: process.cwd(),
+        resumeSessionId: "mock-session-1",
+        clientInfo: { name: "synara-test", version: "0.0.0" },
+        authMethodId: "test",
+      });
+
+      const collectFallbackAssistantItemId = Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        yield* runtime.prompt({
+          prompt: [{ type: "text", text: "hi" }],
+        });
+        const notes = Array.from(yield* Fiber.join(eventsFiber));
+        const delta = notes.find((note) => note._tag === "ContentDelta");
+        expect(delta?._tag).toBe("ContentDelta");
+        return delta?._tag === "ContentDelta" ? delta.itemId : undefined;
+      }).pipe(Effect.provide(runtimeLayer), Effect.scoped, Effect.provide(NodeServices.layer));
+
+      return Effect.gen(function* () {
+        const firstItemId = yield* collectFallbackAssistantItemId;
+        const secondItemId = yield* collectFallbackAssistantItemId;
+        const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
+        expect(firstItemId).toMatch(fallbackIdPattern);
+        expect(secondItemId).toMatch(fallbackIdPattern);
+        expect(firstItemId).not.toBe(secondItemId);
+      });
+    },
+  );
 
   it.effect("starts a session, prompts, and emits normalized events against the mock agent", () =>
     Effect.gen(function* () {
@@ -101,7 +297,7 @@ describe("AcpSessionRuntime", () => {
             args: [mockAgentPath],
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
         }),
       ),
@@ -158,11 +354,11 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
-              T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS: "1",
+              SYNARA_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS: "1",
             },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
         }),
       ),
@@ -203,11 +399,11 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
-              T3_ACP_EMIT_UPSTREAM_ASSISTANT_MESSAGE_IDS: "1",
+              SYNARA_ACP_EMIT_UPSTREAM_ASSISTANT_MESSAGE_IDS: "1",
             },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
         }),
       ),
@@ -251,11 +447,11 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
-              T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
+              SYNARA_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
             },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
         }),
       ),
@@ -293,11 +489,11 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
-              T3_ACP_EMIT_REASONING_THEN_TOOL_CALL: "1",
+              SYNARA_ACP_EMIT_REASONING_THEN_TOOL_CALL: "1",
             },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
         }),
       ),
@@ -346,7 +542,7 @@ describe("AcpSessionRuntime", () => {
             args: [mockAgentPath],
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           requestLogger: (event) =>
             Effect.sync(() => {
               requestEvents.push(event);
@@ -381,7 +577,7 @@ describe("AcpSessionRuntime", () => {
             args: [mockAgentPath],
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           requestLogger: (event) =>
             Effect.sync(() => {
               requestEvents.push(event);
@@ -424,7 +620,7 @@ describe("AcpSessionRuntime", () => {
             args: [mockAgentPath],
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
           protocolLogging: {
             logIncoming: true,
             logOutgoing: true,
@@ -477,11 +673,11 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
-              T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+              SYNARA_ACP_REQUEST_LOG_PATH: requestLogPath,
             },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-test", version: "0.0.0" },
+          clientInfo: { name: "synara-test", version: "0.0.0" },
         }),
       ),
       Effect.scoped,

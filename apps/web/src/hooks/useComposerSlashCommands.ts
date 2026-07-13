@@ -7,9 +7,9 @@ import {
   type ProviderModelOptions,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
-import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
-import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
+} from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
+import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
 import { useCallback, useEffect, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -34,6 +34,8 @@ import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { downloadUrlAsBlob } from "../lib/browserDownload";
+import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 
 type ComposerSnapshot = {
   value: string;
@@ -55,6 +57,7 @@ export function useComposerSlashCommands(input: {
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferExportCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
@@ -103,6 +106,7 @@ export function useComposerSlashCommands(input: {
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferSideCommand,
+    canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,
@@ -130,6 +134,7 @@ export function useComposerSlashCommands(input: {
     canOfferReviewCommand: true,
     canOfferForkCommand: true,
     canOfferSideCommand: true,
+    canOfferExportCommand,
     providerNativeCommandNames,
   });
 
@@ -565,6 +570,32 @@ export function useComposerSlashCommands(input: {
     return false;
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
+  const runExportSlashCommand = useCallback(() => {
+    // Re-validate at call time (mirrors /compact): menu selections and stale
+    // highlights can outlive the availability computed at render time.
+    if (!canOfferExportCommand) {
+      toastManager.add({
+        type: "warning",
+        title: "Export is unavailable",
+        description:
+          "Open a server-backed thread and wait for the current turn to finish before exporting.",
+      });
+      return;
+    }
+    const params = new URLSearchParams({ threadId: threadId });
+    void downloadUrlAsBlob({
+      url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+      filename: `synara-thread-${threadId}.zip`,
+    }).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not export thread",
+        description:
+          error instanceof Error ? error.message : "An error occurred while exporting the thread.",
+      });
+    });
+  }, [canOfferExportCommand, threadId]);
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -604,6 +635,11 @@ export function useComposerSlashCommands(input: {
       }
       if (slashInvocation.command === "subagents") {
         editorActions.setComposerPromptValue(buildSubagentsPrompt(slashInvocation.args));
+        return true;
+      }
+      if (slashInvocation.command === "export") {
+        editorActions.clearComposerSlashDraft();
+        runExportSlashCommand();
         return true;
       }
       if (slashInvocation.command === "review") {
@@ -706,6 +742,7 @@ export function useComposerSlashCommands(input: {
       selectedProvider,
       supportsTextNativeReviewCommand,
       runCodexReviewStart,
+      runExportSlashCommand,
       runFastSlashCommand,
     ],
   );
@@ -825,6 +862,17 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
+      if (item.command === "export") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        runExportSlashCommand();
+        editorActions.scheduleComposerFocus();
+        return;
+      }
+
       if (item.command === "review") {
         if (selectedProvider === "codex") {
           const applied = clearSlashCommandFromComposer();
@@ -901,6 +949,7 @@ export function useComposerSlashCommands(input: {
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,
+      runExportSlashCommand,
       runFastSlashCommand,
     ],
   );

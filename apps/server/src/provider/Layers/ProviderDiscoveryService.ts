@@ -10,7 +10,7 @@ import {
   type ProviderListSkillsResult,
   ProviderReadPluginInput,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Schema, SchemaIssue } from "effect";
 
 import { ServerConfig } from "../../config.ts";

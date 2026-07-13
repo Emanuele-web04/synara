@@ -8,7 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
-import type { ProviderKind, ProviderSkillReference } from "@t3tools/contracts";
+import type { ProviderKind, ProviderSkillReference } from "@synara/contracts";
 
 // Per-skill cap keeps a single oversized SKILL.md from eating the turn budget.
 const MAX_INLINE_SKILL_CONTENT_CHARS = 24_000;
@@ -51,7 +51,7 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // gemini/grok/kilo/opencode have no native skill support.
+      // gemini/grok/droid/kilo/opencode have no native skill support.
       return true;
   }
 }

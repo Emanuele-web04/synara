@@ -1,6 +1,6 @@
-import { type ProjectId, ThreadId } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { useNavigate } from "@tanstack/react-router";
+import { type ProjectId, ThreadId } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { useAppSettings } from "../appSettings";
 import {
@@ -18,6 +18,11 @@ import {
   type NewThreadOptions,
 } from "../lib/threadBootstrap";
 import { promoteThreadCreate } from "../lib/threadCreatePromotion";
+import {
+  draftNavigationSlotKey,
+  runDraftNavigationOnce,
+  stageDraftNavigation,
+} from "../lib/stagedDraftNavigation";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
@@ -38,18 +43,21 @@ export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings } = useAppSettings();
   const navigate = useNavigate();
+  const router = useRouter();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
     useFocusedChatContext();
   const openChatThreadPage = useTerminalStateStore((store) => store.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((store) => store.openTerminalThreadPage);
+  const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
+  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
 
   const handleNewThread = useCallback(
     (
       projectId: ProjectId,
       options?: NewThreadOptions,
       navigation?: NewThreadNavigationOptions,
-    ): Promise<ThreadId> => {
+    ): Promise<ThreadId | null> => {
       const entryPoint = options?.entryPoint ?? "chat";
       const wantsTemporaryThread = options?.temporary === true;
       const applyProviderOverride = (threadId: ThreadId) => {
@@ -92,19 +100,16 @@ export function useHandleNewThread() {
         openChatThreadPage(threadId);
       };
       const {
-        clearProjectDraftThreadId,
         getDraftThread,
         getDraftThreadByProjectId,
         applyStickyState,
+        clearDraftThread,
+        registerDraftThread,
         setDraftThreadContext,
         setProjectDraftThreadId,
         setModelSelection,
       } = useComposerDraftStore.getState();
       const shouldForceFreshThread = options?.fresh === true;
-
-      if (shouldForceFreshThread) {
-        clearProjectDraftThreadId(projectId, entryPoint);
-      }
 
       const storedDraftThreadCandidate = getDraftThreadByProjectId(projectId, entryPoint);
       const latestActiveDraftThreadCandidate: DraftThreadState | null = focusedThreadId
@@ -238,8 +243,6 @@ export function useHandleNewThread() {
         })();
       }
 
-      clearProjectDraftThreadId(projectId, entryPoint);
-
       if (bootstrapPlan.kind === "route") {
         return (async (): Promise<ThreadId> => {
           if (wantsTemporaryThread) {
@@ -267,28 +270,43 @@ export function useHandleNewThread() {
         })();
       }
 
-      const threadId = newThreadId();
-      if (wantsTemporaryThread) {
-        markTemporaryThread(threadId);
-      }
-      const createdAt = new Date().toISOString();
-      return (async (): Promise<ThreadId> => {
-        setProjectDraftThreadId(projectId, threadId, {
-          ...createFreshDraftThreadSeed({
-            createdAt,
-            entryPoint,
-            options,
-          }),
+      return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {
+        const threadId = newThreadId();
+        if (wantsTemporaryThread) {
+          markTemporaryThread(threadId);
+        }
+        const createdAt = new Date().toISOString();
+        const draftSeed = createFreshDraftThreadSeed({ createdAt, entryPoint, options });
+        const committed = await stageDraftNavigation({
+          // Keep the previous routed draft alive while the destination loads. Replacing the
+          // project's primary slot earlier makes the route guard redirect the old URL to Home.
+          stage: () => {
+            registerDraftThread(threadId, { projectId, ...draftSeed });
+            activateThreadEntryPoint(threadId);
+            applyStickyState(threadId);
+            applyProviderOverride(threadId);
+          },
+          navigate: () =>
+            navigate({
+              to: "/$threadId",
+              params: { threadId },
+              ...(navigation?.search ? { search: navigation.search } : {}),
+            }),
+          // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
+          // Verify the committed route before deleting the previous project draft.
+          isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
+          finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
+          rollback: () => {
+            clearDraftThread(threadId);
+            clearTerminalState(threadId);
+            if (wantsTemporaryThread) {
+              clearTemporaryThread(threadId);
+            }
+          },
         });
-        activateThreadEntryPoint(threadId);
-        applyStickyState(threadId);
-        applyProviderOverride(threadId);
-
-        await navigate({
-          to: "/$threadId",
-          params: { threadId },
-          ...(navigation?.search ? { search: navigation.search } : {}),
-        });
+        if (!committed) {
+          return null;
+        }
         if (entryPoint === "terminal") {
           await createTerminalThread(
             threadId,
@@ -296,16 +314,19 @@ export function useHandleNewThread() {
           );
         }
         return threadId;
-      })();
+      });
     },
     [
       activeDraftThread,
       activeThread,
+      clearTemporaryThread,
+      clearTerminalState,
       navigate,
       openChatThreadPage,
       openTerminalThreadPage,
       focusedThreadId,
       markTemporaryThread,
+      router,
       settings.defaultProvider,
     ],
   );

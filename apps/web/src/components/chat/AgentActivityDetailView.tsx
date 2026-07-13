@@ -3,8 +3,8 @@
 // Layer: Chat presentation component
 // Depends on: agentActivity.logic and ChatMarkdown
 
-import { ThreadId } from "@t3tools/contracts";
-import { pluralize } from "@t3tools/shared/text";
+import { ThreadId } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
 import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";

@@ -1,4 +1,4 @@
-import { ProviderKind, type ThreadId } from "@t3tools/contracts";
+import { ProviderKind, type ThreadId } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";

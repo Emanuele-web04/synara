@@ -6,7 +6,7 @@
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import { memo, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";

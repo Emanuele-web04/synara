@@ -10,7 +10,7 @@ import type {
   ProviderMentionReference,
   ProviderSkillReference,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   useCallback,
   type Dispatch,
@@ -140,6 +140,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       value: promptRef.current,
       cursor: composerCursor,
       expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+      selectionCollapsed: true,
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerEditorRef, composerTerminalContexts, promptRef]);

@@ -7,6 +7,7 @@ import {
   DeleteProjectionThreadProposedPlansInput,
   ListProjectionThreadProposedPlansInput,
   ProjectionThreadProposedPlan,
+  ProjectionThreadProposedPlanSummary,
   ProjectionThreadProposedPlanRepository,
   type ProjectionThreadProposedPlanRepositoryShape,
 } from "../Services/ProjectionThreadProposedPlans.ts";
@@ -68,6 +69,21 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
     `,
   });
 
+  const listProjectionThreadProposedPlanSummaryRows = SqlSchema.findAll({
+    Request: ListProjectionThreadProposedPlansInput,
+    Result: ProjectionThreadProposedPlanSummary,
+    execute: ({ threadId }) => sql`
+      SELECT
+        plan_id AS "planId",
+        turn_id AS "turnId",
+        implemented_at AS "implementedAt",
+        updated_at AS "updatedAt"
+      FROM projection_thread_proposed_plans
+      WHERE thread_id = ${threadId}
+      ORDER BY updated_at ASC, plan_id ASC
+    `,
+  });
+
   const deleteProjectionThreadProposedPlanRows = SqlSchema.void({
     Request: DeleteProjectionThreadProposedPlansInput,
     execute: ({ threadId }) => sql`
@@ -88,6 +104,16 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
       ),
     );
 
+  const listSummaryByThreadId: ProjectionThreadProposedPlanRepositoryShape["listSummaryByThreadId"] =
+    (input) =>
+      listProjectionThreadProposedPlanSummaryRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadProposedPlanRepository.listSummaryByThreadId:query",
+          ),
+        ),
+      );
+
   const deleteByThreadId: ProjectionThreadProposedPlanRepositoryShape["deleteByThreadId"] = (
     input,
   ) =>
@@ -100,6 +126,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
   return {
     upsert,
     listByThreadId,
+    listSummaryByThreadId,
     deleteByThreadId,
   } satisfies ProjectionThreadProposedPlanRepositoryShape;
 });

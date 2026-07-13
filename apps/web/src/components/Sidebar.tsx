@@ -42,6 +42,7 @@ import {
   useCallback,
   useEffect,
   lazy,
+  startTransition,
   useMemo,
   useRef,
   Suspense,
@@ -79,12 +80,12 @@ import {
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
-} from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { getDefaultModel } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
-import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { getDefaultModel } from "@synara/shared/model";
+import { pluralize } from "@synara/shared/text";
+import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
@@ -100,6 +101,7 @@ import {
   reconcileDeletedThreadFromClient,
   reconcileDeletedThreadsFromClient,
 } from "../lib/deletedThreadClientReconciliation";
+import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -144,6 +146,11 @@ import {
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
+import {
+  collectStudioProjectIds,
+  isStudioContainerProject,
+  prewarmStudioProject,
+} from "../lib/studioProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
@@ -191,6 +198,7 @@ import {
   type SidebarSearchPaletteMode,
 } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -216,12 +224,14 @@ import {
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
+  shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
   shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
   Dialog,
@@ -261,7 +271,6 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import {
   describeAddProjectError,
-  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -271,18 +280,23 @@ import {
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
+  getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
+  partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
   isLatestPinnedThreadMutation,
-  pruneExpandedProjectThreadListsForCollapsedProjects,
+  pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
+  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
+  type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -290,8 +304,10 @@ import {
   resolveThreadStatusPill,
   type ThreadStatusPill,
   type SidebarDerivedProjectData,
+  type SidebarView,
   shouldShowDebugFeatureFlagsMenu,
   resolvePrStatePresentation,
+  type PrStatePresentation,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -328,7 +344,6 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
-import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
   resolveSplitViewFocusedThreadId,
@@ -358,6 +373,8 @@ import {
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
+// Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
+const THREAD_PREVIEW_PAGE_SIZE = 5;
 // How long the "Undo archive" toast lingers (visible time only — it pauses while
 // the tab is hidden) before auto-dismissing.
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
@@ -378,6 +395,14 @@ const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
+const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
+  threads: "Projects",
+  studio: "Studio",
+  workspace: "Workspace",
+};
+/** Snap the optimistic segment selection back if the navigation never lands. */
+const SIDEBAR_SEGMENT_PENDING_RESET_MS = 2000;
+const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
       import("./DebugFeatureFlagsMenu").then((module) => ({
@@ -451,8 +476,6 @@ function findTrackedProjectRunServer(
 type DebugFeatureFlagsWindow = Window & {
   synaraShowFeatureFlags?: () => void;
   synaraHideFeatureFlags?: () => void;
-  dpcodeShowFeatureFlags?: () => void;
-  dpcodeHideFeatureFlags?: () => void;
 };
 
 function readDebugFeatureFlagsMenuVisibility(): boolean {
@@ -846,7 +869,7 @@ interface TerminalStatusIndicator {
 }
 
 interface PrStatusIndicator {
-  label: "PR open" | "PR closed" | "PR merged";
+  label: PrStatePresentation["label"];
   colorClass: string;
   icon: LucideIcon;
   tooltip: string;
@@ -855,6 +878,8 @@ interface PrStatusIndicator {
 
 type ThreadPr = GitStatusResult["pr"];
 
+// Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
+// optional because older rows predate them.
 function toThreadPr(
   pr:
     | NonNullable<ThreadPr>
@@ -865,6 +890,11 @@ function toThreadPr(
         baseBranch: string;
         headBranch: string;
         state: "open" | "closed" | "merged";
+        isDraft?: boolean | undefined;
+        mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
+        additions?: number | null | undefined;
+        deletions?: number | null | undefined;
+        changedFiles?: number | null | undefined;
       },
 ): ThreadPr {
   return {
@@ -874,6 +904,11 @@ function toThreadPr(
     baseBranch: pr.baseBranch,
     headBranch: pr.headBranch,
     state: pr.state,
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? null,
+    deletions: pr.deletions ?? null,
+    changedFiles: pr.changedFiles ?? null,
   };
 }
 
@@ -908,7 +943,7 @@ function terminalStatusFromThreadState(input: {
 
 function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   if (!pr) return null;
-  const presentation = resolvePrStatePresentation(pr.state);
+  const presentation = resolvePrStatePresentation(pr);
   return {
     label: presentation.label,
     colorClass: presentation.colorClass,
@@ -1171,35 +1206,109 @@ function SidebarSegmentedPicker({
   views,
   activeView,
   onSelectView,
+  onPrewarmView,
 }: {
-  views: ReadonlyArray<"threads" | "workspace">;
-  activeView: "threads" | "workspace";
-  onSelectView: (view: "threads" | "workspace") => void;
+  views: ReadonlyArray<SidebarView>;
+  activeView: SidebarView;
+  onSelectView: (view: SidebarView) => void;
+  onPrewarmView?: (view: SidebarView) => void;
 }) {
+  // Optimistic selection: activeView is derived from the route, which only updates
+  // after the segment switch's (heavy) render commits — the thumb would otherwise
+  // sit still for the whole switch and the click would feel dead. Drive the thumb
+  // from the clicked segment immediately (the navigation itself runs in a
+  // transition, see navigateToBackTarget) and let the route catch up; the timeout
+  // snaps back if the navigation never lands (e.g. Workspace with no pages).
+  const [pendingView, setPendingView] = useState<SidebarView | null>(null);
+  const pendingViewResetTimeoutRef = useRef<number | null>(null);
+  const clearPendingViewResetTimeout = useCallback(() => {
+    if (pendingViewResetTimeoutRef.current !== null) {
+      window.clearTimeout(pendingViewResetTimeoutRef.current);
+      pendingViewResetTimeoutRef.current = null;
+    }
+  }, []);
+  useEffect(() => {
+    clearPendingViewResetTimeout();
+    setPendingView(null);
+  }, [activeView, clearPendingViewResetTimeout]);
+  useEffect(() => clearPendingViewResetTimeout, [clearPendingViewResetTimeout]);
+
   // A single-option switcher is just a static label, so hide it entirely when the
   // user has turned off one of the two sections in Settings.
   if (views.length < 2) {
     return null;
   }
+  const displayedView = pendingView ?? activeView;
+  const handleSelectView = (view: SidebarView) => {
+    const nextPendingView = resolvePendingSidebarViewSelection(activeView, view);
+    clearPendingViewResetTimeout();
+    setPendingView(nextPendingView);
+    if (nextPendingView !== null) {
+      // Start the detail subscription before the transition render so the
+      // destination transcript is already loading while React works.
+      onPrewarmView?.(view);
+      pendingViewResetTimeoutRef.current = window.setTimeout(() => {
+        pendingViewResetTimeoutRef.current = null;
+        setPendingView(null);
+      }, SIDEBAR_SEGMENT_PENDING_RESET_MS);
+    }
+    onSelectView(view);
+  };
+  // displayedView can name a hidden view (e.g. a Studio thread is open while the Studio section is
+  // toggled off) — show no selection then, instead of parking the thumb on the wrong segment.
+  const activeIndex = views.indexOf(displayedView);
+  const segmentCount = views.length;
+  const activeSegment = Math.max(0, activeIndex);
+  const isFirstActive = activeSegment === 0;
+  const isLastActive = activeSegment === segmentCount - 1;
+  // One segment's share of the track interior: the padding box (100%) minus the two 0.5 side
+  // paddings. The chip fills exactly one cell for interior segments.
+  const cell = `(100% - 0.25rem) / ${segmentCount}`;
+  // The active *outer* segment leans a few px past the track's outer edge so it reads as a
+  // raised chip tilting toward that side (macOS style). Its inner edge stays glued to the
+  // segment boundary — only the width grows — so no gap opens next to the neighbour.
+  const OVERHANG = "5px";
+  const chipLeft = isFirstActive
+    ? `calc(-1px - ${OVERHANG})`
+    : `calc(0.125rem + ${activeSegment} * (${cell}))`;
+  const chipWidth =
+    isFirstActive || isLastActive
+      ? `calc(${cell} + 0.125rem + 1px + ${OVERHANG})`
+      : `calc(${cell})`;
   return (
-    <div className="px-3 pb-2.5">
-      <div className="sidebar-segmented-picker inline-flex w-full rounded-lg p-0.5">
+    <div className="px-3 pt-0.5 pb-2.5">
+      <div className="sidebar-segmented-picker relative isolate inline-flex w-full rounded-lg p-0.5">
+        {/* Single highlighted pill that glides between segments instead of snapping per-button.
+            A slim vertical overhang plus an outward horizontal lean on the end segments make
+            the selected segment read as a raised chip lifted out of the recessed well. */}
+        <div
+          aria-hidden
+          className={cn(
+            "sidebar-segmented-thumb pointer-events-none absolute -inset-y-[1.5px] z-0 rounded-md transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+            activeIndex < 0 && "opacity-0",
+          )}
+          style={{ left: chipLeft, width: chipWidth }}
+        />
         {views.map((view) => {
-          const active = activeView === view;
+          const active = displayedView === view;
           return (
             <button
               key={view}
               type="button"
-              data-sidebar-segmented-active={active ? "true" : undefined}
               className={cn(
-                "flex-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                "relative z-10 flex-1 rounded-md px-2.5 py-0.5 text-[11.5px] font-medium transition-colors duration-200",
                 active
-                  ? SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME
-                  : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+                  ? "text-[var(--color-text-foreground)]"
+                  : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
               )}
-              onClick={() => onSelectView(view)}
+              onPointerEnter={() => {
+                if (view !== activeView) {
+                  onPrewarmView?.(view);
+                }
+              }}
+              onClick={() => handleSelectView(view)}
             >
-              {view === "threads" ? "Threads" : "Workspace"}
+              {SIDEBAR_VIEW_LABELS[view]}
             </button>
           );
         })}
@@ -1261,6 +1370,9 @@ export default function Sidebar() {
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
+  const removeDeletedProjectFromClientState = useStore(
+    (store) => store.removeDeletedProjectFromClientState,
+  );
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
@@ -1291,6 +1403,7 @@ export default function Sidebar() {
   const reorderWorkspace = useWorkspaceStore((store) => store.reorderWorkspace);
   const homeDir = useWorkspaceStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((store) => store.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((store) => store.studioWorkspaceRoot);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useLocation({ select: (loc) => loc.pathname });
@@ -1298,6 +1411,7 @@ export default function Sidebar() {
     select: (loc) => loc.pathname === "/settings",
   });
   const isOnWorkspace = pathname.startsWith("/workspace");
+  const isOnStudioRoute = pathname.startsWith("/studio");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
@@ -1326,12 +1440,14 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, updateSettings } = useAppSettings();
-  // The Threads/Projects tab is always available; only the optional Workspace tab
-  // and the standalone Chats footer list can be hidden from Settings.
+  // Threads is always available; Studio, Workspace, and the standalone Chats footer
+  // can be hidden independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
+  const studioSectionVisible = appSettings.showStudioSection;
   const workspaceSectionVisible = appSettings.showWorkspaceSection;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
+  const { handleNewStudioChat } = useHandleNewStudioChat();
   const { createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
@@ -1400,8 +1516,6 @@ export default function Sidebar() {
 
     debugWindow.synaraShowFeatureFlags = showFeatureFlags;
     debugWindow.synaraHideFeatureFlags = hideFeatureFlags;
-    debugWindow.dpcodeShowFeatureFlags = showFeatureFlags;
-    debugWindow.dpcodeHideFeatureFlags = hideFeatureFlags;
     window.addEventListener("storage", updateVisibility);
     updateVisibility();
 
@@ -1412,12 +1526,6 @@ export default function Sidebar() {
       }
       if (debugWindow.synaraHideFeatureFlags === hideFeatureFlags) {
         delete debugWindow.synaraHideFeatureFlags;
-      }
-      if (debugWindow.dpcodeShowFeatureFlags === showFeatureFlags) {
-        delete debugWindow.dpcodeShowFeatureFlags;
-      }
-      if (debugWindow.dpcodeHideFeatureFlags === hideFeatureFlags) {
-        delete debugWindow.dpcodeHideFeatureFlags;
       }
     };
   }, []);
@@ -1454,14 +1562,15 @@ export default function Sidebar() {
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
-  const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
-    ReadonlySet<string>
-  >(() => new Set(readSidebarUiState().expandedProjectThreadListCwds));
+  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
+  const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
     () => readSidebarUiState().chatSectionExpanded,
   );
-  const [chatThreadListExpanded, setChatThreadListExpanded] = useState(
-    () => readSidebarUiState().chatThreadListExpanded,
+  const [chatThreadListExtraPages, setChatThreadListExtraPages] = useState(
+    () => readSidebarUiState().chatThreadListExtraPages,
   );
   const [dismissedThreadStatusKeyByThreadId, setDismissedThreadStatusKeyByThreadId] = useState<
     Record<string, string>
@@ -1515,6 +1624,22 @@ export default function Sidebar() {
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const studioProjectIdSet = useMemo(
+    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+    [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
+  const { nonStudioThreads: nonStudioSidebarThreads, studioThreads: studioSidebarThreads } =
+    useMemo(
+      () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
+      [sidebarThreads, studioProjectIdSet],
+    );
+  const {
+    nonStudioThreads: nonStudioSidebarDisplayThreads,
+    studioThreads: studioSidebarDisplayThreads,
+  } = useMemo(
+    () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
+    [sidebarDisplayThreads, studioProjectIdSet],
+  );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -1613,9 +1738,41 @@ export default function Sidebar() {
     [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarDisplayThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
+  const projectById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project] as const)),
+    [projects],
+  );
+  // Resolve the active thread's project for real threads AND not-yet-persisted draft threads.
+  // Without the draft fallback, opening a fresh Studio chat (a draft at /$threadId) would drop
+  // out of the Studio surface and snap the segmented picker back to Projects.
+  const activeRouteProjectId = routeThreadId
+    ? (sidebarThreadSummaryById[routeThreadId]?.projectId ??
+      draftThreadsByThreadId[routeThreadId]?.projectId ??
+      null)
+    : null;
+  const activeRouteProject = activeRouteProjectId
+    ? (projectById.get(activeRouteProjectId) ?? null)
+    : null;
+  // Same predicate the Studio collectors use — trusting `kind` alone here would let a drifted
+  // studio-kind row (root outside the configured Studio root) activate the Studio segment while
+  // every Studio list excludes it, stranding the active thread in neither segment.
+  const isOnStudio =
+    isOnStudioRoute ||
+    isStudioContainerProject(activeRouteProject, {
+      homeDir,
+      chatWorkspaceRoot,
+      studioWorkspaceRoot,
+    });
+  // Only one segment's pinned threads are ever rendered at a time, so derive a single
+  // memo from the already-partitioned active list instead of computing both segments'
+  // pinned lists on every render (hooks can't be conditional, but the inputs can be).
   const pinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(sidebarDisplayThreads, pinnedThreadIds),
-    [pinnedThreadIds, sidebarDisplayThreads],
+    () =>
+      getPinnedThreadsForSidebar(
+        isOnStudio ? studioSidebarDisplayThreads : nonStudioSidebarDisplayThreads,
+        pinnedThreadIds,
+      ),
+    [isOnStudio, nonStudioSidebarDisplayThreads, pinnedThreadIds, studioSidebarDisplayThreads],
   );
   useEffect(() => {
     sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
@@ -1764,10 +1921,6 @@ export default function Sidebar() {
   }, []);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
-    [projects],
-  );
-  const projectById = useMemo(
-    () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
   const projectByIdRef = useRef(projectById);
@@ -2146,49 +2299,149 @@ export default function Sidebar() {
     },
     [navigate],
   );
+  // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
+  // settings-back path below) — differs only in which segment's thread list and draft ids are
+  // passed in.
+  const resolveBackTargetForThreads = useCallback(
+    (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
+      const latestThread =
+        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+      const availableThreadIds = new Set<string>(threads.map((thread) => thread.id));
+      if (extraAvailableThreadIds) {
+        for (const threadId of extraAvailableThreadIds) {
+          availableThreadIds.add(threadId);
+        }
+      }
+      return resolveSettingsBackTarget({
+        lastThreadRoute,
+        availableThreadIds,
+        availableSplitViewIds: new Set(
+          Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
+        ),
+        latestThreadId: latestThread?.id ?? null,
+      });
+    },
+    [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
+  );
 
-  const resolveBackToThreadTarget = useCallback(() => {
-    const latestThread =
-      sortThreadsForSidebar(sidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
-    return resolveSettingsBackTarget({
-      lastThreadRoute,
-      availableThreadIds: buildSettingsBackAvailableThreadIds({
-        sidebarThreadSummaryById,
-        draftThreadsByThreadId,
-      }),
-      availableSplitViewIds: new Set(
-        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-      ),
-      latestThreadId: latestThread?.id ?? null,
+  // Fresh unsent chats have a route id but no persisted sidebar summary yet. Keep those draft
+  // routes valid return targets — scoped to whichever segment the draft's project belongs to —
+  // for both the settings back button and the segment switcher.
+  const studioDraftThreadIds = useMemo(() => {
+    const draftThreadIds = new Set<string>();
+    for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
+      if (studioProjectIdSet.has(draft.projectId)) {
+        draftThreadIds.add(threadId);
+      }
+    }
+    return draftThreadIds;
+  }, [draftThreadsByThreadId, studioProjectIdSet]);
+  const nonStudioDraftThreadIds = useMemo(() => {
+    const draftThreadIds = new Set<string>();
+    for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
+      if (!studioProjectIdSet.has(draft.projectId)) {
+        draftThreadIds.add(threadId);
+      }
+    }
+    return draftThreadIds;
+  }, [draftThreadsByThreadId, studioProjectIdSet]);
+
+  // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
+  // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
+  // async redirect is what made the segment switch feel sluggish. Mirrors
+  // resolveBackToThreadsTarget so both segments restore the thread you were last on.
+  // Archived chats are excluded, matching the /studio landing: the sidebar hides them, so
+  // neither the segment switch nor settings back may resurrect one.
+  const activeStudioSidebarThreads = useMemo(
+    () => studioSidebarThreads.filter((thread) => (thread.archivedAt ?? null) === null),
+    [studioSidebarThreads],
+  );
+  const resolveBackToStudioTarget = useCallback(
+    () => resolveBackTargetForThreads(activeStudioSidebarThreads, studioDraftThreadIds),
+    [activeStudioSidebarThreads, resolveBackTargetForThreads, studioDraftThreadIds],
+  );
+
+  const resolveBackToThreadsTarget = useCallback(
+    () => resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds),
+    [nonStudioDraftThreadIds, nonStudioSidebarThreads, resolveBackTargetForThreads],
+  );
+
+  // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
+  // to a thread so callers can fall back to creating a fresh chat/home route otherwise.
+  const navigateToBackTarget = useCallback(
+    (target: SettingsBackTarget) => {
+      if (target.kind !== "thread") {
+        return false;
+      }
+      // The route swap re-renders the whole sidebar surface plus the destination
+      // ChatView in one go; run it as a transition so urgent click feedback (the
+      // segmented picker's optimistic thumb) paints first instead of freezing
+      // until the heavy render commits.
+      startTransition(() => {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: ThreadId.makeUnsafe(target.threadId) },
+          search: () => ({
+            splitViewId: target.splitViewId,
+          }),
+        });
+      });
+      return true;
+    },
+    [navigate],
+  );
+
+  // Settings is reachable from either segment (Threads or Studio) and from routes outside the
+  // sidebar entirely (see EnvironmentPanel, __root, etc.), so we can't infer "which segment was
+  // active" from the route once we're already on /settings. Instead we remember the last active
+  // segment continuously (mirrors the lastThreadRoute tracking below) and use that on the way
+  // back. This keeps the back button from bouncing across segments when the remembered thread
+  // route is stale (e.g. its thread was deleted): the segment-scoped resolver falls back to that
+  // *same* segment's latest thread instead of the globally most-recent thread.
+  const lastActiveSidebarSegmentRef = useRef<"studio" | "threads">("threads");
+  useEffect(() => {
+    if (isOnSettings) {
+      return;
+    }
+    lastActiveSidebarSegmentRef.current = isOnStudio ? "studio" : "threads";
+  }, [isOnSettings, isOnStudio]);
+
+  // Shared Studio fallback: reopen/create via handleNewStudioChat and, on failure, land on
+  // /studio — its splash already displays the error with a retry. Swallowing the result here
+  // would make the segment click appear dead and hide the cross-kind conflict message.
+  const openStudioChatFallback = useCallback(() => {
+    void handleNewStudioChat().then((result) => {
+      if (!result.ok) {
+        void navigate({ to: "/studio" });
+      }
     });
-  }, [
-    appSettings.sidebarThreadSortOrder,
-    lastThreadRoute,
-    draftThreadsByThreadId,
-    sidebarThreadSummaryById,
-    sidebarThreads,
-    splitViewsById,
-  ]);
+  }, [handleNewStudioChat, navigate]);
 
   const handleBackToAppFromSettings = useCallback(() => {
-    const target = resolveBackToThreadTarget();
+    const fromStudio = lastActiveSidebarSegmentRef.current === "studio";
+    const target = fromStudio ? resolveBackToStudioTarget() : resolveBackToThreadsTarget();
 
-    if (target.kind === "thread") {
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: ThreadId.makeUnsafe(target.threadId) },
-        search: () => ({
-          splitViewId: target.splitViewId,
-        }),
-      });
+    if (navigateToBackTarget(target)) {
       return;
     }
 
+    // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the
+    // Studio segment with nothing restorable lands back in Studio, not on a fresh home draft.
+    if (fromStudio) {
+      openStudioChatFallback();
+      return;
+    }
     void navigate({ to: "/" });
-  }, [navigate, resolveBackToThreadTarget]);
+  }, [
+    navigate,
+    navigateToBackTarget,
+    openStudioChatFallback,
+    resolveBackToStudioTarget,
+    resolveBackToThreadsTarget,
+  ]);
 
   const handleSidebarViewChange = useCallback(
-    (view: "threads" | "workspace") => {
+    (view: SidebarView) => {
       if (view === "workspace") {
         const fallbackWorkspaceId = workspacePages[0]?.id;
         if (!fallbackWorkspaceId) {
@@ -2197,16 +2450,19 @@ export default function Sidebar() {
         navigateToWorkspace(routeWorkspaceId ?? fallbackWorkspaceId);
         return;
       }
+      if (view === "studio") {
+        // Remembered route first — it already treats the stored Studio draft as a valid target
+        // (resolveBackToStudioTarget includes studioDraftThreadIds), so switching back to Studio
+        // returns to the thread you were on, not an old empty draft. handleNewStudioChat stays
+        // the fallback and reopens the stored draft when there is nothing to restore.
+        if (navigateToBackTarget(resolveBackToStudioTarget())) {
+          return;
+        }
+        openStudioChatFallback();
+        return;
+      }
 
-      const target = resolveBackToThreadTarget();
-      if (target.kind === "thread") {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: ThreadId.makeUnsafe(target.threadId) },
-          search: () => ({
-            splitViewId: target.splitViewId,
-          }),
-        });
+      if (navigateToBackTarget(resolveBackToThreadsTarget())) {
         return;
       }
 
@@ -2214,25 +2470,38 @@ export default function Sidebar() {
     },
     [
       handleNewChat,
-      navigate,
+      navigateToBackTarget,
       navigateToWorkspace,
-      resolveBackToThreadTarget,
+      openStudioChatFallback,
+      resolveBackToStudioTarget,
+      resolveBackToThreadsTarget,
       routeWorkspaceId,
       workspacePages,
     ],
   );
 
-  // Keep the user off the Workspace tab once it's hidden in Settings: viewing it
+  // Keep the user off optional tabs once hidden in Settings: viewing one
   // (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab.
   // Settings is its own route and is never redirected.
   useEffect(() => {
     if (isOnSettings) {
       return;
     }
+    if (isOnStudio && !studioSectionVisible) {
+      handleSidebarViewChange("threads");
+      return;
+    }
     if (isOnWorkspace && !workspaceSectionVisible) {
       handleSidebarViewChange("threads");
     }
-  }, [handleSidebarViewChange, isOnSettings, isOnWorkspace, workspaceSectionVisible]);
+  }, [
+    handleSidebarViewChange,
+    isOnSettings,
+    isOnStudio,
+    isOnWorkspace,
+    studioSectionVisible,
+    workspaceSectionVisible,
+  ]);
 
   const handleCreateWorkspace = useCallback(() => {
     const workspaceId = createWorkspace();
@@ -2240,17 +2509,28 @@ export default function Sidebar() {
   }, [createWorkspace, navigateToWorkspace]);
 
   useEffect(() => {
-    if (!homeDir) {
+    // Same hydration gate as the Studio prewarm below: persisted paths make homeDir truthy
+    // immediately on reload, well before the first shell snapshot arrives.
+    if (!threadsHydrated || !homeDir) {
       return;
     }
     prewarmHomeChatProject({ homeDir, chatWorkspaceRoot });
-  }, [chatWorkspaceRoot, homeDir]);
+  }, [chatWorkspaceRoot, homeDir, threadsHydrated]);
+  useEffect(() => {
+    if (!threadsHydrated || !studioSectionVisible || !studioWorkspaceRoot) {
+      return;
+    }
+    prewarmStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot });
+  }, [chatWorkspaceRoot, homeDir, studioSectionVisible, studioWorkspaceRoot, threadsHydrated]);
 
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
   const handleCreateHomeChat = useCallback(async () => {
     await handleNewChat({ fresh: true });
   }, [handleNewChat]);
+  const handleCreateStudioChat = useCallback(async () => {
+    await handleNewStudioChat({ fresh: true });
+  }, [handleNewStudioChat]);
 
   const beginWorkspaceRename = useCallback((workspaceId: string, title: string) => {
     setRenamingWorkspaceId(workspaceId);
@@ -2648,6 +2928,23 @@ export default function Sidebar() {
       setOptimisticActiveThreadId(threadId);
     },
     [prewarmThreadDetailForIntent],
+  );
+
+  // Segment-switch counterpart of primeThreadActivation: hovering/clicking a
+  // segment resolves the thread the switch will land on and opens its detail
+  // subscription early, so the destination transcript is warm instead of popping
+  // in after a subscribe round-trip once the route has already swapped.
+  const prewarmSidebarViewTarget = useCallback(
+    (view: SidebarView) => {
+      if (view !== "studio" && view !== "threads") {
+        return;
+      }
+      const target = view === "studio" ? resolveBackToStudioTarget() : resolveBackToThreadsTarget();
+      if (target.kind === "thread") {
+        prewarmThreadDetailForIntent(ThreadId.makeUnsafe(target.threadId));
+      }
+    },
+    [prewarmThreadDetailForIntent, resolveBackToStudioTarget, resolveBackToThreadsTarget],
   );
 
   /**
@@ -3594,17 +3891,17 @@ export default function Sidebar() {
       setLastThreadRoute(nextLastThreadRoute);
       persistSidebarUiState({
         chatSectionExpanded,
-        chatThreadListExpanded,
-        expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+        chatThreadListExtraPages,
+        projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
       });
     },
     [
       chatSectionExpanded,
-      chatThreadListExpanded,
+      chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
-      expandedThreadListsByProject,
+      threadListExtraPagesByProjectCwd,
     ],
   );
   const { activateThreadFromSidebarIntent } = useThreadActivationController({
@@ -3835,10 +4132,10 @@ export default function Sidebar() {
           return;
         }
 
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
+        await deleteProjectFromClient({
+          api: api.orchestration,
           projectId,
+          removeDeletedProjectFromClientState,
         });
         clearProjectDraftThreads(projectId);
         toastManager.add({
@@ -3869,6 +4166,7 @@ export default function Sidebar() {
       handleStopProjectRun,
       navigate,
       projectById,
+      removeDeletedProjectFromClientState,
       sidebarThreads,
       toggleProjectPinned,
     ],
@@ -3979,6 +4277,13 @@ export default function Sidebar() {
       ),
     [chatWorkspaceRoot, homeDir, sortedProjects],
   );
+  const studioProjects = useMemo(
+    () =>
+      sortedProjects.filter((project) =>
+        isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+      ),
+    [chatWorkspaceRoot, homeDir, sortedProjects, studioWorkspaceRoot],
+  );
   const visibleChatThreadRows = useMemo(() => {
     if (!chatSectionExpanded) {
       return [];
@@ -4001,6 +4306,38 @@ export default function Sidebar() {
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
+  // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
+  // Studio surface is not showing so thread updates on Projects don't pay for an unused sort.
+  // Pinned threads are hidden here the same way `deriveSidebarProjectData` hides them from
+  // per-project lists, so a pinned Studio chat only ever renders once, inside the Pinned block.
+  const studioChatThreadRows = useMemo(() => {
+    if (!isOnStudio) {
+      return [];
+    }
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        getUnpinnedThreadsForSidebar(
+          studioProjects.flatMap(
+            (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
+          ),
+          pinnedThreadIds,
+        ),
+        appSettings.sidebarThreadSortOrder,
+      ),
+      expandedParentThreadIds: expandedSubagentParentIds,
+    });
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    expandedSubagentParentIds,
+    isOnStudio,
+    pinnedThreadIds,
+    sortedSidebarThreadsByProjectId,
+    studioProjects,
+  ]);
+  const studioChatThreadIds = useMemo(
+    () => studioChatThreadRows.map((row) => row.thread.id),
+    [studioChatThreadRows],
+  );
   const visibleChatPreviewEntries = useMemo(
     () =>
       visibleChatThreadRows.map((row) => ({
@@ -4014,16 +4351,33 @@ export default function Sidebar() {
     activeSidebarThreadId === undefined
       ? null
       : (visibleChatPreviewEntries.find((entry) => entry.rowId === activeSidebarThreadId) ?? null);
-  const { hasHiddenEntries: hasHiddenChatThreads, visibleEntries: renderedChatEntries } = useMemo(
-    () =>
-      getVisibleSidebarEntriesForPreview({
-        entries: visibleChatPreviewEntries,
-        activeEntryId: activeChatPreviewEntry?.rowId,
-        isExpanded: chatThreadListExpanded,
-        previewLimit: THREAD_PREVIEW_LIMIT,
-      }),
-    [activeChatPreviewEntry?.rowId, chatThreadListExpanded, visibleChatPreviewEntries],
-  );
+  const {
+    canShowLessChatThreads,
+    canShowMoreChatThreads,
+    chatThreadListEffectiveExtraPages,
+    renderedChatEntries,
+  } = useMemo(() => {
+    const paging = resolveSidebarThreadListPaging({
+      totalCount: visibleChatPreviewEntries.length,
+      baseLimit: THREAD_PREVIEW_LIMIT,
+      pageSize: THREAD_PREVIEW_PAGE_SIZE,
+      requestedExtraPages: chatThreadListExtraPages,
+    });
+    const { visibleEntries } = getVisibleSidebarEntriesForPreview({
+      entries: visibleChatPreviewEntries,
+      activeEntryId: activeChatPreviewEntry?.rowId,
+      previewLimit: paging.previewLimit,
+    });
+    return {
+      // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
+      // cap, so only offer "Show more" while rows are genuinely hidden.
+      canShowMoreChatThreads:
+        paging.canShowMore && visibleEntries.length < visibleChatPreviewEntries.length,
+      canShowLessChatThreads: paging.canShowLess,
+      chatThreadListEffectiveExtraPages: paging.effectiveExtraPages,
+      renderedChatEntries: visibleEntries,
+    };
+  }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
   const standardProjectsBase = useMemo(
     () =>
       sortedProjects.filter(
@@ -4196,32 +4550,69 @@ export default function Sidebar() {
         sortedSidebarThreadsByProjectId,
         pinnedThreadIds,
         expandedParentThreadIds: expandedSubagentParentIds,
-        expandedThreadListProjectCwds: expandedThreadListsByProject,
+        threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
+        previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
       activeSidebarThreadId,
       expandedSubagentParentIds,
-      expandedThreadListsByProject,
+      threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
       standardProjects,
       resolveThreadStatusForSidebar,
     ],
   );
+  const studioProjectSidebarDataById = useMemo<
+    ReadonlyMap<ProjectId, SidebarDerivedProjectData>
+  >(() => {
+    // Off-Studio this map is unused (surfaceProjectSidebarDataById picks the
+    // standard one), so skip the derivation instead of recomputing it on every
+    // Projects-side store change. Mirrors the isOnStudio gate on
+    // studioChatThreadRows.
+    if (!isOnStudio) {
+      return EMPTY_PROJECT_SIDEBAR_DATA;
+    }
+    return deriveSidebarProjectData({
+      projects: studioProjects,
+      sortedSidebarThreadsByProjectId,
+      pinnedThreadIds,
+      expandedParentThreadIds: expandedSubagentParentIds,
+      threadListExtraPagesByProjectCwd,
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+      activeSidebarThreadId: activeSidebarThreadId ?? undefined,
+      previewLimit: THREAD_PREVIEW_LIMIT,
+      previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+      resolveThreadStatus: resolveThreadStatusForSidebar,
+    });
+  }, [
+    activeSidebarThreadId,
+    expandedSubagentParentIds,
+    isOnStudio,
+    threadListExtraPagesByProjectCwd,
+    pinnedThreadIds,
+    sortedSidebarThreadsByProjectId,
+    studioProjects,
+    resolveThreadStatusForSidebar,
+  ]);
+  const surfaceProjects = isOnStudio ? studioProjects : standardProjects;
+  const surfaceProjectSidebarDataById = isOnStudio
+    ? studioProjectSidebarDataById
+    : standardProjectSidebarDataById;
   const allProjectsExpanded = useMemo(
     () => standardProjects.length > 0 && standardProjects.every((project) => project.expanded),
     [standardProjects],
   );
 
-  // Reset per-project preview expansion when a folder closes so reopening starts at five rows again.
+  // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
-    setExpandedThreadListsByProject((current) =>
-      pruneExpandedProjectThreadListsForCollapsedProjects({
-        expandedProjectThreadListCwds: current,
+    setThreadListExtraPagesByProjectCwd((current) =>
+      pruneProjectThreadListPagingForCollapsedProjects({
+        threadListExtraPagesByProjectCwd: current,
         projects: standardProjects,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
       }),
@@ -4290,16 +4681,16 @@ export default function Sidebar() {
   useEffect(() => {
     persistSidebarUiState({
       chatSectionExpanded,
-      chatThreadListExpanded,
-      expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+      chatThreadListExtraPages,
+      projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
     });
   }, [
     chatSectionExpanded,
-    chatThreadListExpanded,
+    chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
-    expandedThreadListsByProject,
+    threadListExtraPagesByProjectCwd,
     lastThreadRoute,
   ]);
 
@@ -4424,8 +4815,8 @@ export default function Sidebar() {
       addVisibleThreadId(thread.id);
     }
 
-    for (const project of standardProjects) {
-      const projectSidebarData = standardProjectSidebarDataById.get(project.id);
+    for (const project of surfaceProjects) {
+      const projectSidebarData = surfaceProjectSidebarDataById.get(project.id);
       if (!projectSidebarData) {
         continue;
       }
@@ -4442,11 +4833,19 @@ export default function Sidebar() {
       }
     }
 
+    // The Studio surface's primary list is the flat studio tree, not project rows, so its
+    // rendered rows must join the visible ids too — otherwise jump shortcuts and detail
+    // prewarming would cover nothing but pinned rows on Studio. studioChatThreadIds is already
+    // empty off-Studio and in render order (pinned rows excluded, they were added above).
+    for (const threadId of studioChatThreadIds) {
+      addVisibleThreadId(threadId);
+    }
+
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, standardProjects, standardProjectSidebarDataById]);
+  }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
   const visibleSidebarThreadIdSet = useMemo(
-    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds]),
-    [visibleChatThreadIds, visibleSidebarThreadIds],
+    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
+    [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
     () => sidebarDisplayThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),
@@ -4721,6 +5120,43 @@ export default function Sidebar() {
     );
   }
 
+  // Section header (label + hover-revealed toolbar) shared by the Threads and Studio surfaces,
+  // so spacing/typography stay in lockstep; only the label and toolbar contents vary.
+  function renderListSectionHeader(label: string, toolbar: ReactNode) {
+    return (
+      <div className="group/project-header relative my-1">
+        <div
+          className={cn(
+            "flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]",
+            SIDEBAR_SECTION_LABEL_CLASS_NAME,
+          )}
+        >
+          <span className="truncate">{label}</span>
+        </div>
+        <SidebarSectionToolbar placement="overlay" revealOnHover>
+          {toolbar}
+        </SidebarSectionToolbar>
+      </div>
+    );
+  }
+  // Identical "Pinned" header + rows block shared by the Threads and Studio surfaces.
+  // `pinnedThreads` is already the surface-appropriate list, so a single helper keeps both in sync.
+  function renderPinnedThreadsSection() {
+    if (pinnedThreads.length === 0) {
+      return null;
+    }
+    return (
+      <div className="mb-3">
+        <div className="my-1 flex items-center justify-between px-2 py-1">
+          <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+        </div>
+      </div>
+    );
+  }
+
   // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
   // once here so pinned and nested rows stay visually and semantically identical.
   function renderThreadHoverCardPopup(thread: SidebarThreadSummary, hoverAnchorId: string) {
@@ -4807,6 +5243,11 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
+    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
+    // occupies the status slot. In that state the right-aligned project label needs a
+    // hair of clearance so it stops kissing the worktree chip — see the margin below.
+    const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
@@ -4844,7 +5285,7 @@ export default function Sidebar() {
               leadingPrStatus && "pl-8",
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
+                hasTrailingGlyph: hasTrailingStatusGlyph,
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
@@ -4917,8 +5358,16 @@ export default function Sidebar() {
               // Right-aligned project context for the flattened pinned list. The title
               // (flex-1) pushes it to the content edge, so it shows in full when the row
               // has room and only truncates under real pressure, shifting left as the
-              // trailing reserve grows on hover/status.
-              <span className="max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
+              // trailing reserve grows on hover/status. When a live status glyph occupies
+              // the trailing slot (e.g. the running spinner), the absolute cluster reaches
+              // a few px past the reserve — a small margin keeps the folder name from
+              // touching the worktree chip. It costs no space when the row is idle.
+              <span
+                className={cn(
+                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                  hasTrailingStatusGlyph && "mr-2",
+                )}
+              >
                 {projectLabel}
               </span>
             ) : null}
@@ -5251,12 +5700,25 @@ export default function Sidebar() {
     );
   }
 
+  function renderStudioChatItem(row: (typeof studioChatThreadRows)[number]) {
+    // Studio rows are a flat top-level list like home Chats: the indented column
+    // is reserved for project-nested threads.
+    return renderThreadRow(
+      row.thread,
+      studioChatThreadIds,
+      row.depth,
+      row.childCount,
+      row.isExpanded,
+      true,
+    );
+  }
+
   function renderProjectItem(
     project: (typeof sortedProjects)[number],
     dragHandleProps: SortableProjectHandleProps | null,
   ) {
     const isProjectPinned = pinnedProjectIdSet.has(project.id);
-    const projectSidebarData = standardProjectSidebarDataById.get(project.id);
+    const projectSidebarData = surfaceProjectSidebarDataById.get(project.id);
     if (!projectSidebarData) {
       return null;
     }
@@ -5265,8 +5727,9 @@ export default function Sidebar() {
       allProjectThreadCount,
       projectStatus,
       visibleEntries,
-      hasHiddenThreads,
-      isThreadListExpanded,
+      threadListExtraPages,
+      canShowMoreThreads,
+      canShowLessThreads,
     } = projectSidebarData;
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
@@ -5460,34 +5923,40 @@ export default function Sidebar() {
                 ),
               )}
 
-              {hasHiddenThreads && !isThreadListExpanded && (
+              {(canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
-                  <SidebarMenuSubButton
-                    render={<button type="button" />}
-                    data-thread-selection-safe
-                    size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                    onClick={() => {
-                      expandThreadListForProject(project.cwd);
-                    }}
-                  >
-                    <span>Show more</span>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              )}
-              {hasHiddenThreads && isThreadListExpanded && (
-                <SidebarMenuSubItem className="w-full">
-                  <SidebarMenuSubButton
-                    render={<button type="button" />}
-                    data-thread-selection-safe
-                    size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                    onClick={() => {
-                      collapseThreadListForProject(project.cwd);
-                    }}
-                  >
-                    <span>Show less</span>
-                  </SidebarMenuSubButton>
+                  <div className="flex w-full items-center gap-1">
+                    {canShowMoreThreads && (
+                      <SidebarMenuSubButton
+                        render={<button type="button" />}
+                        data-thread-selection-safe
+                        size="sm"
+                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                        onClick={() => {
+                          showMoreThreadsForProject(project.cwd, threadListExtraPages);
+                        }}
+                      >
+                        <span>Show more</span>
+                      </SidebarMenuSubButton>
+                    )}
+                    {canShowLessThreads && (
+                      <SidebarMenuSubButton
+                        render={<button type="button" />}
+                        data-thread-selection-safe
+                        size="sm"
+                        className={cn(
+                          "h-7 translate-x-0 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]",
+                          // Keep the left indent when "Show less" is the only affordance left.
+                          canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
+                        )}
+                        onClick={() => {
+                          showLessThreadsForProject(project.cwd, threadListExtraPages);
+                        }}
+                      >
+                        <span>Show less</span>
+                      </SidebarMenuSubButton>
+                    )}
+                  </div>
                 </SidebarMenuSubItem>
               )}
             </SidebarMenuSub>
@@ -5762,6 +6231,7 @@ export default function Sidebar() {
       }
       lastDesktopUpdateErrorToastSignatureRef.current = signature;
       const releaseUrl = input.state?.releaseUrl ?? null;
+      const recommendManualDownload = shouldRecommendManualDesktopDownload(input.state);
       const fallbackProps = releaseUrl
         ? {
             data: { copyText: releaseUrl },
@@ -5775,8 +6245,10 @@ export default function Sidebar() {
         : {};
       toastManager.add({
         type: "error",
-        title: input.title,
-        description: input.description,
+        title: recommendManualDownload ? "Download the update manually" : input.title,
+        description: recommendManualDownload
+          ? `Automatic installation has failed ${input.state?.installFailureCount ?? 0} times. Download ${input.state?.availableVersion ?? "the update"} manually to finish updating.`
+          : input.description,
         ...fallbackProps,
       });
     },
@@ -6084,27 +6556,40 @@ export default function Sidebar() {
     surfaceDesktopUpdateError,
   ]);
 
-  const expandThreadListForProject = useCallback((projectCwd: string) => {
-    const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-    if (cwdKey.length === 0) return;
-    setExpandedThreadListsByProject((current) => {
-      if (current.has(cwdKey)) return current;
-      const next = new Set(current);
-      next.add(cwdKey);
-      return next;
-    });
-  }, []);
+  // Both handlers step from the *effective* (clamped) page count reported by the derived
+  // project data, so stale/oversized stored paging self-heals on the very next click.
+  const setThreadListExtraPagesForProject = useCallback(
+    (projectCwd: string, nextExtraPages: number) => {
+      const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
+      if (cwdKey.length === 0) return;
+      setThreadListExtraPagesByProjectCwd((current) => {
+        const clampedExtraPages = Math.max(0, nextExtraPages);
+        if ((current.get(cwdKey) ?? 0) === clampedExtraPages) return current;
+        const next = new Map(current);
+        if (clampedExtraPages === 0) {
+          next.delete(cwdKey);
+        } else {
+          next.set(cwdKey, clampedExtraPages);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
-  const collapseThreadListForProject = useCallback((projectCwd: string) => {
-    const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-    if (cwdKey.length === 0) return;
-    setExpandedThreadListsByProject((current) => {
-      if (!current.has(cwdKey)) return current;
-      const next = new Set(current);
-      next.delete(cwdKey);
-      return next;
-    });
-  }, []);
+  const showMoreThreadsForProject = useCallback(
+    (projectCwd: string, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectCwd, currentExtraPages + 1);
+    },
+    [setThreadListExtraPagesForProject],
+  );
+
+  const showLessThreadsForProject = useCallback(
+    (projectCwd: string, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectCwd, currentExtraPages - 1);
+    },
+    [setThreadListExtraPagesForProject],
+  );
 
   const handleToggleProjects = useCallback(() => {
     if (allProjectsExpanded) {
@@ -6235,458 +6720,532 @@ export default function Sidebar() {
         ) : (
           <>
             <SidebarSegmentedPicker
-              views={["threads", ...(workspaceSectionVisible ? (["workspace"] as const) : [])]}
-              activeView={isOnWorkspace ? "workspace" : "threads"}
+              views={[
+                ...(studioSectionVisible ? (["studio"] as const) : []),
+                "threads",
+                ...(workspaceSectionVisible ? (["workspace"] as const) : []),
+              ]}
+              activeView={isOnStudio ? "studio" : isOnWorkspace ? "workspace" : "threads"}
               onSelectView={handleSidebarViewChange}
+              onPrewarmView={prewarmSidebarViewTarget}
             />
-            {/* Primary sidebar actions stay limited to features we currently ship. */}
-            <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-              <SidebarMenu className="gap-0.5">
-                {isOnWorkspace ? (
-                  <SidebarPrimaryAction
-                    icon={TerminalIcon}
-                    label="New workspace"
-                    onClick={handleCreateWorkspace}
-                  />
-                ) : (
-                  <>
-                    <SidebarPrimaryAction
-                      icon={NewThreadIcon}
-                      label="New thread"
-                      onClick={handlePrimaryNewThread}
-                    />
-                    <SidebarPrimaryAction
-                      icon={SearchIcon}
-                      label="Search"
-                      active={searchPaletteOpen}
-                      onClick={() => {
-                        setSearchPaletteOpen(true);
-                      }}
-                      shortcutLabel={searchShortcutLabel}
-                    />
-                    <SidebarPrimaryAction
-                      icon={KanbanIcon}
-                      label="Kanban"
-                      active={isOnKanban}
-                      onClick={() => {
-                        void navigate({ to: "/kanban" });
-                      }}
-                    />
-                    <SidebarPrimaryAction
-                      icon={ClockIcon}
-                      label="Automations"
-                      active={isOnAutomations}
-                      badgeCount={automationAttentionBadgeCount}
-                      onClick={() => {
-                        void navigate({ to: "/automations" });
-                      }}
-                    />
-                  </>
-                )}
-              </SidebarMenu>
-            </SidebarGroup>
-
-            {isOnWorkspace ? (
+            {/* Keyed per segment so switching surfaces (Studio <-> Projects <->
+                Workspace) remounts the content with a short enter animation
+                instead of a hard cut. The picker above stays outside the key so
+                its thumb can glide across the switch. */}
+            <div
+              key={isOnWorkspace ? "workspace" : isOnStudio ? "studio" : "threads"}
+              className="sidebar-surface-enter"
+            >
+              {/* Primary sidebar actions stay limited to features we currently ship. */}
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-                <div className="my-2 h-px w-full bg-border" />
-                <div className="mb-1.5 flex items-center px-2">
-                  <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
-                </div>
-
-                <DndContext
-                  sensors={projectDnDSensors}
-                  collisionDetection={closestCorners}
-                  modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                  onDragEnd={handleWorkspaceDragEnd}
-                >
-                  <SidebarMenu className="gap-0.5">
-                    <SortableContext
-                      items={workspaceRows.map((workspace) => workspace.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      {workspaceRows.map((workspace) => {
-                        const isActive = routeWorkspaceId === workspace.id;
-                        const isRenaming = renamingWorkspaceId === workspace.id;
-                        return (
-                          <SortableWorkspaceItem key={workspace.id} workspaceId={workspace.id}>
-                            {(dragHandleProps) =>
-                              isRenaming ? (
-                                <div className="px-1.5 py-0.5">
-                                  <input
-                                    autoFocus
-                                    value={renamingWorkspaceTitle}
-                                    onChange={(event) => {
-                                      setRenamingWorkspaceTitle(event.target.value);
-                                    }}
-                                    onBlur={commitWorkspaceRename}
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter") {
-                                        event.preventDefault();
-                                        commitWorkspaceRename();
-                                      }
-                                      if (event.key === "Escape") {
-                                        event.preventDefault();
-                                        setRenamingWorkspaceId(null);
-                                        setRenamingWorkspaceTitle(workspace.title);
-                                      }
-                                    }}
-                                    className="h-7 w-full rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none focus:border-[color:var(--color-border-focus)]"
-                                  />
-                                </div>
-                              ) : (
-                                <>
-                                  <SidebarMenuButton
-                                    size="sm"
-                                    isActive={isActive}
-                                    className="h-8 gap-2 rounded-lg pl-2 pr-8 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
-                                    onClick={() => {
-                                      navigateToWorkspace(workspace.id);
-                                    }}
-                                    onContextMenu={(event) => {
-                                      event.preventDefault();
-                                      beginWorkspaceRename(workspace.id, workspace.title);
-                                    }}
-                                  >
-                                    <SidebarLeadingIcon
-                                      ref={dragHandleProps.setActivatorNodeRef}
-                                      {...dragHandleProps.attributes}
-                                      {...dragHandleProps.listeners}
-                                      size="sm"
-                                      tone="text-muted-foreground/65"
-                                      className="cursor-grab active:cursor-grabbing"
-                                    >
-                                      <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-                                    </SidebarLeadingIcon>
-                                    <span className="min-w-0 flex-1 truncate">
-                                      {workspace.title}
-                                    </span>
-                                    {workspace.terminalStatus && (
-                                      <span
-                                        className={cn(
-                                          "inline-flex size-1.5 shrink-0 rounded-full",
-                                          workspace.terminalStatus.label === "Terminal input needed"
-                                            ? "bg-amber-500 dark:bg-amber-300/90"
-                                            : workspace.terminalStatus.label ===
-                                                "Terminal process running"
-                                              ? "bg-teal-500 dark:bg-teal-300/90"
-                                              : "bg-emerald-500 dark:bg-emerald-300/90",
-                                        )}
-                                      />
-                                    )}
-                                    {workspace.terminalCount > 0 && (
-                                      <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] tabular-nums text-muted-foreground/50">
-                                        {workspace.terminalCount}
-                                      </span>
-                                    )}
-                                  </SidebarMenuButton>
-                                  <SidebarIconButton
-                                    icon={Trash2}
-                                    label="Delete workspace"
-                                    glyph="meta"
-                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleDeleteWorkspace(workspace.id);
-                                    }}
-                                  />
-                                </>
-                              )
-                            }
-                          </SortableWorkspaceItem>
-                        );
-                      })}
-                    </SortableContext>
-                  </SidebarMenu>
-                </DndContext>
-              </SidebarGroup>
-            ) : (
-              <SidebarGroup className="px-1.5 py-1.5">
-                {pinnedThreads.length > 0 ? (
-                  <div className="mb-3">
-                    <div className="my-1 flex items-center justify-between px-2 py-1">
-                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Pinned</span>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
-                    </div>
-                  </div>
-                ) : null}
-                <div className="group/project-header relative my-1">
-                  <div
-                    className={cn(
-                      "flex h-7 w-full min-w-0 items-center px-2 py-0.5 pr-[4.75rem]",
-                      SIDEBAR_SECTION_LABEL_CLASS_NAME,
-                    )}
-                  >
-                    <span className="truncate">Projects</span>
-                  </div>
-                  <SidebarSectionToolbar placement="overlay" revealOnHover>
-                    {standardProjects.length > 0 ? (
-                      <SidebarIconButton
-                        icon={allProjectsExpanded ? TbArrowsDiagonalMinimize2 : TbArrowsDiagonal}
-                        label={
-                          allProjectsExpanded
-                            ? focusedProjectId
-                              ? "Collapse all projects except the active project"
-                              : "Collapse all projects"
-                            : "Expand all projects"
-                        }
-                        className="disabled:cursor-default disabled:opacity-45"
-                        onClick={handleToggleProjects}
-                        tooltip={
-                          allProjectsExpanded
-                            ? focusedProjectId
-                              ? "Collapse all projects except the active chat's project"
-                              : "Collapse all projects"
-                            : "Expand all projects"
-                        }
-                        tooltipSide="bottom"
+                <SidebarMenu className="gap-0.5">
+                  {isOnWorkspace ? (
+                    <SidebarPrimaryAction
+                      icon={TerminalIcon}
+                      label="New workspace"
+                      onClick={handleCreateWorkspace}
+                    />
+                  ) : isOnStudio ? (
+                    <>
+                      <SidebarPrimaryAction
+                        icon={NewThreadIcon}
+                        label="New studio chat"
+                        onClick={handleCreateStudioChat}
                       />
-                    ) : null}
-                    <ProjectSortMenu
-                      projectSortOrder={appSettings.sidebarProjectSortOrder}
-                      threadSortOrder={appSettings.sidebarThreadSortOrder}
-                      onProjectSortOrderChange={(sortOrder) => {
-                        updateSettings({ sidebarProjectSortOrder: sortOrder });
-                      }}
-                      onThreadSortOrderChange={(sortOrder) => {
-                        updateSettings({ sidebarThreadSortOrder: sortOrder });
-                      }}
-                    />
-                    <SidebarIconButton
-                      icon={FiPlus}
-                      label={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
-                      aria-pressed={shouldShowProjectPathEntry}
-                      onClick={handleStartAddProject}
-                      tooltip={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
-                      tooltipSide="right"
-                    />
-                  </SidebarSectionToolbar>
-                </div>
+                      <SidebarPrimaryAction
+                        icon={SearchIcon}
+                        label="Search"
+                        active={searchPaletteOpen}
+                        onClick={() => {
+                          setSearchPaletteOpen(true);
+                        }}
+                        shortcutLabel={searchShortcutLabel}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <SidebarPrimaryAction
+                        icon={NewThreadIcon}
+                        label="New thread"
+                        onClick={handlePrimaryNewThread}
+                      />
+                      <SidebarPrimaryAction
+                        icon={SearchIcon}
+                        label="Search"
+                        active={searchPaletteOpen}
+                        onClick={() => {
+                          setSearchPaletteOpen(true);
+                        }}
+                        shortcutLabel={searchShortcutLabel}
+                      />
+                      <SidebarPrimaryAction
+                        icon={KanbanIcon}
+                        label="Kanban"
+                        active={isOnKanban}
+                        onClick={() => {
+                          void navigate({ to: "/kanban" });
+                        }}
+                      />
+                      <SidebarPrimaryAction
+                        icon={ClockIcon}
+                        label="Automations"
+                        active={isOnAutomations}
+                        badgeCount={automationAttentionBadgeCount}
+                        onClick={() => {
+                          void navigate({ to: "/automations" });
+                        }}
+                      />
+                    </>
+                  )}
+                </SidebarMenu>
+              </SidebarGroup>
 
-                {shouldShowProjectPathEntry && (
-                  <div className="mb-2.5 px-1">
-                    {!showManualPathInput ? (
-                      <div className="flex gap-1.5">
-                        {isElectron && (
-                          <button
-                            type="button"
-                            className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:opacity-50"
-                            onClick={() => void handlePickFolder()}
-                            disabled={isPickingFolder || isAddingProject}
-                          >
-                            <SidebarGlyph icon={FolderIcon} variant="chrome" />
-                            {isPickingFolder
-                              ? "Opening..."
-                              : isAddingProject
-                                ? "Adding..."
-                                : "Browse"}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                          onClick={() => setShowManualPathInput(true)}
-                        >
-                          <SidebarGlyph icon={TbCursorText} variant="chrome" />
-                          Type path
-                        </button>
-                      </div>
-                    ) : (
-                      <div
-                        className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
-                          addProjectError
-                            ? "border-red-500/70 focus-within:border-red-500"
-                            : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
-                        }`}
-                      >
-                        <input
-                          ref={addProjectInputRef}
-                          className="min-w-0 flex-1 bg-transparent pl-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
-                          placeholder="/path/to/project"
-                          value={newCwd}
-                          onChange={(event) => {
-                            setNewCwd(event.target.value);
-                            setAddProjectError(null);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") handleAddProject();
-                            if (event.key === "Escape") {
-                              setShowManualPathInput(false);
-                              setAddProjectError(null);
-                            }
-                          }}
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
-                          onClick={handleAddProject}
-                          disabled={!canAddProject}
-                          aria-label="Add project"
-                        >
-                          {isAddingProject ? "..." : "↵"}
-                        </button>
-                      </div>
-                    )}
-                    {addProjectError && (
-                      <div className="mt-1 space-y-1 px-0.5">
-                        <p className="text-xs leading-tight text-red-400">{addProjectError}</p>
-                        {addProjectErrorMeaning && (
-                          <p className="text-xs leading-tight text-muted-foreground/70">
-                            {addProjectErrorMeaning}
-                          </p>
-                        )}
-                      </div>
-                    )}
+              {isOnWorkspace ? (
+                <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+                  <div className="my-2 h-px w-full bg-border" />
+                  <div className="mb-1.5 flex items-center px-2">
+                    <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Workspace</span>
                   </div>
-                )}
 
-                {isManualProjectSorting ? (
                   <DndContext
                     sensors={projectDnDSensors}
-                    collisionDetection={projectCollisionDetection}
+                    collisionDetection={closestCorners}
                     modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                    onDragStart={handleProjectDragStart}
-                    onDragEnd={handleProjectDragEnd}
-                    onDragCancel={handleProjectDragCancel}
+                    onDragEnd={handleWorkspaceDragEnd}
                   >
-                    <SidebarMenu className="gap-3">
+                    <SidebarMenu className="gap-0.5">
                       <SortableContext
-                        items={standardProjects.map((project) => project.id)}
+                        items={workspaceRows.map((workspace) => workspace.id)}
                         strategy={verticalListSortingStrategy}
                       >
-                        {standardProjects.map((project) => (
-                          <SortableProjectItem key={project.id} projectId={project.id}>
-                            {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
-                          </SortableProjectItem>
-                        ))}
+                        {workspaceRows.map((workspace) => {
+                          const isActive = routeWorkspaceId === workspace.id;
+                          const isRenaming = renamingWorkspaceId === workspace.id;
+                          return (
+                            <SortableWorkspaceItem key={workspace.id} workspaceId={workspace.id}>
+                              {(dragHandleProps) =>
+                                isRenaming ? (
+                                  <div className="px-1.5 py-0.5">
+                                    <input
+                                      autoFocus
+                                      value={renamingWorkspaceTitle}
+                                      onChange={(event) => {
+                                        setRenamingWorkspaceTitle(event.target.value);
+                                      }}
+                                      onBlur={commitWorkspaceRename}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          event.preventDefault();
+                                          commitWorkspaceRename();
+                                        }
+                                        if (event.key === "Escape") {
+                                          event.preventDefault();
+                                          setRenamingWorkspaceId(null);
+                                          setRenamingWorkspaceTitle(workspace.title);
+                                        }
+                                      }}
+                                      className="h-7 w-full rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none focus:border-[color:var(--color-border-focus)]"
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <SidebarMenuButton
+                                      size="sm"
+                                      isActive={isActive}
+                                      className="h-8 gap-2 rounded-lg pl-2 pr-8 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
+                                      onClick={() => {
+                                        navigateToWorkspace(workspace.id);
+                                      }}
+                                      onContextMenu={(event) => {
+                                        event.preventDefault();
+                                        beginWorkspaceRename(workspace.id, workspace.title);
+                                      }}
+                                    >
+                                      <SidebarLeadingIcon
+                                        ref={dragHandleProps.setActivatorNodeRef}
+                                        {...dragHandleProps.attributes}
+                                        {...dragHandleProps.listeners}
+                                        size="sm"
+                                        tone="text-muted-foreground/65"
+                                        className="cursor-grab active:cursor-grabbing"
+                                      >
+                                        <SidebarGlyph icon={TerminalIcon} variant="chrome" />
+                                      </SidebarLeadingIcon>
+                                      <span className="min-w-0 flex-1 truncate">
+                                        {workspace.title}
+                                      </span>
+                                      {workspace.terminalStatus && (
+                                        <span
+                                          className={cn(
+                                            "inline-flex size-1.5 shrink-0 rounded-full",
+                                            workspace.terminalStatus.label ===
+                                              "Terminal input needed"
+                                              ? "bg-amber-500 dark:bg-amber-300/90"
+                                              : workspace.terminalStatus.label ===
+                                                  "Terminal process running"
+                                                ? "bg-teal-500 dark:bg-teal-300/90"
+                                                : "bg-emerald-500 dark:bg-emerald-300/90",
+                                          )}
+                                        />
+                                      )}
+                                      {workspace.terminalCount > 0 && (
+                                        <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] tabular-nums text-muted-foreground/50">
+                                          {workspace.terminalCount}
+                                        </span>
+                                      )}
+                                    </SidebarMenuButton>
+                                    <SidebarIconButton
+                                      icon={Trash2}
+                                      label="Delete workspace"
+                                      glyph="meta"
+                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleDeleteWorkspace(workspace.id);
+                                      }}
+                                    />
+                                  </>
+                                )
+                              }
+                            </SortableWorkspaceItem>
+                          );
+                        })}
                       </SortableContext>
                     </SidebarMenu>
                   </DndContext>
-                ) : (
-                  <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
-                    {standardProjects.map((project) => (
-                      <SidebarMenuItem key={project.id} className="rounded-md">
-                        {renderProjectItem(project, null)}
-                      </SidebarMenuItem>
-                    ))}
+                </SidebarGroup>
+              ) : isOnStudio ? (
+                // Studio is "just chats": a labeled Studio block holding a flat list of threads
+                // rooted at the Studio workspace (no project-folder chrome).
+                <SidebarGroup className="px-1.5 py-1.5">
+                  {renderPinnedThreadsSection()}
+                  {renderListSectionHeader(
+                    "Studio",
+                    <>
+                      <SidebarIconButton
+                        icon={NewThreadIcon}
+                        label="New studio chat"
+                        tooltip="New studio chat"
+                        tooltipSide="top"
+                        onClick={handleCreateStudioChat}
+                      />
+                      <ChatSortMenu
+                        threadSortOrder={appSettings.sidebarThreadSortOrder}
+                        onThreadSortOrderChange={(sortOrder) => {
+                          updateSettings({ sidebarThreadSortOrder: sortOrder });
+                        }}
+                      />
+                    </>,
+                  )}
+                  <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
+                    {studioChatThreadRows.length > 0 ? (
+                      studioChatThreadRows.map((row) => renderStudioChatItem(row))
+                    ) : (
+                      <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                        {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
+                      </div>
+                    )}
                   </SidebarMenu>
-                )}
+                </SidebarGroup>
+              ) : (
+                <SidebarGroup className="px-1.5 py-1.5">
+                  {renderPinnedThreadsSection()}
+                  {renderListSectionHeader(
+                    "Projects",
+                    <>
+                      {standardProjects.length > 0 ? (
+                        <SidebarIconButton
+                          icon={allProjectsExpanded ? TbArrowsDiagonalMinimize2 : TbArrowsDiagonal}
+                          label={
+                            allProjectsExpanded
+                              ? focusedProjectId
+                                ? "Collapse all projects except the active project"
+                                : "Collapse all projects"
+                              : "Expand all projects"
+                          }
+                          className="disabled:cursor-default disabled:opacity-45"
+                          onClick={handleToggleProjects}
+                          tooltip={
+                            allProjectsExpanded
+                              ? focusedProjectId
+                                ? "Collapse all projects except the active chat's project"
+                                : "Collapse all projects"
+                              : "Expand all projects"
+                          }
+                          tooltipSide="bottom"
+                        />
+                      ) : null}
+                      <ProjectSortMenu
+                        projectSortOrder={appSettings.sidebarProjectSortOrder}
+                        threadSortOrder={appSettings.sidebarThreadSortOrder}
+                        onProjectSortOrderChange={(sortOrder) => {
+                          updateSettings({ sidebarProjectSortOrder: sortOrder });
+                        }}
+                        onThreadSortOrderChange={(sortOrder) => {
+                          updateSettings({ sidebarThreadSortOrder: sortOrder });
+                        }}
+                      />
+                      <SidebarIconButton
+                        icon={FiPlus}
+                        label={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
+                        aria-pressed={shouldShowProjectPathEntry}
+                        onClick={handleStartAddProject}
+                        tooltip={shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
+                        tooltipSide="right"
+                      />
+                    </>,
+                  )}
 
-                {projectEmptyState === "loading" && (
-                  <div
-                    className="space-y-2 px-2 pt-4"
-                    aria-live="polite"
-                    aria-label="Loading projects"
-                  >
-                    <div className="text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                      Loading projects...
+                  {shouldShowProjectPathEntry && (
+                    <div className="mb-2.5 px-1">
+                      {!showManualPathInput ? (
+                        <div className="flex gap-1.5">
+                          {isElectron && (
+                            <button
+                              type="button"
+                              className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:opacity-50"
+                              onClick={() => void handlePickFolder()}
+                              disabled={isPickingFolder || isAddingProject}
+                            >
+                              <SidebarGlyph icon={FolderIcon} variant="chrome" />
+                              {isPickingFolder
+                                ? "Opening..."
+                                : isAddingProject
+                                  ? "Adding..."
+                                  : "Browse"}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+                            onClick={() => setShowManualPathInput(true)}
+                          >
+                            <SidebarGlyph icon={TbCursorText} variant="chrome" />
+                            Type path
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
+                            addProjectError
+                              ? "border-red-500/70 focus-within:border-red-500"
+                              : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
+                          }`}
+                        >
+                          <input
+                            ref={addProjectInputRef}
+                            className="min-w-0 flex-1 bg-transparent pl-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                            placeholder="/path/to/project"
+                            value={newCwd}
+                            onChange={(event) => {
+                              setNewCwd(event.target.value);
+                              setAddProjectError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") handleAddProject();
+                              if (event.key === "Escape") {
+                                setShowManualPathInput(false);
+                                setAddProjectError(null);
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
+                            onClick={handleAddProject}
+                            disabled={!canAddProject}
+                            aria-label="Add project"
+                          >
+                            {isAddingProject ? "..." : "↵"}
+                          </button>
+                        </div>
+                      )}
+                      {addProjectError && (
+                        <div className="mt-1 space-y-1 px-0.5">
+                          <p className="text-xs leading-tight text-red-400">{addProjectError}</p>
+                          {addProjectErrorMeaning && (
+                            <p className="text-xs leading-tight text-muted-foreground/70">
+                              {addProjectErrorMeaning}
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
-                      <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
-                      <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
-                      <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
-                    </div>
-                  </div>
-                )}
+                  )}
 
-                {projectEmptyState === "empty" && (
-                  <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                    No projects yet
-                  </div>
-                )}
-              </SidebarGroup>
-            )}
+                  {isManualProjectSorting ? (
+                    <DndContext
+                      sensors={projectDnDSensors}
+                      collisionDetection={projectCollisionDetection}
+                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                      onDragStart={handleProjectDragStart}
+                      onDragEnd={handleProjectDragEnd}
+                      onDragCancel={handleProjectDragCancel}
+                    >
+                      <SidebarMenu className="gap-3">
+                        <SortableContext
+                          items={standardProjects.map((project) => project.id)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {standardProjects.map((project) => (
+                            <SortableProjectItem key={project.id} projectId={project.id}>
+                              {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
+                            </SortableProjectItem>
+                          ))}
+                        </SortableContext>
+                      </SidebarMenu>
+                    </DndContext>
+                  ) : (
+                    <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
+                      {standardProjects.map((project) => (
+                        <SidebarMenuItem key={project.id} className="rounded-md">
+                          {renderProjectItem(project, null)}
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  )}
+
+                  {projectEmptyState === "loading" && (
+                    <div
+                      className="space-y-2 px-2 pt-4"
+                      aria-live="polite"
+                      aria-label="Loading projects"
+                    >
+                      <div className="text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                        Loading projects...
+                      </div>
+                      <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
+                        <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
+                        <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
+                        <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
+                      </div>
+                    </div>
+                  )}
+
+                  {projectEmptyState === "empty" && (
+                    <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      No projects yet
+                    </div>
+                  )}
+                </SidebarGroup>
+              )}
+            </div>
           </>
         )}
+        {!isOnSettings && !isOnStudio && chatsSectionVisible ? (
+          // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
+          // animates in step with the keyed surface wrapper above.
+          <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
+            <div className="group/collapsible">
+              <div className="group/project-header relative">
+                <SidebarMenuButton
+                  size="sm"
+                  aria-expanded={chatSectionExpanded}
+                  className={cn(
+                    SIDEBAR_HEADER_ROW_CLASS_NAME,
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    "cursor-pointer",
+                  )}
+                  onClick={() => setChatSectionExpanded((current) => !current)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setChatSectionExpanded((current) => !current);
+                  }}
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                    <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
+                      Chats
+                    </span>
+                    <DisclosureChevron
+                      open={chatSectionExpanded}
+                      className="text-muted-foreground/79"
+                    />
+                  </div>
+                </SidebarMenuButton>
+                <SidebarSectionToolbar placement="overlay" revealOnHover>
+                  <ChatSortMenu
+                    threadSortOrder={appSettings.sidebarThreadSortOrder}
+                    onThreadSortOrderChange={(sortOrder) => {
+                      updateSettings({ sidebarThreadSortOrder: sortOrder });
+                    }}
+                  />
+                  <SidebarIconButton
+                    icon={NewThreadIcon}
+                    label="Open new chat home"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void handleCreateHomeChat();
+                    }}
+                    tooltip={
+                      newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
+                    }
+                    tooltipSide="top"
+                  />
+                </SidebarSectionToolbar>
+              </div>
+
+              <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
+                <div className={DISCLOSURE_INNER_CLASS}>
+                  <SidebarMenu
+                    className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
+                  >
+                    {visibleChatThreadRows.length > 0 ? (
+                      renderedChatEntries.map((entry) => renderChatItem(entry.row))
+                    ) : (
+                      <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+                        No chats yet
+                      </div>
+                    )}
+                    {canShowMoreChatThreads || canShowLessChatThreads ? (
+                      <SidebarMenuItem className="w-full">
+                        <div className="flex w-full items-center gap-1">
+                          {canShowMoreChatThreads ? (
+                            <SidebarMenuButton
+                              size="sm"
+                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                              onClick={() =>
+                                setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
+                              }
+                            >
+                              <span>Show more</span>
+                            </SidebarMenuButton>
+                          ) : null}
+                          {canShowLessChatThreads ? (
+                            <SidebarMenuButton
+                              size="sm"
+                              className={cn(
+                                "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]",
+                                // Keep the left indent when "Show less" is the only affordance left.
+                                canShowMoreChatThreads
+                                  ? "w-auto flex-none px-2"
+                                  : "flex-1 pr-2 pl-8",
+                              )}
+                              onClick={() =>
+                                setChatThreadListExtraPages(
+                                  Math.max(0, chatThreadListEffectiveExtraPages - 1),
+                                )
+                              }
+                            >
+                              <span>Show less</span>
+                            </SidebarMenuButton>
+                          ) : null}
+                        </div>
+                      </SidebarMenuItem>
+                    ) : null}
+                  </SidebarMenu>
+                </div>
+              </div>
+            </div>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
 
       <SidebarFooter className="gap-2 p-2 font-system-ui">
-        {!isOnSettings && chatsSectionVisible ? (
-          <div className="group/collapsible">
-            <div className="group/project-header relative">
-              <SidebarMenuButton
-                size="sm"
-                className={cn(
-                  SIDEBAR_HEADER_ROW_CLASS_NAME,
-                  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-                  SIDEBAR_ROW_HOVER_CLASS_NAME,
-                  "cursor-pointer",
-                )}
-                onClick={() => setChatSectionExpanded((current) => !current)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  setChatSectionExpanded((current) => !current);
-                }}
-              >
-                <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
-                    Chats
-                  </span>
-                </div>
-              </SidebarMenuButton>
-              <SidebarSectionToolbar placement="overlay" revealOnHover>
-                <ChatSortMenu
-                  threadSortOrder={appSettings.sidebarThreadSortOrder}
-                  onThreadSortOrderChange={(sortOrder) => {
-                    updateSettings({ sidebarThreadSortOrder: sortOrder });
-                  }}
-                />
-                <SidebarIconButton
-                  icon={NewThreadIcon}
-                  label="Open new chat home"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void handleCreateHomeChat();
-                  }}
-                  tooltip={newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"}
-                  tooltipSide="top"
-                />
-              </SidebarSectionToolbar>
-            </div>
-
-            <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
-              <div className={DISCLOSURE_INNER_CLASS}>
-                <SidebarMenu
-                  className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
-                >
-                  {visibleChatThreadRows.length > 0 ? (
-                    renderedChatEntries.map((entry) => renderChatItem(entry.row))
-                  ) : (
-                    <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                      No chats yet
-                    </div>
-                  )}
-                  {hasHiddenChatThreads && !chatThreadListExpanded ? (
-                    <SidebarMenuItem className="w-full">
-                      <SidebarMenuButton
-                        size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                        onClick={() => setChatThreadListExpanded(true)}
-                      >
-                        <span>Show more</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
-                  {hasHiddenChatThreads && chatThreadListExpanded ? (
-                    <SidebarMenuItem className="w-full">
-                      <SidebarMenuButton
-                        size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                        onClick={() => setChatThreadListExpanded(false)}
-                      >
-                        <span>Show less</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
-                </SidebarMenu>
-              </div>
-            </div>
-          </div>
-        ) : null}
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
@@ -7034,7 +7593,11 @@ export default function Sidebar() {
           actions={searchPaletteActions}
           projects={searchPaletteProjects}
           projectById={projectById}
-          onCreateChat={() => void handleCreateHomeChat()}
+          onCreateChat={() =>
+            // Segment-aware, matching the sidebar's + action: "New chat" from the palette while
+            // on the Studio segment opens a Studio chat, not a home draft.
+            void (isOnStudio ? handleCreateStudioChat() : handleCreateHomeChat())
+          }
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}

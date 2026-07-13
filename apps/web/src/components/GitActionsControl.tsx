@@ -3,12 +3,14 @@
 // Layer: Header action control
 // Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
 
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
 import type {
   GitActionProgressEvent,
   GitStackedAction,
   GitStatusResult,
+  ModelSelection,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
@@ -315,6 +317,13 @@ export default function GitActionsControl({
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const gitTextGenerationModelSelection = useMemo(
+    (): ModelSelection => ({
+      provider: settings.textGenerationProvider ?? "codex",
+      model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    }),
+    [settings.textGenerationModel, settings.textGenerationProvider],
+  );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
@@ -385,6 +394,7 @@ export default function GitActionsControl({
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
+      modelSelection: gitTextGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
@@ -397,6 +407,11 @@ export default function GitActionsControl({
       baseBranch: string;
       headBranch: string;
       state: "open" | "closed" | "merged";
+      isDraft?: boolean;
+      mergeability?: "mergeable" | "conflicting" | "unknown";
+      additions?: number | null;
+      deletions?: number | null;
+      changedFiles?: number | null;
     }) => {
       if (!activeThreadId) {
         return;

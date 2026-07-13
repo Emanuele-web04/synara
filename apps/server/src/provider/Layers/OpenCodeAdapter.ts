@@ -17,7 +17,7 @@ import {
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
   Agent,
@@ -63,6 +63,7 @@ import {
 } from "../opencodeRuntime.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
+import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
 
@@ -131,6 +132,8 @@ interface OpenCodeSessionContext {
   readonly directory: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
+  /** Permission request ids auto-approved server-side in full-access mode (never surfaced to the UI). */
+  readonly autoApprovedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -441,43 +444,18 @@ function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserI
   }));
 }
 
-function normalizeOpenCodeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
-  if (value === "completed") {
-    return "completed";
-  }
-  if (value === "in_progress") {
-    return "inProgress";
-  }
-  return "pending";
-}
-
 function normalizeOpenCodeTodoTasks(todos: ReadonlyArray<Todo>): {
   readonly tasks: ReadonlyArray<{
     readonly task: string;
     readonly status: "pending" | "inProgress" | "completed";
   }>;
 } | null {
-  const tasks = todos
-    .map((todo) => {
-      const task = todo.content.trim();
-      if (task.length === 0) {
-        return null;
-      }
-      return {
-        task,
-        status: normalizeOpenCodeTodoStatus(todo.status),
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        readonly task: string;
-        readonly status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
+  const tasks = todos.flatMap((todo) => {
+    const task = makeRuntimeTaskListItem(todo.content, todo.status);
+    return task ? [task] : [];
+  });
 
-  return tasks.length > 0 ? { tasks } : null;
+  return nonEmptyRuntimeTaskListPayload(tasks);
 }
 
 function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reasoning_text" {
@@ -690,6 +668,11 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
   context.relatedSessionIds.clear();
+  // Deliberately NOT cleared here: a permission auto-approved at the tail of a turn can
+  // have its permission.replied echo arrive after turn teardown, and dropping the id first
+  // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
+  // UI). Ids are unique per request so stale entries are inert; the set is freed with the
+  // session context when the session is removed.
 }
 
 function markOpenCodeTurnProviderActivity(
@@ -2130,7 +2113,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             yield* completeOpenCodeTurn(context, {
               turnId,
               raw: {
-                source: "dpcode.opencode.idle-after-tool-calls",
+                source: "synara.opencode.idle-after-tool-calls",
                 event: raw,
               },
               errorMessage: message,
@@ -2148,7 +2131,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 threadId: context.session.threadId,
                 turnId,
                 raw: {
-                  source: "dpcode.opencode.idle-after-tool-calls",
+                  source: "synara.opencode.idle-after-tool-calls",
                   event: raw,
                 },
               }),
@@ -2262,7 +2245,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             turnId: input.turnId,
             assistantEntry,
             raw: {
-              source: "dpcode.opencode.prompt.recovery",
+              source: "synara.opencode.prompt.recovery",
               message: assistantEntry,
             },
           });
@@ -2335,7 +2318,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 "OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.";
               yield* completeOpenCodeTurn(context, {
                 turnId: input.turnId,
-                raw: { source: "dpcode.opencode.prompt.watchdog" },
+                raw: { source: "synara.opencode.prompt.watchdog" },
                 errorMessage: message,
               });
               updateProviderSession(
@@ -2350,7 +2333,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...buildEventBase({
                   threadId: context.session.threadId,
                   turnId: input.turnId,
-                  raw: { source: "dpcode.opencode.prompt.watchdog" },
+                  raw: { source: "synara.opencode.prompt.watchdog" },
                 }),
                 type: "runtime.error",
                 payload: {
@@ -2402,7 +2385,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   turnId: input.turnId,
                   assistantEntry,
                   raw: {
-                    source: "dpcode.opencode.prompt.response",
+                    source: "synara.opencode.prompt.response",
                     message: assistantEntry,
                   },
                 });
@@ -2744,6 +2727,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.asked": {
+            // Full access: auto-approve instead of surfacing an approval, mirroring the
+            // Claude/Cursor/Grok adapters. Covers asks the declarative session ruleset cannot
+            // (resumed/forked sessions on older servers, subagent child sessions, user config).
+            if (context.session.runtimeMode === "full-access") {
+              context.autoApprovedPermissionIds.add(event.properties.id);
+              const replyExit = yield* Effect.exit(
+                runOpenCodeSdk("permission.reply", () =>
+                  context.client.permission.reply({
+                    requestID: event.properties.id,
+                    reply: "always",
+                  }),
+                ),
+              );
+              if (Exit.isSuccess(replyExit)) {
+                break;
+              }
+              // Fall back to a visible approval so the turn cannot hang on a failed reply.
+              context.autoApprovedPermissionIds.delete(event.properties.id);
+              yield* Effect.logWarning(
+                `${adapterConfig.displayName} full-access auto-approve failed; surfacing approval`,
+                Cause.squash(replyExit.cause),
+              );
+            }
             context.pendingPermissions.set(event.properties.id, event.properties);
             yield* emit({
               ...buildEventBase({
@@ -2766,6 +2772,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.replied": {
+            if (context.autoApprovedPermissionIds.delete(event.properties.requestID)) {
+              // Auto-approved in full access; nothing was surfaced to the UI.
+              break;
+            }
             context.pendingPermissions.delete(event.properties.requestID);
             yield* emit({
               ...buildEventBase({
@@ -3646,7 +3656,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
                 const createSessionId = resumedSessionId
-                  ? Effect.succeed(resumedSessionId)
+                  ? // Resumed sessions skip session.create, so re-apply the runtime-mode
+                    // permission ruleset explicitly. Non-fatal: older servers may reject the
+                    // field, and full-access asks are still auto-approved in the event pump.
+                    runOpenCodeSdk("session.update", () =>
+                      client.session.update({
+                        sessionID: resumedSessionId,
+                        permission: buildOpenCodePermissionRules(input.runtimeMode),
+                      }),
+                    ).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning(
+                          `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
+                          Cause.squash(cause),
+                        ),
+                      ),
+                      Effect.as(resumedSessionId),
+                    )
                   : runOpenCodeSdk("session.create", () => {
                       const sessionCreateInput = {
                         ...(initialParsedModel
@@ -3730,6 +3756,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             directory,
             openCodeSessionId: started.openCodeSessionId,
             pendingPermissions: new Map(),
+            autoApprovedPermissionIds: new Set(),
             pendingQuestions: new Map(),
             pendingTextDeltasByPartId: new Map(),
             partById: new Map(),
