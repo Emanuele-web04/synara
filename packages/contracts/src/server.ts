@@ -144,8 +144,44 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: Schema.optional(ProviderUsageStatus),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  rateLimitResetCredits: Schema.optional(CodexRateLimitResetCredits),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
+
+// Codex rate-limit reset credit types
+export const CodexResetCredit = Schema.Struct({
+  status: Schema.String,
+  expiresAt: Schema.optional(IsoDateTime),
+  grantedAt: Schema.optional(IsoDateTime),
+});
+export type CodexResetCredit = typeof CodexResetCredit.Type;
+
+export const CodexRateLimitResetCredits = Schema.Struct({
+  availableCount: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalEarnedCount: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  ),
+  nextExpiresAt: Schema.optional(IsoDateTime),
+  credits: Schema.optional(Schema.Array(CodexResetCredit)),
+});
+export type CodexRateLimitResetCredits = typeof CodexRateLimitResetCredits.Type;
+
+export const CodexRateLimitResetOutcome = Schema.Literals(["consumed", "noCredit", "error"]);
+export type CodexRateLimitResetOutcome = typeof CodexRateLimitResetOutcome.Type;
+
+export const CodexRateLimitResetResult = Schema.Struct({
+  outcome: CodexRateLimitResetOutcome,
+  credits: Schema.optional(CodexRateLimitResetCredits),
+});
+export type CodexRateLimitResetResult = typeof CodexRateLimitResetResult.Type;
+
+export const ServerConsumeCodexResetCreditInput = Schema.Struct({
+  idempotencyKey: TrimmedNonEmptyString,
+});
+export type ServerConsumeCodexResetCreditInput = typeof ServerConsumeCodexResetCreditInput.Type;
+
+export const ServerConsumeCodexResetCreditResult = CodexRateLimitResetResult;
+export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexResetCreditResult.Type;
 
 export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
   provider: ProviderKind,

@@ -223,6 +223,9 @@ export const WS_METHODS = {
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
 
+  // Codex rate-limit reset credit
+  serverConsumeCodexResetCredit: "server.consumeCodexResetCredit",
+
   // Automation methods
   automationList: "automation.list",
   automationCreate: "automation.create",

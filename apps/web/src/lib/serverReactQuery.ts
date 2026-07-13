@@ -1,5 +1,6 @@
 import type {
   ProviderKind,
+  ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
   ServerStopLocalServerInput,
   ThreadId,
@@ -257,5 +258,20 @@ export function serverAllProviderUsageQueryOptions(
     refetchOnWindowFocus: false,
     retry: false,
     queryFn: async () => fetchAllProviderUsage(provider ? { provider } : {}),
+  });
+}
+
+export function consumeCodexResetCreditMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: ["server", "consumeCodexResetCredit"],
+    mutationFn: async (body: ServerConsumeCodexResetCreditInput) => {
+      const api = ensureNativeApi();
+      return api.server.consumeCodexResetCredit(body);
+    },
+    onSuccess: () => {
+      void input.queryClient.invalidateQueries({
+        queryKey: serverQueryKeys.allProviderUsage(),
+      });
+    },
   });
 }
