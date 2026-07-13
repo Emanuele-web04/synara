@@ -5,6 +5,7 @@ import {
   APPSNAP_RECENT_TARGET_WINDOW_MS,
   createLatestAppSnapRequestGuard,
   didAppSnapHydrationInputsChange,
+  hasHydratedAppSnapCapture,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
@@ -206,6 +207,42 @@ describe("hasPersistedAppSnapCapture", () => {
         "capture-live-only",
       ),
     ).toBe(false);
+  });
+});
+
+describe("hasHydratedAppSnapCapture", () => {
+  it("requires a restored composer image instead of metadata alone", () => {
+    const source = { kind: "appsnap", captureId: "capture-restored" };
+    expect(
+      hasHydratedAppSnapCapture(
+        [{ images: [], persistedAttachments: [{ source }], promptHistorySavedDraft: null }],
+        "capture-restored",
+      ),
+    ).toBe(false);
+    expect(
+      hasHydratedAppSnapCapture(
+        [{ images: [{ source }], persistedAttachments: [], promptHistorySavedDraft: null }],
+        "capture-restored",
+      ),
+    ).toBe(true);
+  });
+
+  it("recognizes restored prompt-history images", () => {
+    expect(
+      hasHydratedAppSnapCapture(
+        [
+          {
+            images: [],
+            persistedAttachments: [],
+            promptHistorySavedDraft: {
+              images: [{ source: { kind: "appsnap", captureId: "capture-saved" } }],
+              persistedAttachments: [],
+            },
+          },
+        ],
+        "capture-saved",
+      ),
+    ).toBe(true);
   });
 });
 

@@ -50,9 +50,11 @@ interface AppSnapSourceCarrier {
 }
 
 interface AppSnapCaptureDraft {
+  images?: ReadonlyArray<AppSnapSourceCarrier> | undefined;
   persistedAttachments: ReadonlyArray<AppSnapSourceCarrier>;
   promptHistorySavedDraft?:
     | {
+        images?: ReadonlyArray<AppSnapSourceCarrier> | undefined;
         persistedAttachments: ReadonlyArray<AppSnapSourceCarrier>;
       }
     | null
@@ -124,6 +126,24 @@ export function hasPersistedAppSnapCapture(
       (draft.promptHistorySavedDraft !== null &&
         draft.promptHistorySavedDraft !== undefined &&
         entriesContainCapture(draft.promptHistorySavedDraft.persistedAttachments, captureId))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True once persisted AppSnap metadata has also been restored into a composer image chip. */
+export function hasHydratedAppSnapCapture(
+  drafts: Iterable<AppSnapCaptureDraft | undefined>,
+  captureId: string,
+): boolean {
+  if (captureId.length === 0) return false;
+  for (const draft of drafts) {
+    if (!draft) continue;
+    if (
+      entriesContainCapture(draft.images ?? [], captureId) ||
+      entriesContainCapture(draft.promptHistorySavedDraft?.images ?? [], captureId)
     ) {
       return true;
     }

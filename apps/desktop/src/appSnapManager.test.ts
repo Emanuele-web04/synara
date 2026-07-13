@@ -304,6 +304,56 @@ describe("AppSnap helper protocol", () => {
     manager.dispose();
   });
 
+  it("surfaces an unexpected listener exit through the capture error channel", async () => {
+    const checkChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(checkChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory: "/tmp/synara-appsnap-test",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError,
+    });
+
+    const enable = manager.setEnabled(true);
+    await flushPromises();
+    checkChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    checkChild.stderr.end();
+    checkChild.emit("close", 0, null);
+    await enable;
+    watchChild.stdout.write(`${JSON.stringify({ type: "ready" })}\n`);
+
+    watchChild.emit("exit", 1, null);
+
+    expect(manager.getState()).toMatchObject({
+      enabled: true,
+      status: "error",
+      message: "The AppSnap helper stopped unexpectedly (exit 1).",
+    });
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "helper-stopped",
+        message: "The AppSnap helper stopped unexpectedly (exit 1).",
+      }),
+      false,
+    );
+    manager.dispose();
+  });
+
   it("coalesces concurrent listener reconciliation while the capture directory is prepared", async () => {
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-reconcile-"));
     const firstCheckChild = createFakeChildProcess();
@@ -673,6 +723,55 @@ describe("AppSnap helper protocol", () => {
       finalManager.dispose();
     } finally {
       firstManager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a helper PNG left behind before pending metadata was persisted", async () => {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-helper-recovery-"));
+    const captureId = "6b981032-c848-4d0b-94f1-6de335391aa2";
+    const helperPath = join(captureDirectory, `appsnap-${captureId}.png`);
+    const captureBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
+    writeFileSync(helperPath, captureBytes);
+    const now = () => new Date("2026-07-13T23:30:00.000Z");
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+      now,
+    });
+
+    try {
+      const recovered = await manager.listPendingCaptures();
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]).toMatchObject({
+        id: captureId,
+        capturedAt: "2026-07-13T23:30:00.000Z",
+        name: `appsnap-${captureId}.png`,
+        sourceAppName: null,
+      });
+      expect(Buffer.from(recovered[0]!.bytes)).toEqual(captureBytes);
+      expect(FS.existsSync(helperPath)).toBe(false);
+      manager.dispose();
+
+      const restartedManager = new DesktopAppSnapManager({
+        platform: "darwin",
+        helperPath: process.execPath,
+        captureDirectory,
+        excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+        onState: vi.fn(),
+        onCaptured: vi.fn(),
+        onError: vi.fn(),
+        now,
+      });
+      expect(await restartedManager.listPendingCaptures()).toHaveLength(1);
+      restartedManager.dispose();
+    } finally {
+      manager.dispose();
       rmSync(captureDirectory, { recursive: true, force: true });
     }
   });

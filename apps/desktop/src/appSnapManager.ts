@@ -26,6 +26,8 @@ const MAX_PENDING_CAPTURE_METADATA_BYTES = 512 * 1024;
 const PENDING_CAPTURE_STORAGE_VERSION = 1;
 const PENDING_CAPTURE_FILE_PATTERN = /^pending-([a-f0-9]{64})\.json$/;
 const PENDING_CAPTURE_IMAGE_PATTERN = /^pending-([a-f0-9]{64})\.png$/;
+const HELPER_CAPTURE_IMAGE_PATTERN =
+  /^appsnap-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.png$/;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<null, Readable, Readable>;
@@ -500,6 +502,52 @@ export class DesktopAppSnapManager {
       }
     }
 
+    // The helper writes its PNG before Electron can durably create the
+    // pending pair. Recover that original after a crash in the narrow gap.
+    for (const entry of entries) {
+      const captureId = HELPER_CAPTURE_IMAGE_PATTERN.exec(entry)?.[1];
+      if (!captureId) continue;
+      const helperImagePath = Path.join(this.#options.captureDirectory, entry);
+      if (records.some((record) => record.capture.id === captureId)) {
+        await FS.promises.unlink(helperImagePath).catch(() => undefined);
+        continue;
+      }
+
+      let bytes: Buffer;
+      try {
+        bytes = await readValidatedPendingPng(helperImagePath);
+      } catch (error) {
+        console.warn(
+          `[desktop-appsnap] Removing unreadable helper capture ${entry}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await FS.promises.unlink(helperImagePath).catch(() => undefined);
+        continue;
+      }
+
+      const capturedAt = this.#options.now().toISOString();
+      const capture: DesktopAppSnapCapture = {
+        id: captureId,
+        capturedAt,
+        name: entry,
+        mimeType: "image/png",
+        sizeBytes: bytes.byteLength,
+        bytes: new Uint8Array(bytes),
+        sourceAppName: null,
+        sourceBundleIdentifier: null,
+        sourceAppIconDataUrl: null,
+        sourceWindowTitle: null,
+      };
+      try {
+        records.push(await this.#persistPendingCapture(capture));
+        await FS.promises.unlink(helperImagePath).catch(() => undefined);
+      } catch (error) {
+        // Keep the helper image as the recovery source for the next startup.
+        console.warn(
+          `[desktop-appsnap] Could not recover helper capture ${entry}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     records.sort(
       (left, right) =>
         Date.parse(left.capture.capturedAt) - Date.parse(right.capture.capturedAt) ||
@@ -648,7 +696,9 @@ export class DesktopAppSnapManager {
       this.#watchProcess = null;
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
-      this.#setState("error", `Could not start AppSnap: ${error.message}`);
+      const message = `Could not start AppSnap: ${error.message}`;
+      this.#setState("error", message);
+      this.#emitCaptureError("helper-stopped", message, undefined, false);
     });
     child.once("exit", (code, signal) => {
       if (this.#watchProcess !== child) return;
@@ -656,10 +706,9 @@ export class DesktopAppSnapManager {
       this.#watchOutputLines?.close();
       this.#watchOutputLines = null;
       if (this.#disposed || this.#intentionalWatchStop || !this.#enabled) return;
-      this.#setState(
-        "error",
-        `The AppSnap helper stopped unexpectedly (${signal ?? `exit ${code ?? "unknown"}`}).`,
-      );
+      const message = `The AppSnap helper stopped unexpectedly (${signal ?? `exit ${code ?? "unknown"}`}).`;
+      this.#setState("error", message);
+      this.#emitCaptureError("helper-stopped", message, undefined, false);
     });
   }
 

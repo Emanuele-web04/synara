@@ -12,6 +12,7 @@ import {
   type AppSnapThreadTarget,
   type TimedAppSnapThreadTarget,
   didAppSnapHydrationInputsChange,
+  hasHydratedAppSnapCapture,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
@@ -34,7 +35,10 @@ import {
 } from "../lib/composerImageBlobStore";
 import { persistAppSnapIcon, readAppSnapIcon } from "../lib/appSnapIconStore";
 import { playAppSnapCaptureSound } from "../lib/appSnapSound";
-import type { ComposerAppSnapSource } from "../lib/composerImageSource";
+import {
+  type ComposerAppSnapSource,
+  isComposerAppSnapCaptureSource,
+} from "../lib/composerImageSource";
 import { resolveRecentThreadSplitActivation } from "../recentViewActivation.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -106,6 +110,10 @@ export function AppSnapCoordinator() {
   const captureIdsRef = useRef(new Map<string, true>());
   const captureQueueRef = useRef<Promise<void>>(Promise.resolve());
   const blobHydrationInFlightRef = useRef(new Set<string>());
+  const hydratePersistedAppSnapsRef = useRef<(captureId?: string) => Promise<void>>(async () => {});
+  const attachCaptureRef = useRef<
+    ((capture: DesktopAppSnapCapture) => Promise<"persisted" | "unverified">) | null
+  >(null);
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
   const playCaptureSoundRef = useRef(settings.appSnapPlaySound);
@@ -114,7 +122,7 @@ export function AppSnapCoordinator() {
   useEffect(() => {
     let disposed = false;
 
-    const hydratePersistedAppSnaps = async () => {
+    const hydratePersistedAppSnaps = async (captureId?: string) => {
       const draftStore = useComposerDraftStore.getState();
       for (const [rawThreadId, draft] of Object.entries(draftStore.draftsByThreadId)) {
         const threadId = rawThreadId as ThreadId;
@@ -172,6 +180,8 @@ export function AppSnapCoordinator() {
             if (
               !attachment.blobKey ||
               attachment.source?.kind !== "appsnap" ||
+              (captureId !== undefined &&
+                !isComposerAppSnapCaptureSource(attachment.source, captureId)) ||
               existingImageIds.has(attachment.id) ||
               blobHydrationInFlightRef.current.has(attachment.blobKey)
             ) {
@@ -198,6 +208,7 @@ export function AppSnapCoordinator() {
                 file,
                 source,
               });
+              existingImageIds.add(attachment.id);
             } catch (error) {
               console.warn("[appsnap] Could not restore persisted AppSnap", error);
             } finally {
@@ -208,7 +219,15 @@ export function AppSnapCoordinator() {
       }
     };
 
-    void hydratePersistedAppSnaps().then(() => {
+    let hydrationQueue = Promise.resolve();
+    const enqueueHydration = (captureId?: string) => {
+      const hydration = hydrationQueue.then(() => hydratePersistedAppSnaps(captureId));
+      hydrationQueue = hydration.catch(() => undefined);
+      return hydration;
+    };
+    hydratePersistedAppSnapsRef.current = enqueueHydration;
+
+    void enqueueHydration().then(() => {
       if (disposed) return;
       void deleteOrphanedComposerImageBlobs({
         isReferenced: (blobKey) =>
@@ -220,12 +239,13 @@ export function AppSnapCoordinator() {
     });
     const unsubscribe = useComposerDraftStore.subscribe((state, previousState) => {
       if (didAppSnapHydrationInputsChange(state.draftsByThreadId, previousState.draftsByThreadId)) {
-        void hydratePersistedAppSnaps();
+        void enqueueHydration();
       }
     });
     return () => {
       disposed = true;
       unsubscribe();
+      hydratePersistedAppSnapsRef.current = async () => {};
     };
   }, []);
 
@@ -258,6 +278,8 @@ export function AppSnapCoordinator() {
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
+    // The opt-in preference lives in the renderer settings store. This root
+    // coordinator is mounted for the full UI lifetime and owns the native listener.
     void bridge.setEnabled(settings.enableAppSnap).catch((error) => {
       console.warn("[appsnap] Could not update native listener state", error);
     });
@@ -415,6 +437,9 @@ export function AppSnapCoordinator() {
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],
   );
+  // Keep the native subscription stable while navigation callbacks change.
+  // Pending captures can then never cross a cleanup/re-subscribe dedupe gap.
+  attachCaptureRef.current = attachCapture;
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
@@ -436,10 +461,18 @@ export function AppSnapCoordinator() {
               blobKeys.map((blobKey) => readComposerImageBlob(blobKey).catch(() => null)),
             );
             if (blobs.some((file) => file !== null)) {
-              await bridge
-                .acknowledgeCapture(capture.id)
-                .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
-              return;
+              // Durable metadata is not enough: wait until its blob has become
+              // a visible image chip before deleting the desktop recovery copy.
+              await hydratePersistedAppSnapsRef.current(capture.id);
+              const hydratedDrafts = Object.values(
+                useComposerDraftStore.getState().draftsByThreadId,
+              );
+              if (hasHydratedAppSnapCapture(hydratedDrafts, capture.id)) {
+                await bridge
+                  .acknowledgeCapture(capture.id)
+                  .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
+                return;
+              }
             }
           }
           let persistence: "persisted" | "unverified";
@@ -448,7 +481,9 @@ export function AppSnapCoordinator() {
             // row for this capture (including prompt-history snapshots) before
             // rebuilding it from the desktop pending copy.
             useComposerDraftStore.getState().removeAppSnapCapture(capture.id);
-            persistence = await attachCapture(capture);
+            const attach = attachCaptureRef.current;
+            if (!attach) throw new Error("The AppSnap composer is not ready yet.");
+            persistence = await attach(capture);
           } catch (error) {
             toastManager.add({
               type: "error",
@@ -486,6 +521,20 @@ export function AppSnapCoordinator() {
         type: "error",
         title: "AppSnap failed",
         description: error.message,
+        ...(error.code === "helper-stopped"
+          ? {
+              actionProps: {
+                children: "Restart",
+                onClick: () => {
+                  void bridge
+                    .setEnabled(true)
+                    .catch((restartError) =>
+                      console.warn("[appsnap] Could not restart native listener", restartError),
+                    );
+                },
+              },
+            }
+          : {}),
         data: {
           allowCrossThreadVisibility: true,
           copyText: `${error.code}: ${error.message}`,
@@ -501,12 +550,8 @@ export function AppSnapCoordinator() {
       disposed = true;
       unsubscribeCaptured();
       unsubscribeError();
-      // The dedupe map only guards a single subscription (live event vs the
-      // mount-time pending replay). Keeping ids across resubscribes would make
-      // the next pending replay skip captures that were never acknowledged.
-      captureIdsRef.current.clear();
     };
-  }, [attachCapture]);
+  }, []);
 
   return null;
 }

@@ -571,12 +571,12 @@ final class AppSnapCaptureCoordinator {
             do {
                 let png = try encodePNGUnderAttachmentLimit(image)
                 let file = try writePrivatePNG(png, id: id, to: outputDirectory)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.captureFeedback.play(for: selectedWindow.bounds) { [weak self] in
-                        guard let self else { return }
-                        self.queue.async {
-                            self.emitter.emitCaptured(
+                // Retain the coordinator through feedback and the final emit so
+                // every successful capture deterministically releases its lock.
+                DispatchQueue.main.async { [self] in
+                    captureFeedback.play(for: selectedWindow.bounds) { [self] in
+                        queue.async { [self] in
+                            emitter.emitCaptured(
                                 id: id,
                                 capturedAt: capturedAt,
                                 path: file.path,
@@ -590,7 +590,7 @@ final class AppSnapCaptureCoordinator {
                             // the final emit; releasing it earlier would let a
                             // second chord interleave with the pending feedback
                             // and captured event.
-                            self.activeCapture = nil
+                            activeCapture = nil
                         }
                     }
                 }

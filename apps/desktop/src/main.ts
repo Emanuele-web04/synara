@@ -1410,7 +1410,7 @@ function ensureMainWindowForAppSnap(): BrowserWindow | null {
     mainWindow = createWindow();
   }
   if (!mainWindow || mainWindow.isDestroyed()) return null;
-  focusMainWindow();
+  focusMainWindow({ stealAppFocus: true });
   return mainWindow;
 }
 
@@ -1496,7 +1496,7 @@ function clearUnreadNotificationBadge(): void {
 
 // Reuse the existing desktop window when the app is launched again so users
 // don't end up with multiple packaged instances racing the same local state.
-function focusMainWindow(): void {
+function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = null;
     return;
@@ -1507,10 +1507,10 @@ function focusMainWindow(): void {
   if (!mainWindow.isVisible()) {
     mainWindow.show();
   }
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" && options.stealAppFocus === true) {
     // BrowserWindow.focus() alone does not activate an app while another macOS
-    // application owns focus. AppSnap is an explicit global user gesture, so
-    // bringing Synara forward here is intentional.
+    // application owns focus. Only AppSnap is an explicit global user gesture;
+    // notification clicks and ordinary activation keep their existing focus policy.
     app.show();
     app.focus({ steal: true });
   }
