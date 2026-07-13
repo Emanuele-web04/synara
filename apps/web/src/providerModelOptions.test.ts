@@ -70,6 +70,19 @@ describe("mergeDynamicModelOptions", () => {
       { slug: "custom:model", name: "Custom model" },
     ]);
   });
+
+  it("treats the live Droid catalog as authoritative and drops invalid custom slugs", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "droid",
+        staticOptions: [
+          { slug: "retired-model", name: "Retired" },
+          { slug: "made-up-model", name: "Made up", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      }),
+    ).toEqual([{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {

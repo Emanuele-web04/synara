@@ -327,6 +327,12 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
+// Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
+// persisted config for compatibility, but do not offer an editor it cannot honor.
+export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
+  (config) => config.provider !== "droid",
+);
+
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
   provider: ProviderKind = "codex",

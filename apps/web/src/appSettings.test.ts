@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_TERMINAL_FONT_SIZE_PX,
@@ -526,6 +527,12 @@ describe("provider-indexed custom model settings", () => {
       "opencode",
       "pi",
     ]);
+  });
+
+  it("keeps Droid persistence compatible without advertising unsupported custom slugs", () => {
+    expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
+      "droid",
+    );
   });
 
   it("reads custom models for each provider", () => {

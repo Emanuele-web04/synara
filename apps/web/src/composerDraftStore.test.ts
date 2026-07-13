@@ -2253,6 +2253,17 @@ describe("composerDraftStore setModelSelection", () => {
     ).toEqual(modelSelection("codex", "gpt-5.3-codex"));
   });
 
+  it("preserves newly discovered Droid effort strings in composer state", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadId, modelSelection("droid", "future-droid-model"));
+
+    store.setProviderModelOptions(threadId, "droid", { reasoningEffort: "ultra" });
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider.droid,
+    ).toEqual(modelSelection("droid", "future-droid-model", { reasoningEffort: "ultra" }));
+  });
+
   it("drops a runtime Codex effort when switching models before terminal promotion", () => {
     const store = useComposerDraftStore.getState();
     store.setModelSelectionAndSticky(

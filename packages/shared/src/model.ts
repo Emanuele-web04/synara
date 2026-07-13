@@ -12,7 +12,6 @@ import {
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   type DroidModelOptions,
-  type DroidReasoningEffort,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
@@ -884,18 +883,11 @@ export function normalizeGrokModelOptions(
 }
 
 export function normalizeDroidModelOptions(
-  model: string | null | undefined,
+  _model: string | null | undefined,
   modelOptions: DroidModelOptions | null | undefined,
 ): DroidModelOptions | undefined {
-  const caps = getModelCapabilities("droid", model);
   const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
-  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
-    return undefined;
-  }
-  if (reasoningEffort === getDefaultEffort(caps)) {
-    return undefined;
-  }
-  return { reasoningEffort: reasoningEffort as DroidReasoningEffort };
+  return reasoningEffort ? { reasoningEffort } : undefined;
 }
 
 export function normalizePiModelOptions(

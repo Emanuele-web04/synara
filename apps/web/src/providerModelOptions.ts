@@ -158,14 +158,23 @@ export function mergeDynamicModelOptions(input: {
     });
   }
 
-  const customOnlyModels = input.staticOptions.filter(
-    (model) => "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
-  );
+  // Droid validates model values against its live ACP select options, so an
+  // arbitrary custom slug is guaranteed to fail at session configuration.
+  const customOnlyModels =
+    input.provider === "droid"
+      ? []
+      : input.staticOptions.filter(
+          (model) =>
+            "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
+        );
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    (input.provider === "kilo" || input.provider === "opencode" || input.provider === "cursor") &&
+    (input.provider === "kilo" ||
+      input.provider === "opencode" ||
+      input.provider === "cursor" ||
+      input.provider === "droid") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));

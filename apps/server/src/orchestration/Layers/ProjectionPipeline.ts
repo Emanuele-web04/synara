@@ -1315,9 +1315,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             kind: event.payload.activity.kind,
             summary: event.payload.activity.summary,
             payload: event.payload.activity.payload,
-            ...(event.payload.activity.sequence !== undefined
-              ? { sequence: event.payload.activity.sequence }
-              : {}),
+            // The orchestration log is durable and monotonic across provider
+            // restarts, unlike provider-local counters that may reset to zero.
+            sequence: event.sequence,
             createdAt: event.payload.activity.createdAt,
           });
           return;

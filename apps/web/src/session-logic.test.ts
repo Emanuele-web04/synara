@@ -479,6 +479,36 @@ describe("deriveActiveTaskListState", () => {
     });
   });
 
+  it("uses sequence rather than a random activity id for same-millisecond snapshots", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "z-stale",
+        sequence: 10,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "a-final",
+        sequence: 11,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "completed" }] },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))?.tasks).toEqual([
+      { task: "Ship", status: "completed" },
+    ]);
+  });
+
   it("treats an empty task update as an explicit clear", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -93,6 +93,33 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
+  windows_process:
+    name: Windows Process Regression
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test Windows process planning
+        run: bun run --cwd packages/shared test src/windowsProcess.test.ts
+
+      - name: Test Effect Windows process spawn
+        run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
+
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04

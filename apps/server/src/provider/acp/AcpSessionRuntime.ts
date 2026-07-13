@@ -591,6 +591,14 @@ const makeAcpSessionRuntime = (
         } satisfies EffectAcpSchema.ResumeSessionRequest;
         const supportsResume =
           initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
+        const supportsLoad = initializeResult.agentCapabilities?.loadSession === true;
+        if (!supportsResume && !supportsLoad) {
+          return yield* new EffectAcpErrors.AcpRequestError({
+            code: -32601,
+            errorMessage:
+              "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
+          });
+        }
         const resumed = yield* (
           supportsResume
             ? runLoggedRequest(

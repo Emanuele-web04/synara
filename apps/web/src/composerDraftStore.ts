@@ -9,7 +9,6 @@ import {
   type CursorModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
-  DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
   type DroidReasoningEffort,
   type GrokReasoningEffort,
@@ -91,7 +90,6 @@ const COMPOSER_PROVIDER_KINDS = [
 ] as const satisfies readonly ProviderKind[];
 const isProviderKind = Schema.is(ProviderKind);
 const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
-const DROID_REASONING_EFFORT_SET = new Set<string>(DROID_REASONING_EFFORT_OPTIONS);
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
@@ -1201,10 +1199,6 @@ function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
   return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
 
-function isDroidReasoningEffort(value: unknown): value is DroidReasoningEffort {
-  return typeof value === "string" && DROID_REASONING_EFFORT_SET.has(value);
-}
-
 function makeModelSelection(
   provider: ProviderKind,
   model: string,
@@ -1450,11 +1444,9 @@ function normalizeProviderModelOptions(
     : undefined;
   const grok =
     grokReasoningEffort !== undefined ? { reasoningEffort: grokReasoningEffort } : undefined;
-  const droidReasoningEffort: DroidReasoningEffort | undefined = isDroidReasoningEffort(
+  const droidReasoningEffort: DroidReasoningEffort | undefined = trimStringOrUndefined(
     droidCandidate?.reasoningEffort,
-  )
-    ? droidCandidate.reasoningEffort
-    : undefined;
+  );
   const droid =
     droidReasoningEffort !== undefined ? { reasoningEffort: droidReasoningEffort } : undefined;
   const openCodeVariant = trimStringOrUndefined(openCodeCandidate?.variant);

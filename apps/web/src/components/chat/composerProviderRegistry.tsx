@@ -19,7 +19,6 @@ import {
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
-  normalizeDroidModelOptions,
   normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
@@ -201,7 +200,11 @@ function getProviderStateFromCapabilities(
     case "droid": {
       const providerOptions = modelOptions?.droid;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeDroidModelOptions(model, providerOptions);
+      // Droid's advertised "default" is the mutable current CLI preference.
+      // Once the user selects an effort, always dispatch it explicitly.
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) ? providerOptions?.reasoningEffort : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
     case "kilo":

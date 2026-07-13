@@ -2025,8 +2025,7 @@ export default function ChatView({
       enabled: selectedProvider === "grok" || lockedProvider === "grok" || isModelPickerOpen,
     }),
   );
-  const droidModelDiscoveryEnabled =
-    selectedProvider === "droid" || lockedProvider === "droid" || isModelPickerOpen;
+  const droidModelDiscoveryEnabled = selectedProvider === "droid" || lockedProvider === "droid";
   const droidDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "droid",

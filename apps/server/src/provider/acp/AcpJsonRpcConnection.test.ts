@@ -9,7 +9,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Exit, Fiber, Stream } from "effect";
 import { describe, expect } from "vitest";
 
 import { AcpSessionRuntime, type AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
@@ -122,6 +122,37 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: { SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
+  it.effect("does not call session/load when the agent does not advertise it", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start().pipe(Effect.exit);
+      expect(Exit.isFailure(started)).toBe(true);
+      expect(requestEvents.some((event) => event.method === "session/load")).toBe(false);
+      expect(requestEvents.some((event) => event.method === "session/new")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: { SYNARA_ACP_SUPPORT_SESSION_LOAD: "0" },
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",

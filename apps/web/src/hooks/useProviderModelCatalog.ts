@@ -95,7 +95,9 @@ export function useProviderModelCatalog(input: {
       provider: "droid",
       binaryPath: settings.droidBinaryPath || null,
       cwd: discoveryCwd,
-      enabled: selectedProvider === "droid" || discoveryEnabled,
+      // Droid probes every model through a disposable ACP session. Keep it
+      // provider-scoped instead of warming it from unrelated picker/settings UI.
+      enabled: selectedProvider === "droid",
     }),
   );
   const openCodeDynamicModelsQuery = useQuery(
@@ -168,7 +170,7 @@ export function useProviderModelCatalog(input: {
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
-  const droidModelDiscoveryEnabled = selectedProvider === "droid" || discoveryEnabled;
+  const droidModelDiscoveryEnabled = selectedProvider === "droid";
   const hasResolvedDroidModelDiscovery =
     droidDynamicModelsQuery.data?.source === "droid-acp" &&
     (droidDynamicModelsQuery.data.models.length ?? 0) > 0;

@@ -214,8 +214,9 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    retry: input.provider === "cursor" ? 1 : 3,
-    staleTime: 60_000,
+    retry: input.provider === "droid" ? 0 : input.provider === "cursor" ? 1 : 3,
+    staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
+    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
 }

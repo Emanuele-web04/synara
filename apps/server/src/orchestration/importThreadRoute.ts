@@ -406,34 +406,42 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       runtimeMode: thread.runtimeMode,
     });
 
-    if (thread.modelSelection.provider === "codex") {
-      yield* importCodexThreadHistory({
-        threadId: thread.id,
-        importedAt: session.updatedAt,
-      });
-    } else if (thread.modelSelection.provider === "claudeAgent") {
-      yield* importClaudeThreadHistory({
-        threadId: thread.id,
-        externalId,
-        cwd,
-        importedAt: session.updatedAt,
-      });
-    } else if (thread.modelSelection.provider === "droid") {
-      yield* importDroidThreadHistory({
-        threadId: thread.id,
-        externalId,
-        importedAt: session.updatedAt,
-      });
-    } else if (
-      thread.modelSelection.provider === "kilo" ||
-      thread.modelSelection.provider === "opencode"
-    ) {
-      yield* importOpenCodeCompatibleThreadHistory({
-        provider: thread.modelSelection.provider,
-        threadId: thread.id,
-        importedAt: session.updatedAt,
-      });
-    }
+    yield* Effect.gen(function* () {
+      if (thread.modelSelection.provider === "codex") {
+        yield* importCodexThreadHistory({
+          threadId: thread.id,
+          importedAt: session.updatedAt,
+        });
+      } else if (thread.modelSelection.provider === "claudeAgent") {
+        yield* importClaudeThreadHistory({
+          threadId: thread.id,
+          externalId,
+          cwd,
+          importedAt: session.updatedAt,
+        });
+      } else if (thread.modelSelection.provider === "droid") {
+        yield* importDroidThreadHistory({
+          threadId: thread.id,
+          externalId,
+          importedAt: session.updatedAt,
+        });
+      } else if (
+        thread.modelSelection.provider === "kilo" ||
+        thread.modelSelection.provider === "opencode"
+      ) {
+        yield* importOpenCodeCompatibleThreadHistory({
+          provider: thread.modelSelection.provider,
+          threadId: thread.id,
+          importedAt: session.updatedAt,
+        });
+      }
+    }).pipe(
+      Effect.onError(() =>
+        // Startup precedes history materialization. Roll it back when import
+        // cannot finish so no provider child or persisted binding is orphaned.
+        options.providerService.stopSession({ threadId: thread.id }).pipe(Effect.ignore),
+      ),
+    );
 
     yield* options.orchestrationEngine.dispatch({
       type: "thread.session.set",

@@ -41,6 +41,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
+  CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_UI_DENSITY,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
@@ -50,7 +51,6 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
-  MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -941,24 +941,14 @@ function SettingsRouteView() {
         option.provider === currentGitTextGenerationProvider &&
         option.slug === currentGitTextGenerationModel,
     )?.name ?? currentGitTextGenerationModel;
-  const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
+  const selectedCustomModelProviderSettings = CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.find(
     (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
   )!;
   const selectedCustomModelInput = customModelInputByProvider[selectedCustomModelProvider];
   const selectedCustomModelError = customModelErrorByProvider[selectedCustomModelProvider] ?? null;
-  const totalCustomModels =
-    settings.customCodexModels.length +
-    settings.customClaudeModels.length +
-    settings.customCursorModels.length +
-    settings.customGeminiModels.length +
-    settings.customGrokModels.length +
-    settings.customDroidModels.length +
-    settings.customKiloModels.length +
-    settings.customOpenCodeModels.length +
-    settings.customPiModels.length;
   const savedCustomModelRows = useMemo(
     () =>
-      MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
+      CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.flatMap((providerSettings) =>
         getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
           key: `${providerSettings.provider}:${slug}`,
           provider: providerSettings.provider,
@@ -2480,7 +2470,7 @@ function SettingsRouteView() {
           title="Saved model slugs"
           description="Add custom model slugs for supported providers."
           resetAction={
-            totalCustomModels > 0 ? (
+            savedCustomModelRows.length > 0 ? (
               <SettingResetButton
                 label="custom models"
                 onClick={() => {
@@ -2490,7 +2480,6 @@ function SettingsRouteView() {
                     customCursorModels: defaults.customCursorModels,
                     customGeminiModels: defaults.customGeminiModels,
                     customGrokModels: defaults.customGrokModels,
-                    customDroidModels: defaults.customDroidModels,
                     customKiloModels: defaults.customKiloModels,
                     customOpenCodeModels: defaults.customOpenCodeModels,
                     customPiModels: defaults.customPiModels,
@@ -2531,7 +2520,7 @@ function SettingsRouteView() {
                   <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                 </SelectTrigger>
                 <SettingsSelectPopup align="start">
-                  {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
+                  {CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((providerSettings) => (
                     <SelectItem
                       hideIndicator
                       key={providerSettings.provider}
@@ -2582,7 +2571,7 @@ function SettingsRouteView() {
               <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
             ) : null}
 
-            {totalCustomModels > 0 ? (
+            {savedCustomModelRows.length > 0 ? (
               <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
                 {visibleCustomModelRows.map((row) => (
                   <div

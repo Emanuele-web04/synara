@@ -29,6 +29,7 @@ const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
+const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
@@ -231,7 +232,7 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: {
-          loadSession: true,
+          loadSession: supportsSessionLoad,
           sessionCapabilities: {
             ...(supportsSessionResume ? { resume: {} } : {}),
             ...(supportsSessionFork ? { fork: {} } : {}),

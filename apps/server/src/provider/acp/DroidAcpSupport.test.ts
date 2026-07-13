@@ -48,10 +48,11 @@ describe("buildDroidAcpSpawnInput", () => {
     });
   });
 
-  it("passes model, reasoning effort, and full-access flag", () => {
+  it("passes model, reasoning effort, full-access, and an appended system prompt", () => {
     expect(
       buildDroidAcpSpawnInput(
         {
+          appendSystemPrompt: "Run heavyweight validators serially.",
           binaryPath: "/usr/local/bin/droid",
           model: "claude-opus-4-8",
           reasoningEffort: "high",
@@ -66,6 +67,8 @@ describe("buildDroidAcpSpawnInput", () => {
         "--output-format",
         "acp",
         "--skip-permissions-unsafe",
+        "--append-system-prompt",
+        "Run heavyweight validators serially.",
         "-m",
         "claude-opus-4-8",
         "-r",
@@ -263,7 +266,9 @@ describe("discoverDroidAcpModels", () => {
       expect.objectContaining({
         slug: "model-a",
         description: "0.4x Factory token rate",
-        defaultReasoningEffort: "medium",
+        optionDescriptors: [
+          expect.objectContaining({ id: "reasoningEffort", currentValue: "medium" }),
+        ],
         supportedReasoningEfforts: [
           { value: "low", label: "Low" },
           { value: "medium", label: "Medium" },
@@ -271,7 +276,9 @@ describe("discoverDroidAcpModels", () => {
       }),
       expect.objectContaining({
         slug: "model-b",
-        defaultReasoningEffort: "max",
+        optionDescriptors: [
+          expect.objectContaining({ id: "reasoningEffort", currentValue: "max" }),
+        ],
         supportedReasoningEfforts: [
           { value: "high", label: "High" },
           { value: "max", label: "Max" },

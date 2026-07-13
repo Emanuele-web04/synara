@@ -26,6 +26,7 @@ import {
 } from "./AcpSessionRuntime.ts";
 
 export interface DroidAcpRuntimeSettings {
+  readonly appendSystemPrompt?: string;
   readonly binaryPath?: string;
   readonly model?: string;
   readonly reasoningEffort?: DroidModelOptions["reasoningEffort"];
@@ -107,6 +108,10 @@ export function buildDroidAcpSpawnInput(
   const args = ["exec", "--output-format", "acp"];
   if (droidSettings?.skipPermissionsUnsafe === true) {
     args.push("--skip-permissions-unsafe");
+  }
+  const appendSystemPrompt = droidSettings?.appendSystemPrompt?.trim();
+  if (appendSystemPrompt) {
+    args.push("--append-system-prompt", appendSystemPrompt);
   }
   const model = droidSettings?.model?.trim();
   if (model) {
@@ -245,6 +250,21 @@ function droidModelDescriptor(
   reasoning: Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined,
 ): ProviderModelDescriptor {
   const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
+  const optionDescriptors = reasoning
+    ? [
+        {
+          id: "reasoningEffort",
+          label: reasoning.name,
+          type: "select" as const,
+          options: efforts.map((effort) => ({
+            id: effort.value,
+            label: effort.name,
+            ...(effort.description ? { description: effort.description } : {}),
+          })),
+          ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
+        },
+      ]
+    : undefined;
   return {
     slug: model.value,
     name: model.name,
@@ -254,7 +274,7 @@ function droidModelDescriptor(
       label: effort.name,
       ...(effort.description ? { description: effort.description } : {}),
     })),
-    ...(reasoning?.currentValue ? { defaultReasoningEffort: reasoning.currentValue } : {}),
+    ...(optionDescriptors ? { optionDescriptors } : {}),
     supportsFastMode: false,
     supportsThinkingToggle: false,
   };

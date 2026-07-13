@@ -42,7 +42,9 @@ export const DROID_REASONING_EFFORT_OPTIONS = [
   "xhigh",
   "max",
 ] as const;
-export type DroidReasoningEffort = (typeof DROID_REASONING_EFFORT_OPTIONS)[number];
+// Droid exposes effort values dynamically over ACP; keep the static list only
+// as an offline fallback so newly added values survive transport and drafts.
+export type DroidReasoningEffort = string;
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
@@ -145,7 +147,7 @@ export const GrokModelOptions = Schema.Struct({
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
 export const DroidModelOptions = Schema.Struct({
-  reasoningEffort: Schema.optional(Schema.Literals(DROID_REASONING_EFFORT_OPTIONS)),
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
@@ -286,8 +288,22 @@ const DROID_CLAUDE_BASIC_CAPABILITIES = droidCapabilities([
 ]);
 
 const DROID_GPT_MEDIUM_CAPABILITIES = droidCapabilities([
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GPT_5_6_CAPABILITIES = droidCapabilities([
   { value: "none", label: "None" },
   { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Maximum" },
+]);
+
+const DROID_GPT_PRO_CAPABILITIES = droidCapabilities([
   { value: "medium", label: "Medium", isDefault: true },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra High" },
@@ -688,6 +704,21 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CLAUDE_BASIC_CAPABILITIES,
     },
     {
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
       slug: "gpt-5.5",
       name: "GPT-5.5",
       capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
@@ -700,7 +731,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "gpt-5.5-pro",
       name: "GPT-5.5 Pro",
-      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+      capabilities: DROID_GPT_PRO_CAPABILITIES,
     },
     {
       slug: "gpt-5.4",
