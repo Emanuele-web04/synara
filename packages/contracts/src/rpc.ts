@@ -125,8 +125,14 @@ import {
   ProjectWriteFileResult,
 } from "./project";
 import {
+  CodexRateLimitResetCredits,
+  CodexRateLimitResetOutcome,
+  CodexRateLimitResetResult,
+  CodexResetCredit,
   ServerConfig,
   ServerConfigStreamEvent,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
