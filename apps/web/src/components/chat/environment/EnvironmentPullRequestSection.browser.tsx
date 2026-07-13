@@ -99,6 +99,7 @@ describe("EnvironmentPullRequestSection", () => {
           gitCwd={cwd}
           enabled
           activeThreadId={threadId}
+          projectId={null}
           onOpenUrl={vi.fn()}
           onClose={onClose}
         />

@@ -338,6 +338,7 @@ export function EnvironmentPanel({
           gitCwd={gitCwd}
           enabled={open}
           activeThreadId={activeThreadId}
+          projectId={activeProjectId}
           onOpenUrl={onOpenGithubRepository}
           onClose={onClose}
         />

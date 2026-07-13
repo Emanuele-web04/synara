@@ -4,13 +4,20 @@
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers and the shared Environment row skin.
 
-import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@synara/contracts";
+import type {
+  GitPullRequestCheck,
+  GitPullRequestComment,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { DiffStatLabel } from "../DiffStatLabel";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
+import { PullRequestCheckStatusIcon } from "../../pullRequest/PullRequestCheckStatusIcon";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import {
@@ -25,6 +32,7 @@ import {
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
+import { useRightDockStore } from "~/rightDockStore";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -44,26 +52,6 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
-
-function CheckStatusIcon({ status }: { status: GitPullRequestCheck["status"] }) {
-  switch (status) {
-    case "pending":
-      return <Loader2Icon className="size-3.5 shrink-0 animate-spin text-warning" aria-hidden />;
-    case "success":
-      return <CircleCheckIcon className="size-3.5 shrink-0 text-success" aria-hidden />;
-    case "failure":
-    case "cancelled":
-      return <CircleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-hidden />;
-    default:
-      // Skipped/neutral render as GitHub's dashed "not run" circle.
-      return (
-        <span
-          className="size-3 shrink-0 rounded-full border border-dashed border-current opacity-50"
-          aria-hidden
-        />
-      );
-  }
-}
 
 function checksToneIcon(tone: PullRequestChecksTone) {
   switch (tone) {
@@ -144,7 +132,7 @@ function ChecksMenuRow({
       onOpenUrl={onOpenUrl}
       className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1 text-[length:var(--app-font-size-ui,12px)]"
     >
-      <CheckStatusIcon status={check.status} />
+      <PullRequestCheckStatusIcon status={check.status} />
       <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{check.name}</span>
       <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
         {PULL_REQUEST_CHECK_STATUS_LABELS[check.status]}
@@ -198,6 +186,7 @@ export function EnvironmentPullRequestSection({
   gitCwd,
   enabled,
   activeThreadId,
+  projectId,
   onOpenUrl,
   onClose,
 }: {
@@ -205,10 +194,12 @@ export function EnvironmentPullRequestSection({
   /** Gate polling on the panel being open (mirrors the Local Servers section). */
   enabled: boolean;
   activeThreadId: ThreadId | null;
-  /** Open a URL in the in-app browser panel. */
+  projectId: ProjectId | null;
+  /** Open non-PR URLs in the in-app browser panel. */
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const openPane = useRightDockStore((store) => store.openPane);
   // Shares the cached git status the git block already fetches — no extra RPC.
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
   const pr = gitStatus?.pr ?? null;
@@ -235,6 +226,21 @@ export function EnvironmentPullRequestSection({
   const settledState = displayPr.state !== "open" ? displayPr.state : null;
   const diffStat = summarizePullRequestDiffStat(displayPr);
   const hasConflicts = settledState === null && displayPr.mergeability === "conflicting";
+  const pullRequestRepository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(displayPr.url);
+  const openPullRequest = (initialTab: "summary" | "code" = "summary") => {
+    if (activeThreadId && projectId && pullRequestRepository) {
+      openPane(activeThreadId, {
+        kind: "pullRequest",
+        pullRequestProjectId: projectId,
+        pullRequestRepository,
+        pullRequestNumber: displayPr.number,
+        pullRequestInitialTab: initialTab,
+      });
+    } else {
+      onOpenUrl(displayPr.url);
+    }
+    onClose();
+  };
 
   const checks = snapshotQuery.data?.checks ?? [];
   const comments = snapshotQuery.data?.comments ?? [];
@@ -292,8 +298,7 @@ export function EnvironmentPullRequestSection({
         }
         trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
         onClick={() => {
-          onOpenUrl(displayPr.url);
-          onClose();
+          openPullRequest();
         }}
       />
 
@@ -309,10 +314,9 @@ export function EnvironmentPullRequestSection({
             </span>
           }
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          title="Open the PR file changes on GitHub"
+          title="Open pull request file changes"
           onClick={() => {
-            onOpenUrl(`${displayPr.url}/files`);
-            onClose();
+            openPullRequest("code");
           }}
         />
       ) : null}
@@ -330,8 +334,7 @@ export function EnvironmentPullRequestSection({
             label={<span className="truncate">{`Conflicts with ${displayPr.baseBranch}`}</span>}
             trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
-              onOpenUrl(displayPr.url);
-              onClose();
+              openPullRequest();
             }}
           />
           {activeThreadId ? (
@@ -365,8 +368,7 @@ export function EnvironmentPullRequestSection({
           label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
-            onOpenUrl(displayPr.url);
-            onClose();
+            openPullRequest();
           }}
         />
       ) : failed ? (

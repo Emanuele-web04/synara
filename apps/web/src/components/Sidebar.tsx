@@ -134,6 +134,7 @@ import {
 } from "../lib/providerDiscoveryReactQuery";
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
+import { pullRequestsListQueryOptions } from "../lib/pullRequestReactQuery";
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
@@ -1413,6 +1414,7 @@ export default function Sidebar() {
   const isOnStudioRoute = pathname.startsWith("/studio");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
+  const isOnPullRequests = pathname.startsWith("/pull-requests");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -1432,6 +1434,22 @@ export default function Sidebar() {
     if (!data) return 0;
     return automationAttentionCount(data.runs);
   }, [automationListQuery.data]);
+  // Lightweight read of open PRs awaiting the viewer's review, driving the sidebar attention
+  // badge. Shares the `pullRequestsListQueryOptions` query key family with the /pull-requests
+  // route so both surfaces read the same cache — but overrides staleTime/refetchInterval here
+  // since this is a passive background poll and shouldn't hammer `gh` every 60s just because the
+  // sidebar happens to be mounted.
+  const pullRequestsReviewingQuery = useQuery({
+    ...pullRequestsListQueryOptions({ involvement: "reviewing", state: "open", projectId: null }),
+    enabled: projects.some((project) => project.kind === "project"),
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+  const pullRequestsReviewBadgeCount = useMemo(() => {
+    const entries = pullRequestsReviewingQuery.data?.entries;
+    if (!entries) return 0;
+    return entries.filter((entry) => entry.viewerReviewRequested).length;
+  }, [pullRequestsReviewingQuery.data]);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
@@ -6793,6 +6811,18 @@ export default function Sidebar() {
                         badgeCount={automationAttentionBadgeCount}
                         onClick={() => {
                           void navigate({ to: "/automations" });
+                        }}
+                      />
+                      <SidebarPrimaryAction
+                        icon={GitPullRequestIcon}
+                        label="Pull requests"
+                        active={isOnPullRequests}
+                        badgeCount={pullRequestsReviewBadgeCount}
+                        onClick={() => {
+                          void navigate({
+                            to: "/pull-requests",
+                            search: { involvement: "all", state: "open" },
+                          });
                         }}
                       />
                     </>
