@@ -57,6 +57,7 @@ import {
   IconMoon,
   IconPalette,
   IconPaperclip,
+  IconPlayerPause,
   IconPlayerPlay,
   IconPlayerStop,
   IconPlayerStopFilled,
@@ -239,6 +240,7 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 // Solid pin from the fill set — used wherever a pin reflects "pinned" status
 // (project + thread rows and their hover cards) rather than a neutral action.
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
+export const PauseIcon = adaptIcon(IconPlayerPause);
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);

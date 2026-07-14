@@ -465,6 +465,7 @@ import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
 import { deriveComposerSubagentStripItems } from "./chat/ComposerSubagentStrip.logic";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import {
+  buildWorkflowResumePrompt,
   deriveWorkflowRunState,
   type WorkflowSubagentThreadRef,
 } from "./chat/WorkflowRunCard.logic";
@@ -1291,6 +1292,15 @@ export default function ChatView({
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
+  // Transient, client-only workflow run flags keyed by workflow task id:
+  // pausedByUser tells the settled card apart from a plain stop; dismissed
+  // retires a settled card the run's activities would otherwise keep visible.
+  const [pausedWorkflowTaskIds, setPausedWorkflowTaskIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [dismissedWorkflowTaskIds, setDismissedWorkflowTaskIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
   // model name, traits label). Inputs live in a ref so the resize observer
@@ -2724,10 +2734,17 @@ export default function ChatView({
       deriveWorkflowRunState({
         activities: threadActivities,
         subagentThreadsByToolUseId: workflowSubagentThreadsByToolUseId,
+        pausedByUserTaskIds: pausedWorkflowTaskIds,
+        dismissedTaskIds: dismissedWorkflowTaskIds,
       }),
-    [threadActivities, workflowSubagentThreadsByToolUseId],
+    [
+      threadActivities,
+      workflowSubagentThreadsByToolUseId,
+      pausedWorkflowTaskIds,
+      dismissedWorkflowTaskIds,
+    ],
   );
-  const workflowNowMs = useNowMs(workflowRunState !== null);
+  const workflowNowMs = useNowMs(workflowRunState !== null && !workflowRunState.settled);
   // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
   // the composer mounts/unmounts, and the observer catches every panel appearing,
   // resizing, or collapsing. Measuring the wrapper (rather than each panel) keeps one
@@ -5841,6 +5858,21 @@ export default function ChatView({
     });
   }, [activeThread, workflowRunState]);
 
+  // Pause is the same stop command; the local flag makes the settled card read
+  // as paused (with a resume affordance) instead of plain stopped.
+  const onPauseWorkflowRun = useCallback(async () => {
+    if (!workflowRunState) return;
+    const { workflowTaskId } = workflowRunState;
+    setPausedWorkflowTaskIds((existing) => new Set(existing).add(workflowTaskId));
+    await onStopWorkflowRun();
+  }, [onStopWorkflowRun, workflowRunState]);
+
+  const onDismissWorkflowRun = useCallback(() => {
+    if (!workflowRunState) return;
+    const { workflowTaskId } = workflowRunState;
+    setDismissedWorkflowTaskIds((existing) => new Set(existing).add(workflowTaskId));
+  }, [workflowRunState]);
+
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: ModelSlug) => {
       if (!activeThread) return;
@@ -8542,6 +8574,52 @@ export default function ChatView({
     [],
   );
 
+  // Resuming a workflow is a normal composer turn instructing the agent to
+  // re-invoke the Workflow tool against the persisted script; completed agent()
+  // calls replay from cache, so a paused run picks up where it stopped. Sent as
+  // a pre-built chat turn so it takes the exact send path a queued turn does.
+  const onResumeWorkflowRun = useCallback(async () => {
+    if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
+    const { workflowTaskId } = workflowRunState;
+    const prompt = buildWorkflowResumePrompt(workflowRunState.scriptPath, workflowRunState.runId);
+    const sent = await onSendRef.current(undefined, "queue", {
+      id: randomUUID(),
+      kind: "chat",
+      createdAt: new Date().toISOString(),
+      previewText: prompt,
+      prompt,
+      images: [],
+      files: [],
+      assistantSelections: [],
+      terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      skills: [],
+      mentions: [],
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      modelSelection: selectedModelSelection,
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+      runtimeMode,
+      interactionMode,
+      envMode,
+    });
+    if (sent) {
+      setDismissedWorkflowTaskIds((existing) => new Set(existing).add(workflowTaskId));
+    }
+  }, [
+    envMode,
+    interactionMode,
+    providerOptionsForDispatch,
+    runtimeMode,
+    selectedModel,
+    selectedModelSelection,
+    selectedPromptEffort,
+    selectedProvider,
+    workflowRunState,
+  ]);
+
   const onSteerQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn) => {
       const previousQueue = queuedComposerTurnsRef.current;
@@ -10450,6 +10528,9 @@ export default function ChatView({
                   onCompactChange={setWorkflowRunCardCompact}
                   onOpenThread={onNavigateToThread}
                   onStop={onStopWorkflowRun}
+                  onPause={onPauseWorkflowRun}
+                  onResume={onResumeWorkflowRun}
+                  onDismiss={onDismissWorkflowRun}
                   attachedToPrevious={
                     showComposerLiveChangesHeader || showComposerActiveTaskListCard
                   }

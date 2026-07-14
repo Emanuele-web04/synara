@@ -478,6 +478,22 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
+// Phase declared in a workflow script's `meta.phases` literal.
+const WorkflowPhase = Schema.Struct({
+  title: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowPhase = typeof WorkflowPhase.Type;
+
+// Final per-agent snapshot from a settled workflow's progress file.
+const WorkflowAgentSnapshot = Schema.Struct({
+  label: TrimmedNonEmptyStringSchema,
+  phaseIndex: Schema.optional(Schema.Int),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
+
 const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -485,6 +501,11 @@ const TaskStartedPayload = Schema.Struct({
   subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Parsed statically from the workflow script (task_started.prompt or the
+  // Workflow tool input); absent when the meta literal is not parseable.
+  workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
+  // agent() label -> phase title pairs scanned from the script text.
+  workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
@@ -506,6 +527,10 @@ const TaskUpdatedPayload = Schema.Struct({
   ),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Persisted launch identifiers from the Workflow tool result; re-invoking the
+  // tool with {scriptPath, resumeFromRunId} resumes the run.
+  workflowRunId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowScriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
@@ -515,6 +540,7 @@ const TaskCompletedPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 

@@ -1225,6 +1225,12 @@ function runtimeEventToActivities(
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
               : {}),
+            ...(event.payload.workflowPhases
+              ? { workflowPhases: event.payload.workflowPhases }
+              : {}),
+            ...(event.payload.workflowAgentPhases
+              ? { workflowAgentPhases: event.payload.workflowAgentPhases }
+              : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
@@ -1247,6 +1253,9 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
+            // Kept verbatim next to detail: workflow progress encodes
+            // "<phase>: <agent label>" here and the panel parses it back out.
+            description: truncateDetail(event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
@@ -1281,6 +1290,9 @@ function runtimeEventToActivities(
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
               : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1307,6 +1319,10 @@ function runtimeEventToActivities(
             ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowRunId ? { workflowRunId: event.payload.workflowRunId } : {}),
+            ...(event.payload.workflowScriptPath
+              ? { workflowScriptPath: event.payload.workflowScriptPath }
               : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,

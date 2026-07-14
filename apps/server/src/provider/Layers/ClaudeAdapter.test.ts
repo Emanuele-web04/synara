@@ -1865,6 +1865,201 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("surfaces workflow meta, launch identifiers, and final agents on task events", () => {
+    const outputDir = mkdtempSync(path.join(os.tmpdir(), "claude-workflow-output-"));
+    const harness = makeHarness();
+    const workflowScript = `export const meta = {
+  name: "spec",
+  description: "Draft the feature spec",
+  phases: [
+    { title: "One", detail: "Research" },
+    { title: "Two" },
+  ],
+};
+
+const research = await agent("Research prior art", { label: "gamma-agent", phase: "One" });
+await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
+`;
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() =>
+          rmSync(outputDir, {
+            recursive: true,
+            force: true,
+          }),
+        ),
+      );
+      const outputFile = path.join(outputDir, "wf-real-1-output.json");
+      writeFileSync(
+        outputFile,
+        JSON.stringify({
+          workflowProgress: [
+            { type: "workflow_phase", title: "One" },
+            {
+              type: "workflow_agent",
+              label: "gamma-agent",
+              phaseIndex: 0,
+              agentId: "agent-1",
+              model: "haiku",
+              state: "completed",
+            },
+            { type: "workflow_agent", label: "delta-agent", phaseIndex: 1, state: "completed" },
+          ],
+        }),
+      );
+
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.completed" && event.payload.taskId === "wf-real-1",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-workflow-meta",
+        uuid: "stream-workflow-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-workflow-1",
+            name: "Workflow",
+            input: { script: workflowScript },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // task_started carries the full script text as `prompt`.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-real-1",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        tool_use_id: "tool-workflow-1",
+        description: "Draft the feature spec",
+        prompt: workflowScript,
+        session_id: "sdk-session-workflow-meta",
+        uuid: "workflow-meta-started",
+      } as unknown as SDKMessage);
+
+      // Member agents emit no task events of their own; the workflow's own
+      // progress carries "<phase>: <label>" descriptions.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "wf-real-1",
+        tool_use_id: "tool-workflow-1",
+        description: "One: gamma-agent",
+        usage: { total_tokens: 900, tool_uses: 4, duration_ms: 5_000 },
+        session_id: "sdk-session-workflow-meta",
+        uuid: "workflow-meta-progress",
+      } as unknown as SDKMessage);
+
+      // The Workflow tool returns immediately with a structured async launch.
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-workflow-meta",
+        uuid: "workflow-meta-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-workflow-1",
+              content: "Workflow running in background",
+            },
+          ],
+        },
+        tool_use_result: {
+          status: "async_launched",
+          taskId: "wf-real-1",
+          taskType: "local_workflow",
+          workflowName: "spec",
+          runId: "wf_abc123",
+          summary: "Launched",
+          transcriptDir: outputDir,
+          scriptPath: "/sessions/abc/workflow-spec.ts",
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "wf-real-1",
+        tool_use_id: "tool-workflow-1",
+        status: "completed",
+        output_file: outputFile,
+        summary: "Workflow finished.",
+        usage: { total_tokens: 2_000, tool_uses: 9, duration_ms: 60_000 },
+        session_id: "sdk-session-workflow-meta",
+        uuid: "workflow-meta-notification",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const workflowStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "wf-real-1",
+      );
+      assert.equal(workflowStarted?.type, "task.started");
+      if (workflowStarted?.type === "task.started") {
+        assert.equal(workflowStarted.payload.workflowName, "spec");
+        assert.deepEqual(workflowStarted.payload.workflowPhases, [
+          { title: "One", detail: "Research" },
+          { title: "Two" },
+        ]);
+        assert.deepEqual(workflowStarted.payload.workflowAgentPhases, {
+          "gamma-agent": "One",
+          "delta-agent": "Two",
+        });
+      }
+
+      const workflowProgress = runtimeEvents.find(
+        (event) => event.type === "task.progress" && event.payload.taskId === "wf-real-1",
+      );
+      assert.equal(workflowProgress?.type, "task.progress");
+      if (workflowProgress?.type === "task.progress") {
+        assert.equal(workflowProgress.payload.description, "One: gamma-agent");
+      }
+
+      const workflowLaunch = runtimeEvents.find(
+        (event) => event.type === "task.updated" && event.payload.taskId === "wf-real-1",
+      );
+      assert.equal(workflowLaunch?.type, "task.updated");
+      if (workflowLaunch?.type === "task.updated") {
+        assert.equal(workflowLaunch.payload.workflowRunId, "wf_abc123");
+        assert.equal(workflowLaunch.payload.workflowScriptPath, "/sessions/abc/workflow-spec.ts");
+      }
+
+      const workflowCompleted = runtimeEvents.find(
+        (event) => event.type === "task.completed" && event.payload.taskId === "wf-real-1",
+      );
+      assert.equal(workflowCompleted?.type, "task.completed");
+      if (workflowCompleted?.type === "task.completed") {
+        assert.deepEqual(workflowCompleted.payload.workflowAgents, [
+          { label: "gamma-agent", phaseIndex: 0, model: "haiku", state: "completed" },
+          { label: "delta-agent", phaseIndex: 1, state: "completed" },
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps task_updated status patches onto the subagent thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

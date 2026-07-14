@@ -1,14 +1,18 @@
 // FILE: WorkflowRunCard.logic.test.ts
 // Purpose: Locks workflow run panel derivation to task-activity folding: workflow
-// identity, member tagging, status/usage snapshots, thread linking, and retiring
-// once the workflow run settles.
+// identity, agent rows from progress descriptions and tagged member tasks, phase
+// rail grouping, pause/resume identifiers, and settled-card visibility.
 // Layer: Web chat composer tests
 // Depends on: deriveWorkflowRunState
 
 import { EventId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { deriveWorkflowRunState, workflowElapsedMs } from "./WorkflowRunCard.logic";
+import {
+  buildWorkflowResumePrompt,
+  deriveWorkflowRunState,
+  workflowElapsedMs,
+} from "./WorkflowRunCard.logic";
 
 function activity(overrides: {
   id: string;
@@ -30,6 +34,8 @@ function activity(overrides: {
 function workflowStarted(overrides?: {
   id?: string;
   taskId?: string;
+  workflowPhases?: Array<{ title: string; detail?: string }>;
+  workflowAgentPhases?: Record<string, string>;
 }): OrchestrationThreadActivity {
   return activity({
     id: overrides?.id ?? "workflow-started",
@@ -40,6 +46,28 @@ function workflowStarted(overrides?: {
       taskType: "local_workflow",
       workflowName: "spec",
       detail: "Draft the feature spec",
+      ...(overrides?.workflowPhases ? { workflowPhases: overrides.workflowPhases } : {}),
+      ...(overrides?.workflowAgentPhases
+        ? { workflowAgentPhases: overrides.workflowAgentPhases }
+        : {}),
+    },
+  });
+}
+
+function workflowProgress(overrides: {
+  id: string;
+  createdAt: string;
+  description: string;
+}): OrchestrationThreadActivity {
+  return activity({
+    id: overrides.id,
+    createdAt: overrides.createdAt,
+    kind: "task.progress",
+    payload: {
+      taskId: "wf-1",
+      detail: overrides.description,
+      description: overrides.description,
+      usage: { total_tokens: 100, tool_uses: 1, duration_ms: 1_000 },
     },
   });
 }
@@ -183,6 +211,199 @@ describe("deriveWorkflowRunState", () => {
     expect(settled).toBeNull();
   });
 
+  it("derives agent rows and the phase rail from workflow progress descriptions", () => {
+    const state = deriveWorkflowRunState({
+      activities: [
+        workflowStarted({
+          workflowPhases: [{ title: "One", detail: "Research" }, { title: "Two" }],
+        }),
+        workflowProgress({
+          id: "wf-progress-1",
+          createdAt: "2026-07-14T00:00:05.000Z",
+          description: "One: gamma-agent",
+        }),
+        workflowProgress({
+          id: "wf-progress-2",
+          createdAt: "2026-07-14T00:00:06.000Z",
+          description: "One: beta-agent",
+        }),
+        workflowProgress({
+          id: "wf-progress-3",
+          createdAt: "2026-07-14T00:00:20.000Z",
+          description: "Two: delta-agent",
+        }),
+      ],
+    });
+
+    expect(
+      state?.agents.map((agent) => [agent.description, agent.phase, agent.statusKind]),
+    ).toEqual([
+      ["gamma-agent", "One", "completed"],
+      ["beta-agent", "One", "completed"],
+      ["delta-agent", "Two", "running"],
+    ]);
+    expect(state?.runningCount).toBe(1);
+    expect(
+      state?.phases?.map((phase) => [
+        phase.title,
+        phase.doneCount,
+        phase.totalCount,
+        phase.isCurrent,
+      ]),
+    ).toEqual([
+      ["One", 2, 2, false],
+      ["Two", 0, 1, true],
+    ]);
+    // Progress rows are synthetic; only real task ids feed the dedupe list.
+    expect(state?.taskIds).toEqual(["wf-1"]);
+  });
+
+  it("buckets member-task rows via the script label map with an Other fallback", () => {
+    const state = deriveWorkflowRunState({
+      activities: [
+        workflowStarted({
+          workflowPhases: [{ title: "One" }, { title: "Two" }],
+          workflowAgentPhases: { "Research prior art": "One" },
+        }),
+        agentStarted({ taskId: "agent-early" }),
+        agentStarted({ taskId: "agent-1" }),
+        agentStarted({ taskId: "agent-late" }),
+      ].map((entry, index) =>
+        entry.kind === "task.started" && index > 0
+          ? {
+              ...entry,
+              id: EventId.makeUnsafe(`ordered-${index}`),
+              payload: {
+                ...(entry.payload as Record<string, unknown>),
+                detail:
+                  index === 1 ? "Mystery task" : index === 2 ? "research PRIOR art" : "Helper task",
+              },
+            }
+          : entry,
+      ),
+    });
+
+    expect(state?.agents.map((agent) => [agent.description, agent.phase])).toEqual([
+      ["Mystery task", "Other"],
+      ["research PRIOR art", "One"],
+      ["Helper task", "One"],
+    ]);
+    expect(state?.phases?.map((phase) => phase.title)).toEqual(["One", "Two", "Other"]);
+  });
+
+  it("keeps the flat phase-less rendering when no phase information exists", () => {
+    const state = deriveWorkflowRunState({
+      activities: [
+        workflowStarted(),
+        agentStarted(),
+        workflowProgress({
+          id: "wf-progress-bare",
+          createdAt: "2026-07-14T00:00:06.000Z",
+          description: "gamma-agent",
+        }),
+      ],
+    });
+
+    expect(state?.phases).toBeNull();
+    expect(state?.agents.map((agent) => agent.phase)).toEqual([null, null]);
+  });
+
+  it("captures resume identifiers and keeps the settled card visible for resume", () => {
+    const activities = [
+      workflowStarted({ workflowPhases: [{ title: "One" }, { title: "Two" }] }),
+      activity({
+        id: "wf-launch",
+        createdAt: "2026-07-14T00:00:02.000Z",
+        kind: "task.updated",
+        payload: {
+          taskId: "wf-1",
+          workflowRunId: "wf_abc123",
+          workflowScriptPath: "/sessions/abc/workflow-spec.ts",
+        },
+      }),
+      workflowProgress({
+        id: "wf-progress-1",
+        createdAt: "2026-07-14T00:00:05.000Z",
+        description: "One: gamma-agent",
+      }),
+      activity({
+        id: "wf-stopped",
+        createdAt: "2026-07-14T00:01:00.000Z",
+        kind: "task.completed",
+        payload: { taskId: "wf-1", status: "stopped" },
+      }),
+    ];
+
+    const state = deriveWorkflowRunState({ activities });
+    expect(state?.settled).toBe(true);
+    expect(state?.status).toBe("stopped");
+    expect(state?.pausedByUser).toBe(false);
+    expect(state?.runId).toBe("wf_abc123");
+    expect(state?.scriptPath).toBe("/sessions/abc/workflow-spec.ts");
+    expect(state?.agents.map((agent) => agent.statusKind)).toEqual(["stopped"]);
+
+    const paused = deriveWorkflowRunState({
+      activities,
+      pausedByUserTaskIds: new Set(["wf-1"]),
+    });
+    expect(paused?.pausedByUser).toBe(true);
+
+    expect(deriveWorkflowRunState({ activities, dismissedTaskIds: new Set(["wf-1"]) })).toBeNull();
+  });
+
+  it("backfills settled rows from the final workflow agent snapshots", () => {
+    const state = deriveWorkflowRunState({
+      activities: [
+        workflowStarted({ workflowPhases: [{ title: "One" }, { title: "Two" }] }),
+        workflowProgress({
+          id: "wf-progress-1",
+          createdAt: "2026-07-14T00:00:05.000Z",
+          description: "One: gamma-agent",
+        }),
+        activity({
+          id: "wf-launch",
+          createdAt: "2026-07-14T00:00:06.000Z",
+          kind: "task.updated",
+          payload: {
+            taskId: "wf-1",
+            workflowRunId: "wf_abc123",
+            workflowScriptPath: "/sessions/abc/workflow-spec.ts",
+          },
+        }),
+        activity({
+          id: "wf-completed",
+          createdAt: "2026-07-14T00:01:00.000Z",
+          kind: "task.completed",
+          payload: {
+            taskId: "wf-1",
+            status: "completed",
+            workflowAgents: [
+              { label: "gamma-agent", phaseIndex: 0, state: "failed" },
+              { label: "epsilon-agent", phaseIndex: 1, model: "haiku", state: "completed" },
+            ],
+          },
+        }),
+      ],
+    });
+
+    expect(
+      state?.agents.map((agent) => [
+        agent.description,
+        agent.phase,
+        agent.statusKind,
+        agent.modelLabel,
+      ]),
+    ).toEqual([
+      ["gamma-agent", "One", "failed", undefined],
+      ["epsilon-agent", "Two", "completed", "Haiku"],
+    ]);
+    // Everything settled: the last phase with agents is the current one.
+    expect(state?.phases?.map((phase) => [phase.title, phase.isCurrent])).toEqual([
+      ["One", false],
+      ["Two", true],
+    ]);
+  });
+
   it("prefers the latest workflow run when an earlier one already settled", () => {
     const state = deriveWorkflowRunState({
       activities: [
@@ -197,6 +418,14 @@ describe("deriveWorkflowRunState", () => {
       ],
     });
     expect(state?.workflowTaskId).toBe("wf-2");
+  });
+});
+
+describe("buildWorkflowResumePrompt", () => {
+  it("keeps the exact resume phrasing", () => {
+    expect(buildWorkflowResumePrompt("/sessions/abc/workflow-spec.ts", "wf_abc123")).toBe(
+      'Resume the workflow by invoking the Workflow tool with {"scriptPath": "/sessions/abc/workflow-spec.ts", "resumeFromRunId": "wf_abc123"}. Do not modify the script.',
+    );
   });
 });
 

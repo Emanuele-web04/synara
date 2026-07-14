@@ -98,6 +98,13 @@ import {
   parseClaudeTrackedTasks,
   type ClaudeTrackedTask,
 } from "../claudeTaskTracker.ts";
+import {
+  extractClaudeWorkflowAgentPhases,
+  parseClaudeWorkflowLaunch,
+  parseClaudeWorkflowLaunchFromText,
+  parseClaudeWorkflowProgressAgents,
+  parseClaudeWorkflowScriptMeta,
+} from "../claudeWorkflowScript.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
@@ -2763,6 +2770,44 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
           }
 
+          // The Workflow tool returns async_launched with the persisted script
+          // path and runId; surfacing them on task.updated is what lets the
+          // panel offer stop-then-resume.
+          const workflowLaunch =
+            parseClaudeWorkflowLaunch(toolResult.structuredResult) ??
+            (tool.toolName === "Workflow" && toolResult.text.length > 0
+              ? parseClaudeWorkflowLaunchFromText(toolResult.text)
+              : undefined);
+          const workflowLaunchTaskId =
+            workflowLaunch?.taskId ??
+            (context.liveWorkflowTaskIds.size === 1
+              ? Array.from(context.liveWorkflowTaskIds)[0]
+              : undefined);
+          if (workflowLaunch && workflowLaunchTaskId) {
+            const launchStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent({
+              type: "task.updated",
+              eventId: launchStamp.eventId,
+              provider: PROVIDER,
+              createdAt: launchStamp.createdAt,
+              threadId: context.session.threadId,
+              ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+              payload: {
+                taskId: RuntimeTaskId.makeUnsafe(workflowLaunchTaskId),
+                ...(workflowLaunch.runId ? { workflowRunId: workflowLaunch.runId } : {}),
+                ...(workflowLaunch.scriptPath
+                  ? { workflowScriptPath: workflowLaunch.scriptPath }
+                  : {}),
+              },
+              providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
+              raw: {
+                source: "claude.sdk.message",
+                method: "claude/user",
+                payload: message,
+              },
+            });
+          }
+
           const completedStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
             type: "item.completed",
@@ -3003,6 +3048,33 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Workflow scripts arrive inline: task_started.prompt carries the full text,
+    // with the Workflow tool input (`script`, or a resume-style `scriptPath` read
+    // best-effort) as fallback. Absence just means no parsed meta on the event.
+    const resolveWorkflowScriptText = (
+      context: ClaudeSessionContext,
+      message: Extract<SDKMessage, { subtype: "task_started" }>,
+    ): Effect.Effect<string | undefined> =>
+      Effect.gen(function* () {
+        if (typeof message.prompt === "string" && message.prompt.trim().length > 0) {
+          return message.prompt;
+        }
+        const tool = message.tool_use_id
+          ? Array.from(context.inFlightTools.values()).find(
+              (candidate) => candidate.itemId === message.tool_use_id,
+            )
+          : undefined;
+        if (typeof tool?.input.script === "string" && tool.input.script.trim().length > 0) {
+          return tool.input.script;
+        }
+        if (typeof tool?.input.scriptPath === "string" && tool.input.scriptPath.length > 0) {
+          return yield* fileSystem
+            .readFileString(tool.input.scriptPath)
+            .pipe(Effect.orElseSucceed(() => undefined));
+        }
+        return undefined;
+      });
+
     const handleSystemMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -3212,6 +3284,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               context.workflowTaskIdByMemberTaskId.set(message.task_id, workflowTaskId!);
             }
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+            const workflowScript =
+              message.task_type === "local_workflow"
+                ? yield* resolveWorkflowScriptText(context, message)
+                : undefined;
+            const workflowMeta = workflowScript
+              ? parseClaudeWorkflowScriptMeta(workflowScript)
+              : undefined;
+            const workflowAgentPhases = workflowScript
+              ? extractClaudeWorkflowAgentPhases(workflowScript)
+              : undefined;
+            const workflowName = message.workflow_name ?? workflowMeta?.name;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.started",
@@ -3220,10 +3303,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 description: message.description,
                 ...(message.task_type ? { taskType: message.task_type } : {}),
                 ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
-                ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
+                ...(workflowName ? { workflowName } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
                   : {}),
+                ...(workflowMeta?.phases ? { workflowPhases: workflowMeta.phases } : {}),
+                ...(workflowAgentPhases ? { workflowAgentPhases } : {}),
                 ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
               },
             });
@@ -3251,6 +3336,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           case "task_notification": {
             yield* emitTaskUsageSnapshot(context, message);
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+            // Settled workflows: the output file's workflowProgress carries the
+            // final per-agent states/models the live stream never surfaced.
+            const workflowAgents =
+              context.liveWorkflowTaskIds.has(message.task_id) &&
+              typeof message.output_file === "string" &&
+              message.output_file.length > 0
+                ? yield* fileSystem.readFileString(message.output_file).pipe(
+                    Effect.map(parseClaudeWorkflowProgressAgents),
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.completed",
@@ -3262,6 +3358,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
                   : {}),
+                ...(workflowAgents ? { workflowAgents } : {}),
               },
             });
             context.liveWorkflowTaskIds.delete(message.task_id);
