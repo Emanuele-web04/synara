@@ -26,10 +26,7 @@ function acpRequestErrorDetail(error: EffectAcpErrors.AcpRequestError): string {
           })()
         : "";
 
-  if (
-    dataDetail &&
-    /^(?:internal error(?:: agent error)?|agent error)$/iu.test(message)
-  ) {
+  if (dataDetail && /^(?:internal error(?:: agent error)?|agent error)$/iu.test(message)) {
     return dataDetail;
   }
   return message || dataDetail || "ACP request failed.";

@@ -1204,32 +1204,35 @@ function ChatMarkdown({
         }
         return <input {...props} />;
       },
-      // Custom element emitted by the composer-chips remark plugin (user variant
-      // only; the element never appears in assistant markdown). Keyed by tag name
-      // like any other override, hence the cast through the Components map type.
-      [COMPOSER_CHIP_TAG_NAME as "span"]: (props: {
-        className?: string | undefined;
-        [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
-      }) => (
-        <ComposerChipElement
-          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-          theme={resolvedTheme}
-          mentionReferences={mentionReferences ?? []}
-        />
-      ),
-      [TERMINAL_CONTEXT_CHIP_TAG_NAME as "span"]: (props: {
-        [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
-      }) => {
-        const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
-        const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
-        const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
-        if (!context) {
-          return null;
-        }
-        const tooltipText =
-          context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-        return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
-      },
+      // Custom elements emitted by the composer-chips remark plugin (user
+      // variant only; they never appear in assistant markdown). `Components`
+      // only models intrinsic tags, so these entries are typed on their own
+      // and cast into the map.
+      ...({
+        [COMPOSER_CHIP_TAG_NAME]: (props: {
+          className?: string | undefined;
+          [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
+        }) => (
+          <ComposerChipElement
+            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+            theme={resolvedTheme}
+            mentionReferences={mentionReferences ?? []}
+          />
+        ),
+        [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
+          [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
+        }) => {
+          const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
+          const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
+          const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
+          if (!context) {
+            return null;
+          }
+          const tooltipText =
+            context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
+          return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+        },
+      } as unknown as Components),
     }),
     [
       cwd,

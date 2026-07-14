@@ -192,6 +192,14 @@ export const AppSettingsSchema = Schema.Struct({
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local desktop preference. Native capability/permission state remains owned by Electron.
+  // AppSnap is opt-in because enabling its Settings toggle requests macOS
+  // Input Monitoring and Screen Recording permissions.
+  enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Local desktop preference: play the shutter cue when an AppSnap lands in a composer.
+  appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Deprecated rename bridge. Normalization migrates this value and then omits the key.
+  enableAppshots: Schema.optionalKey(Schema.Boolean),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),
@@ -427,8 +435,10 @@ function normalizeProviderBinaryPathOverride(
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const { enableAppshots: legacyEnableAppshots, ...currentSettings } = settings;
   return {
-    ...settings,
+    ...currentSettings,
+    enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),

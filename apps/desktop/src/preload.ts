@@ -8,6 +8,7 @@ import {
 } from "./desktopWsBridge";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 import { STORAGE_MIGRATION_IPC_CHANNELS } from "./desktopStorageMigration";
+import { APPSNAP_IPC_CHANNELS } from "./appSnapIpc";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const SAVE_FILE_CHANNEL = "desktop:save-file";
@@ -119,6 +120,38 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   notifications: {
     isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
     show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
+  },
+  appSnap: {
+    getState: () => ipcRenderer.invoke(APPSNAP_IPC_CHANNELS.getState),
+    setEnabled: (enabled) => ipcRenderer.invoke(APPSNAP_IPC_CHANNELS.setEnabled, enabled),
+    requestPermissions: () => ipcRenderer.invoke(APPSNAP_IPC_CHANNELS.requestPermissions),
+    listPendingCaptures: () => ipcRenderer.invoke(APPSNAP_IPC_CHANNELS.listPendingCaptures),
+    acknowledgeCapture: (captureId) =>
+      ipcRenderer.invoke(APPSNAP_IPC_CHANNELS.acknowledgeCapture, captureId),
+    onCaptured: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
+        if (typeof capture !== "object" || capture === null) return;
+        listener(capture as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(APPSNAP_IPC_CHANNELS.captured, wrappedListener);
+      return () => ipcRenderer.removeListener(APPSNAP_IPC_CHANNELS.captured, wrappedListener);
+    },
+    onError: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, error: unknown) => {
+        if (typeof error !== "object" || error === null) return;
+        listener(error as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(APPSNAP_IPC_CHANNELS.error, wrappedListener);
+      return () => ipcRenderer.removeListener(APPSNAP_IPC_CHANNELS.error, wrappedListener);
+    },
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(APPSNAP_IPC_CHANNELS.state, wrappedListener);
+      return () => ipcRenderer.removeListener(APPSNAP_IPC_CHANNELS.state, wrappedListener);
+    },
   },
   storageMigration: {
     readSnapshot: () => ipcRenderer.sendSync(STORAGE_MIGRATION_IPC_CHANNELS.read),

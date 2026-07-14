@@ -156,6 +156,13 @@ import {
   resolveSynaraStorageSnapshotPath,
   STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+import { DesktopAppSnapManager } from "./appSnapManager";
+import {
+  registerAppSnapIpcHandlers,
+  sendAppSnapCaptured,
+  sendAppSnapError,
+  sendAppSnapState,
+} from "./appSnapIpc";
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -257,6 +264,7 @@ let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
+let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
@@ -1387,6 +1395,79 @@ function resolveNotificationIconPath(): string | null {
   return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
 
+function resolveAppSnapHelperPath(): string {
+  if (app.isPackaged) {
+    return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
+  }
+  return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
+}
+
+function ensureMainWindowForAppSnap(): BrowserWindow | null {
+  if (mainWindow?.isDestroyed()) {
+    mainWindow = null;
+  }
+  if (!mainWindow && backendPort > 0 && !isQuitting) {
+    mainWindow = createWindow();
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  focusMainWindow({ stealAppFocus: true });
+  return mainWindow;
+}
+
+function canSendAppSnapEvent(window: BrowserWindow | null): window is BrowserWindow {
+  return Boolean(
+    window &&
+    !window.isDestroyed() &&
+    !window.webContents.isDestroyed() &&
+    !window.webContents.isLoadingMainFrame(),
+  );
+}
+
+function sendAppSnapEvent(
+  window: BrowserWindow | null,
+  send: (webContents: BrowserWindow["webContents"]) => void,
+): boolean {
+  if (!canSendAppSnapEvent(window)) return false;
+  send(window.webContents);
+  return true;
+}
+
+function initializeDesktopAppSnap(): void {
+  if (appSnapManager) return;
+  appSnapManager = new DesktopAppSnapManager({
+    platform: process.platform,
+    helperPath: resolveAppSnapHelperPath(),
+    captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
+    excludedBundleId: APP_USER_MODEL_ID,
+    onState: (state) => {
+      sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
+    },
+    onCaptured: (capture) => {
+      const window = ensureMainWindowForAppSnap();
+      if (sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture))) {
+        return;
+      }
+      // The renderer is still loading: replay the event once the main frame is
+      // ready. The renderer dedupes by capture id, and the capture also stays
+      // in the pending queue as a fallback for the next mount.
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.once("did-finish-load", () => {
+          sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture));
+        });
+      }
+    },
+    onError: (error, focusApp) => {
+      const window = focusApp ? ensureMainWindowForAppSnap() : mainWindow;
+      if (!sendAppSnapEvent(window, (webContents) => sendAppSnapError(webContents, error))) {
+        showDesktopNotification({
+          title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
+          body: error.message,
+        });
+      }
+    },
+  });
+}
+
 // Keep the app badge aligned with desktop notifications that arrive off-focus.
 function syncUnreadNotificationBadge(): void {
   app.setBadgeCount(unreadBackgroundNotificationCount);
@@ -1394,7 +1475,7 @@ function syncUnreadNotificationBadge(): void {
 
 // Count minimized, hidden, or unfocused windows as background notification targets.
 function isMainWindowForeground(window: BrowserWindow | null): boolean {
-  if (!window) {
+  if (!window || window.isDestroyed()) {
     return false;
   }
   return window.isVisible() && !window.isMinimized() && window.isFocused();
@@ -1415,8 +1496,9 @@ function clearUnreadNotificationBadge(): void {
 
 // Reuse the existing desktop window when the app is launched again so users
 // don't end up with multiple packaged instances racing the same local state.
-function focusMainWindow(): void {
-  if (!mainWindow) {
+function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = null;
     return;
   }
   if (mainWindow.isMinimized()) {
@@ -1424,6 +1506,13 @@ function focusMainWindow(): void {
   }
   if (!mainWindow.isVisible()) {
     mainWindow.show();
+  }
+  if (process.platform === "darwin" && options.stealAppFocus === true) {
+    // BrowserWindow.focus() alone does not activate an app while another macOS
+    // application owns focus. Only AppSnap is an explicit global user gesture;
+    // notification clicks and ordinary activation keep their existing focus policy.
+    app.show();
+    app.focus({ steal: true });
   }
   mainWindow.focus();
 }
@@ -2672,6 +2761,8 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       clearUpdateCheckTimeoutTimer();
       clearUpdatePollTimer();
       cancelBackendReadinessWait();
+      appSnapManager?.dispose();
+      appSnapManager = null;
       await disposeBrowserUsePipeServerForShutdown(reason);
       await stopBackendAndWaitForExit();
       browserManager.dispose();
@@ -3010,6 +3101,9 @@ function registerIpcHandlers(): void {
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
+  if (appSnapManager) {
+    registerAppSnapIpcHandlers(ipcMain, appSnapManager);
+  }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   void ensureBrowserUsePipeServer().catch((error) => {
@@ -3312,6 +3406,7 @@ if (hasSingleInstanceLock) {
       applyLegacyMacDockIcon();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
+      initializeDesktopAppSnap();
       configureApplicationMenu();
       try {
         registerDesktopProtocol();

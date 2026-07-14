@@ -126,10 +126,11 @@ function normalizeTopLevelAcpJsonRpcLine(line: string): string {
 
     const result = parsed.result;
     const response = normalized ?? parsed;
+    const parsedError: unknown = parsed.error;
     if (
       "id" in parsed &&
       isProtocolError(parsed.error) &&
-      (!isJsonObject(parsed.error) || parsed.error._tag !== "Cause")
+      (!isJsonObject(parsedError) || parsedError._tag !== "Cause")
     ) {
       // ACP agents return ordinary JSON-RPC errors. Effect RPC expects its own
       // encoded Cause envelope and otherwise decodes the response as a defect,

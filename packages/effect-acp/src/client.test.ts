@@ -191,7 +191,9 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
           assert.fail("Expected prompt to fail");
         }
         const failure = Cause.squash(result.cause);
-        assert.isTrue(Schema.is(AcpError.AcpRequestError)(failure));
+        if (!Schema.is(AcpError.AcpRequestError)(failure)) {
+          assert.fail("Expected an AcpRequestError failure");
+        }
         assert.equal(failure.message, "Agent error");
       }),
     CHILD_PROCESS_FIXTURE_TIMEOUT_MS,
