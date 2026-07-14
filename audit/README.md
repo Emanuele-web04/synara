@@ -34,10 +34,51 @@ existing path and states when the old path is deleted.
 
 For ACP, do not expand `effect-acp`. The official TypeScript SDK now owns the production wire for all
 three ACP providers, and the competing production branch is deleted. The shortened desktop,
-settings, automation, ACP, web-state, and provider-metadata phases are code-complete. Git handoff
+settings, automation, web-state, and provider-metadata phases are code-complete. ACP wire ownership
+is complete, but the bounded raw-input criterion is reopened by the audit sweep below. Git handoff
 now spans RPC, a durable workflow journal, and orchestration under one server owner. Completed Git
 results replay into the same idempotent metadata command after restart; pre-result interruptions are
 fenced as `uncertain` rather than silently rerunning filesystem mutations.
+
+### Full-scan checkpoint — 2026-07-14
+
+This checkpoint does not open a new workstream. It rechecks the current implementation against the
+existing Effect, desktop IPC, WebSocket, lifecycle, and ACP acceptance criteria.
+
+- **Fixed — invalid Effect service execution.** `wsRpc` executed
+  `CurrentManagedAttachmentPrincipal` and the Git/provider runtime layers executed
+  `ProviderCredentials` as first-class Effects. In the installed Effect version, both are yieldable
+  ServiceMap tags but are not valid Effect values; the failure is `Fiber.runLoop: Not a valid effect:
+  Service`, surfaced to clients as an interrupted RPC. All three paths now acquire the service with
+  `yield*`. The two credential consumers share one owner in `providerCredentials.ts`, and a focused
+  regression test covers the invariant. A repository-wide scan across 93 ServiceMap definitions now
+  reports zero remaining tag-as-Effect patterns; focused server verification passes 11/11.
+- **Verified — desktop IPC consolidation.** All 49 desktop IPC channel leaves have both a producer and
+  consumer in the main/preload/browser/voice/storage paths. The strings now have one data-only owner
+  in `ipcChannels.ts`; no duplicate `desktop:*` literal remains elsewhere in desktop source.
+- **Current diff accounting.** Runtime source is **-24 LOC** (`144` tracked additions plus the 64-line
+  IPC contract, against `232` deletions). The focused 26-line regression test makes the implementation
+  slice **+2 LOC**; audit documentation is accounted separately. This is not a return to the previous
+  +34,024-LOC commit.
+- **Reopened — ACP raw-input resource boundary.** `AcpSessionRuntime` gives the official SDK a
+  push-driven `ReadableStream`: an unscoped `Effect.runFork` drains child stdout and calls
+  `controller.enqueue` without observing `desiredSize`. A slow SDK consumer can therefore accumulate
+  chunks despite the Web Stream high-water mark. The official SDK's `LineBuffer` also retains an
+  unterminated line without a byte ceiling. The current 512-message conformance test uses a separate
+  pull-driven stream under 64 KiB, so it does not prove the production bridge is bounded. Official SDK
+  wire ownership remains correct; only the already-required Synara admission layer is incomplete.
+
+Short remaining TODO:
+
+- [x] Replace every discovered ServiceMap-tag-as-Effect path and add one focused regression gate.
+- [x] Verify the 49-channel desktop IPC contract after preload consolidation.
+- [ ] Replace the existing ACP `ReadableStream.start` + unscoped `Effect.runFork` bridge with one
+  scope-bound, backpressured raw-byte admission path. It may count bytes/newlines but must not parse
+  JSON-RPC, recreate SDK schemas, or fall back to `effect-acp`; the old bridge is deleted in the same
+  change.
+- [ ] Prove the actual production ACP adapter (not a synthetic pull stream) stays within a declared
+  frame/queue budget under a slow consumer and fails closed on oversize/unterminated input. Keep this
+  as one focused integration fixture, not a new test framework.
 
 Pruning log: `PRUNE-01` removed duplicate projected-thread reads and dead approval-error control flow
 from `ProviderCommandReactor` (**-8 runtime LOC**); focused approval forwarding/stopped-session gates
@@ -820,9 +861,11 @@ The worktree is intentionally dirty and is the authority for this roadmap. Do no
   aggregation after restart. Hard deletion retains unconsumed/unresolved delivery and promotion evidence
   while removing settled evidence safely. Migration 67 and the orchestration RPC boundary now expose
   exact terminal evidence and require explicit, audited operator reconciliation.
-- ACP conformance fixtures now gate the single production boundary. `AcpSessionRuntime` uses the
+- ACP conformance fixtures gate the single production wire boundary. `AcpSessionRuntime` uses the
   official SDK for Grok, Droid, and Cursor; the legacy production wire branch and deprecated SDK
   constructor are deleted. `effect-acp` remains only for existing Effect schema/error adapter types.
+  The production stdout-to-Web-Stream admission path still needs the bounded/backpressured closeout
+  recorded in the full-scan checkpoint; do not describe the resource boundary as complete before it.
 - WebSocket connection/subscription admission, short-lived ticket ownership, authenticated attachment cache policy, initial provider-input limits, symlink-safe workspace writes, and several baseline lifecycle fixes are already implemented. Do not reopen them under new names.
 - Release Phases 1-5 and 7-9 are implemented in the dirty worktree: publication is fail-closed on signing, exact source/lock/artifact provenance and packaged startup are gated before upload, CLI publication uses an isolated stage, updater handoff is bound to exact downloaded bytes, and the Windows runtime signer DN is independent of feed metadata. Phase 6 remains blocked on authority to declare Electron Builder and regenerate the frozen lockfile.
 - The original roadmap rewrite was source-read-only. The bounded release phases later changed release/updater/staging files and ran only focused tests and read-only checks; they did not install dependencies, mutate Git, or run builds, release smoke, lint, formatting, or typechecking.
@@ -835,7 +878,7 @@ This is not a choice between “official ACP” and “Effect.” They solve dif
 
 | Question | Current reality | Target result |
 | --- | --- | --- |
-| Do we already have the official SDK? | Yes. Version 1.2.1 is an exact server runtime dependency and is exercised by `AcpSdkConformance.test.ts`. | Keep it exact; do not add another ACP wire package. |
+| Do we already have the official SDK? | Yes. Version 1.2.1 is an exact build dependency, is bundled into server output, and is exercised by `AcpSdkConformance.test.ts`. | Keep it exact; do not add another ACP wire package. |
 | What owns production ACP today? | The official SDK owns validation, JSON-RPC correlation/dispatch, cancellation, and NDJSON for Grok, Droid, and Cursor. | Keep one SDK-backed boundary; do not restore provider-selectable wire implementations. |
 | What remains Synara-owned? | Effect scopes/fibers, byte and queue budgets, process teardown, lifecycle-generation fences, persistence, recovery, provider extensions, and normalized events. | Preserve these product/runtime policies above the SDK. |
 | Will it be faster? | There is no evidence of a material latency or throughput win from swapping JSON-RPC implementations alone; provider/model latency dominates. | Treat performance as neutral until the same corpus measures it. Any concrete win must come from removing duplicate queues/copies. |
@@ -1213,14 +1256,16 @@ Keep these as regression baselines, not open work: `SEC-01`, `SEC-AUTH-01`, `SEC
 
 ## P2 TODO
 
-- [x] **P2-ACP-01 — Official ACP SDK production wire authority**
-  - **Implementation status (2026-07-14):** CODE COMPLETE. The official SDK owns NDJSON,
+- [ ] **P2-ACP-01 — Official ACP SDK production wire authority**
+  - **Implementation status (2026-07-14):** WIRE CUTOVER COMPLETE; RESOURCE CLOSEOUT REOPENED. The official SDK owns NDJSON,
     validation, JSON-RPC correlation/dispatch, and both cancellation layers for Grok, Droid, and
     Cursor. The deprecated constructor and legacy production wire branch are deleted; explicit
-    extensions use SDK parsers, raw diagnostics wrap bytes without a second parser, queues remain
-    bounded, and failed resume/load remains terminal. `effect-acp` remains only as existing Effect
+    extensions use SDK parsers, raw diagnostics wrap bytes without a second parser, and failed
+    resume/load remains terminal. `effect-acp` remains only as existing Effect
     error/schema adapter types, not as wire authority. Focused sweep: prior 40/40 tests plus 25/25
-    official conformance/runtime tests.
+    official conformance/runtime tests. The sweep did not exercise the production push-driven stdout
+    adapter under a slow consumer and therefore cannot certify its frame/queue bounds; the exact
+    replacement and focused gate are listed in the full-scan checkpoint.
   - **Absorbs:** `TEST-ACP-01`, `ACP-BOUNDARY-01`, `DEP-ACP-01`, `ARCH-ACP-01`, `COMPAT-ACP-01`, `ARCH-ACP-02`, `REL-ACP-01`, `CLEAN-ACP-01`, `COR-ACP-RESUME-01`, `COR-ACP-ELICITATION-01`.
   - **Evidence:** `AcpSessionRuntime.ts` now constructs the official SDK client builder only; the `effect-acp` child layer, duplicate raw notification drain, deprecated SDK constructor, and resume-to-new fallback are deleted.
   - **Why/current behavior:** Synara owns duplicate JSON-RPC/schema/wire behavior, buffering, and recovery semantics. Migrating every provider together would multiply compatibility risk instead of improving the foundation.

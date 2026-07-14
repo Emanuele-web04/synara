@@ -3,7 +3,10 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config";
-import { ProviderCredentials, ProviderCredentialsLive } from "../providerCredentials";
+import {
+  ProviderCredentialsLive,
+  resolveProviderServerPassword,
+} from "../providerCredentials";
 import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
@@ -58,19 +61,13 @@ export function makeServerProviderLayer(): Layer.Layer<
     const claudeAdapterLayer = makeClaudeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
-    const resolveServerPassword = (provider: "kilo" | "opencode") =>
-      ProviderCredentials.pipe(
-        Effect.flatMap((credentials) => credentials.getServerPassword(provider)),
-        Effect.map((password) => password ?? undefined),
-        Effect.orDie,
-      );
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveServerPassword,
+      resolveServerPassword: resolveProviderServerPassword,
     }).pipe(Layer.provide(ProviderCredentialsLive));
     const kiloAdapterLayer = makeKiloAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
-      resolveServerPassword,
+      resolveServerPassword: resolveProviderServerPassword,
     }).pipe(Layer.provide(ProviderCredentialsLive));
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,

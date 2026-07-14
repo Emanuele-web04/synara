@@ -21,8 +21,7 @@ import {
   type OutboundHttpResponse,
 } from "@synara/shared/outboundHttp";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
-
-export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
+import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
 
 const MAX_VOICE_DURATION_MS = 120_000;
 

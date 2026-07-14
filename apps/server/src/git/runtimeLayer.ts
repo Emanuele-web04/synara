@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Layer } from "effect";
 
 import { GitCoreLive } from "./Layers/GitCore";
 import { GitHubCliLive } from "./Layers/GitHubCli";
@@ -12,21 +12,16 @@ import {
 } from "./Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
-import { ProviderCredentials, ProviderCredentialsLive } from "../providerCredentials";
+import {
+  ProviderCredentialsLive,
+  resolveProviderServerPassword,
+} from "../providerCredentials";
 
-const resolveServerPassword = (provider: "kilo" | "opencode") =>
-  ProviderCredentials.pipe(
-    Effect.flatMap((credentials) => credentials.getServerPassword(provider)),
-    Effect.map((password) => password ?? undefined),
-    Effect.orDie,
-  );
-
-const kiloTextGenerationLayer = makeKiloTextGenerationServiceLive(resolveServerPassword).pipe(
-  Layer.provide(OpenCodeRuntimeLive),
-  Layer.provide(ProviderCredentialsLive),
-);
+const kiloTextGenerationLayer = makeKiloTextGenerationServiceLive(
+  resolveProviderServerPassword,
+).pipe(Layer.provide(OpenCodeRuntimeLive), Layer.provide(ProviderCredentialsLive));
 const openCodeTextGenerationLayer = makeOpenCodeTextGenerationServiceLive(
-  resolveServerPassword,
+  resolveProviderServerPassword,
 ).pipe(Layer.provide(OpenCodeRuntimeLive), Layer.provide(ProviderCredentialsLive));
 
 export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(

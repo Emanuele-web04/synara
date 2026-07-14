@@ -504,13 +504,12 @@ const makeWsRpcHandlersLayer = () =>
       });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
-        CurrentManagedAttachmentPrincipal.pipe(
-          Effect.flatMap((attachmentPrincipal) =>
-            runtimeStartup.enqueueCommand(
-              orchestrationEngine.dispatch(command, { attachmentPrincipal }),
-            ),
-          ),
-        );
+        Effect.gen(function* () {
+          const attachmentPrincipal = yield* CurrentManagedAttachmentPrincipal;
+          return yield* runtimeStartup.enqueueCommand(
+            orchestrationEngine.dispatch(command, { attachmentPrincipal }),
+          );
+        });
 
       // Terminal-first threads are created with the generic "New terminal" placeholder.
       // The tracker buffers per-terminal input and, once a meaningful command is submitted,

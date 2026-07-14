@@ -147,7 +147,6 @@ import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubU
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import {
-  BROWSER_IPC_CHANNELS,
   registerBrowserIpcHandlers,
   sendBrowserCopyLink,
   sendBrowserState,
@@ -158,7 +157,6 @@ import {
   SYNARA_BROWSER_USE_PIPE_PATH,
 } from "./browserUsePipeServer";
 import {
-  DESKTOP_WS_URL_CHANNEL,
   normalizeDesktopWsUrl,
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
@@ -172,8 +170,8 @@ import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
   resolveSynaraStorageSnapshotPath,
-  STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -182,30 +180,8 @@ const startupBundleIdentity = captureStartupBundleIdentity();
 
 syncShellEnvironment();
 
-const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
-const SAVE_FILE_CHANNEL = "desktop:save-file";
-const CONFIRM_CHANNEL = "desktop:confirm";
-const SET_THEME_CHANNEL = "desktop:set-theme";
-const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
-const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
-const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
-const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
+const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
-const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
-const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
-const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
-const WINDOW_STATE_CHANNEL = "desktop:window-state";
-const MENU_ACTION_CHANNEL = "desktop:menu-action";
-const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
-const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
-const UPDATE_STATE_CHANNEL = "desktop:update-state";
-const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
-const UPDATE_CHECK_CHANNEL = "desktop:update-check";
-const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
-const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
-const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BASE_DIR = process.env.SYNARA_HOME?.trim() || Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = SYNARA_DESKTOP_SCHEME;
@@ -321,7 +297,7 @@ async function ensureBrowserUsePipeServer(): Promise<void> {
   }
   const server = new BrowserUsePipeServer(browserManager, {
     requestOpenPanel: () => {
-      mainWindow?.webContents.send(BROWSER_IPC_CHANNELS.requestOpenPanel);
+      mainWindow?.webContents.send(IPC.browser.requestOpenPanel);
     },
   });
   await server.start();
@@ -418,7 +394,7 @@ function getDesktopWindowState(window: BrowserWindow): {
 
 function emitDesktopWindowState(window: BrowserWindow | null = mainWindow): void {
   if (!window || window.isDestroyed()) return;
-  window.webContents.send(WINDOW_STATE_CHANNEL, getDesktopWindowState(window));
+  window.webContents.send(IPC.windowState, getDesktopWindowState(window));
 }
 
 function isSaveFileInput(input: unknown): input is {
@@ -1228,7 +1204,7 @@ function dispatchMenuAction(action: string): void {
 
   const send = () => {
     if (targetWindow.isDestroyed()) return;
-    targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
+    targetWindow.webContents.send(IPC.menuAction, action);
     if (!targetWindow.isVisible()) {
       targetWindow.show();
     }
@@ -1249,7 +1225,7 @@ function resolveMenuTargetWindow(): BrowserWindow | null {
 
 function sendDesktopZoomFactor(webContents: Electron.WebContents): void {
   if (webContents.isDestroyed()) return;
-  webContents.send(ZOOM_FACTOR_CHANGED_CHANNEL, webContents.getZoomFactor());
+  webContents.send(IPC.zoomFactorChanged, webContents.getZoomFactor());
 }
 
 function attachDesktopZoomFactorSync(window: BrowserWindow): void {
@@ -1571,7 +1547,7 @@ function showDesktopNotification(input: {
       return;
     }
     if (threadId.length > 0) {
-      mainWindow.webContents.send(MENU_ACTION_CHANNEL, `notification-open-thread:${threadId}`);
+      mainWindow.webContents.send(IPC.menuAction, `notification-open-thread:${threadId}`);
     }
   });
 
@@ -1864,7 +1840,7 @@ function isExplicitUpdateCheckReason(reason: string): boolean {
 function emitUpdateState(): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) continue;
-    window.webContents.send(UPDATE_STATE_CHANNEL, updateState);
+    window.webContents.send(IPC.updateState, updateState);
   }
 }
 
@@ -2898,31 +2874,31 @@ function requestGracefulAppQuit(reason: string): void {
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
 
-  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
-  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+  ipcMain.removeAllListeners(IPC.storageMigration.read);
+  ipcMain.on(IPC.storageMigration.read, (event: IpcMainEvent) => {
     event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
   });
 
-  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
-  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+  ipcMain.removeHandler(IPC.storageMigration.acknowledge);
+  ipcMain.handle(IPC.storageMigration.acknowledge, async () => {
     await acknowledgeSynaraStorageSnapshot(storageSnapshotPath);
   });
 
-  ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
-  ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
+  ipcMain.removeAllListeners(IPC.wsUrl);
+  ipcMain.on(IPC.wsUrl, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the
     // live URL instead of trusting build-time or inherited renderer env.
     event.returnValue =
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
   });
 
-  ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
-  ipcMain.on(ZOOM_FACTOR_CHANNEL, (event: IpcMainEvent) => {
+  ipcMain.removeAllListeners(IPC.zoomFactor);
+  ipcMain.on(IPC.zoomFactor, (event: IpcMainEvent) => {
     event.returnValue = event.sender.getZoomFactor();
   });
 
-  ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
-  ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
+  ipcMain.removeHandler(IPC.pickFolder);
+  ipcMain.handle(IPC.pickFolder, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
     const result = owner
       ? await dialog.showOpenDialog(owner, {
@@ -2935,8 +2911,8 @@ function registerIpcHandlers(): void {
     return result.filePaths[0] ?? null;
   });
 
-  ipcMain.removeHandler(SAVE_FILE_CHANNEL);
-  ipcMain.handle(SAVE_FILE_CHANNEL, async (_event, input: unknown) => {
+  ipcMain.removeHandler(IPC.saveFile);
+  ipcMain.handle(IPC.saveFile, async (_event, input: unknown) => {
     if (!isSaveFileInput(input)) {
       throw new Error("Invalid save file input.");
     }
@@ -2958,8 +2934,8 @@ function registerIpcHandlers(): void {
     return result.filePath;
   });
 
-  ipcMain.removeHandler(CONFIRM_CHANNEL);
-  ipcMain.handle(CONFIRM_CHANNEL, async (_event, message: unknown) => {
+  ipcMain.removeHandler(IPC.confirm);
+  ipcMain.handle(IPC.confirm, async (_event, message: unknown) => {
     if (typeof message !== "string") {
       return false;
     }
@@ -2968,8 +2944,8 @@ function registerIpcHandlers(): void {
     return showDesktopConfirmDialog(message, owner);
   });
 
-  ipcMain.removeHandler(SET_THEME_CHANNEL);
-  ipcMain.handle(SET_THEME_CHANNEL, async (_event, rawTheme: unknown) => {
+  ipcMain.removeHandler(IPC.setTheme);
+  ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
     if (!theme) {
       return;
@@ -2978,9 +2954,9 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = theme;
   });
 
-  ipcMain.removeHandler(CONTEXT_MENU_CHANNEL);
+  ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
-    CONTEXT_MENU_CHANNEL,
+    IPC.contextMenu,
     async (_event, items: ContextMenuItem[], position?: { x: number; y: number }) => {
       const normalizedItems = items
         .filter((item) => typeof item.id === "string" && typeof item.label === "string")
@@ -3045,8 +3021,8 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.removeHandler(OPEN_EXTERNAL_CHANNEL);
-  ipcMain.handle(OPEN_EXTERNAL_CHANNEL, async (_event, rawUrl: unknown) => {
+  ipcMain.removeHandler(IPC.openExternal);
+  ipcMain.handle(IPC.openExternal, async (_event, rawUrl: unknown) => {
     const externalUrl = getSafeExternalUrl(rawUrl);
     if (!externalUrl) {
       return false;
@@ -3060,8 +3036,8 @@ function registerIpcHandlers(): void {
     }
   });
 
-  ipcMain.removeHandler(CLIPBOARD_WRITE_IMAGE_CHANNEL);
-  ipcMain.handle(CLIPBOARD_WRITE_IMAGE_CHANNEL, async (_event, rawDataUrl: unknown) => {
+  ipcMain.removeHandler(IPC.clipboardWriteImage);
+  ipcMain.handle(IPC.clipboardWriteImage, async (_event, rawDataUrl: unknown) => {
     if (typeof rawDataUrl !== "string") {
       return false;
     }
@@ -3083,8 +3059,8 @@ function registerIpcHandlers(): void {
     return true;
   });
 
-  ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);
-  ipcMain.handle(SHOW_IN_FOLDER_CHANNEL, async (_event, rawPath: unknown) => {
+  ipcMain.removeHandler(IPC.showInFolder);
+  ipcMain.handle(IPC.showInFolder, async (_event, rawPath: unknown) => {
     if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
       throw new Error("Missing folder path.");
     }
@@ -3108,14 +3084,14 @@ function registerIpcHandlers(): void {
     shell.showItemInFolder(resolvedPath);
   });
 
-  ipcMain.removeHandler(WINDOW_MINIMIZE_CHANNEL);
-  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, async (event) => {
+  ipcMain.removeHandler(IPC.windowMinimize);
+  ipcMain.handle(IPC.windowMinimize, async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
     window?.minimize();
   });
 
-  ipcMain.removeHandler(WINDOW_TOGGLE_MAXIMIZE_CHANNEL);
-  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, async (event) => {
+  ipcMain.removeHandler(IPC.windowToggleMaximize);
+  ipcMain.handle(IPC.windowToggleMaximize, async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
     if (!window) {
       return { isMaximized: false, isFullscreen: false };
@@ -3126,33 +3102,33 @@ function registerIpcHandlers(): void {
       window.maximize();
     }
     const state = getDesktopWindowState(window);
-    window.webContents.send(WINDOW_STATE_CHANNEL, state);
+    window.webContents.send(IPC.windowState, state);
     return state;
   });
 
-  ipcMain.removeHandler(WINDOW_CLOSE_CHANNEL);
-  ipcMain.handle(WINDOW_CLOSE_CHANNEL, async (event) => {
+  ipcMain.removeHandler(IPC.windowClose);
+  ipcMain.handle(IPC.windowClose, async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
     window?.close();
   });
 
-  ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
-  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async (event) => {
+  ipcMain.removeHandler(IPC.windowGetState);
+  ipcMain.handle(IPC.windowGetState, async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
     return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
   });
 
-  ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
-  ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
+  ipcMain.removeHandler(IPC.updateGetState);
+  ipcMain.handle(IPC.updateGetState, async () => updateState);
 
-  ipcMain.removeHandler(UPDATE_CHECK_CHANNEL);
-  ipcMain.handle(UPDATE_CHECK_CHANNEL, async () => {
+  ipcMain.removeHandler(IPC.updateCheck);
+  ipcMain.handle(IPC.updateCheck, async () => {
     await checkForUpdates("renderer");
     return updateState;
   });
 
-  ipcMain.removeHandler(UPDATE_DOWNLOAD_CHANNEL);
-  ipcMain.handle(UPDATE_DOWNLOAD_CHANNEL, async () => {
+  ipcMain.removeHandler(IPC.updateDownload);
+  ipcMain.handle(IPC.updateDownload, async () => {
     const result = await downloadAvailableUpdate();
     return {
       accepted: result.accepted,
@@ -3161,8 +3137,8 @@ function registerIpcHandlers(): void {
     } satisfies DesktopUpdateActionResult;
   });
 
-  ipcMain.removeHandler(UPDATE_INSTALL_CHANNEL);
-  ipcMain.handle(UPDATE_INSTALL_CHANNEL, async () => {
+  ipcMain.removeHandler(IPC.updateInstall);
+  ipcMain.handle(IPC.updateInstall, async () => {
     if (isQuitting) {
       return {
         accepted: false,
@@ -3178,12 +3154,12 @@ function registerIpcHandlers(): void {
     } satisfies DesktopUpdateActionResult;
   });
 
-  ipcMain.removeHandler(NOTIFICATIONS_IS_SUPPORTED_CHANNEL);
-  ipcMain.handle(NOTIFICATIONS_IS_SUPPORTED_CHANNEL, async () => Notification.isSupported());
+  ipcMain.removeHandler(IPC.notificationsIsSupported);
+  ipcMain.handle(IPC.notificationsIsSupported, async () => Notification.isSupported());
 
-  ipcMain.removeHandler(NOTIFICATIONS_SHOW_CHANNEL);
+  ipcMain.removeHandler(IPC.notificationsShow);
   ipcMain.handle(
-    NOTIFICATIONS_SHOW_CHANNEL,
+    IPC.notificationsShow,
     async (
       _event,
       input:

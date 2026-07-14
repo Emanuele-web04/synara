@@ -1,41 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopBridge } from "@synara/contracts";
-import { BROWSER_IPC_CHANNELS } from "./browserIpc";
-import {
-  DESKTOP_WS_URL_CHANNEL,
-  normalizeDesktopWsUrl,
-  resolveDesktopWsUrlFromEnv,
-} from "./desktopWsBridge";
-import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
-import { STORAGE_MIGRATION_IPC_CHANNELS } from "./desktopStorageMigration";
+import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
+import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 
-const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
-const SAVE_FILE_CHANNEL = "desktop:save-file";
-const CONFIRM_CHANNEL = "desktop:confirm";
-const SET_THEME_CHANNEL = "desktop:set-theme";
-const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
-const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
-const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
-const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
-const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
-const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
-const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
-const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
-const WINDOW_STATE_CHANNEL = "desktop:window-state";
-const MENU_ACTION_CHANNEL = "desktop:menu-action";
-const UPDATE_STATE_CHANNEL = "desktop:update-state";
-const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
-const UPDATE_CHECK_CHANNEL = "desktop:update-check";
-const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
-const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
-const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
-const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
+const IPC = DESKTOP_IPC_CHANNELS;
 
 function getDesktopWsUrl(): string | null {
   try {
-    const ipcWsUrl = normalizeDesktopWsUrl(ipcRenderer.sendSync(DESKTOP_WS_URL_CHANNEL));
+    const ipcWsUrl = normalizeDesktopWsUrl(ipcRenderer.sendSync(IPC.wsUrl));
     return ipcWsUrl ?? resolveDesktopWsUrlFromEnv(process.env);
   } catch {
     return resolveDesktopWsUrlFromEnv(process.env);
@@ -44,34 +16,34 @@ function getDesktopWsUrl(): string | null {
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getWsUrl: getDesktopWsUrl,
-  pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
-  saveFile: (input) => ipcRenderer.invoke(SAVE_FILE_CHANNEL, input),
-  confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),
-  setTheme: (theme) => ipcRenderer.invoke(SET_THEME_CHANNEL, theme),
-  showContextMenu: (items, position) => ipcRenderer.invoke(CONTEXT_MENU_CHANNEL, items, position),
-  openExternal: (url: string) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url),
-  showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
+  pickFolder: () => ipcRenderer.invoke(IPC.pickFolder),
+  saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
+  confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
+  setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
+  openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
+  showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),
   shell: {
-    showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
+    showInFolder: (path: string) => ipcRenderer.invoke(IPC.showInFolder, path),
   },
   clipboard: {
     writeImagePngDataUrl: (dataUrl: string) =>
-      ipcRenderer.invoke(CLIPBOARD_WRITE_IMAGE_CHANNEL, dataUrl),
+      ipcRenderer.invoke(IPC.clipboardWriteImage, dataUrl),
   },
   windowControls: {
-    minimize: () => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL),
-    toggleMaximize: () => ipcRenderer.invoke(WINDOW_TOGGLE_MAXIMIZE_CHANNEL),
-    close: () => ipcRenderer.invoke(WINDOW_CLOSE_CHANNEL),
-    getState: () => ipcRenderer.invoke(WINDOW_GET_STATE_CHANNEL),
+    minimize: () => ipcRenderer.invoke(IPC.windowMinimize),
+    toggleMaximize: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
+    close: () => ipcRenderer.invoke(IPC.windowClose),
+    getState: () => ipcRenderer.invoke(IPC.windowGetState),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
         if (typeof state !== "object" || state === null) return;
         listener(state as Parameters<typeof listener>[0]);
       };
 
-      ipcRenderer.on(WINDOW_STATE_CHANNEL, wrappedListener);
+      ipcRenderer.on(IPC.windowState, wrappedListener);
       return () => {
-        ipcRenderer.removeListener(WINDOW_STATE_CHANNEL, wrappedListener);
+        ipcRenderer.removeListener(IPC.windowState, wrappedListener);
       };
     },
   },
@@ -81,13 +53,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       listener(action);
     };
 
-    ipcRenderer.on(MENU_ACTION_CHANNEL, wrappedListener);
+    ipcRenderer.on(IPC.menuAction, wrappedListener);
     return () => {
-      ipcRenderer.removeListener(MENU_ACTION_CHANNEL, wrappedListener);
+      ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
   },
   getZoomFactor: () => {
-    const factor = ipcRenderer.sendSync(ZOOM_FACTOR_CHANNEL);
+    const factor = ipcRenderer.sendSync(IPC.zoomFactor);
     return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;
   },
   onZoomFactorChange: (listener) => {
@@ -96,76 +68,76 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       listener(factor);
     };
 
-    ipcRenderer.on(ZOOM_FACTOR_CHANGED_CHANNEL, wrappedListener);
+    ipcRenderer.on(IPC.zoomFactorChanged, wrappedListener);
     return () => {
-      ipcRenderer.removeListener(ZOOM_FACTOR_CHANGED_CHANNEL, wrappedListener);
+      ipcRenderer.removeListener(IPC.zoomFactorChanged, wrappedListener);
     };
   },
-  getUpdateState: () => ipcRenderer.invoke(UPDATE_GET_STATE_CHANNEL),
-  checkForUpdates: () => ipcRenderer.invoke(UPDATE_CHECK_CHANNEL),
-  downloadUpdate: () => ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL),
-  installUpdate: () => ipcRenderer.invoke(UPDATE_INSTALL_CHANNEL),
+  getUpdateState: () => ipcRenderer.invoke(IPC.updateGetState),
+  checkForUpdates: () => ipcRenderer.invoke(IPC.updateCheck),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.updateDownload),
+  installUpdate: () => ipcRenderer.invoke(IPC.updateInstall),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;
       listener(state as Parameters<typeof listener>[0]);
     };
 
-    ipcRenderer.on(UPDATE_STATE_CHANNEL, wrappedListener);
+    ipcRenderer.on(IPC.updateState, wrappedListener);
     return () => {
-      ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, wrappedListener);
+      ipcRenderer.removeListener(IPC.updateState, wrappedListener);
     };
   },
   notifications: {
-    isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
-    show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
+    isSupported: () => ipcRenderer.invoke(IPC.notificationsIsSupported),
+    show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
   storageMigration: {
-    readSnapshot: () => ipcRenderer.sendSync(STORAGE_MIGRATION_IPC_CHANNELS.read),
-    acknowledgeSnapshot: () => ipcRenderer.invoke(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge),
+    readSnapshot: () => ipcRenderer.sendSync(IPC.storageMigration.read),
+    acknowledgeSnapshot: () => ipcRenderer.invoke(IPC.storageMigration.acknowledge),
   },
   server: {
-    transcribeVoice: (input) => ipcRenderer.invoke(SERVER_TRANSCRIBE_VOICE_CHANNEL, input),
+    transcribeVoice: (input) => ipcRenderer.invoke(IPC.transcribeVoice, input),
   },
   browser: {
-    open: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.open, input),
-    close: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.close, input),
-    hide: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.hide, input),
-    getState: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.getState, input),
+    open: (input) => ipcRenderer.invoke(IPC.browser.open, input),
+    close: (input) => ipcRenderer.invoke(IPC.browser.close, input),
+    hide: (input) => ipcRenderer.invoke(IPC.browser.hide, input),
+    getState: (input) => ipcRenderer.invoke(IPC.browser.getState, input),
     setPanelBounds: async (input) => {
-      ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
+      ipcRenderer.send(IPC.browser.setBounds, input);
     },
-    attachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.attachWebview, input),
-    detachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.detachWebview, input),
-    copyLink: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.requestCopyLink, input),
+    attachWebview: (input) => ipcRenderer.invoke(IPC.browser.attachWebview, input),
+    detachWebview: (input) => ipcRenderer.invoke(IPC.browser.detachWebview, input),
+    copyLink: (input) => ipcRenderer.invoke(IPC.browser.requestCopyLink, input),
     copyScreenshotToClipboard: (input) =>
-      ipcRenderer.invoke(BROWSER_IPC_CHANNELS.copyScreenshotToClipboard, input),
-    captureScreenshot: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.captureScreenshot, input),
-    executeCdp: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.executeCdp, input),
-    navigate: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.navigate, input),
-    reload: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.reload, input),
-    goBack: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.goBack, input),
-    goForward: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.goForward, input),
-    newTab: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.newTab, input),
-    closeTab: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.closeTab, input),
-    selectTab: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.selectTab, input),
-    openDevTools: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.openDevTools, input),
+      ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
+    captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
+    executeCdp: (input) => ipcRenderer.invoke(IPC.browser.executeCdp, input),
+    navigate: (input) => ipcRenderer.invoke(IPC.browser.navigate, input),
+    reload: (input) => ipcRenderer.invoke(IPC.browser.reload, input),
+    goBack: (input) => ipcRenderer.invoke(IPC.browser.goBack, input),
+    goForward: (input) => ipcRenderer.invoke(IPC.browser.goForward, input),
+    newTab: (input) => ipcRenderer.invoke(IPC.browser.newTab, input),
+    closeTab: (input) => ipcRenderer.invoke(IPC.browser.closeTab, input),
+    selectTab: (input) => ipcRenderer.invoke(IPC.browser.selectTab, input),
+    openDevTools: (input) => ipcRenderer.invoke(IPC.browser.openDevTools, input),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
         if (typeof state !== "object" || state === null) return;
         listener(state as Parameters<typeof listener>[0]);
       };
 
-      ipcRenderer.on(BROWSER_IPC_CHANNELS.state, wrappedListener);
+      ipcRenderer.on(IPC.browser.state, wrappedListener);
       return () => {
-        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.state, wrappedListener);
+        ipcRenderer.removeListener(IPC.browser.state, wrappedListener);
       };
     },
     onBrowserUseOpenPanelRequest: (listener) => {
       const wrappedListener = () => listener();
-      ipcRenderer.on(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+      ipcRenderer.on(IPC.browser.requestOpenPanel, wrappedListener);
       return () => {
-        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+        ipcRenderer.removeListener(IPC.browser.requestOpenPanel, wrappedListener);
       };
     },
     onBrowserCopyLink: (listener) => {
@@ -173,9 +145,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         if (typeof payload !== "object" || payload === null) return;
         listener(payload as Parameters<typeof listener>[0]);
       };
-      ipcRenderer.on(BROWSER_IPC_CHANNELS.copyLink, wrappedListener);
+      ipcRenderer.on(IPC.browser.copyLink, wrappedListener);
       return () => {
-        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.copyLink, wrappedListener);
+        ipcRenderer.removeListener(IPC.browser.copyLink, wrappedListener);
       };
     },
   },
