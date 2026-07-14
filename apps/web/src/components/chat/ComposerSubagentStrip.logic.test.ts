@@ -4,10 +4,13 @@
 // Layer: Web chat composer tests
 // Depends on: deriveComposerSubagentStripItems
 
-import { TurnId } from "@synara/contracts";
+import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
+import { deriveWorkLogEntries, type WorkLogEntry, type WorkLogSubagent } from "../../session-logic";
+import type { Thread } from "../../types";
+import { enrichSubagentWorkEntries } from "../ChatView.logic";
+import { localSubagentThreadId } from "../ChatView.selectors";
 import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
 
 function workEntry(
@@ -236,5 +239,79 @@ describe("deriveComposerSubagentStripItems", () => {
     });
 
     expect(items.map((item) => item.primaryLabel)).toEqual(["Ada"]);
+  });
+
+  it("derives a strip row end-to-end from a routed collab activity omitted by the timeline", () => {
+    const parentThreadId = ThreadId.makeUnsafe("thread-1");
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("routed-agent-update"),
+        createdAt: "2026-07-14T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Subagent task",
+        tone: "tool",
+        turnId: TurnId.makeUnsafe("turn-1"),
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            toolCallId: "toolu_x",
+            callId: "toolu_x",
+            toolName: "Agent",
+            input: {},
+            receiverThreadId: "toolu_x",
+          },
+        },
+      },
+    ];
+
+    // Timeline entries omit the routed activity; the strip source must not.
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+    const stripEntries = deriveWorkLogEntries(activities, undefined, {
+      includeRoutedSubagentActivities: true,
+    });
+
+    const subagentThread: Thread = {
+      id: localSubagentThreadId(parentThreadId, "toolu_x"),
+      codexThreadId: null,
+      projectId: "project-1" as Thread["projectId"],
+      title: "Subagent task",
+      modelSelection: { provider: "claudeAgent", model: "sonnet" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      session: {
+        provider: "claudeAgent",
+        status: "running",
+        createdAt: "2026-07-14T00:00:01.000Z",
+        updatedAt: "2026-07-14T00:00:01.000Z",
+        orchestrationStatus: "running",
+      },
+      messages: [],
+      proposedPlans: [],
+      error: null,
+      createdAt: "2026-07-14T00:00:01.000Z",
+      latestTurn: null,
+      parentThreadId,
+      turnDiffSummaries: [],
+      activities: [],
+      branch: null,
+      worktreePath: null,
+    };
+    const enriched = enrichSubagentWorkEntries(stripEntries, [subagentThread], parentThreadId);
+
+    // Background case: parent turn already settled (liveTurnId null) while the
+    // subagent keeps running.
+    const items = deriveComposerSubagentStripItems({
+      workEntries: enriched,
+      liveTurnId: null,
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      threadId: subagentThread.id,
+      providerThreadId: "toolu_x",
+      statusKind: "running",
+      isActive: true,
+    });
   });
 });

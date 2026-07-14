@@ -819,13 +819,20 @@ export function buildSourceProposedPlanReference(input: {
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
-  options: { visibleTurnIds?: ReadonlySet<TurnId | string> } = {},
+  options: {
+    visibleTurnIds?: ReadonlySet<TurnId | string>;
+    includeRoutedSubagentActivities?: boolean;
+  } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
-    .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
+    .filter(
+      (activity) =>
+        options.includeRoutedSubagentActivities === true ||
+        !shouldOmitRoutedCollabAgentToolActivity(activity),
+    )
     .filter(
       (activity) =>
         activity.kind !== "task.started" &&

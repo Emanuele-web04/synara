@@ -2554,6 +2554,48 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
+  // Composer-strip source: routed subagent activities are omitted from the timeline
+  // entries above (they render as nested threads), so the strip derives from an
+  // unfiltered pass or it would structurally never see routed subagents.
+  const stripRawWorkLogEntries = useMemo(
+    () =>
+      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
+        visibleTurnIds: workLogVisibleTurnIds,
+        includeRoutedSubagentActivities: true,
+      }),
+    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
+  );
+  const hasStripWorkLogSubagents = useMemo(
+    () => stripRawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
+    [stripRawWorkLogEntries],
+  );
+  const stripRelevantWorkLogThreads = useStore(
+    useMemo(
+      () =>
+        createRelevantWorkLogThreadsSelector({
+          workEntries: stripRawWorkLogEntries,
+          parentThreadId: activeThread?.id ?? null,
+          enabled: hasStripWorkLogSubagents,
+        }),
+      [activeThread?.id, hasStripWorkLogSubagents, stripRawWorkLogEntries],
+    ),
+  );
+  const stripWorkLogEntries = useMemo(
+    () =>
+      hasStripWorkLogSubagents
+        ? enrichSubagentWorkEntries(
+            stripRawWorkLogEntries,
+            stripRelevantWorkLogThreads,
+            activeThread?.id ?? null,
+          )
+        : stripRawWorkLogEntries,
+    [
+      activeThread?.id,
+      hasStripWorkLogSubagents,
+      stripRawWorkLogEntries,
+      stripRelevantWorkLogThreads,
+    ],
+  );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -2734,11 +2776,16 @@ export default function ChatView({
   const composerSubagentStripItems = useMemo(
     () =>
       deriveComposerSubagentStripItems({
-        workEntries: workLogEntries,
+        workEntries: stripWorkLogEntries,
         liveTurnId: latestTurnSettled ? null : (activeLatestTurn?.turnId ?? null),
         backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
       }),
-    [activeLatestTurn?.turnId, backgroundedSubagentToolUseIds, latestTurnSettled, workLogEntries],
+    [
+      activeLatestTurn?.turnId,
+      backgroundedSubagentToolUseIds,
+      latestTurnSettled,
+      stripWorkLogEntries,
+    ],
   );
   // Links workflow agent rows to their subagent child threads (and models) when the
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
