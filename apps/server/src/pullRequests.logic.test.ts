@@ -52,6 +52,14 @@ describe("isViewerReviewRequested", () => {
   it("flags a teammate pull request that explicitly requests the viewer", () => {
     expect(isViewerReviewRequested(teammate, ["Viewer"], "viewer")).toBe(true);
   });
+
+  it("flags team-only matches returned by the reviewing query", () => {
+    expect(isViewerReviewRequested(teammate, [], "viewer", true)).toBe(true);
+  });
+
+  it("does not flag self-authored matches returned by the reviewing query", () => {
+    expect(isViewerReviewRequested(viewer, [], "viewer", true)).toBe(false);
+  });
 });
 
 describe("isPullRequestMergeMethodAllowed", () => {

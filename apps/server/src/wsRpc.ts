@@ -1314,14 +1314,33 @@ export const makeWsRpcLayer = () =>
               const batches = yield* Effect.forEach(
                 uniqueRepositories.values(),
                 ({ projects: repositoryProjects, repository }) =>
-                  loadRepositoryPullRequests(
-                    repositoryProjects[0]!.workspaceRoot,
-                    repository.nameWithOwner,
-                    input.state,
-                    involvement,
-                    viewer,
-                  ).pipe(
-                    Effect.map((result) => ({
+                  Effect.gen(function* () {
+                    const cwd = repositoryProjects[0]!.workspaceRoot;
+                    const [result, reviewingResult] = yield* Effect.all(
+                      [
+                        loadRepositoryPullRequests(
+                          cwd,
+                          repository.nameWithOwner,
+                          input.state,
+                          involvement,
+                          viewer,
+                        ),
+                        involvement === "all"
+                          ? loadRepositoryPullRequests(
+                              cwd,
+                              repository.nameWithOwner,
+                              input.state,
+                              "reviewing",
+                              viewer,
+                            )
+                          : Effect.succeed(null),
+                      ],
+                      { concurrency: 2 },
+                    );
+                    const reviewingNumbers = new Set(
+                      reviewingResult?.entries.map((pullRequest) => pullRequest.number) ?? [],
+                    );
+                    return {
                       entries: repositoryProjects.flatMap((project) =>
                         result.entries.map(
                           (pullRequest): PullRequestListEntry => ({
@@ -1345,6 +1364,8 @@ export const makeWsRpcLayer = () =>
                               pullRequest.author,
                               pullRequest.reviewRequestLogins,
                               viewer,
+                              involvement === "reviewing" ||
+                                reviewingNumbers.has(pullRequest.number),
                             ),
                             labels: pullRequest.labels,
                           }),
@@ -1357,7 +1378,8 @@ export const makeWsRpcLayer = () =>
                         truncated: result.truncated,
                       })),
                       errors: [],
-                    })),
+                    };
+                  }).pipe(
                     Effect.catch((error) =>
                       error.reason === "not-installed" || error.reason === "not-authenticated"
                         ? Effect.fail(error)

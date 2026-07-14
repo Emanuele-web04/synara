@@ -6,7 +6,12 @@ import type {
   PullRequestsListInput,
   PullRequestState,
 } from "@synara/contracts";
-import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
+import {
+  mutationOptions,
+  queryOptions,
+  type QueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 
 import { gitQueryKeys } from "~/lib/gitReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
@@ -108,6 +113,20 @@ export function pullRequestActionMutationOptions(queryClient: QueryClient) {
   });
 }
 
+function queryKeysEqual(left: QueryKey, right: QueryKey): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function invalidateOtherPullRequestQueries(
+  queryClient: QueryClient,
+  refreshedQueryKey: QueryKey,
+) {
+  return queryClient.invalidateQueries({
+    queryKey: pullRequestQueryKeys.all,
+    predicate: (query) => !queryKeysEqual(query.queryKey, refreshedQueryKey),
+  });
+}
+
 export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationKey: ["pull-requests", "force-refresh"] as const,
@@ -120,11 +139,9 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
       });
     },
     onSuccess: async (result, input) => {
-      queryClient.setQueryData(
-        pullRequestQueryKeys.list(normalizePullRequestListKeyInput(input)),
-        result,
-      );
-      await queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
+      const refreshedQueryKey = pullRequestQueryKeys.list(normalizePullRequestListKeyInput(input));
+      queryClient.setQueryData(refreshedQueryKey, result);
+      await invalidateOtherPullRequestQueries(queryClient, refreshedQueryKey);
     },
   });
 }

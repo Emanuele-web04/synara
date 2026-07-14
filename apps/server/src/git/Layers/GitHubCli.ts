@@ -834,12 +834,14 @@ const makeGitHubCli = Effect.sync(() => {
         }),
       ),
     listRepositoryPullRequests: (input) => {
-      const involvementArgs =
-        input.involvement === "authored"
-          ? ["--author", input.viewer]
-          : input.involvement === "reviewing"
-            ? ["--search", `review-requested:${input.viewer}`]
-            : [];
+      const searchTerms = [
+        ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
+        ...(input.state === "closed" ? ["is:unmerged"] : []),
+      ];
+      const involvementArgs = [
+        ...(input.involvement === "authored" ? ["--author", input.viewer] : []),
+        ...(searchTerms.length > 0 ? ["--search", searchTerms.join(" ")] : []),
+      ];
       return validateRepository(input.repository, "listRepositoryPullRequests").pipe(
         Effect.flatMap((repository) =>
           execute({

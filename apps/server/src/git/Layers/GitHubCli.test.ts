@@ -804,6 +804,35 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("excludes merged pull requests from closed repository lists", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "[]",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const gh = yield* GitHubCli;
+      yield* gh.listRepositoryPullRequests({
+        cwd: "/repo",
+        repository: "acme/app",
+        state: "closed",
+        involvement: "reviewing",
+        viewer: "octocat",
+        limit: 50,
+      });
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining([
+          "--search",
+          "review-requested:octocat is:unmerged",
+          "--state",
+          "closed",
+        ]),
+      );
+    }),
+  );
+
   it.effect("accepts commits with empty or missing headlines and omits the files field", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

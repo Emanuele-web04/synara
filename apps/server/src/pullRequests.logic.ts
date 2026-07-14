@@ -20,11 +20,13 @@ export function isViewerReviewRequested(
   author: PullRequestActor | null,
   reviewRequestLogins: ReadonlyArray<string>,
   viewer: string,
+  matchedReviewingQuery = false,
 ): boolean {
   const normalizedViewer = viewer.trim().toLowerCase();
   return (
     author?.login.trim().toLowerCase() !== normalizedViewer &&
-    reviewRequestLogins.some((login) => login.trim().toLowerCase() === normalizedViewer)
+    (matchedReviewingQuery ||
+      reviewRequestLogins.some((login) => login.trim().toLowerCase() === normalizedViewer))
   );
 }
 
