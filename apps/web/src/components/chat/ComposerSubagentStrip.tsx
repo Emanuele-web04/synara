@@ -8,13 +8,21 @@
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { memo } from "react";
-import { PiArrowLineDown, PiArrowsInSimple, PiArrowsOutSimple } from "react-icons/pi";
+import {
+  PiArrowBendUpLeft,
+  PiArrowLineDown,
+  PiArrowsInSimple,
+  PiArrowsOutSimple,
+} from "react-icons/pi";
 
 import { BotIcon, LoaderIcon, StopIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
-import type { ComposerSubagentStripItem } from "./ComposerSubagentStrip.logic";
+import type {
+  ComposerSubagentStripItem,
+  ComposerSubagentStripRow,
+} from "./ComposerSubagentStrip.logic";
 import {
   ComposerStackedPanelHeaderRow,
   ComposerStackedPanelRowLabel,
@@ -28,7 +36,7 @@ import {
 } from "./composerStackedPanelStyles";
 
 interface ComposerSubagentStripProps {
-  items: ReadonlyArray<ComposerSubagentStripItem>;
+  items: ReadonlyArray<ComposerSubagentStripRow>;
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenThread: (threadId: ThreadId) => void;
@@ -63,7 +71,10 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
   onStopItem,
   attachedToPrevious = false,
 }: ComposerSubagentStripProps) {
-  const runningCount = items.filter((item) => item.isActive).length;
+  const subagentItems = items.filter(
+    (item): item is ComposerSubagentStripItem => item.kind === "subagent",
+  );
+  const runningCount = subagentItems.filter((item) => item.isActive).length;
 
   return (
     <ComposerStackedPanel
@@ -80,8 +91,8 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
           )}
           <ComposerStackedPanelRowLabel tone="meta">
             {runningCount > 0
-              ? `${runningCount} of ${items.length} ${pluralize(items.length, "subagent")} running`
-              : `${items.length} ${pluralize(items.length, "subagent")}`}
+              ? `${runningCount} of ${subagentItems.length} ${pluralize(subagentItems.length, "subagent")} running`
+              : `${subagentItems.length} ${pluralize(subagentItems.length, "subagent")}`}
           </ComposerStackedPanelRowLabel>
         </ComposerStackedPanelRowMain>
         <Button
@@ -103,81 +114,105 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
 
       <DisclosureRegion open={!compact}>
         <div className={cn("space-y-0", COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME)}>
-          {items.map((item) => (
-            <div
-              key={item.key}
-              data-testid="composer-subagent-row"
-              className="flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                title={item.fullLabel}
-                onClick={() => onOpenThread(item.threadId)}
+          {items.map((item) =>
+            item.kind === "parent" ? (
+              <div
+                key={item.key}
+                data-testid="composer-subagent-parent-row"
+                className="flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
               >
-                <span
-                  className={cn(
-                    "size-1.5 shrink-0 rounded-full",
-                    item.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
-                  )}
-                />
-                <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
-                  <span style={{ color: item.accentColor }}>{item.primaryLabel}</span>
-                  {item.role ? (
-                    <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
-                      ({item.role})
-                    </span>
-                  ) : null}
-                  {item.modelLabel ? (
-                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
-                      {item.modelLabel}
-                    </span>
-                  ) : null}
-                  {item.isBackground ? (
-                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
-                      background
-                    </span>
-                  ) : null}
-                </span>
-                {item.statusLabel ? (
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  title={item.label}
+                  onClick={() => onOpenThread(item.threadId)}
+                >
+                  <PiArrowBendUpLeft className="size-3 shrink-0 text-muted-foreground/55" />
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                    {item.label}
+                  </span>
+                </button>
+              </div>
+            ) : (
+              <div
+                key={item.key}
+                data-testid="composer-subagent-row"
+                data-viewed={item.isViewed || undefined}
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
+                  item.isViewed && "bg-[var(--color-background-button-secondary)]",
+                )}
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  title={item.fullLabel}
+                  onClick={() => onOpenThread(item.threadId)}
+                >
                   <span
                     className={cn(
-                      "shrink-0 text-[11px]",
-                      subagentStatusToneClassName(item.statusKind),
+                      "size-1.5 shrink-0 rounded-full",
+                      item.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
                     )}
-                  >
-                    {item.statusLabel}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                    <span style={{ color: item.accentColor }}>{item.primaryLabel}</span>
+                    {item.role ? (
+                      <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
+                        ({item.role})
+                      </span>
+                    ) : null}
+                    {item.modelLabel ? (
+                      <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                        {item.modelLabel}
+                      </span>
+                    ) : null}
+                    {item.isBackground ? (
+                      <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                        background
+                      </span>
+                    ) : null}
                   </span>
+                  {item.statusLabel ? (
+                    <span
+                      className={cn(
+                        "shrink-0 text-[11px]",
+                        subagentStatusToneClassName(item.statusKind),
+                      )}
+                    >
+                      {item.statusLabel}
+                    </span>
+                  ) : null}
+                </button>
+                {item.isActive && !item.isBackground && onBackgroundItem ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                    onClick={() => onBackgroundItem(item)}
+                    aria-label="Move subagent to background"
+                    title="Move subagent to background (the main agent keeps working)"
+                  >
+                    <PiArrowLineDown className="size-3" />
+                  </Button>
                 ) : null}
-              </button>
-              {item.isActive && !item.isBackground && onBackgroundItem ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
-                  onClick={() => onBackgroundItem(item)}
-                  aria-label="Move subagent to background"
-                  title="Move subagent to background (the main agent keeps working)"
-                >
-                  <PiArrowLineDown className="size-3" />
-                </Button>
-              ) : null}
-              {item.isActive && onStopItem ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
-                  onClick={() => onStopItem(item)}
-                  aria-label="Stop subagent"
-                  title="Stop subagent"
-                >
-                  <StopIcon className="size-3" />
-                </Button>
-              ) : null}
-            </div>
-          ))}
+                {item.isActive && onStopItem ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                    onClick={() => onStopItem(item)}
+                    aria-label="Stop subagent"
+                    title="Stop subagent"
+                  >
+                    <StopIcon className="size-3" />
+                  </Button>
+                ) : null}
+              </div>
+            ),
+          )}
         </div>
       </DisclosureRegion>
     </ComposerStackedPanel>

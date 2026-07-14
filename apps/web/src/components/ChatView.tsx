@@ -201,6 +201,7 @@ import {
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
@@ -2554,16 +2555,58 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
+  // Native-CLI parity: while a subagent thread is open, the strip derives from the
+  // PARENT thread's activities so all sibling subagents (plus a way back to the
+  // main thread) stay visible, with the open subagent marked as viewed.
+  const stripParentThreadId = activeThread?.parentThreadId ?? null;
+  const stripParentThread = useStore(
+    useMemo(() => createThreadSelector(stripParentThreadId), [stripParentThreadId]),
+  );
+  // Deep links can land on a subagent thread before the parent has a detail
+  // subscription; retain one so the parent's activities hydrate for the strip.
+  useEffect(() => {
+    if (!stripParentThreadId) {
+      return;
+    }
+    return retainThreadDetailSubscription(stripParentThreadId);
+  }, [stripParentThreadId]);
+  const stripSourceThreadId = stripParentThread?.id ?? activeThread?.id ?? null;
+  const stripSourceActivities = stripParentThread?.activities ?? threadActivities;
+  const stripSourceLatestTurnId = stripParentThread
+    ? (stripParentThread.latestTurn?.turnId ?? null)
+    : (activeLatestTurn?.turnId ?? null);
+  const stripVisibleTurnIds = useMemo(() => {
+    if (!stripParentThread) {
+      return workLogVisibleTurnIds;
+    }
+    const turnIds = new Set<TurnId>();
+    for (const message of stripParentThread.messages) {
+      if (message.turnId) {
+        turnIds.add(message.turnId);
+      }
+    }
+    if (stripParentThread.latestTurn?.turnId) {
+      turnIds.add(stripParentThread.latestTurn.turnId);
+    }
+    return turnIds;
+  }, [stripParentThread, workLogVisibleTurnIds]);
+  const stripLiveTurnId = stripParentThread
+    ? isLatestTurnSettled(stripParentThread.latestTurn, stripParentThread.session ?? null)
+      ? null
+      : (stripParentThread.latestTurn?.turnId ?? null)
+    : latestTurnSettled
+      ? null
+      : (activeLatestTurn?.turnId ?? null);
   // Composer-strip source: routed subagent activities are omitted from the timeline
   // entries above (they render as nested threads), so the strip derives from an
   // unfiltered pass or it would structurally never see routed subagents.
   const stripRawWorkLogEntries = useMemo(
     () =>
-      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
-        visibleTurnIds: workLogVisibleTurnIds,
+      deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
+        visibleTurnIds: stripVisibleTurnIds,
         includeRoutedSubagentActivities: true,
       }),
-    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
+    [stripSourceActivities, stripSourceLatestTurnId, stripVisibleTurnIds],
   );
   const hasStripWorkLogSubagents = useMemo(
     () => stripRawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -2574,10 +2617,10 @@ export default function ChatView({
       () =>
         createRelevantWorkLogThreadsSelector({
           workEntries: stripRawWorkLogEntries,
-          parentThreadId: activeThread?.id ?? null,
+          parentThreadId: stripSourceThreadId,
           enabled: hasStripWorkLogSubagents,
         }),
-      [activeThread?.id, hasStripWorkLogSubagents, stripRawWorkLogEntries],
+      [stripSourceThreadId, hasStripWorkLogSubagents, stripRawWorkLogEntries],
     ),
   );
   const stripWorkLogEntries = useMemo(
@@ -2586,11 +2629,11 @@ export default function ChatView({
         ? enrichSubagentWorkEntries(
             stripRawWorkLogEntries,
             stripRelevantWorkLogThreads,
-            activeThread?.id ?? null,
+            stripSourceThreadId,
           )
         : stripRawWorkLogEntries,
     [
-      activeThread?.id,
+      stripSourceThreadId,
       hasStripWorkLogSubagents,
       stripRawWorkLogEntries,
       stripRelevantWorkLogThreads,
@@ -2753,7 +2796,7 @@ export default function ChatView({
   // patches (last patch wins, so re-foregrounded tasks drop back out).
   const backgroundedSubagentToolUseIds = useMemo(() => {
     const toolUseIds = new Set<string>();
-    for (const activity of threadActivities) {
+    for (const activity of stripSourceActivities) {
       if (activity.kind !== "task.updated") {
         continue;
       }
@@ -2772,18 +2815,23 @@ export default function ChatView({
       }
     }
     return toolUseIds;
-  }, [threadActivities]);
+  }, [stripSourceActivities]);
   const composerSubagentStripItems = useMemo(
     () =>
       deriveComposerSubagentStripItems({
         workEntries: stripWorkLogEntries,
-        liveTurnId: latestTurnSettled ? null : (activeLatestTurn?.turnId ?? null),
+        liveTurnId: stripLiveTurnId,
         backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+        viewedThreadId: stripParentThread ? (activeThread?.id ?? null) : null,
+        parentRow: stripParentThread
+          ? { threadId: stripParentThread.id, label: stripParentThread.title ?? null }
+          : null,
       }),
     [
-      activeLatestTurn?.turnId,
+      activeThread?.id,
       backgroundedSubagentToolUseIds,
-      latestTurnSettled,
+      stripLiveTurnId,
+      stripParentThread,
       stripWorkLogEntries,
     ],
   );
@@ -5936,16 +5984,18 @@ export default function ChatView({
   const onBackgroundSubagentStripItem = useCallback(
     async (item: ComposerSubagentStripItem) => {
       const api = readNativeApi();
-      if (!api || !activeThread) return;
+      // The Task tool_use lives on the strip source thread (the parent while a
+      // subagent thread is open), so route the command there.
+      if (!api || !stripSourceThreadId) return;
       await api.orchestration.dispatchCommand({
         type: "thread.task.background",
         commandId: newCommandId(),
-        threadId: activeThread.id,
+        threadId: stripSourceThreadId,
         toolUseId: item.providerThreadId,
         createdAt: new Date().toISOString(),
       });
     },
-    [activeThread],
+    [stripSourceThreadId],
   );
 
   // Stop goes through the interrupt seam: on a subagent thread the reactor

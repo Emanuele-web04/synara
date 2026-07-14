@@ -11,7 +11,11 @@ import { deriveWorkLogEntries, type WorkLogEntry, type WorkLogSubagent } from ".
 import type { Thread } from "../../types";
 import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import { localSubagentThreadId } from "../ChatView.selectors";
-import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
+import {
+  deriveComposerSubagentStripItems,
+  type ComposerSubagentStripItem,
+  type ComposerSubagentStripRow,
+} from "./ComposerSubagentStrip.logic";
 
 function workEntry(
   overrides: Partial<Omit<WorkLogEntry, "turnId">> & { id: string; turnId?: string | null },
@@ -28,6 +32,10 @@ function workEntry(
 
 function subagent(overrides: Partial<WorkLogSubagent> & { threadId: string }): WorkLogSubagent {
   return overrides;
+}
+
+function subagentRows(rows: ComposerSubagentStripRow[]): ComposerSubagentStripItem[] {
+  return rows.filter((row): row is ComposerSubagentStripItem => row.kind === "subagent");
 }
 
 describe("deriveComposerSubagentStripItems", () => {
@@ -77,38 +85,40 @@ describe("deriveComposerSubagentStripItems", () => {
   });
 
   it("merges snapshots of one subagent, keeping identity while the latest status wins", () => {
-    const items = deriveComposerSubagentStripItems({
-      workEntries: [
-        workEntry({
-          id: "entry-1",
-          turnId: "turn-1",
-          subagents: [
-            subagent({
-              threadId: "sub-1",
-              agentId: "agent-1",
-              nickname: "Ada",
-              role: "builder",
-              model: "opus-4.5",
-              rawStatus: "running",
-              isActive: true,
-            }),
-          ],
-        }),
-        workEntry({
-          id: "entry-2",
-          turnId: "turn-1",
-          subagents: [
-            subagent({
-              threadId: "sub-1",
-              agentId: "agent-1",
-              resolvedThreadId: "subagent:parent:sub-1",
-              rawStatus: "completed",
-            }),
-          ],
-        }),
-      ],
-      liveTurnId: TurnId.makeUnsafe("turn-1"),
-    });
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                agentId: "agent-1",
+                nickname: "Ada",
+                role: "builder",
+                model: "opus-4.5",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+          workEntry({
+            id: "entry-2",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                agentId: "agent-1",
+                resolvedThreadId: "subagent:parent:sub-1",
+                rawStatus: "completed",
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
@@ -134,10 +144,12 @@ describe("deriveComposerSubagentStripItems", () => {
       }),
     ];
 
-    const stillRunning = deriveComposerSubagentStripItems({
-      workEntries: entries("running"),
-      liveTurnId: null,
-    });
+    const stillRunning = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: entries("running"),
+        liveTurnId: null,
+      }),
+    );
     expect(stillRunning.map((item) => item.primaryLabel)).toEqual(["Ada", "Blue"]);
 
     expect(
@@ -149,32 +161,34 @@ describe("deriveComposerSubagentStripItems", () => {
   });
 
   it("appends the worker-tier effort to the model label", () => {
-    const items = deriveComposerSubagentStripItems({
-      workEntries: [
-        workEntry({
-          id: "entry-1",
-          turnId: "turn-1",
-          subagents: [
-            subagent({
-              threadId: "sub-1",
-              nickname: "Ada",
-              model: "sonnet",
-              effort: "high",
-              rawStatus: "running",
-              isActive: true,
-            }),
-            subagent({
-              threadId: "sub-2",
-              nickname: "Blue",
-              effort: "low",
-              rawStatus: "running",
-              isActive: true,
-            }),
-          ],
-        }),
-      ],
-      liveTurnId: TurnId.makeUnsafe("turn-1"),
-    });
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                nickname: "Ada",
+                model: "sonnet",
+                effort: "high",
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "sub-2",
+                nickname: "Blue",
+                effort: "low",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
 
     expect(items[0]?.modelLabel).toBe("Sonnet · high");
     // No model hint: the effort still reads on its own.
@@ -182,40 +196,42 @@ describe("deriveComposerSubagentStripItems", () => {
   });
 
   it("marks rows background from spawn hints and confirmed backgrounded tool use ids", () => {
-    const items = deriveComposerSubagentStripItems({
-      workEntries: [
-        workEntry({
-          id: "entry-1",
-          turnId: "turn-1",
-          subagents: [
-            subagent({
-              threadId: "sub-fg",
-              providerThreadId: "sub-fg",
-              nickname: "Ada",
-              rawStatus: "running",
-              isActive: true,
-            }),
-            subagent({
-              threadId: "sub-bg-spawn",
-              providerThreadId: "sub-bg-spawn",
-              nickname: "Blue",
-              background: true,
-              rawStatus: "running",
-              isActive: true,
-            }),
-            subagent({
-              threadId: "sub-bg-patch",
-              providerThreadId: "sub-bg-patch",
-              nickname: "Cleo",
-              rawStatus: "running",
-              isActive: true,
-            }),
-          ],
-        }),
-      ],
-      liveTurnId: TurnId.makeUnsafe("turn-1"),
-      backgroundedProviderThreadIds: new Set(["sub-bg-patch"]),
-    });
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-fg",
+                providerThreadId: "sub-fg",
+                nickname: "Ada",
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "sub-bg-spawn",
+                providerThreadId: "sub-bg-spawn",
+                nickname: "Blue",
+                background: true,
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "sub-bg-patch",
+                providerThreadId: "sub-bg-patch",
+                nickname: "Cleo",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+        backgroundedProviderThreadIds: new Set(["sub-bg-patch"]),
+      }),
+    );
 
     expect(items.map((item) => [item.providerThreadId, item.isBackground])).toEqual([
       ["sub-fg", false],
@@ -225,20 +241,136 @@ describe("deriveComposerSubagentStripItems", () => {
   });
 
   it("falls back to prior subagents when the live turn spawned none", () => {
-    const items = deriveComposerSubagentStripItems({
-      workEntries: [
-        workEntry({
-          id: "entry-1",
-          turnId: "turn-1",
-          subagents: [
-            subagent({ threadId: "sub-1", nickname: "Ada", rawStatus: "running", isActive: true }),
-          ],
-        }),
-      ],
-      liveTurnId: TurnId.makeUnsafe("turn-2"),
-    });
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                nickname: "Ada",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-2"),
+      }),
+    );
 
     expect(items.map((item) => item.primaryLabel)).toEqual(["Ada"]);
+  });
+
+  it("marks the viewed subagent row and leaves siblings unmarked", () => {
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                nickname: "Ada",
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "sub-2",
+                nickname: "Blue",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+        viewedThreadId: ThreadId.makeUnsafe("sub-2"),
+      }),
+    );
+
+    expect(items.map((item) => [item.primaryLabel, item.isViewed])).toEqual([
+      ["Ada", false],
+      ["Blue", true],
+    ]);
+  });
+
+  it("prepends a parent row while a subagent thread is open, absent on the main thread", () => {
+    const workEntries = [
+      workEntry({
+        id: "entry-1",
+        turnId: "turn-1",
+        subagents: [
+          subagent({ threadId: "sub-1", nickname: "Ada", rawStatus: "running", isActive: true }),
+        ],
+      }),
+    ];
+
+    const fromSubagentView = deriveComposerSubagentStripItems({
+      workEntries,
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+      viewedThreadId: ThreadId.makeUnsafe("sub-1"),
+      parentRow: { threadId: ThreadId.makeUnsafe("thread-main"), label: "Fix the bug" },
+    });
+    expect(fromSubagentView[0]).toEqual({
+      kind: "parent",
+      key: "parent:thread-main",
+      threadId: "thread-main",
+      label: "Fix the bug",
+    });
+    expect(subagentRows(fromSubagentView)).toHaveLength(1);
+
+    // Untitled parent threads fall back to a generic label.
+    const untitled = deriveComposerSubagentStripItems({
+      workEntries,
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+      parentRow: { threadId: ThreadId.makeUnsafe("thread-main"), label: null },
+    });
+    expect(untitled[0]).toMatchObject({ kind: "parent", label: "Main thread" });
+
+    // Main thread view passes no parentRow, so no parent row appears.
+    const fromMainView = deriveComposerSubagentStripItems({
+      workEntries,
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+    });
+    expect(fromMainView.every((row) => row.kind === "subagent")).toBe(true);
+  });
+
+  it("keeps parent-derived rows while the viewed subagent still runs, then retires fully", () => {
+    const entries = (viewedStatus: string) => [
+      workEntry({
+        id: "entry-1",
+        turnId: "turn-1",
+        subagents: [
+          subagent({ threadId: "sub-1", nickname: "Ada", rawStatus: "completed" }),
+          subagent({ threadId: "sub-2", nickname: "Blue", rawStatus: viewedStatus }),
+        ],
+      }),
+    ];
+    const parentRow = { threadId: ThreadId.makeUnsafe("thread-main"), label: "Fix the bug" };
+
+    // Parent turn settled but the viewed subagent still works: rows stay visible.
+    const stillRunning = deriveComposerSubagentStripItems({
+      workEntries: entries("running"),
+      liveTurnId: null,
+      viewedThreadId: ThreadId.makeUnsafe("sub-2"),
+      parentRow,
+    });
+    expect(stillRunning.map((row) => row.kind)).toEqual(["parent", "subagent", "subagent"]);
+
+    // Everything finished and the parent turn settled: the strip retires whole,
+    // parent row included.
+    expect(
+      deriveComposerSubagentStripItems({
+        workEntries: entries("completed"),
+        liveTurnId: null,
+        viewedThreadId: ThreadId.makeUnsafe("sub-2"),
+        parentRow,
+      }),
+    ).toEqual([]);
   });
 
   it("derives a strip row end-to-end from a routed collab activity omitted by the timeline", () => {

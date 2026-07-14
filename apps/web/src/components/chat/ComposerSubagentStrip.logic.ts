@@ -3,7 +3,7 @@
 // log entries, mirroring the active-task-list scoping (live turn wins; a prior set
 // stays visible only while some subagent is still working).
 // Layer: Chat composer logic
-// Exports: deriveComposerSubagentStripItems and ComposerSubagentStripItem
+// Exports: deriveComposerSubagentStripItems and the strip row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
 
@@ -17,6 +17,7 @@ import {
 } from "../../lib/subagentPresentation";
 
 export interface ComposerSubagentStripItem {
+  kind: "subagent";
   key: string;
   threadId: ThreadId;
   // Task tool_use_id: the handle for per-run task control (background/stop).
@@ -28,9 +29,22 @@ export interface ComposerSubagentStripItem {
   statusLabel: string | undefined;
   statusKind: SubagentStatusKind | null;
   isActive: boolean;
+  // True when this row is the thread currently open in the chat pane (viewing a
+  // sibling from inside a subagent thread).
+  isViewed: boolean;
   isBackground: boolean;
   accentColor: string;
 }
+
+// Leading "back to the main thread" row shown while a subagent thread is open.
+export interface ComposerSubagentStripParentItem {
+  kind: "parent";
+  key: string;
+  threadId: ThreadId;
+  label: string;
+}
+
+export type ComposerSubagentStripRow = ComposerSubagentStripItem | ComposerSubagentStripParentItem;
 
 // The provider thread id is present on every snapshot of a subagent, unlike
 // resolvedThreadId/agentId which can appear only once resolution catches up.
@@ -64,6 +78,7 @@ function toStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
+  viewedThreadId: ThreadId | null,
 ): ComposerSubagentStripItem {
   const presentation = resolveSubagentPresentation({
     nickname: subagent.nickname,
@@ -78,10 +93,12 @@ function toStripItem(
     subagent.isActive,
   );
   const modelLabel = formatSubagentModelLabel(subagent.model);
+  const threadId = ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId);
 
   return {
+    kind: "subagent",
     key,
-    threadId: ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId),
+    threadId,
     providerThreadId: subagent.providerThreadId ?? subagent.threadId,
     primaryLabel: presentation.nickname ?? presentation.primaryLabel,
     fullLabel: presentation.fullLabel,
@@ -93,6 +110,7 @@ function toStripItem(
     statusLabel,
     statusKind,
     isActive: statusKind === "running",
+    isViewed: viewedThreadId !== null && threadId === viewedThreadId,
     isBackground: subagent.background === true || backgroundedThreadIds.has(key),
     accentColor: presentation.accentColor,
   };
@@ -101,6 +119,7 @@ function toStripItem(
 function collectStripItems(
   entries: ReadonlyArray<WorkLogEntry>,
   backgroundedThreadIds: ReadonlySet<string>,
+  viewedThreadId: ThreadId | null,
 ): ComposerSubagentStripItem[] {
   const subagentByKey = new Map<string, WorkLogSubagent>();
   for (const entry of entries) {
@@ -111,18 +130,40 @@ function collectStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds),
+    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
   );
 }
 
 const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
+
+function withParentRow(
+  items: ComposerSubagentStripItem[],
+  parentRow: { threadId: ThreadId; label: string | null } | null | undefined,
+): ComposerSubagentStripRow[] {
+  if (items.length === 0 || !parentRow) {
+    return items;
+  }
+  return [
+    {
+      kind: "parent",
+      key: `parent:${parentRow.threadId}`,
+      threadId: parentRow.threadId,
+      label: parentRow.label ?? "Main thread",
+    },
+    ...items,
+  ];
+}
 
 export function deriveComposerSubagentStripItems(input: {
   workEntries: ReadonlyArray<WorkLogEntry>;
   liveTurnId: TurnId | null;
   // Task tool_use_ids the provider confirmed as backgrounded (task_updated patches).
   backgroundedProviderThreadIds?: ReadonlySet<string>;
-}): ComposerSubagentStripItem[] {
+  // The open thread when it is one of the subagents (marks its row as viewed).
+  viewedThreadId?: ThreadId | null;
+  // Present while a subagent thread is open: prepends a row back to the parent.
+  parentRow?: { threadId: ThreadId; label: string | null } | null;
+}): ComposerSubagentStripRow[] {
   const entriesWithSubagents = input.workEntries.filter(
     (entry) => (entry.subagents?.length ?? 0) > 0,
   );
@@ -131,17 +172,21 @@ export function deriveComposerSubagentStripItems(input: {
   }
 
   const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
+  const viewedThreadId = input.viewedThreadId ?? null;
   const liveTurnEntries = input.liveTurnId
     ? entriesWithSubagents.filter((entry) => entry.turnId === input.liveTurnId)
     : [];
   if (liveTurnEntries.length > 0) {
-    return collectStripItems(liveTurnEntries, backgroundedThreadIds);
+    return withParentRow(
+      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId),
+      input.parentRow,
+    );
   }
 
   // No subagents spawned by the live turn: keep the latest known set visible only
   // while some subagent is still running or queued, then let the strip retire.
-  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds);
+  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds, viewedThreadId);
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
-    ? items
+    ? withParentRow(items, input.parentRow)
     : [];
 }
