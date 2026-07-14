@@ -131,8 +131,6 @@ interface ClaudeResumeState {
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
-  readonly rerouteOriginalApiModelId?: string;
-  readonly rerouteFallbackApiModelId?: string;
   readonly trackedTasks?: ReadonlyArray<ClaudeTrackedTask>;
 }
 
@@ -234,14 +232,15 @@ interface ClaudeSessionContext {
   interruptRequestedTurnId: TurnId | undefined;
   lastKnownContextWindow: number | undefined;
   currentAutoCompactWindow: number | undefined;
+  currentAlwaysThinkingEnabled: boolean | undefined;
   lastKnownAutoCompactThreshold: number | undefined;
   contextUsageControlEnabled: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // Original API model id the runtime rerouted away from (safeguard refusal
-  // fallback). While set, turns requesting that model stay on the fallback:
-  // every flip back re-ingests the entire context as uncached tokens.
+  // fallback). Tracks the in-flight turn only; turn completion restores the
+  // user-selected model via setModel so the fallback cannot pin later turns.
   rerouteOriginalApiModelId: string | undefined;
   // Context-size warnings already emitted for this session (once per threshold).
   readonly emittedContextUsageWarnings: Set<string>;
@@ -640,6 +639,18 @@ function resolveSelectedClaudeAutoCompactWindow(
   ];
 }
 
+function resolveSelectedClaudeThinkingToggle(
+  model: string | null | undefined,
+  selectedThinking: boolean | null | undefined,
+): boolean | undefined {
+  if (typeof selectedThinking !== "boolean") {
+    return undefined;
+  }
+  return getModelCapabilities("claudeAgent", model).supportsThinkingToggle
+    ? selectedThinking
+    : undefined;
+}
+
 function resolveEffectiveClaudeContextWindow(input: {
   reportedContextWindow: number | undefined;
   lastKnownContextWindow: number | undefined;
@@ -684,8 +695,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     sessionId?: unknown;
     resumeSessionAt?: unknown;
     turnCount?: unknown;
-    rerouteOriginalApiModelId?: unknown;
-    rerouteFallbackApiModelId?: unknown;
     trackedTasks?: unknown;
   };
 
@@ -704,10 +713,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
   const resumeSessionAt =
     typeof cursor.resumeSessionAt === "string" ? cursor.resumeSessionAt : undefined;
   const turnCountValue = typeof cursor.turnCount === "number" ? cursor.turnCount : undefined;
-  const rerouteOriginalApiModelId = readNonEmptyString(cursor.rerouteOriginalApiModelId);
-  const rerouteFallbackApiModelId = readNonEmptyString(cursor.rerouteFallbackApiModelId);
-  const hasCompleteReroute =
-    rerouteOriginalApiModelId !== undefined && rerouteFallbackApiModelId !== undefined;
   const trackedTasks = parseClaudeTrackedTasks(cursor.trackedTasks);
 
   return {
@@ -717,7 +722,6 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
       ? { turnCount: turnCountValue }
       : {}),
-    ...(hasCompleteReroute ? { rerouteOriginalApiModelId, rerouteFallbackApiModelId } : {}),
     ...(trackedTasks.length > 0 ? { trackedTasks } : {}),
   };
 }
@@ -1492,12 +1496,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
           ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
           turnCount: context.turns.length,
-          ...(context.rerouteOriginalApiModelId && context.currentApiModelId
-            ? {
-                rerouteOriginalApiModelId: context.rerouteOriginalApiModelId,
-                rerouteFallbackApiModelId: context.currentApiModelId,
-              }
-            : {}),
           ...(context.trackedTasks.size > 0
             ? { trackedTasks: Array.from(context.trackedTasks.values()) }
             : {}),
@@ -2091,6 +2089,25 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
           ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
           : accumulatedSnapshot;
+
+        // A safeguard reroute only applies to the turn that just finished.
+        // Restore the user-selected model so subsequent turns do not silently
+        // stay on the (heavier) fallback; the safeguard may reroute again.
+        const reroutedFrom = context.rerouteOriginalApiModelId;
+        if (reroutedFrom !== undefined) {
+          const restoreExit = yield* Effect.exit(
+            Effect.tryPromise({
+              try: () => context.query.setModel(reroutedFrom),
+              catch: (cause) => toError(cause, "Failed to restore Claude model after reroute."),
+            }),
+          );
+          if (Exit.isSuccess(restoreExit)) {
+            context.rerouteOriginalApiModelId = undefined;
+            context.currentApiModelId = reroutedFrom;
+            context.lastKnownContextWindow =
+              resolveClaudeApiModelIdContextWindowMaxTokens(reroutedFrom);
+          }
+        }
 
         const turnState = context.turnState;
         if (!turnState) {
@@ -2802,9 +2819,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           },
         };
 
-        // Safeguard reroute (e.g. Fable 5 refusal -> Opus fallback). Pin the session
-        // to the fallback model: forcing the refused model back on the next turn
-        // costs two full-context cache misses per bounce.
+        // Safeguard reroute (e.g. Fable 5 refusal -> Opus fallback). Track the
+        // fallback for the in-flight turn only; turn completion restores the
+        // user-selected model so one refusal cannot pin later turns to Opus.
         const refusalFallback = readClaudeModelRefusalFallback(message);
         if (refusalFallback) {
           context.rerouteOriginalApiModelId ??= refusalFallback.originalModel;
@@ -3606,29 +3623,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           effectiveClaudeModel,
           requestedAutoCompactWindow,
         );
-        const requestedApiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
-        const resumeRerouteOriginalApiModelId = resumeState?.rerouteOriginalApiModelId;
-        const resumeRerouteFallbackApiModelId = resumeState?.rerouteFallbackApiModelId;
-        const resumedRerouteMatchesSelection =
-          resumeRerouteOriginalApiModelId !== undefined &&
-          resumeRerouteFallbackApiModelId !== undefined &&
-          (requestedApiModelId === undefined ||
-            stripClaudeContextWindowSuffix(requestedApiModelId) ===
-              stripClaudeContextWindowSuffix(resumeRerouteOriginalApiModelId));
-        const resumedRerouteOriginalApiModelId = resumedRerouteMatchesSelection
-          ? resumeRerouteOriginalApiModelId
-          : undefined;
-        const resumedRerouteFallbackApiModelId = resumedRerouteMatchesSelection
-          ? stripClaudeContextWindowSuffix(resumeRerouteFallbackApiModelId)
-          : undefined;
-        const apiModelId = resumedRerouteFallbackApiModelId ?? requestedApiModelId;
+        const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
         const effort =
           requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
         const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
-        const thinking =
-          typeof modelSelection?.options?.thinking === "boolean" && caps.supportsThinkingToggle
-            ? modelSelection.options.thinking
-            : undefined;
+        const thinking = resolveSelectedClaudeThinkingToggle(
+          effectiveClaudeModel,
+          modelSelection?.options?.thinking,
+        );
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
@@ -3752,12 +3754,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ? { resumeSessionAt: resumeState.resumeSessionAt }
                 : {}),
               turnCount: resumeState?.turnCount ?? 0,
-              ...(resumedRerouteOriginalApiModelId && resumedRerouteFallbackApiModelId
-                ? {
-                    rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
-                    rerouteFallbackApiModelId: resumedRerouteFallbackApiModelId,
-                  }
-                : {}),
               ...(trackedTasks.size > 0 ? { trackedTasks: Array.from(trackedTasks.values()) } : {}),
             },
             createdAt: startedAt,
@@ -3785,12 +3781,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               apiModelId ?? effectiveClaudeModel,
             ),
             currentAutoCompactWindow: requestedAutoCompactWindowTokens,
+            currentAlwaysThinkingEnabled: thinking,
             lastKnownAutoCompactThreshold: requestedAutoCompactWindowTokens,
             contextUsageControlEnabled: true,
             lastKnownTokenUsage: undefined,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
-            rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
+            rerouteOriginalApiModelId: undefined,
             emittedContextUsageWarnings: new Set(),
             stopped: false,
             warnedUnhandledSdkKinds: new Set(),
@@ -3933,39 +3930,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         if (modelSelection?.model) {
           const apiModelId = resolveApiModelId(modelSelection);
-          const reroutedFrom = context.rerouteOriginalApiModelId;
-          const requestsReroutedModel =
-            reroutedFrom !== undefined &&
-            stripClaudeContextWindowSuffix(apiModelId) ===
-              stripClaudeContextWindowSuffix(reroutedFrom);
-          if (requestsReroutedModel) {
-            // A safeguard reroute pinned this session to the fallback model. The
-            // thread selection still names the refused model; switching back would
-            // re-ingest the entire context uncached (and likely bounce again), so
-            // stay on the fallback until the user picks a different model.
-            const fallbackApiModelId = context.currentApiModelId;
-            if (fallbackApiModelId !== undefined) {
-              const effectiveFallbackApiModelId =
-                stripClaudeContextWindowSuffix(fallbackApiModelId);
-              context.currentApiModelId = effectiveFallbackApiModelId;
-              context.lastKnownContextWindow = resolveClaudeApiModelIdContextWindowMaxTokens(
-                effectiveFallbackApiModelId,
-              );
-              yield* updateResumeCursor(context);
-            }
-          } else {
-            if (apiModelId !== context.currentApiModelId) {
-              yield* Effect.tryPromise({
-                try: () => context.query.setModel(apiModelId),
-                catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
-              });
-            }
-            context.currentApiModelId = apiModelId;
-            context.rerouteOriginalApiModelId = undefined;
-            context.lastKnownContextWindow =
-              resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId);
-            yield* updateResumeCursor(context);
+          if (apiModelId !== context.currentApiModelId) {
+            yield* Effect.tryPromise({
+              try: () => context.query.setModel(apiModelId),
+              catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
+            });
           }
+          context.currentApiModelId = apiModelId;
+          context.rerouteOriginalApiModelId = undefined;
+          context.lastKnownContextWindow =
+            resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId);
+          yield* updateResumeCursor(context);
         }
 
         if (modelSelection && requestedAutoCompactWindow !== context.currentAutoCompactWindow) {
@@ -3980,6 +3955,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.lastKnownAutoCompactThreshold = requestedAutoCompactWindow;
           context.emittedContextUsageWarnings.delete("near-window");
           context.emittedContextUsageWarnings.delete("large-prompt");
+        }
+
+        // The thinking toggle mirrors the spawn-time `alwaysThinkingEnabled`
+        // setting; flipping it live avoids a restart-and-resume replay.
+        const requestedThinking = resolveSelectedClaudeThinkingToggle(
+          modelSelection?.model,
+          modelSelection?.options?.thinking,
+        );
+        if (modelSelection && requestedThinking !== context.currentAlwaysThinkingEnabled) {
+          yield* Effect.tryPromise({
+            try: () =>
+              context.query.applyFlagSettings({
+                alwaysThinkingEnabled: requestedThinking ?? null,
+              }),
+            catch: (cause) => toRequestError(input.threadId, "turn/applyFlagSettings", cause),
+          });
+          context.currentAlwaysThinkingEnabled = requestedThinking;
         }
 
         // Apply interaction mode on every turn so sticky SDK permission state

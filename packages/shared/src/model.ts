@@ -749,14 +749,12 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly effectiveEffort: ClaudeApiEffort | null;
-  readonly thinking: boolean | undefined;
   readonly fastMode: boolean;
   readonly ultracode: boolean;
 }
 
 interface ClaudeRequestedSpawnOptions {
   readonly effort: string | null;
-  readonly thinking: boolean | undefined;
   readonly fastMode: boolean;
 }
 
@@ -765,8 +763,6 @@ function claudeRequestedSpawnOptions(
 ): ClaudeRequestedSpawnOptions {
   return {
     effort: trimOrNull(selection.options?.effort ?? null),
-    thinking:
-      typeof selection.options?.thinking === "boolean" ? selection.options.thinking : undefined,
     fastMode: selection.options?.fastMode === true,
   };
 }
@@ -777,26 +773,19 @@ function sameClaudeRequestedSpawnOptions(
 ): boolean {
   const prev = claudeRequestedSpawnOptions(previous);
   const desired = claudeRequestedSpawnOptions(next);
-  return (
-    prev.effort === desired.effort &&
-    prev.thinking === desired.thinking &&
-    prev.fastMode === desired.fastMode
-  );
+  return prev.effort === desired.effort && prev.fastMode === desired.fastMode;
 }
 
 // Mirrors the spawn-time option derivation in the Claude adapter's startSession:
 // only these inputs are fixed at subprocess spawn (query `effort` + `settings`).
-// Model and context window switch in-session via `setModel`.
+// Model and context window switch in-session via `setModel`; the thinking
+// toggle switches via the live flag-settings control.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
     effectiveEffort: getEffectiveClaudeCodeEffort(effort),
-    thinking:
-      typeof selection.options?.thinking === "boolean" && caps.supportsThinkingToggle
-        ? selection.options.thinking
-        : undefined,
     fastMode: selection.options?.fastMode === true && caps.supportsFastMode,
     ultracode: effort === "ultracode" && hasEffortLevel(caps, "xhigh"),
   } satisfies ClaudeSpawnProfile;
@@ -807,7 +796,8 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
  * subprocess. Restarting resumes via `--resume`, which replays the whole
  * conversation as uncached input tokens, so it must only happen for options
  * fixed at spawn (effort/settings). Model changes use `setModel`, while the
- * auto-compact budget uses the SDK's live flag-settings control.
+ * auto-compact budget and thinking toggle use the SDK's live flag-settings
+ * control.
  */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
@@ -835,7 +825,6 @@ export function claudeSelectionRequiresRestart(
   const desired = claudeSpawnProfile(next);
   return (
     prev.effectiveEffort !== desired.effectiveEffort ||
-    prev.thinking !== desired.thinking ||
     prev.fastMode !== desired.fastMode ||
     prev.ultracode !== desired.ultracode
   );

@@ -774,13 +774,14 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(true);
   });
 
-  it("restarts when the thinking toggle changes on a supported model", () => {
+  it("does not restart when the thinking toggle changes", () => {
+    // The thinking toggle switches live via the SDK flag-settings control.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-haiku-4-5"),
         selection("claude-haiku-4-5", { thinking: false }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("ignores options the target model does not support", () => {

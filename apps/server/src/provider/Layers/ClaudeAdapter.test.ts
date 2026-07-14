@@ -4103,6 +4103,58 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("updates the thinking toggle live instead of restarting the session", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-haiku-4-5",
+          options: { thinking: false },
+        },
+      });
+      const settings = harness.getLastCreateQueryInput()?.options.settings;
+      assert.ok(settings && typeof settings === "object");
+      assert.equal(
+        (settings as { alwaysThinkingEnabled?: boolean }).alwaysThinkingEnabled,
+        false,
+      );
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-haiku-4-5",
+          options: { thinking: true },
+        },
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ alwaysThinkingEnabled: true }]);
+
+      // The same toggle value on the next turn stays quiet.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-haiku-4-5",
+          options: { thinking: true },
+        },
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ alwaysThinkingEnabled: true }]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("skips redundant setModel when the turn model matches the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -4186,7 +4238,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("pins the fallback model after a safeguard reroute", () => {
+  it.effect("restores the selected model once a safeguard-rerouted turn completes", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -4194,7 +4246,7 @@ describe("ClaudeAdapterLive", () => {
       const reroutedFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "model.rerouted",
-      ).pipe(Stream.take(2), Stream.runCollect, Effect.forkChild);
+      ).pipe(Stream.runHead, Effect.forkChild);
 
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -4204,6 +4256,16 @@ describe("ClaudeAdapterLive", () => {
           provider: "claudeAgent",
           model: "claude-fable-5",
         },
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-fable-5",
+        },
+        attachments: [],
       });
 
       harness.query.emit({
@@ -4216,31 +4278,33 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-fallback",
         uuid: "fallback-1",
       } as unknown as SDKMessage);
-      harness.query.emit({
-        type: "system",
-        subtype: "model_refusal_fallback",
-        content: "The safeguard repeated its Opus 4.8 fallback.",
-        original_model: "claude-fable-5",
-        fallback_model: "claude-opus-4-8",
-        request_id: "fallback-request-2",
-        session_id: "sdk-session-fallback",
-        uuid: "fallback-2",
-      } as unknown as SDKMessage);
 
-      const rerouted = Array.from(yield* Fiber.join(reroutedFiber));
-      assert.equal(rerouted.length, 2);
-      const firstReroute = rerouted[0];
-      if (firstReroute?.type === "model.rerouted") {
-        assert.equal(firstReroute.payload.fromModel, "claude-fable-5");
-        assert.equal(firstReroute.payload.toModel, "claude-opus-4-8");
+      const rerouted = yield* Fiber.join(reroutedFiber);
+      assert.equal(rerouted._tag, "Some");
+      if (rerouted._tag === "Some" && rerouted.value.type === "model.rerouted") {
+        assert.equal(rerouted.value.payload.fromModel, "claude-fable-5");
+        assert.equal(rerouted.value.payload.toModel, "claude-opus-4-8");
       }
 
-      // A turn still requesting the refused model must not flip back: each bounce
-      // re-ingests the entire context as uncached tokens.
-      const turnStartedFiber = yield* Stream.filter(
+      const turnCompletedFiber = yield* Stream.filter(
         adapter.streamEvents,
-        (event) => event.type === "turn.started",
+        (event) => event.type === "turn.completed",
       ).pipe(Stream.runHead, Effect.forkChild);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-fallback",
+        uuid: "result-1",
+      } as unknown as SDKMessage);
+      yield* Fiber.join(turnCompletedFiber);
+
+      // The reroute only covers the completed turn: completion switches the
+      // session back so the fallback cannot pin every subsequent turn to Opus.
+      assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5"]);
+
+      // The next turn already runs on the selection; no extra control request.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
@@ -4250,57 +4314,14 @@ describe("ClaudeAdapterLive", () => {
         },
         attachments: [],
       });
-      assert.deepEqual(harness.query.setModelCalls, []);
-      const turnStarted = yield* Fiber.join(turnStartedFiber);
-      assert.equal(turnStarted._tag, "Some");
-      if (turnStarted._tag === "Some" && turnStarted.value.type === "turn.started") {
-        assert.equal(turnStarted.value.payload.model, "claude-opus-4-8");
-      }
-
-      // Budget changes apply to the effective fallback without switching models.
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "continue with the larger window",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-fable-5",
-          options: { autoCompactWindow: "1m" },
-        },
-        attachments: [],
-      });
-      assert.deepEqual(harness.query.setModelCalls, []);
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ autoCompactWindow: 1_000_000 }]);
-
-      // Picking a genuinely different model clears the pin and applies it.
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "switch",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-        attachments: [],
-      });
-      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6"]);
-
-      // And the original model can be re-applied after the explicit switch.
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "back to fable",
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-fable-5",
-        },
-        attachments: [],
-      });
-      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6", "claude-fable-5"]);
+      assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
   });
 
-  it.effect("preserves fallback routing while replacing and resuming a session", () => {
+  it.effect("resumes with the selected model instead of a prior reroute fallback", () => {
     const harness = makeMultiQueryHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -4352,7 +4373,7 @@ describe("ClaudeAdapterLive", () => {
       const secondQuery = harness.queries[1];
       assert.ok(secondQuery);
       assert.equal(firstQuery.closeCalls, 1);
-      assert.equal(harness.createInputs[1]?.options.model, "claude-opus-4-8");
+      assert.equal(harness.createInputs[1]?.options.model, "claude-fable-5");
       assert.equal(autoCompactWindowFromOptions(harness.createInputs[1]?.options), 1_000_000);
       assert.equal(yield* adapter.hasSession(THREAD_ID), true);
       assert.equal((yield* adapter.listSessions()).length, 1);
