@@ -460,6 +460,8 @@ import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
+import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import { deriveComposerSubagentStripItems } from "./chat/ComposerSubagentStrip.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
@@ -1281,6 +1283,7 @@ export default function ChatView({
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
+  const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
   // model name, traits label). Inputs live in a ref so the resize observer
@@ -2683,6 +2686,14 @@ export default function ChatView({
         ? null
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
+  );
+  const composerSubagentStripItems = useMemo(
+    () =>
+      deriveComposerSubagentStripItems({
+        workEntries: workLogEntries,
+        liveTurnId: latestTurnSettled ? null : (activeLatestTurn?.turnId ?? null),
+      }),
+    [activeLatestTurn?.turnId, latestTurnSettled, workLogEntries],
   );
   // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
   // the composer mounts/unmounts, and the observer catches every panel appearing,
@@ -10333,6 +10344,7 @@ export default function ChatView({
 
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
+  const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
 
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
@@ -10378,13 +10390,28 @@ export default function ChatView({
                 />
               ) : null}
               {renderActiveTaskListCard(showComposerLiveChangesHeader)}
+              {showComposerSubagentStrip ? (
+                <ComposerSubagentStrip
+                  items={composerSubagentStripItems}
+                  compact={subagentStripCompact}
+                  onCompactChange={setSubagentStripCompact}
+                  onOpenThread={onNavigateToThread}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader || showComposerActiveTaskListCard
+                  }
+                />
+              ) : null}
               <ComposerQueuedHeader
                 queuedTurns={queuedComposerTurns}
                 onSteer={onSteerQueuedComposerTurn}
                 onRemove={removeQueuedComposerTurn}
                 onEdit={onEditQueuedComposerTurn}
                 cwd={threadWorkspaceCwd ?? undefined}
-                attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
+                attachedToPrevious={
+                  showComposerLiveChangesHeader ||
+                  showComposerActiveTaskListCard ||
+                  showComposerSubagentStrip
+                }
               />
               {/* Pending approvals and AskUserQuestion prompts both render as a detached
                   card floating just above the composer (padding gives the measured gap),
