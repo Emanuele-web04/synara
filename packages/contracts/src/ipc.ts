@@ -1,4 +1,12 @@
 import type {
+  CanvasDrawingCreateInput,
+  CanvasDrawingDeleteInput,
+  CanvasDrawingDeleteResult,
+  CanvasDrawingReadInput,
+  CanvasDrawingSaveInput,
+  CanvasDrawingSnapshot,
+} from "./canvas";
+import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
   AuthBootstrapResult,
@@ -448,6 +456,12 @@ export interface NativeApi {
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
     onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
+  };
+  canvas: {
+    createDrawing: (input: CanvasDrawingCreateInput) => Promise<CanvasDrawingSnapshot>;
+    readDrawing: (input: CanvasDrawingReadInput) => Promise<CanvasDrawingSnapshot>;
+    saveDrawing: (input: CanvasDrawingSaveInput) => Promise<CanvasDrawingSnapshot>;
+    deleteDrawing: (input: CanvasDrawingDeleteInput) => Promise<CanvasDrawingDeleteResult>;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;

@@ -49,6 +49,15 @@ export const ProviderSession = Schema.Struct({
 });
 export type ProviderSession = typeof ProviderSession.Type;
 
+export const ProviderCanvasRuntime = Schema.Struct({
+  bridgeUrl: TrimmedNonEmptyString,
+  bridgeToken: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  mcpCommand: TrimmedNonEmptyString,
+  mcpArgs: Schema.Array(TrimmedNonEmptyString),
+});
+export type ProviderCanvasRuntime = typeof ProviderCanvasRuntime.Type;
+
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderKind),
@@ -58,6 +67,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   providerOptions: Schema.optional(ProviderStartOptions),
+  canvas: Schema.optional(ProviderCanvasRuntime),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;

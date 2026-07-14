@@ -350,6 +350,7 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            surface: payload.surface,
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,

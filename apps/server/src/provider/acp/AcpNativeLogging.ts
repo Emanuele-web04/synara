@@ -5,6 +5,31 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type { EventNdjsonLogger } from "../Layers/EventNdjsonLogger.ts";
 import type { AcpSessionRequestLogEvent, AcpSessionRuntimeOptions } from "./AcpSessionRuntime.ts";
 
+const SENSITIVE_LOG_FIELD = /(?:token|secret|password|authorization|api[-_]?key)/i;
+
+export function redactAcpLogPayload(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((entry) => redactAcpLogPayload(entry, seen));
+
+    const record = value as Record<string, unknown>;
+    const sensitiveEnvEntry =
+      typeof record.name === "string" && SENSITIVE_LOG_FIELD.test(record.name);
+    return Object.fromEntries(
+      Object.entries(record).map(([key, entry]) => [
+        key,
+        SENSITIVE_LOG_FIELD.test(key) || (sensitiveEnvEntry && key === "value")
+          ? "[REDACTED]"
+          : redactAcpLogPayload(entry, seen),
+      ]),
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+
 function writeNativeAcpLog(input: {
   readonly nativeEventLogger: EventNdjsonLogger | undefined;
   readonly provider: ProviderKind;
@@ -24,7 +49,7 @@ function writeNativeAcpLog(input: {
           provider: input.provider,
           createdAt: observedAt,
           threadId: input.threadId,
-          payload: input.payload,
+          payload: redactAcpLogPayload(input.payload),
         },
       },
       input.threadId,

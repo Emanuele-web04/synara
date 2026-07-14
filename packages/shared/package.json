@@ -155,6 +155,10 @@
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"
+    },
+    "./excalidrawScene": {
+      "types": "./src/excalidrawScene.ts",
+      "import": "./src/excalidrawScene.ts"
     }
   },
   "scripts": {

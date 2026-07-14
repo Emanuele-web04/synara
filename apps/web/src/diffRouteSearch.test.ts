@@ -102,4 +102,13 @@ describe("parseDiffRouteSearch", () => {
       splitViewId: "split-1",
     });
   });
+
+  it("recognizes the canvas workspace without accepting editor-only file state", () => {
+    expect(
+      parseDiffRouteSearch({
+        view: "canvas",
+        editorFilePath: "src/app.ts",
+      }),
+    ).toEqual({ view: "canvas" });
+  });
 });

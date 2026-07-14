@@ -573,6 +573,7 @@ function toProjectedThreadShell(input: {
   return {
     id: threadRow.threadId,
     projectId: threadRow.projectId,
+    surface: threadRow.surface,
     title: threadRow.title,
     modelSelection: threadRow.modelSelection,
     runtimeMode: threadRow.runtimeMode,
@@ -614,6 +615,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
   return {
     id: threadRow.threadId,
     projectId: threadRow.projectId,
+    surface: threadRow.surface,
     title: threadRow.title,
     modelSelection: threadRow.modelSelection,
     runtimeMode: threadRow.runtimeMode,
@@ -660,6 +662,7 @@ function toProjectedThread(input: {
   return {
     id: threadRow.threadId,
     projectId: threadRow.projectId,
+    surface: threadRow.surface,
     title: threadRow.title,
     modelSelection: threadRow.modelSelection,
     runtimeMode: threadRow.runtimeMode,
@@ -763,6 +766,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          surface,
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -808,6 +812,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          surface,
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1151,6 +1156,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          surface,
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1198,6 +1204,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          surface,
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",

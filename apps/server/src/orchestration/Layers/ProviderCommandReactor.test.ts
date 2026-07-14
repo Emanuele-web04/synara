@@ -513,6 +513,49 @@ describe("ProviderCommandReactor", () => {
     );
   }
 
+  it("creates the backing canvas file as soon as a canvas thread is created", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const workspaceRoot = path.join(path.dirname(harness.stateDir), "canvas-project");
+    const threadId = ThreadId.makeUnsafe("thread-canvas");
+    fs.mkdirSync(workspaceRoot, { recursive: true });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-create-canvas"),
+        projectId: asProjectId("project-canvas"),
+        title: "Canvas Project",
+        workspaceRoot,
+        defaultModelSelection: { provider: "grok", model: "grok-4" },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-canvas"),
+        threadId,
+        projectId: asProjectId("project-canvas"),
+        surface: "canvas",
+        title: "Canvas Thread",
+        modelSelection: { provider: "grok", model: "grok-4" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    const drawingPath = path.join(workspaceRoot, "drawings", `${threadId}.excalidraw`);
+    await waitFor(() => fs.existsSync(drawingPath));
+    expect(JSON.parse(fs.readFileSync(drawingPath, "utf8"))).toMatchObject({
+      type: "excalidraw",
+      elements: [],
+    });
+  });
+
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

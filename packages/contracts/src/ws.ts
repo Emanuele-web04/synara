@@ -1,5 +1,11 @@
 import { Schema, Struct } from "effect";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  CanvasDrawingCreateInput,
+  CanvasDrawingDeleteInput,
+  CanvasDrawingReadInput,
+  CanvasDrawingSaveInput,
+} from "./canvas";
 
 import {
   AutomationCancelRunInput,
@@ -124,6 +130,10 @@ export const WS_METHODS = {
   projectsReadFile: "projects.readFile",
   projectsCreateLocalFilePreviewGrant: "projects.createLocalFilePreviewGrant",
   projectsWriteFile: "projects.writeFile",
+  canvasCreateDrawing: "canvas.createDrawing",
+  canvasReadDrawing: "canvas.readDrawing",
+  canvasSaveDrawing: "canvas.saveDrawing",
+  canvasDeleteDrawing: "canvas.deleteDrawing",
   projectsRunDevServer: "projects.runDevServer",
   projectsStopDevServer: "projects.stopDevServer",
   projectsListDevServers: "projects.listDevServers",
@@ -279,6 +289,10 @@ const WebSocketRequestBody = Schema.Union([
     ProjectCreateLocalFilePreviewGrantInput,
   ),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
+  tagRequestBody(WS_METHODS.canvasCreateDrawing, CanvasDrawingCreateInput),
+  tagRequestBody(WS_METHODS.canvasReadDrawing, CanvasDrawingReadInput),
+  tagRequestBody(WS_METHODS.canvasSaveDrawing, CanvasDrawingSaveInput),
+  tagRequestBody(WS_METHODS.canvasDeleteDrawing, CanvasDrawingDeleteInput),
   tagRequestBody(WS_METHODS.projectsRunDevServer, ProjectRunDevServerInput),
   tagRequestBody(WS_METHODS.projectsStopDevServer, ProjectStopDevServerInput),
   tagRequestBody(WS_METHODS.projectsListDevServers, Schema.Struct({})),

@@ -20,6 +20,40 @@ const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts")
 const bunExe = "bun";
 
 describe("AcpSessionRuntime", () => {
+  it.effect("passes configured MCP servers to new sessions", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    const mcpServers = [
+      {
+        name: "synara-excalidraw",
+        command: "node",
+        args: ["mcp.mjs"],
+        env: [{ name: "TOKEN", value: "secret" }],
+      },
+    ];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+      expect(
+        requestEvents.find(
+          (event) => event.method === "session/new" && event.status === "started",
+        )?.payload,
+      ).toMatchObject({ mcpServers });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: { command: bunExe, args: [mockAgentPath] },
+          cwd: process.cwd(),
+          mcpServers,
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+          requestLogger: (event) => Effect.sync(() => requestEvents.push(event)),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
@@ -63,11 +97,25 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("loads a resumed session and still prompts normally", () =>
-    Effect.gen(function* () {
+  it.effect("loads a resumed session with configured MCP servers and still prompts", () => {
+    const requestEvents: Array<AcpSessionRequestLogEvent> = [];
+    const mcpServers = [
+      {
+        name: "synara-excalidraw",
+        command: "node",
+        args: ["mcp.mjs"],
+        env: [{ name: "TOKEN", value: "secret" }],
+      },
+    ];
+    return Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       const started = yield* runtime.start();
       expect(started.sessionId).toBe("mock-session-1");
+      expect(
+        requestEvents.find(
+          (event) => event.method === "session/load" && event.status === "started",
+        )?.payload,
+      ).toMatchObject({ mcpServers });
 
       // Resumed sessions drop session/update until a consumer attaches, so the
       // events stream must be taken before prompting (mirrors the adapters,
@@ -98,14 +146,16 @@ describe("AcpSessionRuntime", () => {
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",
+          mcpServers,
           clientInfo: { name: "synara-test", version: "0.0.0" },
           authMethodId: "test",
+          requestLogger: (event) => Effect.sync(() => requestEvents.push(event)),
         }),
       ),
       Effect.scoped,
       Effect.provide(NodeServices.layer),
-    ),
-  );
+    );
+  });
 
   it.effect("prefers session/resume when the agent advertises it", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];

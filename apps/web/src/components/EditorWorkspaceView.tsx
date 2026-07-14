@@ -6,14 +6,9 @@
 import type { ProjectId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
-  type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
-  useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -61,6 +56,7 @@ import {
 } from "./chat/workspaceExplorer";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
+import { ResizableChatPane, useResizableChatPane } from "./ResizableChatPane";
 
 type EditorCenterMode = "file" | "diff";
 type EditorActivityBarItem = EditorCenterMode | "search";
@@ -71,7 +67,6 @@ const EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY = "synara.editor.chatPaneVisible";
 const EDITOR_CHAT_PANE_DEFAULT_WIDTH = 384;
 const EDITOR_CHAT_PANE_MIN_WIDTH = 320;
 const EDITOR_CHAT_PANE_MAX_WIDTH = 600;
-const EDITOR_CHAT_PANE_KEYBOARD_STEP = 24;
 
 interface EditorWorkspaceViewProps {
   workspaceRoot: string | null;
@@ -98,44 +93,6 @@ interface EditorWorkspaceViewProps {
   onSelectProject?: (projectId: ProjectId) => void;
 }
 
-function clampEditorChatPaneWidth(width: number): number {
-  return Math.min(
-    EDITOR_CHAT_PANE_MAX_WIDTH,
-    Math.max(EDITOR_CHAT_PANE_MIN_WIDTH, Math.round(width)),
-  );
-}
-
-function readStoredEditorChatPaneWidth(): number {
-  if (typeof window === "undefined") {
-    return EDITOR_CHAT_PANE_DEFAULT_WIDTH;
-  }
-
-  try {
-    const rawValue = window.localStorage.getItem(EDITOR_CHAT_PANE_STORAGE_KEY);
-    const parsed = rawValue === null ? Number.NaN : Number.parseFloat(rawValue);
-    return Number.isFinite(parsed)
-      ? clampEditorChatPaneWidth(parsed)
-      : EDITOR_CHAT_PANE_DEFAULT_WIDTH;
-  } catch {
-    return EDITOR_CHAT_PANE_DEFAULT_WIDTH;
-  }
-}
-
-function storeEditorChatPaneWidth(width: number): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(
-      EDITOR_CHAT_PANE_STORAGE_KEY,
-      String(clampEditorChatPaneWidth(width)),
-    );
-  } catch {
-    // Best-effort preference persistence only.
-  }
-}
-
 function readStoredEditorVisibility(key: string): boolean {
   if (typeof window === "undefined") {
     return true;
@@ -156,18 +113,6 @@ function storeEditorVisibility(key: string, visible: boolean): void {
   } catch {
     // Best-effort preference persistence only.
   }
-}
-
-interface EditorChatPaneResizeState {
-  pointerId: number;
-  startX: number;
-  startWidth: number;
-  pendingWidth: number;
-  rafId: number | null;
-  restoreBodyCursor: string;
-  restoreBodyUserSelect: string;
-  onPointerMove: (event: PointerEvent) => void;
-  onPointerEnd: (event: PointerEvent) => void;
 }
 
 function DiffFileRow(props: {
@@ -368,17 +313,20 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // global sidebar is collapsed, so it has to clear the macOS traffic lights the
   // same way every other chat-surface header does.
   const trafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const [chatPaneWidth, setChatPaneWidth] = useState(readStoredEditorChatPaneWidth);
-  const chatPaneResizeStateRef = useRef<EditorChatPaneResizeState | null>(null);
+  const chatPane = useResizableChatPane({
+    storageKey: "synara.editor.chatPane",
+    widthStorageKey: EDITOR_CHAT_PANE_STORAGE_KEY,
+    visibilityStorageKey: EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY,
+    defaultWidth: EDITOR_CHAT_PANE_DEFAULT_WIDTH,
+    minWidth: EDITOR_CHAT_PANE_MIN_WIDTH,
+    maxWidth: EDITOR_CHAT_PANE_MAX_WIDTH,
+  });
   // Both side surfaces can be hidden so the main content takes the full width:
   // re-clicking the active activity-bar item collapses the sidebar (VS Code
   // style), and the header chat toggle hides the chat pane (kept mounted so
   // the chat runtime survives).
   const [sidebarVisible, setSidebarVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY),
-  );
-  const [chatPaneVisible, setChatPaneVisible] = useState(() =>
-    readStoredEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY),
   );
   // The search pane replaces the explorer/diff sidebar without touching the
   // center mode, so picking a result simply opens it in the file preview. The
@@ -411,126 +359,6 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
     },
     [centerMode, onCenterModeChange, searchPaneActive, sidebarVisible],
   );
-  const toggleChatPaneVisible = useCallback(() => {
-    setChatPaneVisible((previous) => {
-      const next = !previous;
-      storeEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY, next);
-      return next;
-    });
-  }, []);
-
-  const stopChatPaneResize = useCallback(() => {
-    const resizeState = chatPaneResizeStateRef.current;
-    if (!resizeState || typeof window === "undefined") {
-      return;
-    }
-
-    if (resizeState.rafId !== null) {
-      window.cancelAnimationFrame(resizeState.rafId);
-      resizeState.rafId = null;
-    }
-
-    window.removeEventListener("pointermove", resizeState.onPointerMove);
-    window.removeEventListener("pointerup", resizeState.onPointerEnd);
-    window.removeEventListener("pointercancel", resizeState.onPointerEnd);
-    document.body.style.cursor = resizeState.restoreBodyCursor;
-    document.body.style.userSelect = resizeState.restoreBodyUserSelect;
-    setChatPaneWidth(resizeState.pendingWidth);
-    storeEditorChatPaneWidth(resizeState.pendingWidth);
-    chatPaneResizeStateRef.current = null;
-  }, []);
-
-  useEffect(() => stopChatPaneResize, [stopChatPaneResize]);
-
-  const handleChatPaneResizePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || typeof window === "undefined") {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      stopChatPaneResize();
-
-      const resizeState: EditorChatPaneResizeState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startWidth: chatPaneWidth,
-        pendingWidth: chatPaneWidth,
-        rafId: null,
-        restoreBodyCursor: document.body.style.cursor,
-        restoreBodyUserSelect: document.body.style.userSelect,
-        onPointerMove: () => undefined,
-        onPointerEnd: () => undefined,
-      };
-
-      resizeState.onPointerMove = (moveEvent) => {
-        if (moveEvent.pointerId !== resizeState.pointerId) {
-          return;
-        }
-
-        resizeState.pendingWidth = clampEditorChatPaneWidth(
-          resizeState.startWidth + resizeState.startX - moveEvent.clientX,
-        );
-
-        if (resizeState.rafId !== null) {
-          return;
-        }
-
-        resizeState.rafId = window.requestAnimationFrame(() => {
-          resizeState.rafId = null;
-          setChatPaneWidth(resizeState.pendingWidth);
-        });
-      };
-
-      resizeState.onPointerEnd = (endEvent) => {
-        if (endEvent.pointerId !== resizeState.pointerId) {
-          return;
-        }
-        stopChatPaneResize();
-      };
-
-      chatPaneResizeStateRef.current = resizeState;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      window.addEventListener("pointermove", resizeState.onPointerMove);
-      window.addEventListener("pointerup", resizeState.onPointerEnd);
-      window.addEventListener("pointercancel", resizeState.onPointerEnd);
-    },
-    [chatPaneWidth, stopChatPaneResize],
-  );
-
-  const handleChatPaneResizeDoubleClick = useCallback(() => {
-    setChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
-    storeEditorChatPaneWidth(EDITOR_CHAT_PANE_DEFAULT_WIDTH);
-  }, []);
-
-  const handleChatPaneResizeKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      let nextWidth: number | null = null;
-
-      if (event.key === "ArrowLeft") {
-        nextWidth = chatPaneWidth + EDITOR_CHAT_PANE_KEYBOARD_STEP;
-      } else if (event.key === "ArrowRight") {
-        nextWidth = chatPaneWidth - EDITOR_CHAT_PANE_KEYBOARD_STEP;
-      } else if (event.key === "Home") {
-        nextWidth = EDITOR_CHAT_PANE_MIN_WIDTH;
-      } else if (event.key === "End") {
-        nextWidth = EDITOR_CHAT_PANE_MAX_WIDTH;
-      }
-
-      if (nextWidth === null) {
-        return;
-      }
-
-      event.preventDefault();
-      const clampedWidth = clampEditorChatPaneWidth(nextWidth);
-      setChatPaneWidth(clampedWidth);
-      storeEditorChatPaneWidth(clampedWidth);
-    },
-    [chatPaneWidth],
-  );
-
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-root)] text-foreground">
       <div
@@ -574,13 +402,15 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
         <ChatHeaderButton
           type="button"
           tone="outline"
-          aria-pressed={chatPaneVisible}
-          title={chatPaneVisible ? "Hide chat panel" : "Show chat panel"}
+          aria-pressed={chatPane.visible}
+          title={chatPane.visible ? "Hide chat panel" : "Show chat panel"}
           className="gap-1.5"
-          onClick={toggleChatPaneVisible}
+          onClick={chatPane.toggleVisible}
         >
           <PanelRightCloseIcon className="size-3.5" />
-          <span className="sr-only">{chatPaneVisible ? "Hide chat panel" : "Show chat panel"}</span>
+          <span className="sr-only">
+            {chatPane.visible ? "Hide chat panel" : "Show chat panel"}
+          </span>
         </ChatHeaderButton>
         <ChatHeaderButton
           type="button"
@@ -650,47 +480,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               </div>
             ) : null}
           </main>
-          <div
-            role="separator"
-            aria-label="Resize chat panel"
-            aria-orientation="vertical"
-            aria-valuemin={EDITOR_CHAT_PANE_MIN_WIDTH}
-            aria-valuemax={EDITOR_CHAT_PANE_MAX_WIDTH}
-            aria-valuenow={chatPaneWidth}
-            tabIndex={0}
-            title="Drag to resize chat panel"
-            className={cn(
-              "group relative z-10 w-0 shrink-0 cursor-col-resize outline-none",
-              chatPaneVisible ? "hidden lg:block" : "hidden",
-            )}
-            onPointerDown={handleChatPaneResizePointerDown}
-            onDoubleClick={handleChatPaneResizeDoubleClick}
-            onKeyDown={handleChatPaneResizeKeyDown}
-          >
-            <span
-              className="absolute inset-y-0 left-[-3px] w-1.5 cursor-col-resize bg-transparent transition-colors group-hover:bg-[var(--color-background-button-secondary-hover)] group-focus-visible:bg-[var(--color-background-button-secondary-hover)]"
-              aria-hidden="true"
-            />
-            <span
-              className="pointer-events-none absolute inset-y-0 left-0 w-px bg-[var(--app-surface-divider)] transition-colors group-hover:bg-[var(--color-text-accent)] group-focus-visible:bg-[var(--color-text-accent)]"
-              aria-hidden="true"
-            />
-          </div>
-          {/* Hidden (not unmounted) so the chat runtime and composer focus
-              state survive toggling the pane. */}
-          <aside
-            className={cn(
-              "min-h-[18rem] w-full shrink-0 bg-[var(--color-background-surface)] lg:h-full lg:w-[var(--editor-chat-pane-width)]",
-              chatPaneVisible ? "flex" : "hidden",
-            )}
-            style={
-              {
-                "--editor-chat-pane-width": `${chatPaneWidth}px`,
-              } as CSSProperties
-            }
-          >
-            {props.chatPanel}
-          </aside>
+          <ResizableChatPane controller={chatPane}>{props.chatPanel}</ResizableChatPane>
         </div>
       </div>
     </div>

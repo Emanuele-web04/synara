@@ -198,6 +198,7 @@ import {
   type SidebarSearchPaletteMode,
 } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useHandleNewCanvasDrawing } from "../hooks/useHandleNewCanvasDrawing";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
@@ -1445,6 +1446,7 @@ export default function Sidebar() {
   const studioSectionVisible = appSettings.showStudioSection;
   const workspaceSectionVisible = appSettings.showWorkspaceSection;
   const { handleNewThread } = useHandleNewThread();
+  const { handleNewCanvasDrawing } = useHandleNewCanvasDrawing();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewStudioChat } = useHandleNewStudioChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -3023,11 +3025,15 @@ export default function Sidebar() {
       const deletedPaneInActiveSplit = activeSplitView
         ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
         : null;
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
+      if (thread.surface === "canvas") {
+        await api.canvas.deleteDrawing({ threadId });
+      } else {
+        await api.orchestration.dispatchCommand({
+          type: "thread.delete",
+          commandId: newCommandId(),
+          threadId,
+        });
+      }
       if (opts.reconcileDeletedThread ?? true) {
         void reconcileDeletedThreadFromClient({
           threadId,
@@ -5855,6 +5861,18 @@ export default function Sidebar() {
               <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
             </button>
             <SidebarSectionToolbar placement="overlay" revealOnHover>
+              <SidebarIconButton
+                icon={PencilIcon}
+                label={`Create new drawing in ${project.name}`}
+                tooltip="New AI drawing"
+                tooltipSide="top"
+                data-testid="new-canvas-drawing-button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void handleNewCanvasDrawing(project.id);
+                }}
+              />
               <SidebarIconButton
                 icon={TerminalIcon}
                 label={`Create new terminal thread in ${project.name}`}

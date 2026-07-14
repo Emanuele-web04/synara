@@ -528,6 +528,26 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards Canvas operations using only the server-resolved drawing identity", async () => {
+    requestMock.mockResolvedValue({});
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const threadId = ThreadId.makeUnsafe("drawing-1");
+    const scene = { elements: [], appState: {}, files: {} };
+
+    await api.canvas.createDrawing({ threadId });
+    await api.canvas.readDrawing({ threadId });
+    await api.canvas.saveDrawing({ threadId, scene, expectedRevision: "revision-1" });
+    await api.canvas.deleteDrawing({ threadId });
+
+    expect(requestMock.mock.calls.slice(-4)).toEqual([
+      [WS_METHODS.canvasCreateDrawing, { threadId }],
+      [WS_METHODS.canvasReadDrawing, { threadId }],
+      [WS_METHODS.canvasSaveDrawing, { threadId, scene, expectedRevision: "revision-1" }],
+      [WS_METHODS.canvasDeleteDrawing, { threadId }],
+    ]);
+  });
+
   it("forwards workspace file reads to the websocket project method", async () => {
     requestMock.mockResolvedValue({
       relativePath: "src/app.ts",

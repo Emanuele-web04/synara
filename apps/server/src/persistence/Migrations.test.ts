@@ -54,6 +54,7 @@ layer("reconcileMigrationLineage", (it) => {
       const afterColumns = yield* projectionThreadsColumnNames(sql);
       assert.include(afterColumns, "env_mode");
       assert.include(afterColumns, "archived_at");
+      assert.include(afterColumns, "surface");
 
       // The tracker now mirrors the Synara lineage exactly; foreign rows are gone.
       const rows = yield* trackerRows(sql);

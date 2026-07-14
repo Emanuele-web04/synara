@@ -8,7 +8,7 @@ export type ChatRightPanel = "browser" | "diff";
 
 export interface DiffRouteSearch {
   splitViewId?: string | undefined;
-  view?: "editor" | undefined;
+  view?: "editor" | "canvas" | undefined;
   editorFilePath?: string | undefined;
   panel?: ChatRightPanel | undefined;
   diff?: "1" | undefined;
@@ -44,8 +44,8 @@ export function stripDiffSearchParams<T extends Record<string, unknown>>(
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
   const splitViewId = normalizeSearchString(search.splitViewId);
   const viewRaw = normalizeSearchString(search.view);
-  const view = viewRaw === "editor" ? "editor" : undefined;
-  const editorFilePath = view ? normalizeSearchString(search.editorFilePath) : undefined;
+  const view = viewRaw === "editor" || viewRaw === "canvas" ? viewRaw : undefined;
+  const editorFilePath = view === "editor" ? normalizeSearchString(search.editorFilePath) : undefined;
   const panelRaw = normalizeSearchString(search.panel);
   const panel: ChatRightPanel | undefined =
     panelRaw === "browser" ? "browser" : panelRaw === "diff" ? "diff" : undefined;

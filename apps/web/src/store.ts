@@ -364,6 +364,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.id === right.id &&
     left.codexThreadId === right.codexThreadId &&
     left.projectId === right.projectId &&
+    (left.surface ?? "chat") === (right.surface ?? "chat") &&
     left.title === right.title &&
     left.modelSelection === right.modelSelection &&
     left.runtimeMode === right.runtimeMode &&
@@ -412,6 +413,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     id: thread.id,
     codexThreadId: thread.codexThreadId,
     projectId: thread.projectId,
+    surface: thread.surface ?? "chat",
     title: thread.title,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
@@ -1694,6 +1696,7 @@ function normalizeThreadFromReadModel(
   if (
     previous &&
     previous.projectId === incoming.projectId &&
+    (previous.surface ?? "chat") === incoming.surface &&
     previous.title === incoming.title &&
     previous.modelSelection === modelSelection &&
     previous.runtimeMode === incoming.runtimeMode &&
@@ -1741,6 +1744,7 @@ function normalizeThreadFromReadModel(
     id: incoming.id,
     codexThreadId: null,
     projectId: incoming.projectId,
+    surface: incoming.surface,
     title: incoming.title,
     modelSelection,
     runtimeMode: incoming.runtimeMode,
@@ -1840,6 +1844,7 @@ function normalizeThreadShellSnapshot(
     id: incoming.id,
     codexThreadId: previous?.codexThreadId ?? null,
     projectId: incoming.projectId,
+    surface: incoming.surface,
     title: incoming.title,
     modelSelection,
     runtimeMode: incoming.runtimeMode,
@@ -2139,6 +2144,7 @@ function sidebarThreadSummariesEqual(
     left !== undefined &&
     left.id === right.id &&
     left.projectId === right.projectId &&
+    (left.surface ?? "chat") === (right.surface ?? "chat") &&
     left.title === right.title &&
     left.modelSelection === right.modelSelection &&
     left.interactionMode === right.interactionMode &&
@@ -2181,6 +2187,7 @@ function buildSidebarThreadSummary(
   const nextSummary: SidebarThreadSummary = {
     id: thread.id,
     projectId: thread.projectId,
+    surface: thread.surface ?? "chat",
     title: thread.title,
     modelSelection: thread.modelSelection,
     interactionMode: thread.interactionMode,

@@ -80,7 +80,7 @@ import {
   type AcpToolCallState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
-import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import { makeAcpNativeLoggers, redactAcpLogPayload } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
   resolveAcpTurnIdleTimeoutMs,
@@ -166,6 +166,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
   );
 
 function summarizeGrokAcpLogPayload(payload: unknown): unknown {
+  payload = redactAcpLogPayload(payload);
   const text =
     typeof payload === "string"
       ? payload
@@ -1108,6 +1109,22 @@ export function makeGrokAdapter(
             grokSettings: effectiveGrokSettings,
             childProcessSpawner,
             cwd,
+            ...(input.canvas
+              ? {
+                  mcpServers: [
+                    {
+                      name: "synara-excalidraw",
+                      command: input.canvas.mcpCommand,
+                      args: input.canvas.mcpArgs,
+                      env: [
+                        { name: "SYNARA_CANVAS_BRIDGE_URL", value: input.canvas.bridgeUrl },
+                        { name: "SYNARA_CANVAS_BRIDGE_TOKEN", value: input.canvas.bridgeToken },
+                        { name: "SYNARA_CANVAS_THREAD_ID", value: input.canvas.threadId },
+                      ],
+                    },
+                  ],
+                }
+              : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
             ...acpRuntimeLoggers,

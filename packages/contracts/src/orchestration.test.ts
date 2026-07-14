@@ -407,6 +407,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
     });
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.surface, "chat");
     assert.strictEqual(parsed.modelSelection.provider, "codex");
   }),
 );

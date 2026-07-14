@@ -55,6 +55,7 @@ export interface AcpSpawnInput {
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
+  readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly resumeSessionId?: string;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: {
@@ -587,7 +588,7 @@ const makeAcpSessionRuntime = (
         const resumePayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers: options.mcpServers ?? [],
         } satisfies EffectAcpSchema.ResumeSessionRequest;
         const supportsResume =
           initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -610,7 +611,7 @@ const makeAcpSessionRuntime = (
                 const loadPayload = {
                   sessionId: options.resumeSessionId,
                   cwd: options.cwd,
-                  mcpServers: [],
+                  mcpServers: options.mcpServers ?? [],
                 } satisfies EffectAcpSchema.LoadSessionRequest;
                 return runLoggedRequest(
                   "session/load",
@@ -634,7 +635,7 @@ const makeAcpSessionRuntime = (
           acceptingSessionUpdates = true;
           const createPayload = {
             cwd: options.cwd,
-            mcpServers: [],
+            mcpServers: options.mcpServers ?? [],
           } satisfies EffectAcpSchema.NewSessionRequest;
           const created = yield* runLoggedRequest(
             "session/new",
@@ -651,7 +652,7 @@ const makeAcpSessionRuntime = (
         acceptingSessionUpdates = true;
         const createPayload = {
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers: options.mcpServers ?? [],
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",

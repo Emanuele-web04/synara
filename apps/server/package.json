@@ -42,6 +42,7 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
+    "@synara/excalidraw-mcp": "workspace:*",
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "@synara/web": "workspace:*",
