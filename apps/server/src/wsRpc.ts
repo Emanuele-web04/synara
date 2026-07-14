@@ -449,11 +449,7 @@ export const makeWsRpcLayer = () =>
         Effect.gen(function* () {
           const cached = repositoryCache.get(project.workspaceRoot);
           const generation = repositoryCacheGeneration;
-          if (
-            cached &&
-            cached.generation === generation &&
-            cached.expiresAt > Date.now()
-          ) {
+          if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
             return cached.repositories;
           }
           const inFlightKey = `${generation}:${project.workspaceRoot}`;
@@ -548,11 +544,7 @@ export const makeWsRpcLayer = () =>
           const cacheKey = pullRequestListCacheKey(repository, state, involvement, viewer);
           const cached = pullRequestListCache.get(cacheKey);
           const generation = pullRequestListCacheGeneration;
-          if (
-            cached &&
-            cached.generation === generation &&
-            cached.expiresAt > Date.now()
-          ) {
+          if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
             return cached.value;
           }
           const inFlightKey = `${generation}:${cacheKey}`;
@@ -1386,10 +1378,7 @@ export const makeWsRpcLayer = () =>
                 entries: batches
                   .flatMap((batch) => batch.entries)
                   .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-                errors: [
-                  ...errors,
-                  ...batches.flatMap((batch) => batch.errors),
-                ],
+                errors: [...errors, ...batches.flatMap((batch) => batch.errors)],
                 repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
               };
             }),

@@ -226,8 +226,7 @@ export function EnvironmentPullRequestSection({
   const hasConflicts = settledState === null && displayPr.mergeability === "conflicting";
   const pullRequestRepository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(displayPr.url);
   const repositoryBelongsToProject = configuredRepositories.some(
-    (repository) =>
-      repository.nameWithOwner.toLowerCase() === pullRequestRepository?.toLowerCase(),
+    (repository) => repository.nameWithOwner.toLowerCase() === pullRequestRepository?.toLowerCase(),
   );
   const openPullRequest = (initialTab: "summary" | "code" = "summary") => {
     if (activeThreadId && projectId && pullRequestRepository && repositoryBelongsToProject) {
