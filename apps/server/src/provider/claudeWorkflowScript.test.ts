@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   extractClaudeWorkflowAgentPhases,
+  extractClaudeWorkflowAgentPlans,
   parseClaudeWorkflowLaunch,
   parseClaudeWorkflowLaunchFromText,
   parseClaudeWorkflowProgressAgents,
@@ -73,6 +74,27 @@ describe("extractClaudeWorkflowAgentPhases", () => {
   });
 });
 
+describe("extractClaudeWorkflowAgentPlans", () => {
+  it("collects string-literal phase/model/effort opts per label", () => {
+    expect(extractClaudeWorkflowAgentPlans(FULL_SCRIPT)).toEqual({
+      "gamma-agent": { phase: "One", model: "haiku" },
+      "delta-agent": { phase: "Two" },
+    });
+  });
+
+  it("keeps labels that only declare model or effort", () => {
+    const script = `
+      await agent("a", { label: "fast", model: 'haiku', effort: "low" });
+      await agent("b", { label: "computed-model", model: pickModel() });
+      await agent("c", { label: "bare" });
+    `;
+    expect(extractClaudeWorkflowAgentPlans(script)).toEqual({
+      fast: { model: "haiku", effort: "low" },
+    });
+    expect(extractClaudeWorkflowAgentPhases(script)).toBeUndefined();
+  });
+});
+
 describe("parseClaudeWorkflowLaunch", () => {
   it("reads identifiers from the structured tool result", () => {
     expect(
@@ -89,6 +111,7 @@ describe("parseClaudeWorkflowLaunch", () => {
       taskId: "wf-task-1",
       runId: "wf_abc123",
       scriptPath: "/home/user/.claude/workflows/spec.ts",
+      transcriptDir: "/tmp/transcripts",
     });
   });
 
@@ -134,7 +157,13 @@ describe("parseClaudeWorkflowProgressAgents", () => {
       ],
     });
     expect(parseClaudeWorkflowProgressAgents(content)).toEqual([
-      { label: "gamma-agent", phaseIndex: 0, model: "haiku", state: "completed" },
+      {
+        label: "gamma-agent",
+        phaseIndex: 0,
+        agentId: "agent-1",
+        model: "haiku",
+        state: "completed",
+      },
       { label: "delta-agent", phaseIndex: 1, state: "failed" },
     ]);
   });
@@ -142,5 +171,47 @@ describe("parseClaudeWorkflowProgressAgents", () => {
   it("returns undefined for invalid JSON or missing progress", () => {
     expect(parseClaudeWorkflowProgressAgents("not json")).toBeUndefined();
     expect(parseClaudeWorkflowProgressAgents("{}")).toBeUndefined();
+  });
+
+  it("captures the rich per-agent fields real output files carry", () => {
+    // Mirrors ~/.claude/projects/<session>/workflows/wf_*.json workflow_agent
+    // entries (1-based phaseIndex plus phaseTitle, runtime metrics, previews).
+    const content = JSON.stringify({
+      workflowProgress: [
+        { type: "workflow_phase", index: 1, title: "Scope" },
+        {
+          type: "workflow_agent",
+          index: 1,
+          label: "scope",
+          phaseIndex: 1,
+          phaseTitle: "Scope",
+          agentId: "a423ae8cef86a1ed4",
+          model: "claude-sonnet-4-6",
+          state: "done",
+          startedAt: 1784069338400,
+          attempt: 1,
+          lastToolName: "StructuredOutput",
+          promptPreview: "Decompose this research question…",
+          tokens: 17325,
+          toolCalls: 1,
+          durationMs: 12374,
+        },
+      ],
+    });
+    expect(parseClaudeWorkflowProgressAgents(content)).toEqual([
+      {
+        label: "scope",
+        phaseIndex: 1,
+        phaseTitle: "Scope",
+        agentId: "a423ae8cef86a1ed4",
+        model: "claude-sonnet-4-6",
+        state: "done",
+        tokens: 17325,
+        toolCalls: 1,
+        durationMs: 12374,
+        lastToolName: "StructuredOutput",
+        promptPreview: "Decompose this research question…",
+      },
+    ]);
   });
 });

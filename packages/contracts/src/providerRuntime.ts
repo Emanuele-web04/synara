@@ -491,10 +491,45 @@ export type WorkflowPhase = typeof WorkflowPhase.Type;
 const WorkflowAgentSnapshot = Schema.Struct({
   label: TrimmedNonEmptyStringSchema,
   phaseIndex: Schema.optional(Schema.Int),
+  // Authoritative phase name from the progress file; phaseIndex is 1-based in
+  // recent CLI output files, so prefer the title when both are present.
+  phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   state: Schema.optional(TrimmedNonEmptyStringSchema),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  durationMs: Schema.optional(Schema.Int),
+  lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
+
+// Live per-agent snapshot polled from a running workflow's transcript directory
+// (journal.jsonl + agent-<id>.jsonl). The label is a best-effort join against
+// the workflow's progress descriptions and may be absent.
+const WorkflowAgentRuntimeSnapshot = Schema.Struct({
+  agentId: TrimmedNonEmptyStringSchema,
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(Schema.Literals(["running", "completed"])),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  recentToolNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+  startedAt: Schema.optional(TrimmedNonEmptyStringSchema),
+  lastActivityAt: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentRuntimeSnapshot = typeof WorkflowAgentRuntimeSnapshot.Type;
+
+// Per-agent() opts scanned statically from a workflow script (string literals
+// only): planned phase/model/effort for an agent label before it runs live.
+const WorkflowAgentPlan = Schema.Struct({
+  phase: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
 
 const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
@@ -508,6 +543,9 @@ const TaskStartedPayload = Schema.Struct({
   workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
   // agent() label -> phase title pairs scanned from the script text.
   workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  // agent() label -> planned {phase, model, effort} opts scanned from the script
+  // text. Superset of workflowAgentPhases (kept for already-persisted events).
+  workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
@@ -519,6 +557,9 @@ const TaskProgressPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Live per-agent snapshots for workflow tasks, polled from the run's
+  // transcript directory while the workflow is running.
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 

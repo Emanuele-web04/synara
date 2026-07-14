@@ -188,6 +188,7 @@ function makeHarness(config?: {
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
   readonly cwd?: string;
   readonly baseDir?: string;
+  readonly workflowRuntimePollIntervalMs?: number;
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -210,6 +211,11 @@ function makeHarness(config?: {
     ...(config?.nativeEventLogPath
       ? {
           nativeEventLogPath: config.nativeEventLogPath,
+        }
+      : {}),
+    ...(config?.workflowRuntimePollIntervalMs !== undefined
+      ? {
+          workflowRuntimePollIntervalMs: config.workflowRuntimePollIntervalMs,
         }
       : {}),
   };
@@ -2301,8 +2307,175 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(workflowCompleted?.type, "task.completed");
       if (workflowCompleted?.type === "task.completed") {
         assert.deepEqual(workflowCompleted.payload.workflowAgents, [
-          { label: "gamma-agent", phaseIndex: 0, model: "haiku", state: "completed" },
+          {
+            label: "gamma-agent",
+            phaseIndex: 0,
+            agentId: "agent-1",
+            model: "haiku",
+            state: "completed",
+          },
           { label: "delta-agent", phaseIndex: 1, state: "completed" },
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("polls the workflow transcript directory into live agent snapshots", () => {
+    const transcriptDir = mkdtempSync(path.join(os.tmpdir(), "claude-workflow-transcripts-"));
+    const harness = makeHarness({ workflowRuntimePollIntervalMs: 25 });
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => rmSync(transcriptDir, { recursive: true, force: true })),
+      );
+      writeFileSync(
+        path.join(transcriptDir, "journal.jsonl"),
+        `${JSON.stringify({ type: "started", key: "v2:abc", agentId: "agent-live-1" })}\n`,
+      );
+      writeFileSync(
+        path.join(transcriptDir, "agent-agent-live-1.jsonl"),
+        [
+          JSON.stringify({
+            type: "user",
+            message: { role: "user", content: "Research prior art in depth." },
+            timestamp: "2026-07-14T22:48:58.400Z",
+          }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              id: "msg_1",
+              role: "assistant",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "tool_use", id: "toolu_1", name: "WebSearch", input: {} }],
+              usage: {
+                input_tokens: 3,
+                cache_creation_input_tokens: 17_276,
+                cache_read_input_tokens: 0,
+                output_tokens: 97,
+              },
+            },
+            timestamp: "2026-07-14T22:49:14.490Z",
+          }),
+          "",
+        ].join("\n"),
+      );
+
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.progress" && event.payload.workflowAgents !== undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-workflow-poll",
+        uuid: "stream-workflow-poll-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-workflow-poll",
+            name: "Workflow",
+            input: { script: "export const meta = { name: 'spec' };" },
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-poll-1",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        tool_use_id: "tool-workflow-poll",
+        description: "Draft the feature spec",
+        session_id: "sdk-session-workflow-poll",
+        uuid: "workflow-poll-started",
+      } as unknown as SDKMessage);
+      // Progress description supplies the label the poller zips onto the
+      // journal's first started agent.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "wf-poll-1",
+        tool_use_id: "tool-workflow-poll",
+        description: "One: gamma-agent",
+        usage: { total_tokens: 900, tool_uses: 4, duration_ms: 5_000 },
+        session_id: "sdk-session-workflow-poll",
+        uuid: "workflow-poll-progress",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-workflow-poll",
+        uuid: "workflow-poll-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-workflow-poll",
+              content: "Workflow running in background",
+            },
+          ],
+        },
+        tool_use_result: {
+          status: "async_launched",
+          taskId: "wf-poll-1",
+          taskType: "local_workflow",
+          workflowName: "spec",
+          runId: "wf_poll123",
+          summary: "Launched",
+          transcriptDir,
+          scriptPath: "/sessions/abc/workflow-spec.ts",
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      // Settle the workflow so the poller fiber is interrupted.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "wf-poll-1",
+        tool_use_id: "tool-workflow-poll",
+        status: "completed",
+        summary: "Workflow finished.",
+        session_id: "sdk-session-workflow-poll",
+        uuid: "workflow-poll-notification",
+      } as unknown as SDKMessage);
+
+      const snapshotEvent = runtimeEvents.findLast(
+        (event) => event.type === "task.progress" && event.payload.workflowAgents !== undefined,
+      );
+      assert.equal(snapshotEvent?.type, "task.progress");
+      if (snapshotEvent?.type === "task.progress") {
+        assert.equal(snapshotEvent.payload.taskId, "wf-poll-1");
+        assert.deepEqual(snapshotEvent.payload.workflowAgents, [
+          {
+            agentId: "agent-live-1",
+            label: "gamma-agent",
+            model: "claude-sonnet-4-6",
+            state: "running",
+            tokens: 17_376,
+            toolCalls: 1,
+            recentToolNames: ["WebSearch"],
+            promptPreview: "Research prior art in depth.",
+            startedAt: "2026-07-14T22:48:58.400Z",
+            lastActivityAt: "2026-07-14T22:49:14.490Z",
+          },
         ]);
       }
     }).pipe(

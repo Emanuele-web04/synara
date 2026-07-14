@@ -3,7 +3,7 @@
 // so the meta can be read without evaluating the script; everything here returns
 // undefined instead of throwing when the input does not match that shape.
 
-import type { WorkflowAgentSnapshot, WorkflowPhase } from "@synara/contracts";
+import type { WorkflowAgentPlan, WorkflowAgentSnapshot, WorkflowPhase } from "@synara/contracts";
 
 export interface ClaudeWorkflowScriptMeta {
   readonly name?: string;
@@ -15,6 +15,7 @@ export interface ClaudeWorkflowLaunch {
   readonly taskId?: string;
   readonly runId?: string;
   readonly scriptPath?: string;
+  readonly transcriptDir?: string;
 }
 
 const QUOTES = new Set(['"', "'", "`"]);
@@ -134,6 +135,10 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function readInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
 function readPhases(value: unknown): ReadonlyArray<WorkflowPhase> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -178,13 +183,13 @@ export function parseClaudeWorkflowScriptMeta(
   };
 }
 
-// Scans agent(...) call options for string-literal {label, phase} pairs. Options
-// with computed labels/phases are skipped; the map is a fallback for placing
-// agents when live progress events do not carry a phase.
-export function extractClaudeWorkflowAgentPhases(
+// Scans agent(...) call options for string-literal {label, phase, model, effort}
+// opts. Computed values are skipped; the map is a planning fallback for agent
+// rows before (or without) live per-agent data.
+export function extractClaudeWorkflowAgentPlans(
   script: string,
-): Record<string, string> | undefined {
-  const pairs: Record<string, string> = {};
+): Record<string, WorkflowAgentPlan> | undefined {
+  const plans: Record<string, WorkflowAgentPlan> = {};
   const callPattern = /\bagent\s*\(/g;
   for (let match = callPattern.exec(script); match; match = callPattern.exec(script)) {
     const callText = readBalancedCall(script, match.index + match[0].length - 1);
@@ -192,12 +197,36 @@ export function extractClaudeWorkflowAgentPhases(
       continue;
     }
     const label = readOptionStringLiteral(callText, "label");
+    if (!label) {
+      continue;
+    }
     const phase = readOptionStringLiteral(callText, "phase");
-    if (label && phase) {
-      pairs[label] = phase;
+    const model = readOptionStringLiteral(callText, "model");
+    const effort = readOptionStringLiteral(callText, "effort");
+    if (phase || model || effort) {
+      plans[label] = {
+        ...(phase ? { phase } : {}),
+        ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
+      };
     }
   }
-  return Object.keys(pairs).length > 0 ? pairs : undefined;
+  return Object.keys(plans).length > 0 ? plans : undefined;
+}
+
+// Legacy label -> phase map derived from the plans; still emitted so older
+// persisted-event consumers keep working.
+export function extractClaudeWorkflowAgentPhases(
+  script: string,
+): Record<string, string> | undefined {
+  const plans = extractClaudeWorkflowAgentPlans(script);
+  if (!plans) {
+    return undefined;
+  }
+  const pairs = Object.entries(plans).flatMap(
+    ([label, plan]): Array<[string, string]> => (plan.phase ? [[label, plan.phase]] : []),
+  );
+  return pairs.length > 0 ? Object.fromEntries(pairs) : undefined;
 }
 
 // Returns the text of one call's argument list, from the opening paren to its
@@ -236,6 +265,9 @@ function readOptionStringLiteral(callText: string, key: string): string | undefi
 
 const WORKFLOW_RUN_ID_PATTERN = /\bwf_[a-z0-9-]{6,}\b/;
 
+// Enough of a prompt to render a two-line preview with an expand affordance.
+export const WORKFLOW_PROMPT_PREVIEW_CHARS = 400;
+
 // Launch identifiers from the Workflow tool result. The structured
 // tool_use_result is {status: "async_launched", taskId, taskType:
 // "local_workflow", runId, scriptPath, ...}; free-text fallback covers older
@@ -258,6 +290,7 @@ export function parseClaudeWorkflowLaunch(value: unknown): ClaudeWorkflowLaunch 
   const taskId = readString(record.taskId);
   const runId = readString(record.runId);
   const scriptPath = readString(record.scriptPath);
+  const transcriptDir = readString(record.transcriptDir);
   if (!runId && !scriptPath) {
     return undefined;
   }
@@ -265,6 +298,7 @@ export function parseClaudeWorkflowLaunch(value: unknown): ClaudeWorkflowLaunch 
     ...(taskId ? { taskId } : {}),
     ...(runId && WORKFLOW_RUN_ID_PATTERN.test(runId) ? { runId } : {}),
     ...(scriptPath ? { scriptPath } : {}),
+    ...(transcriptDir ? { transcriptDir } : {}),
   };
 }
 
@@ -314,18 +348,29 @@ export function parseClaudeWorkflowProgressAgents(
     if (!label) {
       return [];
     }
-    const phaseIndex =
-      typeof record.phaseIndex === "number" && Number.isInteger(record.phaseIndex)
-        ? record.phaseIndex
-        : undefined;
+    const phaseIndex = readInt(record.phaseIndex);
+    const phaseTitle = readString(record.phaseTitle);
+    const agentId = readString(record.agentId);
     const model = readString(record.model);
     const state = readString(record.state);
+    const tokens = readInt(record.tokens);
+    const toolCalls = readInt(record.toolCalls);
+    const durationMs = readInt(record.durationMs);
+    const lastToolName = readString(record.lastToolName);
+    const promptPreview = readString(record.promptPreview)?.slice(0, WORKFLOW_PROMPT_PREVIEW_CHARS);
     return [
       {
         label,
         ...(phaseIndex !== undefined ? { phaseIndex } : {}),
+        ...(phaseTitle ? { phaseTitle } : {}),
+        ...(agentId ? { agentId } : {}),
         ...(model ? { model } : {}),
         ...(state ? { state } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+        ...(toolCalls !== undefined ? { toolCalls } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(lastToolName ? { lastToolName } : {}),
+        ...(promptPreview ? { promptPreview } : {}),
       },
     ];
   });

@@ -1231,6 +1231,9 @@ function runtimeEventToActivities(
             ...(event.payload.workflowAgentPhases
               ? { workflowAgentPhases: event.payload.workflowAgentPhases }
               : {}),
+            ...(event.payload.workflowAgentPlans
+              ? { workflowAgentPlans: event.payload.workflowAgentPlans }
+              : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
@@ -1261,6 +1264,9 @@ function runtimeEventToActivities(
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
               : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,

@@ -74,6 +74,7 @@ import {
   Cause,
   DateTime,
   Deferred,
+  Duration,
   Effect,
   Exit,
   FileSystem,
@@ -102,11 +103,17 @@ import {
 } from "../claudeTaskTracker.ts";
 import {
   extractClaudeWorkflowAgentPhases,
+  extractClaudeWorkflowAgentPlans,
   parseClaudeWorkflowLaunch,
   parseClaudeWorkflowLaunchFromText,
   parseClaudeWorkflowProgressAgents,
   parseClaudeWorkflowScriptMeta,
 } from "../claudeWorkflowScript.ts";
+import {
+  claudeWorkflowRuntimeSnapshots,
+  collectClaudeWorkflowRuntime,
+  makeClaudeWorkflowRuntimeState,
+} from "../claudeWorkflowRuntime.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
@@ -280,6 +287,11 @@ interface ClaudeSessionContext {
   // concurrent workflows membership is ambiguous and stays untagged.
   readonly liveWorkflowTaskIds: Set<string>;
   readonly workflowTaskIdByMemberTaskId: Map<string, string>;
+  // Live transcript-directory pollers per workflow task id, plus the agent
+  // labels seen so far (first-seen order from "<phase>: <label>" progress
+  // descriptions) that the poller zips against journal start order.
+  readonly workflowRuntimePollers: Map<string, Fiber.Fiber<void>>;
+  readonly workflowAgentLabels: Map<string, Array<string>>;
   // Set on subagent-scoped contexts only: stamps providerThreadId (the Task
   // tool_use_id) + providerParentThreadId on every runtime event this context emits.
   readonly subagentRefs?: {
@@ -312,6 +324,8 @@ export interface ClaudeAdapterLiveOptions {
   }) => ClaudeQueryRuntime;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  // Interval for polling a live workflow's transcript directory. Tests shrink it.
+  readonly workflowRuntimePollIntervalMs?: number;
 }
 
 function mapSupportedCommands(commands: SlashCommand[]): ProviderListCommandsResult {
@@ -642,6 +656,11 @@ const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
   "200k": 200_000,
   "1m": 1_000_000,
 } as const;
+
+const DEFAULT_WORKFLOW_RUNTIME_POLL_INTERVAL_MS = 2_000;
+// Synthetic description for poller-emitted task.progress events; consumers key
+// off payload.workflowAgents, not this text.
+const WORKFLOW_AGENTS_PROGRESS_DESCRIPTION = "Workflow agents";
 
 function resolveClaudeApiModelIdContextWindowMaxTokens(
   apiModelId: string | undefined,
@@ -2485,6 +2504,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingSubagentSteers: new Map(),
           liveWorkflowTaskIds: new Set(),
           workflowTaskIdByMemberTaskId: new Map(),
+          workflowRuntimePollers: new Map(),
+          workflowAgentLabels: new Map(),
           subagentRefs: {
             providerThreadId: toolUseId,
             providerParentThreadId: context.session.threadId,
@@ -2853,6 +2874,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 payload: message,
               },
             });
+            if (workflowLaunch.transcriptDir) {
+              startWorkflowRuntimePoller(
+                context,
+                workflowLaunchTaskId,
+                workflowLaunch.transcriptDir,
+              );
+            }
           }
 
           const completedStamp = yield* makeEventStamp();
@@ -3155,6 +3183,83 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return undefined;
       });
 
+    const workflowRuntimePollInterval = Duration.millis(
+      options?.workflowRuntimePollIntervalMs ?? DEFAULT_WORKFLOW_RUNTIME_POLL_INTERVAL_MS,
+    );
+
+    // Polls a live workflow's transcript directory (journal.jsonl + per-agent
+    // transcripts) and emits task.progress events carrying per-agent runtime
+    // snapshots. Runs detached like streamFiber; exits when the workflow
+    // settles or the session stops, and is interrupted eagerly on both.
+    const startWorkflowRuntimePoller = (
+      context: ClaudeSessionContext,
+      taskId: string,
+      transcriptDir: string,
+    ): void => {
+      if (context.workflowRuntimePollers.has(taskId)) {
+        return;
+      }
+      const state = makeClaudeWorkflowRuntimeState();
+      let lastEmitted = "";
+      const loop = Effect.gen(function* () {
+        while (!context.stopped && context.liveWorkflowTaskIds.has(taskId)) {
+          yield* Effect.sleep(workflowRuntimePollInterval);
+          const changed = yield* collectClaudeWorkflowRuntime(fileSystem, transcriptDir, state);
+          if (!changed) {
+            continue;
+          }
+          const snapshots = claudeWorkflowRuntimeSnapshots(
+            state,
+            context.workflowAgentLabels.get(taskId) ?? [],
+          );
+          if (snapshots.length === 0) {
+            continue;
+          }
+          const fingerprint = JSON.stringify(snapshots);
+          if (fingerprint === lastEmitted) {
+            continue;
+          }
+          lastEmitted = fingerprint;
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "task.progress",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe(taskId),
+              description: WORKFLOW_AGENTS_PROGRESS_DESCRIPTION,
+              workflowAgents: snapshots,
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+      });
+      const fiber = Effect.runFork(loop);
+      context.workflowRuntimePollers.set(taskId, fiber);
+      fiber.addObserver(() => {
+        if (context.workflowRuntimePollers.get(taskId) === fiber) {
+          context.workflowRuntimePollers.delete(taskId);
+        }
+      });
+    };
+
+    const stopWorkflowRuntimePoller = (
+      context: ClaudeSessionContext,
+      taskId: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        context.workflowAgentLabels.delete(taskId);
+        const fiber = context.workflowRuntimePollers.get(taskId);
+        if (!fiber) {
+          return;
+        }
+        context.workflowRuntimePollers.delete(taskId);
+        yield* Fiber.interrupt(fiber);
+      });
+
     const handleSystemMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -3188,6 +3293,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.liveWorkflowTaskIds.has(message.task_id)
           ) {
             context.liveWorkflowTaskIds.delete(message.task_id);
+            yield* stopWorkflowRuntimePoller(context, message.task_id);
           }
           const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
           const run = subagentRunForTask(context, undefined, message.task_id);
@@ -3378,6 +3484,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const workflowAgentPhases = workflowScript
               ? extractClaudeWorkflowAgentPhases(workflowScript)
               : undefined;
+            const workflowAgentPlans = workflowScript
+              ? extractClaudeWorkflowAgentPlans(workflowScript)
+              : undefined;
             const workflowName = message.workflow_name ?? workflowMeta?.name;
             yield* offerRuntimeEvent({
               ...base,
@@ -3393,6 +3502,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   : {}),
                 ...(workflowMeta?.phases ? { workflowPhases: workflowMeta.phases } : {}),
                 ...(workflowAgentPhases ? { workflowAgentPhases } : {}),
+                ...(workflowAgentPlans ? { workflowAgentPlans } : {}),
                 ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
               },
             });
@@ -3400,6 +3510,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           case "task_progress": {
             yield* emitTaskUsageSnapshot(context, message);
+            // Workflow progress descriptions arrive as "<phase>: <label>" in agent
+            // start order; the label list is what the transcript poller zips
+            // against journal starts to attach labels to live snapshots.
+            if (context.liveWorkflowTaskIds.has(message.task_id)) {
+              const separator = message.description.indexOf(": ");
+              const label = (
+                separator > 0 ? message.description.slice(separator + 2) : message.description
+              ).trim();
+              if (label.length > 0) {
+                const labels = context.workflowAgentLabels.get(message.task_id) ?? [];
+                if (!labels.includes(label)) {
+                  labels.push(label);
+                  context.workflowAgentLabels.set(message.task_id, labels);
+                }
+              }
+            }
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
             yield* offerRuntimeEvent({
               ...base,
@@ -3447,6 +3573,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             context.liveWorkflowTaskIds.delete(message.task_id);
             context.workflowTaskIdByMemberTaskId.delete(message.task_id);
+            yield* stopWorkflowRuntimePoller(context, message.task_id);
             const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
             if (run) {
               context.subagentRuns.delete(run.toolUseId);
@@ -3719,6 +3846,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         context.subagentRuns.clear();
         context.pendingSubagentSteers.clear();
+
+        for (const taskId of Array.from(context.workflowRuntimePollers.keys())) {
+          yield* stopWorkflowRuntimePoller(context, taskId);
+        }
 
         if (context.turnState) {
           yield* completeTurn(context, "interrupted", "Session stopped.");
@@ -4348,6 +4479,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingSubagentSteers,
             liveWorkflowTaskIds: new Set(),
             workflowTaskIdByMemberTaskId: new Map(),
+            workflowRuntimePollers: new Map(),
+            workflowAgentLabels: new Map(),
           };
           installationContext = context;
           yield* withSessionLifecycleLock(
