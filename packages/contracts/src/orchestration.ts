@@ -1125,6 +1125,14 @@ const ThreadTaskStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadTaskBackgroundCommand = Schema.Struct({
+  type: Schema.Literal("thread.task.background"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ThreadDispatchQueuedTurnCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.dispatch-queued"),
   commandId: CommandId,
@@ -1234,6 +1242,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
+  ThreadTaskBackgroundCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1268,6 +1277,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
+  ThreadTaskBackgroundCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1400,6 +1410,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
+  "thread.task-background-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1653,6 +1664,12 @@ export const ThreadTaskStopRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadTaskBackgroundRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
@@ -1878,6 +1895,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.task-stop-requested"),
     payload: ThreadTaskStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.task-background-requested"),
+    payload: ThreadTaskBackgroundRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

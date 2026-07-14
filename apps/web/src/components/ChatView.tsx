@@ -462,7 +462,10 @@ import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachment
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
-import { deriveComposerSubagentStripItems } from "./chat/ComposerSubagentStrip.logic";
+import {
+  deriveComposerSubagentStripItems,
+  type ComposerSubagentStripItem,
+} from "./chat/ComposerSubagentStrip.logic";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import {
   buildWorkflowResumePrompt,
@@ -2704,13 +2707,38 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
+  // Task tool_use_ids the provider confirmed as backgrounded via task_updated
+  // patches (last patch wins, so re-foregrounded tasks drop back out).
+  const backgroundedSubagentToolUseIds = useMemo(() => {
+    const toolUseIds = new Set<string>();
+    for (const activity of threadActivities) {
+      if (activity.kind !== "task.updated") {
+        continue;
+      }
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : null;
+      const toolUseId = typeof payload?.toolUseId === "string" ? payload.toolUseId : null;
+      if (!toolUseId || typeof payload?.isBackgrounded !== "boolean") {
+        continue;
+      }
+      if (payload.isBackgrounded) {
+        toolUseIds.add(toolUseId);
+      } else {
+        toolUseIds.delete(toolUseId);
+      }
+    }
+    return toolUseIds;
+  }, [threadActivities]);
   const composerSubagentStripItems = useMemo(
     () =>
       deriveComposerSubagentStripItems({
         workEntries: workLogEntries,
         liveTurnId: latestTurnSettled ? null : (activeLatestTurn?.turnId ?? null),
+        backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
       }),
-    [activeLatestTurn?.turnId, latestTurnSettled, workLogEntries],
+    [activeLatestTurn?.turnId, backgroundedSubagentToolUseIds, latestTurnSettled, workLogEntries],
   );
   // Links workflow agent rows to their subagent child threads (and models) when the
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
@@ -5857,6 +5885,34 @@ export default function ChatView({
       createdAt: new Date().toISOString(),
     });
   }, [activeThread, workflowRunState]);
+
+  const onBackgroundSubagentStripItem = useCallback(
+    async (item: ComposerSubagentStripItem) => {
+      const api = readNativeApi();
+      if (!api || !activeThread) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.task.background",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        toolUseId: item.providerThreadId,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [activeThread],
+  );
+
+  // Stop goes through the interrupt seam: on a subagent thread the reactor
+  // resolves the tool_use_id and stops that task instead of the whole turn.
+  const onStopSubagentStripItem = useCallback(async (item: ComposerSubagentStripItem) => {
+    const api = readNativeApi();
+    if (!api) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.turn.interrupt",
+      commandId: newCommandId(),
+      threadId: item.threadId,
+      createdAt: new Date().toISOString(),
+    });
+  }, []);
 
   // Pause is the same stop command; the local flag makes the settled card read
   // as paused (with a resume affordance) instead of plain stopped.
@@ -10542,6 +10598,8 @@ export default function ChatView({
                   compact={subagentStripCompact}
                   onCompactChange={setSubagentStripCompact}
                   onOpenThread={onNavigateToThread}
+                  onBackgroundItem={onBackgroundSubagentStripItem}
+                  onStopItem={onStopSubagentStripItem}
                   attachedToPrevious={
                     showComposerLiveChangesHeader ||
                     showComposerActiveTaskListCard ||
@@ -10717,11 +10775,13 @@ export default function ChatView({
                             : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
-                            : hasLiveTurn
-                              ? "Ask for follow-up changes"
-                              : phase === "disconnected"
-                                ? "Ask for follow-up changes or attach images"
-                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                            : activeThread?.parentThreadId
+                              ? "Message this subagent while it works"
+                              : hasLiveTurn
+                                ? "Ask for follow-up changes"
+                                : phase === "disconnected"
+                                  ? "Ask for follow-up changes or attach images"
+                                  : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />

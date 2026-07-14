@@ -123,6 +123,19 @@ export const ProviderStopTaskInput = Schema.Struct({
 });
 export type ProviderStopTaskInput = typeof ProviderStopTaskInput.Type;
 
+export const ProviderBackgroundTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+});
+export type ProviderBackgroundTaskInput = typeof ProviderBackgroundTaskInput.Type;
+
+export const ProviderSteerSubagentInput = Schema.Struct({
+  threadId: ThreadId,
+  providerThreadId: TrimmedNonEmptyString,
+  input: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+});
+export type ProviderSteerSubagentInput = typeof ProviderSteerSubagentInput.Type;
+
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });

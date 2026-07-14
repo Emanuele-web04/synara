@@ -78,6 +78,8 @@ function createProviderServiceHarness() {
     forkThread: () => Effect.succeed(null),
     interruptTurn: () => unsupported(),
     stopTask: () => unsupported(),
+    backgroundTask: () => unsupported(),
+    steerSubagent: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),

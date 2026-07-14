@@ -103,6 +103,8 @@ export interface WorkLogSubagent {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   rawStatus?: string | undefined;
   latestUpdate?: string | undefined;
@@ -1574,15 +1576,20 @@ function extractCollabSubagents(
   }
 
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
-  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => ({
-    threadId: agent.providerThreadId,
-    providerThreadId: agent.providerThreadId,
-    ...(agent.agentId ? { agentId: agent.agentId } : {}),
-    ...(agent.nickname ? { nickname: agent.nickname } : {}),
-    ...(agent.role ? { role: agent.role } : {}),
-    ...(agent.model ? { model: agent.model } : {}),
-    ...(agent.prompt ? { prompt: agent.prompt } : {}),
-  }));
+  const receiverAgents = decodeSubagentReceiverAgents(item, receiverThreadIds).map((agent) => {
+    const receiverAgent: WorkLogSubagent = {
+      threadId: agent.providerThreadId,
+      providerThreadId: agent.providerThreadId,
+    };
+    if (agent.agentId) receiverAgent.agentId = agent.agentId;
+    if (agent.nickname) receiverAgent.nickname = agent.nickname;
+    if (agent.role) receiverAgent.role = agent.role;
+    if (agent.model) receiverAgent.model = agent.model;
+    if (agent.effort) receiverAgent.effort = agent.effort;
+    if (agent.background) receiverAgent.background = agent.background;
+    if (agent.prompt) receiverAgent.prompt = agent.prompt;
+    return receiverAgent;
+  });
 
   const agentStates = decodeSubagentAgentStates(item);
   if (receiverAgents.length > 0 || Object.keys(agentStates).length > 0) {
@@ -1628,6 +1635,8 @@ function extractCollabSubagents(
         ...(fallbackIdentity.nickname ? { nickname: fallbackIdentity.nickname } : {}),
         ...(fallbackIdentity.role ? { role: fallbackIdentity.role } : {}),
         ...(fallbackIdentity.model ? { model: fallbackIdentity.model } : {}),
+        ...(fallbackIdentity.effort ? { effort: fallbackIdentity.effort } : {}),
+        ...(fallbackIdentity.background ? { background: fallbackIdentity.background } : {}),
         ...(fallbackIdentity.prompt ? { prompt: fallbackIdentity.prompt } : {}),
         ...(fallbackIdentity.status ? { rawStatus: fallbackIdentity.status } : {}),
         ...(fallbackIdentity.message ? { latestUpdate: fallbackIdentity.message } : {}),
@@ -1669,6 +1678,8 @@ function extractCollabSubagents(
             item.requestedModel ??
             item.requested_model,
         ) ?? undefined,
+      effort: asTrimmedString(item.effort) ?? undefined,
+      background: item.background === true ? true : undefined,
       prompt: asTrimmedString(item.prompt ?? item.task ?? item.message) ?? undefined,
     },
   ];

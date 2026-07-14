@@ -244,6 +244,8 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const backgroundTask = vi.fn<ProviderServiceShape["backgroundTask"]>(() => Effect.void);
+    const steerSubagent = vi.fn<ProviderServiceShape["steerSubagent"]>(() => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
@@ -362,6 +364,8 @@ describe("ProviderCommandReactor", () => {
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       stopTask: () => unsupported(),
+      backgroundTask,
+      steerSubagent,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
@@ -455,6 +459,8 @@ describe("ProviderCommandReactor", () => {
       startReview,
       forkThread,
       interruptTurn,
+      backgroundTask,
+      steerSubagent,
       respondToRequest,
       respondToUserInput,
       rollbackConversation,
@@ -1993,6 +1999,94 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("routes subagent-thread turn starts to the parent session as steers", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-subagent-thread-create"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
+        projectId: asProjectId("project-1"),
+        title: "Subagent",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-subagent-steer-1"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
+        message: {
+          messageId: asMessageId("subagent-steer-message-1"),
+          role: "user",
+          text: "focus on the tests",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.steerSubagent.mock.calls.length === 1);
+    expect(harness.steerSubagent.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      providerThreadId: "tool-steer-1",
+      input: "focus on the tests",
+    });
+    // The subagent thread must never boot a provider session of its own.
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("dispatches thread.task.background to the provider service", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-before-background"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-background"),
+          role: "user",
+          text: "spawn something",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe("cmd-task-background-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        toolUseId: "tool-task-bg-1",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(() => harness.backgroundTask.mock.calls.length === 1);
+    expect(harness.backgroundTask.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      toolUseId: "tool-task-bg-1",
+    });
   });
 
   it("waits for the message-start checkpoint before sending the provider turn", async () => {

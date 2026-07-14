@@ -268,19 +268,25 @@ describe("deriveWorkflowRunState", () => {
         agentStarted({ taskId: "agent-early" }),
         agentStarted({ taskId: "agent-1" }),
         agentStarted({ taskId: "agent-late" }),
-      ].map((entry, index) =>
-        entry.kind === "task.started" && index > 0
-          ? {
-              ...entry,
-              id: EventId.makeUnsafe(`ordered-${index}`),
-              payload: {
-                ...(entry.payload as Record<string, unknown>),
-                detail:
-                  index === 1 ? "Mystery task" : index === 2 ? "research PRIOR art" : "Helper task",
-              },
-            }
-          : entry,
-      ),
+      ].map((entry, index): OrchestrationThreadActivity => {
+        if (entry.kind !== "task.started" || index === 0) {
+          return entry;
+        }
+        return {
+          id: EventId.makeUnsafe(`ordered-${index}`),
+          tone: entry.tone,
+          kind: entry.kind,
+          summary: entry.summary,
+          payload: {
+            ...(entry.payload as Record<string, unknown>),
+            detail:
+              index === 1 ? "Mystery task" : index === 2 ? "research PRIOR art" : "Helper task",
+          },
+          turnId: entry.turnId,
+          sequence: entry.sequence,
+          createdAt: entry.createdAt,
+        };
+      }),
     });
 
     expect(state?.agents.map((agent) => [agent.description, agent.phase])).toEqual([

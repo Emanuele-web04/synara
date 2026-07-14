@@ -8,6 +8,8 @@ export interface ParsedSubagentReceiverAgent {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   modelIsRequestedHint?: boolean | undefined;
 }
@@ -29,6 +31,8 @@ export interface ParsedSubagentIdentityHint {
   nickname?: string | undefined;
   role?: string | undefined;
   model?: string | undefined;
+  effort?: string | undefined;
+  background?: boolean | undefined;
   prompt?: string | undefined;
   status?: string | undefined;
   message?: string | undefined;
@@ -169,6 +173,7 @@ export function decodeSubagentReceiverAgents(
     "requestedModel",
     "requested_model",
   ]);
+  const topLevelEffort = firstStringValue(item, ["effort", "reasoningEffort", "reasoning_effort"]);
   const topLevelPrompt = firstStringValue(item, ["prompt", "task", "message"]);
   const agentsValue =
     asArray(item.receiverAgents) ?? asArray(item.receiver_agents) ?? asArray(item.agents);
@@ -226,6 +231,10 @@ export function decodeSubagentReceiverAgents(
       const directModel = firstStringValue(object, ["model", "modelName", "model_name"]);
       const requestedModel = firstStringValue(object, ["requestedModel", "requested_model"]);
       const model = directModel ?? requestedModel ?? topLevelModel;
+      const effort =
+        firstStringValue(object, ["effort", "reasoningEffort", "reasoning_effort"]) ??
+        topLevelEffort;
+      const background = object.background === true || item.background === true;
       const prompt = firstStringValue(object, ["prompt", "task", "message"]) ?? topLevelPrompt;
 
       return [
@@ -235,6 +244,8 @@ export function decodeSubagentReceiverAgents(
           ...(nickname ? { nickname } : {}),
           ...(role ? { role } : {}),
           ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(background ? { background } : {}),
           ...(prompt ? { prompt } : {}),
           ...(model && !directModel ? { modelIsRequestedHint: true } : {}),
         },
@@ -277,6 +288,8 @@ export function decodeSubagentReceiverAgents(
       ...(nickname ? { nickname } : {}),
       ...(role ? { role } : {}),
       ...(topLevelModel ? { model: topLevelModel, modelIsRequestedHint: true } : {}),
+      ...(topLevelEffort ? { effort: topLevelEffort } : {}),
+      ...(item.background === true ? { background: true } : {}),
       ...(topLevelPrompt ? { prompt: topLevelPrompt } : {}),
     },
   ];
@@ -453,6 +466,8 @@ export function extractSubagentIdentityHints(
       hint.nickname ?? "",
       hint.role ?? "",
       hint.model ?? "",
+      hint.effort ?? "",
+      hint.background ? "1" : "0",
       hint.prompt ?? "",
       hint.status ?? "",
       hint.message ?? "",
@@ -573,6 +588,8 @@ export function mergeSubagentIdentityHints(
     nickname: incoming.nickname ?? existing?.nickname,
     role: incoming.role ?? existing?.role,
     model: mergedModel.model,
+    effort: incoming.effort ?? existing?.effort,
+    background: incoming.background ?? existing?.background,
     prompt: incoming.prompt ?? existing?.prompt,
     status: incoming.status ?? existing?.status,
     message: incoming.message ?? existing?.message,
@@ -652,7 +669,7 @@ export function resolveSubagentIdentityFromDirectory(
   }
 
   return mergeSubagentIdentityHints(agentEntry, {
-    ...(threadEntry ?? {}),
+    ...threadEntry,
     providerThreadId:
       threadEntry?.providerThreadId ?? agentEntry?.providerThreadId ?? normalizedProviderThreadId,
     agentId: threadEntry?.agentId ?? agentEntry?.agentId ?? normalizedAgentId,

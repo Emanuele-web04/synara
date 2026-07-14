@@ -72,6 +72,31 @@ describe("decodeSubagentReceiverAgents", () => {
       },
     ]);
   });
+
+  it("carries flat effort and background hints onto the child row", () => {
+    expect(
+      decodeSubagentReceiverAgents(
+        {
+          agentType: "worker-high",
+          agentNickname: "Deep audit",
+          model: "sonnet",
+          effort: "high",
+          background: true,
+        },
+        ["child-provider-1"],
+      ),
+    ).toEqual([
+      {
+        providerThreadId: "child-provider-1",
+        nickname: "Deep audit",
+        role: "worker-high",
+        model: "sonnet",
+        modelIsRequestedHint: true,
+        effort: "high",
+        background: true,
+      },
+    ]);
+  });
 });
 
 describe("extractSubagentIdentityHints", () => {

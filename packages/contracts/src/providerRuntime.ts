@@ -23,6 +23,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "codex.eventmsg",
   "claude.sdk.message",
   "claude.sdk.permission",
+  "claude.sdk.hook",
   "codex.sdk.thread-event",
   "gemini.acp.message",
   "gemini.acp.stdout",
@@ -225,6 +226,7 @@ const TurnTasksUpdatedType = Schema.Literal("turn.tasks.updated");
 const TurnProposedDeltaType = Schema.Literal("turn.proposed.delta");
 const TurnProposedCompletedType = Schema.Literal("turn.proposed.completed");
 const TurnDiffUpdatedType = Schema.Literal("turn.diff.updated");
+const TurnSteeredType = Schema.Literal("turn.steered");
 const ItemStartedType = Schema.Literal("item.started");
 const ItemUpdatedType = Schema.Literal("item.updated");
 const ItemCompletedType = Schema.Literal("item.completed");
@@ -526,6 +528,9 @@ const TaskUpdatedPayload = Schema.Struct({
     Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
   ),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Set when the SDK moves a blocking Task call between foreground and background.
+  isBackgrounded: Schema.optional(Schema.Boolean),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
   // Persisted launch identifiers from the Workflow tool result; re-invoking the
   // tool with {scriptPath, resumeFromRunId} resumes the run.
@@ -543,6 +548,12 @@ const TaskCompletedPayload = Schema.Struct({
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
+
+// A queued mid-task user message was injected into a running subagent.
+const TurnSteeredPayload = Schema.Struct({
+  message: TrimmedNonEmptyStringSchema,
+});
+export type TurnSteeredPayload = typeof TurnSteeredPayload.Type;
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
@@ -816,6 +827,13 @@ const ProviderRuntimeTurnDiffUpdatedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTurnDiffUpdatedEvent = typeof ProviderRuntimeTurnDiffUpdatedEvent.Type;
 
+const ProviderRuntimeTurnSteeredEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TurnSteeredType,
+  payload: TurnSteeredPayload,
+});
+export type ProviderRuntimeTurnSteeredEvent = typeof ProviderRuntimeTurnSteeredEvent.Type;
+
 const ProviderRuntimeItemStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: ItemStartedType,
@@ -1038,6 +1056,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTurnProposedDeltaEvent,
   ProviderRuntimeTurnProposedCompletedEvent,
   ProviderRuntimeTurnDiffUpdatedEvent,
+  ProviderRuntimeTurnSteeredEvent,
   ProviderRuntimeItemStartedEvent,
   ProviderRuntimeItemUpdatedEvent,
   ProviderRuntimeItemCompletedEvent,

@@ -145,6 +145,82 @@ describe("deriveComposerSubagentStripItems", () => {
     ).toEqual([]);
   });
 
+  it("appends the worker-tier effort to the model label", () => {
+    const items = deriveComposerSubagentStripItems({
+      workEntries: [
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          subagents: [
+            subagent({
+              threadId: "sub-1",
+              nickname: "Ada",
+              model: "sonnet",
+              effort: "high",
+              rawStatus: "running",
+              isActive: true,
+            }),
+            subagent({
+              threadId: "sub-2",
+              nickname: "Blue",
+              effort: "low",
+              rawStatus: "running",
+              isActive: true,
+            }),
+          ],
+        }),
+      ],
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+    });
+
+    expect(items[0]?.modelLabel).toBe("Sonnet · high");
+    // No model hint: the effort still reads on its own.
+    expect(items[1]?.modelLabel).toBe("low");
+  });
+
+  it("marks rows background from spawn hints and confirmed backgrounded tool use ids", () => {
+    const items = deriveComposerSubagentStripItems({
+      workEntries: [
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          subagents: [
+            subagent({
+              threadId: "sub-fg",
+              providerThreadId: "sub-fg",
+              nickname: "Ada",
+              rawStatus: "running",
+              isActive: true,
+            }),
+            subagent({
+              threadId: "sub-bg-spawn",
+              providerThreadId: "sub-bg-spawn",
+              nickname: "Blue",
+              background: true,
+              rawStatus: "running",
+              isActive: true,
+            }),
+            subagent({
+              threadId: "sub-bg-patch",
+              providerThreadId: "sub-bg-patch",
+              nickname: "Cleo",
+              rawStatus: "running",
+              isActive: true,
+            }),
+          ],
+        }),
+      ],
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+      backgroundedProviderThreadIds: new Set(["sub-bg-patch"]),
+    });
+
+    expect(items.map((item) => [item.providerThreadId, item.isBackground])).toEqual([
+      ["sub-fg", false],
+      ["sub-bg-spawn", true],
+      ["sub-bg-patch", true],
+    ]);
+  });
+
   it("falls back to prior subagents when the live turn spawned none", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [

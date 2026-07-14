@@ -8,9 +8,9 @@
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { memo } from "react";
-import { PiArrowsInSimple, PiArrowsOutSimple } from "react-icons/pi";
+import { PiArrowLineDown, PiArrowsInSimple, PiArrowsOutSimple } from "react-icons/pi";
 
-import { BotIcon, LoaderIcon } from "~/lib/icons";
+import { BotIcon, LoaderIcon, StopIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -32,6 +32,8 @@ interface ComposerSubagentStripProps {
   compact: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenThread: (threadId: ThreadId) => void;
+  onBackgroundItem?: (item: ComposerSubagentStripItem) => void;
+  onStopItem?: (item: ComposerSubagentStripItem) => void;
   attachedToPrevious?: boolean;
 }
 
@@ -57,6 +59,8 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
   compact,
   onCompactChange,
   onOpenThread,
+  onBackgroundItem,
+  onStopItem,
   attachedToPrevious = false,
 }: ComposerSubagentStripProps) {
   const runningCount = items.filter((item) => item.isActive).length;
@@ -100,44 +104,79 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
       <DisclosureRegion open={!compact}>
         <div className={cn("space-y-0", COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME)}>
           {items.map((item) => (
-            <button
+            <div
               key={item.key}
-              type="button"
               data-testid="composer-subagent-row"
-              className="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-              title={item.fullLabel}
-              onClick={() => onOpenThread(item.threadId)}
+              className="flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
             >
-              <span
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  item.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
-                )}
-              />
-              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
-                <span style={{ color: item.accentColor }}>{item.primaryLabel}</span>
-                {item.role ? (
-                  <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
-                    ({item.role})
-                  </span>
-                ) : null}
-                {item.modelLabel ? (
-                  <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
-                    {item.modelLabel}
-                  </span>
-                ) : null}
-              </span>
-              {item.statusLabel ? (
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                title={item.fullLabel}
+                onClick={() => onOpenThread(item.threadId)}
+              >
                 <span
                   className={cn(
-                    "shrink-0 text-[11px]",
-                    subagentStatusToneClassName(item.statusKind),
+                    "size-1.5 shrink-0 rounded-full",
+                    item.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
                   )}
-                >
-                  {item.statusLabel}
+                />
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                  <span style={{ color: item.accentColor }}>{item.primaryLabel}</span>
+                  {item.role ? (
+                    <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
+                      ({item.role})
+                    </span>
+                  ) : null}
+                  {item.modelLabel ? (
+                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                      {item.modelLabel}
+                    </span>
+                  ) : null}
+                  {item.isBackground ? (
+                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                      background
+                    </span>
+                  ) : null}
                 </span>
+                {item.statusLabel ? (
+                  <span
+                    className={cn(
+                      "shrink-0 text-[11px]",
+                      subagentStatusToneClassName(item.statusKind),
+                    )}
+                  >
+                    {item.statusLabel}
+                  </span>
+                ) : null}
+              </button>
+              {item.isActive && !item.isBackground && onBackgroundItem ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                  onClick={() => onBackgroundItem(item)}
+                  aria-label="Move subagent to background"
+                  title="Move subagent to background (the main agent keeps working)"
+                >
+                  <PiArrowLineDown className="size-3" />
+                </Button>
               ) : null}
-            </button>
+              {item.isActive && onStopItem ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                  onClick={() => onStopItem(item)}
+                  aria-label="Stop subagent"
+                  title="Stop subagent"
+                >
+                  <StopIcon className="size-3" />
+                </Button>
+              ) : null}
+            </div>
           ))}
         </div>
       </DisclosureRegion>

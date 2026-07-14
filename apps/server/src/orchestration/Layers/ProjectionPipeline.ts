@@ -1592,6 +1592,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.task-background-requested": {
+          // Intent only: the provider confirms via a task_updated backgrounded patch.
+          return;
+        }
+
         case "thread.turn-diff-completed": {
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,

@@ -391,12 +391,14 @@ export function deriveWorkflowRunState(input: {
     const threadRef = snapshot.toolUseId
       ? input.subagentThreadsByToolUseId?.get(snapshot.toolUseId)
       : undefined;
+    const { statusKind, statusLabel } = agentStatusPresentation(snapshot.status);
     return {
       taskId: snapshot.taskId,
       description: snapshot.description,
       subagentType: snapshot.subagentType,
       phase: matched ?? lastMatchedPhase,
-      ...agentStatusPresentation(snapshot.status),
+      statusKind,
+      statusLabel,
       totalTokens: snapshot.totalTokens,
       durationMs: snapshot.durationMs,
       startedAt: snapshot.startedAt,
@@ -436,12 +438,14 @@ export function deriveWorkflowRunState(input: {
         : (phase !== null && phase === latestPhase) || label === latestEntry?.label
           ? "running"
           : "completed";
+      const { statusKind, statusLabel } = agentStatusPresentation(status);
       return {
         taskId: `${workflow.taskId}:agent:${label}`,
         description: label,
         subagentType: null,
         phase,
-        ...agentStatusPresentation(status),
+        statusKind,
+        statusLabel,
         totalTokens: null,
         durationMs: null,
         startedAt: entry.firstAt,
@@ -458,8 +462,11 @@ export function deriveWorkflowRunState(input: {
   const backfilledRows = settled
     ? (workflow.finalAgents ?? [])
         .filter((agent) => !seenLabels.has(agent.label.toLowerCase()))
-        .map(
-          (agent): WorkflowAgentRow => ({
+        .map((agent): WorkflowAgentRow => {
+          const { statusKind, statusLabel } = agentStatusPresentation(
+            finalAgentStatus(agent.state, workflow.status),
+          );
+          return {
             taskId: `${workflow.taskId}:agent:${agent.label}`,
             description: agent.label,
             subagentType: null,
@@ -467,14 +474,15 @@ export function deriveWorkflowRunState(input: {
               (agent.phaseIndex !== null
                 ? (workflow.phases?.[agent.phaseIndex]?.title ?? null)
                 : null) ?? canonicalPhase(phaseForLabel(agent.label)),
-            ...agentStatusPresentation(finalAgentStatus(agent.state, workflow.status)),
+            statusKind,
+            statusLabel,
             totalTokens: null,
             durationMs: null,
             startedAt: workflow.startedAt,
             threadId: null,
             modelLabel: formatSubagentModelLabel(agent.model ?? undefined),
-          }),
-        )
+          };
+        })
     : [];
 
   const agents = [...memberRows, ...progressRows, ...backfilledRows];

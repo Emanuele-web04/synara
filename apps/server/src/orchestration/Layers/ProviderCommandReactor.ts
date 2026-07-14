@@ -85,6 +85,7 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.task-stop-requested"
+      | "thread.task-background-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
@@ -448,6 +449,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
       | "provider.task.stop.failed"
+      | "provider.task.background.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -1026,6 +1028,23 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
+    }
+    // Subagent threads have no provider session of their own: their messages
+    // steer the running child task through the parent session (mirrors the
+    // interrupt seam), never the session-bootstrap path below.
+    if (thread.parentThreadId) {
+      const providerThread = yield* resolveProviderSessionThread(input.threadId);
+      const subagentProviderThreadId = providerThread
+        ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
+        : undefined;
+      if (providerThread && subagentProviderThreadId) {
+        yield* providerService.steerSubagent({
+          threadId: providerThread.id,
+          providerThreadId: subagentProviderThreadId,
+          input: input.messageText,
+        });
+        return;
+      }
     }
     const activeSessionBeforeEnsure = yield* providerService
       .listSessions()
@@ -1949,6 +1968,28 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processTaskBackgroundRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-background-requested" }>,
+  ) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    const hasSession = providerThread?.session && providerThread.session.status !== "stopped";
+    if (!providerThread || !hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.task.background.failed",
+        summary: "Provider task background failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService.backgroundTask({
+      threadId: providerThread.id,
+      toolUseId: event.payload.toolUseId,
+    });
+  });
+
   const processApprovalResponseRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
@@ -2437,6 +2478,9 @@ const make = Effect.gen(function* () {
         case "thread.task-stop-requested":
           yield* processTaskStopRequested(event);
           return;
+        case "thread.task-background-requested":
+          yield* processTaskBackgroundRequested(event);
+          return;
         case "thread.approval-response-requested":
           yield* processApprovalResponseRequested(event);
           return;
@@ -2506,6 +2550,7 @@ const make = Effect.gen(function* () {
             event.type !== "thread.turn-start-requested" &&
             event.type !== "thread.turn-interrupt-requested" &&
             event.type !== "thread.task-stop-requested" &&
+            event.type !== "thread.task-background-requested" &&
             event.type !== "thread.approval-response-requested" &&
             event.type !== "thread.user-input-response-requested" &&
             event.type !== "thread.conversation-rollback-requested" &&

@@ -19,6 +19,8 @@ import {
 export interface ComposerSubagentStripItem {
   key: string;
   threadId: ThreadId;
+  // Task tool_use_id: the handle for per-run task control (background/stop).
+  providerThreadId: string;
   primaryLabel: string;
   fullLabel: string;
   role: string | null;
@@ -26,6 +28,7 @@ export interface ComposerSubagentStripItem {
   statusLabel: string | undefined;
   statusKind: SubagentStatusKind | null;
   isActive: boolean;
+  isBackground: boolean;
   accentColor: string;
 }
 
@@ -46,6 +49,8 @@ function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent
     nickname: next.nickname ?? previous.nickname,
     role: next.role ?? previous.role,
     model: next.model ?? previous.model,
+    effort: next.effort ?? previous.effort,
+    background: next.background ?? previous.background,
     prompt: next.prompt ?? previous.prompt,
     title: next.title ?? previous.title,
     latestUpdate: next.latestUpdate ?? previous.latestUpdate,
@@ -55,7 +60,11 @@ function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent
   };
 }
 
-function toStripItem(key: string, subagent: WorkLogSubagent): ComposerSubagentStripItem {
+function toStripItem(
+  key: string,
+  subagent: WorkLogSubagent,
+  backgroundedThreadIds: ReadonlySet<string>,
+): ComposerSubagentStripItem {
   const presentation = resolveSubagentPresentation({
     nickname: subagent.nickname,
     role: subagent.role,
@@ -68,22 +77,31 @@ function toStripItem(key: string, subagent: WorkLogSubagent): ComposerSubagentSt
     statusLabel ?? subagent.rawStatus,
     subagent.isActive,
   );
+  const modelLabel = formatSubagentModelLabel(subagent.model);
 
   return {
     key,
     threadId: ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId),
+    providerThreadId: subagent.providerThreadId ?? subagent.threadId,
     primaryLabel: presentation.nickname ?? presentation.primaryLabel,
     fullLabel: presentation.fullLabel,
     role: presentation.role,
-    modelLabel: formatSubagentModelLabel(subagent.model),
+    modelLabel:
+      modelLabel && subagent.effort
+        ? `${modelLabel} · ${subagent.effort}`
+        : (modelLabel ?? subagent.effort),
     statusLabel,
     statusKind,
     isActive: statusKind === "running",
+    isBackground: subagent.background === true || backgroundedThreadIds.has(key),
     accentColor: presentation.accentColor,
   };
 }
 
-function collectStripItems(entries: ReadonlyArray<WorkLogEntry>): ComposerSubagentStripItem[] {
+function collectStripItems(
+  entries: ReadonlyArray<WorkLogEntry>,
+  backgroundedThreadIds: ReadonlySet<string>,
+): ComposerSubagentStripItem[] {
   const subagentByKey = new Map<string, WorkLogSubagent>();
   for (const entry of entries) {
     for (const subagent of entry.subagents ?? []) {
@@ -92,12 +110,18 @@ function collectStripItems(entries: ReadonlyArray<WorkLogEntry>): ComposerSubage
       subagentByKey.set(key, previous ? mergeSubagentSnapshots(previous, subagent) : subagent);
     }
   }
-  return [...subagentByKey.entries()].map(([key, subagent]) => toStripItem(key, subagent));
+  return [...subagentByKey.entries()].map(([key, subagent]) =>
+    toStripItem(key, subagent, backgroundedThreadIds),
+  );
 }
+
+const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
 
 export function deriveComposerSubagentStripItems(input: {
   workEntries: ReadonlyArray<WorkLogEntry>;
   liveTurnId: TurnId | null;
+  // Task tool_use_ids the provider confirmed as backgrounded (task_updated patches).
+  backgroundedProviderThreadIds?: ReadonlySet<string>;
 }): ComposerSubagentStripItem[] {
   const entriesWithSubagents = input.workEntries.filter(
     (entry) => (entry.subagents?.length ?? 0) > 0,
@@ -106,16 +130,17 @@ export function deriveComposerSubagentStripItems(input: {
     return [];
   }
 
+  const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
   const liveTurnEntries = input.liveTurnId
     ? entriesWithSubagents.filter((entry) => entry.turnId === input.liveTurnId)
     : [];
   if (liveTurnEntries.length > 0) {
-    return collectStripItems(liveTurnEntries);
+    return collectStripItems(liveTurnEntries, backgroundedThreadIds);
   }
 
   // No subagents spawned by the live turn: keep the latest known set visible only
   // while some subagent is still running or queued, then let the strip retire.
-  const items = collectStripItems(entriesWithSubagents);
+  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds);
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? items
     : [];

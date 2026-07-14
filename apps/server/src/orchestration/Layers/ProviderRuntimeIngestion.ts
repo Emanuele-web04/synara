@@ -1312,10 +1312,16 @@ function runtimeEventToActivities(
               ? "Task paused"
               : event.payload.status === "killed"
                 ? "Task killed"
-                : "Task updated",
+                : event.payload.isBackgrounded === true
+                  ? "Task moved to background"
+                  : "Task updated",
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
@@ -1324,6 +1330,23 @@ function runtimeEventToActivities(
             ...(event.payload.workflowScriptPath
               ? { workflowScriptPath: event.payload.workflowScriptPath }
               : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "turn.steered": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.steered",
+          summary: "User message delivered",
+          payload: toActivityPayload({
+            detail: truncateDetail(event.payload.message),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

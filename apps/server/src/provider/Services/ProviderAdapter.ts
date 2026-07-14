@@ -124,6 +124,20 @@ export interface ProviderAdapterShape<TError> {
   readonly stopTask?: (threadId: ThreadId, taskId: string) => Effect.Effect<void, TError>;
 
   /**
+   * Move one in-flight foreground task to the background when the adapter supports it.
+   */
+  readonly backgroundTask?: (threadId: ThreadId, toolUseId: string) => Effect.Effect<void, TError>;
+
+  /**
+   * Deliver a mid-task user message to a running subagent when the adapter supports it.
+   */
+  readonly steerSubagent?: (
+    threadId: ThreadId,
+    providerThreadId: string,
+    input: string,
+  ) => Effect.Effect<void, TError>;
+
+  /**
    * Respond to an interactive approval request.
    */
   readonly respondToRequest: (

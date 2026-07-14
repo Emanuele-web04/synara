@@ -13,6 +13,8 @@ import {
   ModelUsage,
   NonNullableUsage,
   query,
+  type HookInput,
+  type HookJSONOutput,
   type Options as ClaudeQueryOptions,
   type ModelInfo,
   type PermissionMode,
@@ -269,6 +271,9 @@ interface ClaudeSessionContext {
   // Live Task tool spawns keyed by tool_use_id. Each run owns a scoped context
   // whose events carry `subagentRefs`, so ingestion routes them to the child thread.
   readonly subagentRuns: Map<string, ClaudeSubagentRun>;
+  // Mid-task user messages queued per subagent tool_use_id, drained by the
+  // PreToolUse hook on the subagent's next tool call.
+  readonly pendingSubagentSteers: Map<string, Array<string>>;
   // Live workflow runs (task_type "local_workflow") by task id. The SDK carries no
   // parent-task linkage, so agent tasks that start while exactly one workflow is
   // live get tagged with it (recorded in workflowTaskIdByMemberTaskId); with
@@ -872,7 +877,7 @@ function toolLifecycleEventData(
     callId: tool.itemId,
     toolName: tool.toolName,
     input: tool.input,
-    ...(tool.toolName === "Task" ? subagentReceiverData(tool) : {}),
+    ...(tool.toolName === "Task" || tool.toolName === "Agent" ? subagentReceiverData(tool) : {}),
     ...extra,
   };
 }
@@ -883,13 +888,23 @@ function toolLifecycleEventData(
 function subagentReceiverData(
   tool: Pick<ToolInFlight, "itemId" | "input">,
 ): Record<string, unknown> {
-  const { subagent_type: subagentType, description, prompt, model } = tool.input;
+  const {
+    subagent_type: subagentType,
+    description,
+    prompt,
+    model,
+    run_in_background: runInBackground,
+  } = tool.input;
+  const effort =
+    typeof subagentType === "string" ? claudeWorkerEffortFromSubagentType(subagentType) : undefined;
   return {
     receiverThreadId: tool.itemId,
     ...(typeof subagentType === "string" ? { agentType: subagentType } : {}),
     ...(typeof description === "string" ? { nickname: description } : {}),
     ...(typeof prompt === "string" ? { prompt } : {}),
     ...(typeof model === "string" ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(runInBackground === true ? { background: true } : {}),
   };
 }
 
@@ -935,7 +950,23 @@ const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
   "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
   "Treat the current working directory as the active workspace for the task.",
   "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+  "When spawning subagents, set the Agent tool's `model` parameter and pick reasoning effort by choosing a worker-<tier> subagent type (worker-low, worker-medium, worker-high, worker-xhigh).",
+  "Honor explicit user instructions about a subagent's model or effort verbatim; otherwise match task complexity: mechanical work → haiku or worker-low, standard work → sonnet or worker-medium, hard reasoning → opus or fable with worker-high and above.",
 ].join("\n");
+
+const CLAUDE_WORKER_EFFORT_TIERS = ["low", "medium", "high", "xhigh"] as const;
+const CLAUDE_WORKER_PROMPT =
+  "You are a general-purpose worker agent. Complete the assigned task end to end with the available tools, then return a concise report covering what you did, key findings, and any remaining risks.";
+
+function claudeWorkerEffortFromSubagentType(subagentType: string): string | undefined {
+  return (CLAUDE_WORKER_EFFORT_TIERS as readonly string[]).find(
+    (tier) => subagentType === `worker-${tier}`,
+  );
+}
+
+function claudeSubagentSteerContext(message: string): string {
+  return `The user sent you a message mid-task: ${message}. Address it and adjust your work accordingly.`;
+}
 
 function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
   const agents: Record<string, AgentDefinition> = {};
@@ -951,6 +982,21 @@ function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
       ...(alias.tools ? { tools: [...alias.tools] } : {}),
       ...(alias.disallowedTools ? { disallowedTools: [...alias.disallowedTools] } : {}),
       ...(alias.model ? { model: alias.model } : {}),
+    };
+  }
+
+  // Effort-tier worker variants: the Agent tool input has a `model` param but no
+  // effort param, so effort is selected by picking the matching worker type.
+  // Model stays unset (inherit) so the tool's `model` input composes with it.
+  for (const tier of CLAUDE_WORKER_EFFORT_TIERS) {
+    const agentName = `worker-${tier}`;
+    if (agents[agentName]) {
+      continue;
+    }
+    agents[agentName] = {
+      description: `General-purpose worker at ${tier} reasoning effort; choose per task complexity`,
+      prompt: CLAUDE_WORKER_PROMPT,
+      effort: tier,
     };
   }
 
@@ -1102,7 +1148,7 @@ function nativeProviderRefs(
   },
 ): NonNullable<ProviderRuntimeEvent["providerRefs"]> {
   return {
-    ...(context.subagentRefs ?? {}),
+    ...context.subagentRefs,
     ...(options?.providerItemId
       ? { providerItemId: ProviderItemId.makeUnsafe(options.providerItemId) }
       : {}),
@@ -1471,6 +1517,24 @@ function runtimeSessionStateFromClaudeTaskStatus(
     default:
       return undefined;
   }
+}
+
+function subagentRunForTask(
+  context: ClaudeSessionContext,
+  toolUseId: string | undefined,
+  taskId: string,
+): ClaudeSubagentRun | undefined {
+  const run = toolUseId ? context.subagentRuns.get(toolUseId) : undefined;
+  if (run) {
+    run.taskId ??= taskId;
+    return run;
+  }
+  for (const candidate of context.subagentRuns.values()) {
+    if (candidate.taskId === taskId) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
@@ -2418,6 +2482,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           stopped: false,
           warnedUnhandledSdkKinds: context.warnedUnhandledSdkKinds,
           subagentRuns: new Map(),
+          pendingSubagentSteers: new Map(),
           liveWorkflowTaskIds: new Set(),
           workflowTaskIdByMemberTaskId: new Map(),
           subagentRefs: {
@@ -2428,24 +2493,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       };
       context.subagentRuns.set(toolUseId, run);
       return run;
-    };
-
-    const subagentRunForTask = (
-      context: ClaudeSessionContext,
-      toolUseId: string | undefined,
-      taskId: string,
-    ): ClaudeSubagentRun | undefined => {
-      const run = toolUseId ? context.subagentRuns.get(toolUseId) : undefined;
-      if (run) {
-        run.taskId ??= taskId;
-        return run;
-      }
-      for (const candidate of context.subagentRuns.values()) {
-        if (candidate.taskId === taskId) {
-          return candidate;
-        }
-      }
-      return undefined;
     };
 
     const handleStreamEvent = (
@@ -2889,6 +2936,39 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Transcript marker on the child thread, emitted only at actual delivery
+    // (the PreToolUse hook fired inside the subagent), never on enqueue.
+    const emitSubagentSteerDelivered = (
+      run: ClaudeSubagentRun,
+      message: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* ensureSyntheticTurn(run.context);
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "turn.steered",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: run.context.session.threadId,
+          ...(run.context.turnState
+            ? { turnId: asCanonicalTurnId(run.context.turnState.turnId) }
+            : {}),
+          payload: {
+            message,
+          },
+          providerRefs: nativeProviderRefs(run.context),
+          raw: {
+            source: "claude.sdk.hook",
+            method: "hooks/PreToolUse",
+            payload: {
+              taskId: run.taskId,
+              toolUseId: run.toolUseId,
+            },
+          },
+        });
+      });
+
     const handleAssistantMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -3099,7 +3179,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (message.subtype === "task_updated") {
           const patch = message.patch;
           const status = patch?.status;
-          if (status === undefined) {
+          const isBackgrounded = patch?.is_backgrounded;
+          if (status === undefined && isBackgrounded === undefined) {
             return;
           }
           if (
@@ -3109,6 +3190,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.liveWorkflowTaskIds.delete(message.task_id);
           }
           const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+          const run = subagentRunForTask(context, undefined, message.task_id);
           const raw = {
             source: "claude.sdk.message" as const,
             method: sdkNativeMethod(message),
@@ -3125,8 +3207,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
             payload: {
               taskId: RuntimeTaskId.makeUnsafe(message.task_id),
-              status,
+              ...(status !== undefined ? { status } : {}),
               ...(patch?.error ? { error: patch.error } : {}),
+              ...(isBackgrounded !== undefined ? { isBackgrounded } : {}),
+              ...(run ? { toolUseId: run.toolUseId } : {}),
               ...(workflowTaskId
                 ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
                 : {}),
@@ -3134,8 +3218,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             providerRefs: nativeProviderRefs(context),
             raw,
           });
-          const run = subagentRunForTask(context, undefined, message.task_id);
-          const state = runtimeSessionStateFromClaudeTaskStatus(status);
+          const state =
+            status !== undefined ? runtimeSessionStateFromClaudeTaskStatus(status) : undefined;
           if (!run || state === undefined) {
             return;
           }
@@ -3366,6 +3450,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
             if (run) {
               context.subagentRuns.delete(run.toolUseId);
+              context.pendingSubagentSteers.delete(run.toolUseId);
               if (run.context.turnState) {
                 yield* completeTurn(run.context, claudeTaskTurnStatus(message.status));
               }
@@ -3633,6 +3718,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
         }
         context.subagentRuns.clear();
+        context.pendingSubagentSteers.clear();
 
         if (context.turnState) {
           yield* completeTurn(context, "interrupted", "Session stopped.");
@@ -3735,6 +3821,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
         const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
+        const pendingSubagentSteers = new Map<string, Array<string>>();
         const inFlightTools = new Map<number, ToolInFlight>();
         const trackedTasks = new Map<string, ClaudeTrackedTask>(
           (resumeState?.trackedTasks ?? []).map((task) => [task.id, task]),
@@ -3863,6 +3950,46 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             } satisfies PermissionResult;
           });
+
+        // Host-side PreToolUse hook: the only SDK channel that reaches a RUNNING
+        // subagent (inbound messages with parent_tool_use_id become main-thread
+        // turns). Hook input `agent_id` equals the run's task_id. It fires on
+        // every tool call, so the no-steer path must stay trivial; queued
+        // messages are drained on the subagent's next tool call.
+        const subagentSteerHook = async (hookInput: HookInput): Promise<HookJSONOutput> => {
+          const agentId = "agent_id" in hookInput ? hookInput.agent_id : undefined;
+          if (pendingSubagentSteers.size === 0 || typeof agentId !== "string") {
+            return {};
+          }
+          return Effect.runPromise(
+            Effect.gen(function* () {
+              const context = yield* Ref.get(contextRef);
+              if (!context) {
+                return {};
+              }
+              let run: ClaudeSubagentRun | undefined;
+              for (const candidate of context.subagentRuns.values()) {
+                if (candidate.taskId === agentId) {
+                  run = candidate;
+                  break;
+                }
+              }
+              const pending = run ? pendingSubagentSteers.get(run.toolUseId) : undefined;
+              if (!run || !pending || pending.length === 0) {
+                return {};
+              }
+              pendingSubagentSteers.delete(run.toolUseId);
+              const message = pending.join("\n\n");
+              yield* emitSubagentSteerDelivered(run, message);
+              return {
+                hookSpecificOutput: {
+                  hookEventName: "PreToolUse",
+                  additionalContext: claudeSubagentSteerContext(message),
+                },
+              } satisfies HookJSONOutput;
+            }),
+          ).catch(() => ({}));
+        };
 
         const canUseTool: CanUseTool = (toolName, toolInput, callbackOptions) =>
           Effect.runPromise(
@@ -4101,6 +4228,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Forward full subagent conversations (text + thinking) tagged with
           // parent_tool_use_id so child threads can stream live.
           forwardSubagentText: true,
+          hooks: {
+            PreToolUse: [{ hooks: [subagentSteerHook] }],
+          },
           canUseTool,
           env: claudeSdkEnv,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
@@ -4215,6 +4345,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             stopped: false,
             warnedUnhandledSdkKinds: new Set(),
             subagentRuns: new Map(),
+            pendingSubagentSteers,
             liveWorkflowTaskIds: new Set(),
             workflowTaskIdByMemberTaskId: new Map(),
           };
@@ -4527,6 +4658,39 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Moves one in-flight foreground Task call to the background (the CLI's
+    // Ctrl+B): the blocking Task tool_result returns immediately, the parent
+    // turn continues, and the task settles later via task_notification.
+    const backgroundTask: ClaudeAdapterShape["backgroundTask"] = (threadId, toolUseId) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        yield* Effect.tryPromise({
+          try: () => context.query.backgroundTasks(toolUseId).then(() => undefined),
+          catch: (cause) => toRequestError(threadId, "task/background", cause),
+        });
+      });
+
+    // Queues a mid-task user message for one running subagent; the PreToolUse
+    // hook injects it as additionalContext on the subagent's next tool call.
+    const steerSubagent: ClaudeAdapterShape["steerSubagent"] = (
+      threadId,
+      providerThreadId,
+      input,
+    ) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        if (!context.subagentRuns.has(providerThreadId)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/steerSubagent",
+            detail: `Subagent '${providerThreadId}' already finished; the message was not delivered.`,
+          });
+        }
+        const pending = context.pendingSubagentSteers.get(providerThreadId) ?? [];
+        pending.push(input);
+        context.pendingSubagentSteers.set(providerThreadId, pending);
+      });
+
     const readThread: ClaudeAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
@@ -4815,6 +4979,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       sendTurn,
       interruptTurn,
       stopTask,
+      backgroundTask,
+      steerSubagent,
       readThread,
       rollbackThread,
       respondToRequest,

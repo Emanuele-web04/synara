@@ -17,6 +17,8 @@ import {
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderStopTaskInput,
+  ProviderBackgroundTaskInput,
+  ProviderSteerSubagentInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
@@ -1135,6 +1137,51 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const backgroundTask: ProviderServiceShape["backgroundTask"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.backgroundTask",
+          schema: ProviderBackgroundTaskInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.backgroundTask",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.backgroundTask) {
+          return;
+        }
+        yield* routed.adapter.backgroundTask(routed.threadId, input.toolUseId);
+        yield* analytics.record("provider.task.backgrounded", {
+          provider: routed.adapter.provider,
+        });
+      });
+
+    const steerSubagent: ProviderServiceShape["steerSubagent"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.steerSubagent",
+          schema: ProviderSteerSubagentInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.steerSubagent",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.steerSubagent) {
+          return yield* toValidationError(
+            "ProviderService.steerSubagent",
+            `Provider '${routed.adapter.provider}' does not support messaging a running subagent.`,
+          );
+        }
+        yield* routed.adapter.steerSubagent(routed.threadId, input.providerThreadId, input.input);
+        yield* analytics.record("provider.subagent.steered", {
+          provider: routed.adapter.provider,
+        });
+      });
+
     const respondToRequest: ProviderServiceShape["respondToRequest"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -1539,6 +1586,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       startReview,
       interruptTurn,
       stopTask,
+      backgroundTask,
+      steerSubagent,
       respondToRequest,
       respondToUserInput,
       stopSession,
