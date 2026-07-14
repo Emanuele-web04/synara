@@ -3,6 +3,8 @@
 // Layer: Browser storage adapter
 // Depends on: IndexedDB structured-clone support for Blob values.
 
+import { awaitIdbRequest, openIndexedDbDatabase, waitForIdbTransaction } from "./indexedDb";
+
 const DATABASE_NAME = "synara-composer-images";
 const DATABASE_VERSION = 1;
 const IMAGE_STORE_NAME = "images";
@@ -19,37 +21,17 @@ interface StoredComposerImageBlob {
 }
 
 function openComposerImageDatabase(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB is unavailable."));
-  }
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(IMAGE_STORE_NAME)) {
-        database.createObjectStore(IMAGE_STORE_NAME, { keyPath: "key" });
-      }
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("Could not open the composer image database.")),
-    );
-    request.addEventListener("blocked", () =>
-      reject(new Error("The composer image database upgrade was blocked.")),
-    );
+  return openIndexedDbDatabase({
+    name: DATABASE_NAME,
+    version: DATABASE_VERSION,
+    storeName: IMAGE_STORE_NAME,
+    keyPath: "key",
+    label: "composer image database",
   });
 }
 
 function waitForTransaction(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve());
-    transaction.addEventListener("abort", () =>
-      reject(transaction.error ?? new Error("Composer image storage was aborted.")),
-    );
-    transaction.addEventListener("error", () =>
-      reject(transaction.error ?? new Error("Composer image storage failed.")),
-    );
-  });
+  return waitForIdbTransaction(transaction, "Composer image storage");
 }
 
 export function composerImageBlobKey(threadId: string, imageId: string): string {
@@ -86,15 +68,10 @@ export async function readComposerImageBlob(key: string): Promise<File | null> {
   try {
     const transaction = database.transaction(IMAGE_STORE_NAME, "readonly");
     const completion = waitForTransaction(transaction);
-    const request = transaction.objectStore(IMAGE_STORE_NAME).get(key);
-    const stored = await new Promise<StoredComposerImageBlob | undefined>((resolve, reject) => {
-      request.addEventListener("success", () =>
-        resolve(request.result as StoredComposerImageBlob | undefined),
-      );
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("Could not read the composer image.")),
-      );
-    });
+    const stored = (await awaitIdbRequest(
+      transaction.objectStore(IMAGE_STORE_NAME).get(key),
+      "Could not read the composer image.",
+    )) as StoredComposerImageBlob | undefined;
     await completion;
     if (!stored?.blob) return null;
     return new File([stored.blob], stored.name, {
@@ -138,13 +115,10 @@ export async function deleteOrphanedComposerImageBlobs(input: {
   try {
     const keysTransaction = database.transaction(IMAGE_STORE_NAME, "readonly");
     const keysCompletion = waitForTransaction(keysTransaction);
-    const keysRequest = keysTransaction.objectStore(IMAGE_STORE_NAME).getAllKeys();
-    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
-      keysRequest.addEventListener("success", () => resolve(keysRequest.result));
-      keysRequest.addEventListener("error", () =>
-        reject(keysRequest.error ?? new Error("Could not list the composer images.")),
-      );
-    });
+    const keys = await awaitIdbRequest(
+      keysTransaction.objectStore(IMAGE_STORE_NAME).getAllKeys(),
+      "Could not list the composer images.",
+    );
     await keysCompletion;
 
     const candidateKeys = keys.filter(

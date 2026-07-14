@@ -1154,7 +1154,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     removeLocalStorageItem(COMPOSER_DRAFT_STORAGE_KEY);
   });
 
-  it("serializes overlapping attachment syncs for the same thread", async () => {
+  it("stages overlapping attachment syncs immediately and serializes verification", async () => {
     const firstImage = makeImage({
       id: "appsnap-sync-first",
       previewUrl: "blob:appsnap-sync-first",
@@ -1181,11 +1181,13 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       attachmentFor(secondImage),
     ]);
 
+    // Staging is synchronous even while an earlier sync is still verifying, so
+    // a reload in that window cannot lose the newer attachment metadata.
     expect(
       useComposerDraftStore
         .getState()
         .draftsByThreadId[threadId]?.persistedAttachments.map((attachment) => attachment.id),
-    ).toEqual([firstImage.id]);
+    ).toEqual([firstImage.id, secondImage.id]);
     await expect(Promise.all([firstSync, secondSync])).resolves.toEqual([
       "unverified",
       "unverified",

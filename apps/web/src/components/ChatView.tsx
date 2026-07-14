@@ -731,6 +731,69 @@ function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
   });
 }
 
+// Shared by the live-composer and prompt-history attachment sync effects:
+// AppSnap images persist their bytes as IndexedDB blobs (reusing an existing
+// blob key when valid), everything else inlines a data URL. Falls back to the
+// already-persisted attachments for images whose serialization fails.
+async function stagePersistedComposerImageAttachments(input: {
+  threadId: ThreadId;
+  images: ReadonlyArray<ComposerImageAttachment>;
+  getPersistedAttachments: () => PersistedComposerImageAttachment[];
+}): Promise<PersistedComposerImageAttachment[]> {
+  try {
+    const existingPersistedById = new Map(
+      input.getPersistedAttachments().map((attachment) => [attachment.id, attachment]),
+    );
+    const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
+    await Promise.all(
+      input.images.map(async (image) => {
+        try {
+          if (image.source?.kind === "appsnap") {
+            const existingPersisted = existingPersistedById.get(image.id);
+            const expectedBlobKey = composerImageBlobKey(input.threadId, image.id);
+            const blobKey =
+              existingPersisted?.blobKey === expectedBlobKey
+                ? expectedBlobKey
+                : await persistComposerImageBlob({
+                    threadId: input.threadId,
+                    imageId: image.id,
+                    file: image.file,
+                  });
+            stagedAttachmentById.set(image.id, {
+              id: image.id,
+              name: image.name,
+              mimeType: image.mimeType,
+              sizeBytes: image.sizeBytes,
+              blobKey,
+              source: image.source,
+            });
+            return;
+          }
+          const dataUrl = await readFileAsDataUrl(image.file);
+          stagedAttachmentById.set(image.id, {
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl,
+          });
+        } catch {
+          const existingPersisted = existingPersistedById.get(image.id);
+          if (existingPersisted) {
+            stagedAttachmentById.set(image.id, existingPersisted);
+          }
+        }
+      }),
+    );
+    return Array.from(stagedAttachmentById.values());
+  } catch {
+    const currentImageIds = new Set(input.images.map((image) => image.id));
+    return input
+      .getPersistedAttachments()
+      .filter((attachment) => currentImageIds.has(attachment.id));
+  }
+}
+
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -5433,75 +5496,17 @@ export default function ChatView({
         clearComposerDraftPersistedAttachments(threadId);
         return;
       }
-      const getPersistedAttachmentsForThread = () =>
-        useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [];
-      try {
-        const currentPersistedAttachments = getPersistedAttachmentsForThread();
-        const existingPersistedById = new Map(
-          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
-        );
-        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
-        await Promise.all(
-          composerImages.map(async (image) => {
-            try {
-              if (image.source?.kind === "appsnap") {
-                const existingPersisted = existingPersistedById.get(image.id);
-                const expectedBlobKey = composerImageBlobKey(threadId, image.id);
-                const blobKey =
-                  existingPersisted?.blobKey === expectedBlobKey
-                    ? expectedBlobKey
-                    : await persistComposerImageBlob({
-                        threadId,
-                        imageId: image.id,
-                        file: image.file,
-                      });
-                stagedAttachmentById.set(image.id, {
-                  id: image.id,
-                  name: image.name,
-                  mimeType: image.mimeType,
-                  sizeBytes: image.sizeBytes,
-                  blobKey,
-                  source: image.source,
-                });
-                return;
-              }
-              const dataUrl = await readFileAsDataUrl(image.file);
-              stagedAttachmentById.set(image.id, {
-                id: image.id,
-                name: image.name,
-                mimeType: image.mimeType,
-                sizeBytes: image.sizeBytes,
-                dataUrl,
-              });
-            } catch {
-              const existingPersisted = existingPersistedById.get(image.id);
-              if (existingPersisted) {
-                stagedAttachmentById.set(image.id, existingPersisted);
-              }
-            }
-          }),
-        );
-        const serialized = Array.from(stagedAttachmentById.values());
-        if (cancelled) {
-          return;
-        }
-        // Stage attachments in persisted draft state first so persist middleware can write them.
-        void syncComposerDraftPersistedAttachments(threadId, serialized);
-      } catch {
-        const currentImageIds = new Set(composerImages.map((image) => image.id));
-        const fallbackPersistedAttachments = getPersistedAttachmentsForThread();
-        const fallbackPersistedIds = fallbackPersistedAttachments
-          .map((attachment) => attachment.id)
-          .filter((id) => currentImageIds.has(id));
-        const fallbackPersistedIdSet = new Set(fallbackPersistedIds);
-        const fallbackAttachments = fallbackPersistedAttachments.filter((attachment) =>
-          fallbackPersistedIdSet.has(attachment.id),
-        );
-        if (cancelled) {
-          return;
-        }
-        void syncComposerDraftPersistedAttachments(threadId, fallbackAttachments);
+      const staged = await stagePersistedComposerImageAttachments({
+        threadId,
+        images: composerImages,
+        getPersistedAttachments: () =>
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [],
+      });
+      if (cancelled) {
+        return;
       }
+      // Stage attachments in persisted draft state first so persist middleware can write them.
+      void syncComposerDraftPersistedAttachments(threadId, staged);
     })();
     return () => {
       cancelled = true;
@@ -5522,77 +5527,17 @@ export default function ChatView({
     }
     let cancelled = false;
     void (async () => {
-      const getPersistedAttachmentsForThread = () =>
-        useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
-          ?.persistedAttachments ?? [];
-      try {
-        const currentPersistedAttachments = getPersistedAttachmentsForThread();
-        const existingPersistedById = new Map(
-          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
-        );
-        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
-        await Promise.all(
-          composerPromptHistorySavedDraftImages.map(async (image) => {
-            try {
-              if (image.source?.kind === "appsnap") {
-                const existingPersisted = existingPersistedById.get(image.id);
-                const expectedBlobKey = composerImageBlobKey(threadId, image.id);
-                const blobKey =
-                  existingPersisted?.blobKey === expectedBlobKey
-                    ? expectedBlobKey
-                    : await persistComposerImageBlob({
-                        threadId,
-                        imageId: image.id,
-                        file: image.file,
-                      });
-                stagedAttachmentById.set(image.id, {
-                  id: image.id,
-                  name: image.name,
-                  mimeType: image.mimeType,
-                  sizeBytes: image.sizeBytes,
-                  blobKey,
-                  source: image.source,
-                });
-                return;
-              }
-              const dataUrl = await readFileAsDataUrl(image.file);
-              stagedAttachmentById.set(image.id, {
-                id: image.id,
-                name: image.name,
-                mimeType: image.mimeType,
-                sizeBytes: image.sizeBytes,
-                dataUrl,
-              });
-            } catch {
-              const existingPersisted = existingPersistedById.get(image.id);
-              if (existingPersisted) {
-                stagedAttachmentById.set(image.id, existingPersisted);
-              }
-            }
-          }),
-        );
-        if (cancelled) {
-          return;
-        }
-        void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
-          threadId,
-          Array.from(stagedAttachmentById.values()),
-        );
-      } catch {
-        const currentImageIds = new Set(
-          composerPromptHistorySavedDraftImages.map((image) => image.id),
-        );
-        const fallbackAttachments = getPersistedAttachmentsForThread().filter((attachment) =>
-          currentImageIds.has(attachment.id),
-        );
-        if (cancelled) {
-          return;
-        }
-        void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
-          threadId,
-          fallbackAttachments,
-        );
+      const staged = await stagePersistedComposerImageAttachments({
+        threadId,
+        images: composerPromptHistorySavedDraftImages,
+        getPersistedAttachments: () =>
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
+            ?.persistedAttachments ?? [],
+      });
+      if (cancelled) {
+        return;
       }
+      void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(threadId, staged);
     })();
     return () => {
       cancelled = true;
