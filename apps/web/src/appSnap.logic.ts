@@ -174,6 +174,40 @@ export function persistedAppSnapCaptureBlobKeys(
   return [...blobKeys];
 }
 
+interface AttachmentIdCarrier {
+  id: string;
+}
+
+interface EffectiveComposerAttachmentCountDraft {
+  images?: ReadonlyArray<AttachmentIdCarrier> | undefined;
+  files?: ReadonlyArray<unknown> | undefined;
+  assistantSelections?: ReadonlyArray<unknown> | undefined;
+  persistedAttachments?: ReadonlyArray<AttachmentIdCarrier> | undefined;
+}
+
+/**
+ * Attachment count a new AppSnap must be checked against for the per-turn
+ * attachment limit. Counts live images/files/assistantSelections plus any
+ * `persistedAttachments` rows not yet represented in `images` — persisted
+ * rows are common right after a restart, while blob hydration is still
+ * pending, and omitting them would let the limit check be bypassed.
+ */
+export function effectiveComposerAttachmentCount(
+  draft: EffectiveComposerAttachmentCountDraft | undefined,
+): number {
+  if (!draft) return 0;
+  const hydratedImageIds = new Set((draft.images ?? []).map((image) => image.id));
+  const pendingPersistedCount = (draft.persistedAttachments ?? []).filter(
+    (attachment) => !hydratedImageIds.has(attachment.id),
+  ).length;
+  return (
+    (draft.images?.length ?? 0) +
+    (draft.files?.length ?? 0) +
+    (draft.assistantSelections?.length ?? 0) +
+    pendingPersistedCount
+  );
+}
+
 function isRecent(atMs: number, captureAtMs: number): boolean {
   const ageMs = captureAtMs - atMs;
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= APPSNAP_RECENT_TARGET_WINDOW_MS;

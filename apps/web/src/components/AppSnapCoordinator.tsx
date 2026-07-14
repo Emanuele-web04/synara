@@ -12,6 +12,7 @@ import {
   type AppSnapThreadTarget,
   type TimedAppSnapThreadTarget,
   didAppSnapHydrationInputsChange,
+  effectiveComposerAttachmentCount,
   hasHydratedAppSnapCapture,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
@@ -361,10 +362,7 @@ export function AppSnapCoordinator() {
       });
       const draftStore = useComposerDraftStore.getState();
       const draft = draftStore.draftsByThreadId[target.threadId];
-      const existingAttachmentCount =
-        (draft?.images.length ?? 0) +
-        (draft?.files.length ?? 0) +
-        (draft?.assistantSelections.length ?? 0);
+      const existingAttachmentCount = effectiveComposerAttachmentCount(draft);
       const { images, error } = buildComposerImageAttachmentsFromFiles({
         files: [file],
         existingAttachmentCount,
