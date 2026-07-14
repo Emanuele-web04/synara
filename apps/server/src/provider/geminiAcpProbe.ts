@@ -15,6 +15,7 @@ import {
 } from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect } from "effect";
+import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
 // Gemini ACP cold starts can take noticeably longer than a normal request path,
@@ -161,13 +162,16 @@ export function captureGeminiAcpProbeLogFailure(
 
 // Runs Gemini probes as status checks only; they must never launch an OAuth browser.
 export function buildGeminiProbeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    NO_BROWSER: "true",
-    BROWSER: GEMINI_BROWSER_BLOCKLIST_VALUE,
-    CI: "true",
-    DEBIAN_FRONTEND: "noninteractive",
-  };
+  return buildProviderChildEnvironment({
+    provider: "gemini",
+    baseEnv: env,
+    overrides: {
+      NO_BROWSER: "true",
+      BROWSER: GEMINI_BROWSER_BLOCKLIST_VALUE,
+      CI: "true",
+      DEBIAN_FRONTEND: "noninteractive",
+    },
+  });
 }
 
 export function isGeminiOAuthBrowserPrompt(line: string): boolean {

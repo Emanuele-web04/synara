@@ -3,6 +3,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config";
+import { ProviderCredentials, ProviderCredentialsLive } from "../providerCredentials";
 import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
@@ -17,13 +18,14 @@ import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeA
 import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
-import { makeProviderServiceLive } from "./Layers/ProviderService";
+import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderAdapterRegistry } from "./Services/ProviderAdapterRegistry";
 import { ProviderDiscoveryService } from "./Services/ProviderDiscoveryService";
 import { ProviderService } from "./Services/ProviderService";
 import { ProviderSessionDirectory } from "./Services/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
+import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/ProviderRuntimeEvents";
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry | ProviderSessionDirectory,
@@ -56,12 +58,20 @@ export function makeServerProviderLayer(): Layer.Layer<
     const claudeAdapterLayer = makeClaudeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
-    const openCodeAdapterLayer = makeOpenCodeAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
-    const kiloAdapterLayer = makeKiloAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    const resolveServerPassword = (provider: "kilo" | "opencode") =>
+      ProviderCredentials.pipe(
+        Effect.flatMap((credentials) => credentials.getServerPassword(provider)),
+        Effect.map((password) => password ?? undefined),
+        Effect.orDie,
+      );
+    const openCodeAdapterLayer = makeOpenCodeAdapterLive({
+      ...(nativeEventLogger ? { nativeEventLogger } : {}),
+      resolveServerPassword,
+    }).pipe(Layer.provide(ProviderCredentialsLive));
+    const kiloAdapterLayer = makeKiloAdapterLive({
+      ...(nativeEventLogger ? { nativeEventLogger } : {}),
+      resolveServerPassword,
+    }).pipe(Layer.provide(ProviderCredentialsLive));
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
@@ -90,9 +100,13 @@ export function makeServerProviderLayer(): Layer.Layer<
       Layer.provide(piAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
-    const providerServiceLayer = makeProviderServiceLive(
+    const providerServiceLayer = makeDurableProviderServiceLive(
       canonicalEventLogger ? { canonicalEventLogger } : undefined,
-    ).pipe(Layer.provide(adapterRegistryLayer), Layer.provide(providerSessionDirectoryLayer));
+    ).pipe(
+      Layer.provide(adapterRegistryLayer),
+      Layer.provide(providerSessionDirectoryLayer),
+      Layer.provide(ProviderRuntimeEventRepositoryLive),
+    );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
       // Skill toggles live in server settings; the shared ServerSettingsLive

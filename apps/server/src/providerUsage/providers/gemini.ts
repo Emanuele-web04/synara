@@ -142,7 +142,9 @@ export const geminiUsageFetcher: ProviderUsageFetcher = {
 
     try {
       const loadResult = await fetchJson({
+        service: "provider-usage-gemini",
         url: LOAD_URL,
+        allowedOrigins: [new URL(LOAD_URL).origin],
         method: "POST",
         headers: geminiHeaders(creds.accessToken),
         body: {
@@ -176,7 +178,9 @@ export const geminiUsageFetcher: ProviderUsageFetcher = {
         asString(loadRoot?.cloudaicompanionProject) ?? asString(asRecord(loadRoot?.project)?.id);
 
       const quotaResult = await fetchJson({
+        service: "provider-usage-gemini",
         url: QUOTA_URL,
+        allowedOrigins: [new URL(QUOTA_URL).origin],
         method: "POST",
         headers: geminiHeaders(creds.accessToken),
         body: project ? { project } : {},

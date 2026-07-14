@@ -19,6 +19,8 @@ import {
   OrchestrationSession,
   OrchestrationThreadPullRequest,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ProviderStartOptions,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
   THREAD_MARKER_LABEL_MAX_CHARS,
@@ -45,6 +47,7 @@ const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSessi
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+const decodeProviderStartOptions = Schema.decodeUnknownEffect(ProviderStartOptions);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
@@ -192,6 +195,35 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
       provider: "pi",
       model: "openai/gpt-5.5",
     });
+  }),
+);
+
+it.effect("drops legacy provider passwords from decoded provider options", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProviderStartOptions({
+      kilo: {
+        binaryPath: "/custom/bin/kilo",
+        serverUrl: "http://127.0.0.1:4095",
+        serverPassword: "legacy-kilo-secret",
+      },
+      opencode: {
+        binaryPath: "/custom/bin/opencode",
+        serverUrl: "http://127.0.0.1:4096",
+        serverPassword: "legacy-opencode-secret",
+      },
+    });
+
+    assert.deepStrictEqual(parsed, {
+      kilo: {
+        binaryPath: "/custom/bin/kilo",
+        serverUrl: "http://127.0.0.1:4095",
+      },
+      opencode: {
+        binaryPath: "/custom/bin/opencode",
+        serverUrl: "http://127.0.0.1:4096",
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(parsed), /serverPassword|legacy-.*-secret/);
   }),
 );
 
@@ -361,6 +393,44 @@ it.effect("decodes thread.turn.start defaults for provider, runtime mode, and di
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
     assert.strictEqual(parsed.dispatchMode, "queue");
+  }),
+);
+
+it.effect("bounds initial turn text while preserving attachment-only turns", () =>
+  Effect.gen(function* () {
+    const command = (text: string, attachments: ReadonlyArray<unknown> = []) => ({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-input-limit",
+      threadId: "thread-1",
+      message: { messageId: "msg-input-limit", role: "user", text, attachments },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const exact = yield* decodeThreadTurnStartCommand(
+      command("x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+    );
+    assert.strictEqual(exact.message.text.length, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+
+    const overLimit = yield* Effect.exit(
+      decodeThreadTurnStartCommand(command("x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1))),
+    );
+    assert.strictEqual(overLimit._tag, "Failure");
+
+    const whitespaceOnly = yield* Effect.exit(decodeThreadTurnStartCommand(command("   ")));
+    assert.strictEqual(whitespaceOnly._tag, "Failure");
+
+    const attachmentOnly = yield* decodeThreadTurnStartCommand(
+      command("", [
+        {
+          type: "image",
+          id: "thread-1-11111111-1111-4111-8111-111111111111",
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+        },
+      ]),
+    );
+    assert.strictEqual(attachmentOnly.message.attachments.length, 1);
   }),
 );
 
@@ -731,10 +801,10 @@ it.effect("rejects client thread.turn.start commands with too many upload attach
         text: "hello",
         attachments: Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS + 1 }, (_, index) => ({
           type: "image",
+          id: `thread-1-00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
           name: `image-${index}.png`,
           mimeType: "image/png",
           sizeBytes: 1,
-          dataUrl: "data:image/png;base64,AQ==",
         })),
       },
       runtimeMode: "full-access",

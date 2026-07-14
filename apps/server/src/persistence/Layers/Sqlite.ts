@@ -2,7 +2,19 @@ import { Effect, Layer, FileSystem, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
+import {
+  requireNoPendingMigrationRecovery,
+  runWithPreMigrationBackup,
+} from "../MigrationBackup.ts";
+import {
+  ensurePrivateFileSync,
+  repairPrivateFile,
+} from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  acquireDatabaseLifecycleLock,
+  releaseDatabaseLifecycleLock,
+} from "../DatabaseLifecycleLock.ts";
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
@@ -26,26 +38,56 @@ const makeRuntimeSqliteLayer = (
     return clientModule.layer(config);
   }).pipe(Layer.unwrap);
 
-const setup = Layer.effectDiscard(
+function errnoCode(cause: unknown): string | undefined {
+  const error = cause as (Error & { readonly code?: string; readonly cause?: unknown }) | null;
+  return error?.code ?? (error?.cause as NodeJS.ErrnoException | undefined)?.code;
+}
+
+const repairSqliteFilePermissions = (dbPath: string) =>
+  Effect.promise(async () => {
+    await repairPrivateFile(dbPath);
+    for (const suffix of ["-wal", "-shm"]) {
+      await repairPrivateFile(`${dbPath}${suffix}`).catch((cause) => {
+        if (errnoCode(cause) !== "ENOENT") throw cause;
+      });
+    }
+  });
+
+const makeSetup = (dbPath?: string) => Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA journal_mode = WAL;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
-    yield* runMigrations();
+    const migrations = dbPath
+      ? runWithPreMigrationBackup(dbPath, runMigrations())
+      : runMigrations();
+    yield* dbPath
+      ? migrations.pipe(Effect.ensuring(repairSqliteFilePermissions(dbPath)))
+      : migrations;
   }),
 );
 
 export const makeSqlitePersistenceLive = (dbPath: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+  Effect.acquireRelease(
+    acquireDatabaseLifecycleLock(dbPath),
+    releaseDatabaseLifecycleLock,
+  ).pipe(
+    Effect.flatMap(() =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+        yield* requireNoPendingMigrationRecovery(dbPath);
+        yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
 
-    return Layer.provideMerge(setup, makeRuntimeSqliteLayer({ filename: dbPath }));
-  }).pipe(Layer.unwrap);
+        return Layer.provideMerge(makeSetup(dbPath), makeRuntimeSqliteLayer({ filename: dbPath }));
+      }),
+    ),
+    Layer.unwrap,
+  );
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup,
+  makeSetup(),
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 

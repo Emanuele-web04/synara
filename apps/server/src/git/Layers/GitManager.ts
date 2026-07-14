@@ -1385,9 +1385,9 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
-  // Keep diff summaries read-only by summarizing the patch already selected in the UI.
+  // Resolve the patch server-side so large repository data never makes a client→RPC round trip.
   const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
-    const patch = input.patch.trim();
+    const patch = yield* readWorkingTreeDiff({ cwd: input.cwd, scope: input.scope });
     if (patch.length === 0) {
       return yield* gitManagerError("summarizeDiff", "Cannot summarize an empty diff.");
     }
@@ -2721,9 +2721,11 @@ The local stash entry was kept for recovery.`,
     summarizeDiff,
     resolvePullRequest,
     pullRequestSnapshot,
-    preparePullRequestThread,
-    handoffThread,
-    runStackedAction,
+    preparePullRequestThread: (input) =>
+      gitCore.withMutation(input.cwd, preparePullRequestThread(input)),
+    handoffThread: (input) => gitCore.withMutation(input.cwd, handoffThread(input)),
+    runStackedAction: (input, options) =>
+      gitCore.withMutation(input.cwd, runStackedAction(input, options)),
   } satisfies GitManagerShape;
 });
 

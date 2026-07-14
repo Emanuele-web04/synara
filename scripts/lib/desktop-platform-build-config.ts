@@ -23,6 +23,7 @@ export interface DesktopPlatformBuildConfig {
 export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
+  readonly signed?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
 }
 
@@ -57,7 +58,8 @@ export function createDesktopPlatformBuildConfig(
       target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
-      hardenedRuntime: true,
+      hardenedRuntime: input.signed === true,
+      notarize: input.signed === true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
       extendInfo: {
@@ -95,7 +97,12 @@ export function createDesktopPlatformBuildConfig(
     win: {
       target: [input.target],
       icon: "icon.ico",
-      ...(input.windowsAzureSignOptions ? { azureSignOptions: input.windowsAzureSignOptions } : {}),
+      ...(input.windowsAzureSignOptions
+        ? {
+            publisherName: input.windowsAzureSignOptions.publisherName,
+            azureSignOptions: input.windowsAzureSignOptions,
+          }
+        : {}),
     },
   };
 }

@@ -9,6 +9,7 @@ import {
   type AuthBootstrapResult,
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
+  type AuthLogoutResult,
   type AuthPairingCredentialResult,
   type AuthPairingLink,
   type AuthRevokeClientSessionInput,
@@ -25,6 +26,7 @@ import {
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
+  type ServerVoiceTranscriptionResult,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -36,11 +38,13 @@ import {
   type WsWelcomePayload,
   type AutomationStreamEvent,
 } from "@synara/contracts";
+import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
-import { emitWsTransportState } from "./wsTransportEvents";
+import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
+import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
@@ -131,6 +135,38 @@ async function requestAuthJson<T>(
     throw new Error(message);
   }
   return payload as T;
+}
+
+async function requestVoiceTranscriptionUpload(input: Parameters<NativeApi["server"]["transcribeVoice"]>[0]) {
+  const params = new URLSearchParams({
+    provider: input.provider,
+    cwd: input.cwd,
+    mimeType: input.mimeType,
+    sampleRateHz: String(input.sampleRateHz),
+    durationMs: String(input.durationMs),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
+  });
+  const decoded = atob(input.audioBase64);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  const response = await fetch(
+    resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
+    { method: "POST", credentials: "include", body: bytes },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | ServerVoiceTranscriptionResult
+    | { readonly error?: unknown }
+    | null;
+  if (!response.ok || !payload || !("text" in payload)) {
+    const message =
+      payload && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Voice transcription failed with status ${response.status}.`;
+    throw new Error(message);
+  }
+  return payload;
 }
 
 function createFallbackTab(url = "about:blank") {
@@ -321,7 +357,11 @@ export function createWsNativeApi(): NativeApi {
   }
 
   const transport = new WsTransport();
+  let unsubscribeDomainEventTransport: (() => void) | null = null;
   transport.onStateChange((state) => emitWsTransportState(state));
+  transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
+    replayCurrent: true,
+  });
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     const payload = message.data;
@@ -406,16 +446,6 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     const payload = message.data;
     for (const listener of automationEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
-  });
-  transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationDomainEventListeners) {
       try {
         listener(payload);
       } catch {
@@ -623,6 +653,13 @@ export function createWsNativeApi(): NativeApi {
         requestAuthJson<{ revokedCount: number }>("/api/auth/clients/revoke-others", {
           method: "POST",
         }),
+      logoutAuthSession: async () => {
+        const result = await requestAuthJson<AuthLogoutResult>("/api/auth/logout", {
+          method: "POST",
+        });
+        transport.dispose();
+        return result;
+      },
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
@@ -644,7 +681,7 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
         }
-        return transport.request(WS_METHODS.serverTranscribeVoice, input);
+        return requestVoiceTranscriptionUpload(input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
@@ -682,6 +719,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
           fromSequenceExclusive,
         }),
+      listProviderDeliveryBlockers: (input = {}) =>
+        transport.request(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers, input),
+      reconcileProviderDelivery: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, input),
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
@@ -690,9 +731,29 @@ export function createWsNativeApi(): NativeApi {
       unsubscribeThread: (input) =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeThread, input),
       onDomainEvent: (callback) => {
+        const shouldStartTransport = orchestrationDomainEventListeners.size === 0;
         orchestrationDomainEventListeners.add(callback);
+        if (shouldStartTransport) {
+          unsubscribeDomainEventTransport = transport.subscribe(
+            ORCHESTRATION_WS_CHANNELS.domainEvent,
+            (message) => {
+              const payload = message.data;
+              for (const listener of orchestrationDomainEventListeners) {
+                try {
+                  listener(payload);
+                } catch {
+                  // Swallow listener errors
+                }
+              }
+            },
+          );
+        }
         return () => {
           orchestrationDomainEventListeners.delete(callback);
+          if (orchestrationDomainEventListeners.size === 0) {
+            unsubscribeDomainEventTransport?.();
+            unsubscribeDomainEventTransport = null;
+          }
         };
       },
       onShellEvent: (callback) => {

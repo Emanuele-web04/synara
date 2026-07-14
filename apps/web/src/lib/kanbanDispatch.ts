@@ -33,7 +33,7 @@ import type { SidebarThreadSummary } from "../types";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 import {
-  buildUploadComposerAttachments,
+  stageUploadComposerAttachments,
   formatOutgoingComposerPrompt,
   resolvePromptEffortFromModelSelection,
 } from "./composerSend";
@@ -212,7 +212,8 @@ async function dispatchKanbanDraftThreadOnce(
     modelSelection.provider,
   );
   const mentionedMentions = filterPromptProviderMentionReferences(outgoingMessageText, mentions);
-  const turnAttachmentsPromise = buildUploadComposerAttachments({
+  const turnAttachmentsPromise = stageUploadComposerAttachments({
+    threadId,
     images: composerImages,
     files: composerFiles,
     assistantSelections: composerAssistantSelections,
@@ -268,6 +269,7 @@ async function dispatchKanbanDraftThreadOnce(
         api,
       );
       if (promotion === "unavailable") {
+        await turnAttachmentsPromise.then((staged) => staged.cleanup(), () => undefined);
         kanbanUi.clearOptimisticDispatch(threadId);
         return { kind: "unavailable" };
       }
@@ -281,28 +283,31 @@ async function dispatchKanbanDraftThreadOnce(
       }
     }
 
-    const turnAttachments = await turnAttachmentsPromise;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.start",
-      commandId: newCommandId(),
-      threadId,
-      message: {
-        messageId: newMessageId(),
-        role: "user",
-        text: outgoingMessageText,
-        attachments: turnAttachments,
-        ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
-        ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
-      },
-      modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      assistantDeliveryMode: input.assistantDeliveryMode,
-      dispatchMode: "queue",
-      runtimeMode,
-      interactionMode,
-      createdAt,
-    });
+    const stagedTurnAttachments = await turnAttachmentsPromise;
+    await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
+      api.orchestration.dispatchCommand({
+        type: "thread.turn.start",
+        commandId: newCommandId(),
+        threadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: outgoingMessageText,
+          attachments: turnAttachments,
+          ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
+          ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
+        },
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+        assistantDeliveryMode: input.assistantDeliveryMode,
+        dispatchMode: "queue",
+        runtimeMode,
+        interactionMode,
+        createdAt,
+      }),
+    );
   } catch (error) {
+    await turnAttachmentsPromise.then((staged) => staged.cleanup(), () => undefined);
     kanbanUi.clearOptimisticDispatch(threadId);
     return {
       kind: "error",

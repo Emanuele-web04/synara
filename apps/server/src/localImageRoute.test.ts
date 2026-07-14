@@ -106,7 +106,8 @@ function makeFakeServerAuth(): ServerAuthShape {
     listClientSessions: () => Effect.succeed([]),
     revokeClientSession: () => Effect.succeed(true),
     revokeOtherClientSessions: () => Effect.succeed(1),
-    authenticateHttpRequest: () => Effect.succeed(session),
+    logoutSession: () => Effect.succeed(true),
+    authenticateHttpRequest: () => Effect.succeed({ ...session, credentialSource: "cookie" }),
     authenticateWebSocketUpgrade: () => Effect.succeed(session),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () => Effect.succeed("http://127.0.0.1:3773/pair#token=PAIRINGTOKEN"),
@@ -318,7 +319,8 @@ describe("attachmentsEffectRouteLayer", () => {
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("image/png");
-      expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
     });
   });

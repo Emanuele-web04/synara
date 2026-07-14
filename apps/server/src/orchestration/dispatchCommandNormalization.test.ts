@@ -219,20 +219,19 @@ describe("makeDispatchCommandNormalizer", () => {
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio/Outbox"]);
   });
 
-  it("rolls back attachment files written before a later upload fails", async () => {
+  it("defers binary attachment authority to the transactional managed ledger", async () => {
     const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-dispatch-normalize-"));
+    const validId = "thread-rollback-attachments-11111111-1111-4111-8111-111111111111";
+    const validPath = path.join(attachmentsDir, `${validId}.png`);
+    fs.writeFileSync(validPath, Buffer.from([1]));
     const fileSystem = {
-      makeDirectory: (dir: string, options?: { readonly recursive?: boolean }) =>
-        Effect.sync(() => {
-          fs.mkdirSync(dir, { recursive: options?.recursive === true });
-        }),
-      writeFile: (filePath: string, bytes: Uint8Array) =>
-        Effect.sync(() => {
-          fs.writeFileSync(filePath, bytes);
-        }),
-      remove: (filePath: string, options?: { readonly force?: boolean }) =>
-        Effect.sync(() => {
-          fs.rmSync(filePath, { force: options?.force === true });
+      stat: (filePath: string) =>
+        Effect.try({
+          try: () => {
+            const info = fs.statSync(filePath);
+            return { type: "File", size: BigInt(info.size) };
+          },
+          catch: (cause) => new Error("stat failed", { cause }),
         }),
     } as unknown as FileSystem.FileSystem;
     const normalizer = makeDispatchCommandNormalizer<Error>({
@@ -243,9 +242,8 @@ describe("makeDispatchCommandNormalizer", () => {
     });
 
     try {
-      await expect(
-        Effect.runPromise(
-          normalizer({
+      const result = await Effect.runPromise(
+        normalizer({
             command: {
               type: "thread.turn.start",
               commandId: CommandId.makeUnsafe("cmd-turn-attachments"),
@@ -257,17 +255,17 @@ describe("makeDispatchCommandNormalizer", () => {
                 attachments: [
                   {
                     type: "image",
+                    id: validId,
                     name: "ok.png",
                     mimeType: "image/png",
                     sizeBytes: 1,
-                    dataUrl: "data:image/png;base64,AQ==",
                   },
                   {
                     type: "image",
+                    id: "thread-rollback-attachments-22222222-2222-4222-8222-222222222222",
                     name: "bad.png",
                     mimeType: "image/png",
                     sizeBytes: 1,
-                    dataUrl: "data:text/plain;base64,AQ==",
                   },
                 ],
               },
@@ -276,10 +274,13 @@ describe("makeDispatchCommandNormalizer", () => {
               createdAt: "2026-01-01T00:00:00.000Z",
             } satisfies Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>,
           }),
-        ),
-      ).rejects.toThrow("Invalid image attachment payload");
+      );
 
-      expect(fs.readdirSync(attachmentsDir)).toEqual([]);
+      expect(result.command.type).toBe("thread.turn.start");
+      if (result.command.type === "thread.turn.start") {
+        expect(result.command.message.attachments).toHaveLength(2);
+      }
+      expect(fs.readFileSync(validPath)).toEqual(Buffer.from([1]));
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
     }

@@ -20,6 +20,7 @@ import {
 } from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import {
   aggregateThreadTokenRows,
@@ -252,6 +253,16 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
   `;
 });
 
+const acknowledgeProviderCommandJournal = (sql: SqlClient.SqlClient) =>
+  sql`
+    UPDATE orchestration_consumer_state
+    SET last_acked_sequence = (
+      SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events
+    ),
+    updated_at = '2026-07-14T00:00:00.000Z'
+    WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+  `;
+
 describe("ProfileStatsArchive", () => {
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
@@ -334,6 +345,7 @@ describe("ProfileStatsArchive", () => {
         const archive = yield* ProfileStatsArchive;
 
         yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
@@ -449,6 +461,95 @@ describe("ProfileStatsArchive", () => {
         expect(purgedAgain).toBe(false);
         const statsAfterRepurge = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfterRepurge.activity).toEqual(statsBefore.activity);
+      }),
+    );
+  });
+
+  it("retains unresolved delivery evidence and purges only after explicit settlement", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        const sourceRows = yield* sql<{ readonly sequence: number }>`
+          SELECT sequence
+          FROM orchestration_events
+          WHERE stream_id = 'thread-purge'
+          ORDER BY sequence ASC
+          LIMIT 1
+        `;
+        const sourceSequence = sourceRows[0]!.sequence;
+        yield* sql`
+          INSERT INTO orchestration_event_deliveries (
+            consumer_name, event_sequence, thread_id, state,
+            claim_owner, claimed_at, claim_expires_at, attempt_count,
+            last_error, completed_at, updated_at
+          ) VALUES (
+            ${PROVIDER_COMMAND_REACTOR_CONSUMER}, ${sourceSequence}, 'thread-purge', 'uncertain',
+            NULL, NULL, NULL, 1,
+            'Provider outcome requires reconciliation.', NULL, '2026-07-14T00:00:00.000Z'
+          )
+        `;
+
+        expect(
+          yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }),
+        ).toBe(true);
+        expect(
+          yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" }),
+        ).toBe(false);
+        const retained = yield* sql<{ readonly threads: number; readonly deliveries: number }>`
+          SELECT
+            (SELECT COUNT(*) FROM projection_threads WHERE thread_id = 'thread-purge') AS threads,
+            (
+              SELECT COUNT(*) FROM orchestration_event_deliveries
+              WHERE thread_id = 'thread-purge' AND state = 'uncertain'
+            ) AS deliveries
+        `;
+        expect(retained[0]).toEqual({ threads: 1, deliveries: 1 });
+
+        yield* sql`
+          UPDATE orchestration_event_deliveries
+          SET state = 'succeeded', completed_at = '2026-07-14T00:00:01.000Z',
+              updated_at = '2026-07-14T00:00:01.000Z'
+          WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+            AND event_sequence = ${sourceSequence}
+        `;
+        yield* sql`
+          INSERT INTO queued_turn_promotions (
+            queued_event_sequence, thread_id, message_id, dispatch_mode, state,
+            claim_owner, claimed_at, claim_expires_at, attempt_count,
+            created_at, updated_at, promoted_at
+          ) VALUES (
+            ${sourceSequence}, 'thread-purge', 'message-settled-promotion', 'queue', 'promoted',
+            NULL, NULL, NULL, 1,
+            '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:01.000Z',
+            '2026-07-14T00:00:01.000Z'
+          )
+        `;
+
+        expect(
+          yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }),
+        ).toBe(false);
+        expect(
+          yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" }),
+        ).toBe(true);
+        const purgedEvidence = yield* sql<{
+          readonly deliveries: number;
+          readonly promotions: number;
+        }>`
+          SELECT
+            (
+              SELECT COUNT(*) FROM orchestration_event_deliveries
+              WHERE thread_id = 'thread-purge'
+            ) AS deliveries,
+            (
+              SELECT COUNT(*) FROM queued_turn_promotions
+              WHERE thread_id = 'thread-purge'
+            ) AS promotions
+        `;
+        expect(purgedEvidence[0]).toEqual({ deliveries: 0, promotions: 0 });
       }),
     );
   });

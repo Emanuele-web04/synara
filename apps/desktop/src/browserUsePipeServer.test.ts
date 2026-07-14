@@ -18,7 +18,7 @@ describe("browser-use pipe path resolution", () => {
     const pipePath = resolveDefaultBrowserUsePipePath("darwin");
 
     expect(dirname(pipePath)).toBe(`${tmpdir()}/codex-browser-use`);
-    expect(basename(pipePath)).toMatch(/^synara-iab-\d+\.sock$/);
+    expect(basename(pipePath)).toMatch(/^synara-iab-\d+-[0-9a-f-]{36}\.sock$/);
   });
 
   it("prefers an explicit Synara pipe path from the environment", () => {
@@ -34,7 +34,23 @@ describe("browser-use pipe path resolution", () => {
 
   it("falls back to the generated path when the environment is empty", () => {
     expect(resolveConfiguredBrowserUsePipePath({}, "darwin")).toMatch(
-      /codex-browser-use\/synara-iab-\d+\.sock$/,
+      /codex-browser-use\/synara-iab-\d+-[0-9a-f-]{36}\.sock$/,
     );
+  });
+
+  it("uses an unguessable path for each browser-use server generation", () => {
+    expect(resolveDefaultBrowserUsePipePath("darwin")).not.toBe(
+      resolveDefaultBrowserUsePipePath("darwin"),
+    );
+  });
+
+  it("fails closed on Windows until the named-pipe ACL is explicitly proven", () => {
+    expect(resolveDefaultBrowserUsePipePath("win32")).toBe("");
+    expect(
+      resolveConfiguredBrowserUsePipePath(
+        { [SYNARA_BROWSER_USE_PIPE_ENV]: String.raw`\\.\pipe\synara-browser` },
+        "win32",
+      ),
+    ).toBe("");
   });
 });

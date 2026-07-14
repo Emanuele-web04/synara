@@ -3,13 +3,75 @@
 // Layer: Provider adapter tests
 // Depends on: PiAdapter discovery helpers and Pi model metadata shapes.
 
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
+
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   getPiSupportedThinkingOptions,
+  makePiBashProcessSupervisor,
+  makePiRuntimeEventBase,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
 } from "./PiAdapter";
+
+describe("Pi Bash process supervision", () => {
+  it("keeps an aborted command pending until process-tree exit is proven", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 64_201,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    }) as unknown as ChildProcess;
+    let proveExit!: () => void;
+    const exitProof = new Promise<void>((resolve) => {
+      proveExit = resolve;
+    });
+    let observeTeardown!: () => void;
+    const teardownStarted = new Promise<void>((resolve) => {
+      observeTeardown = resolve;
+    });
+    const supervisor = makePiBashProcessSupervisor({
+      getShellConfig: () => ({ shell: "/bin/sh", args: ["-c"] }),
+      spawnProcess: () => child,
+      teardownProcessTree: async (input) => {
+        observeTeardown();
+        await exitProof;
+        (child as ChildProcess & { exitCode: number | null }).exitCode = 0;
+        child.emit("exit", 0, null);
+        await input.rootExited;
+        return { escalated: false, signalErrors: [] };
+      },
+    });
+    const abortController = new AbortController();
+    const command = supervisor.operations.exec("sleep 10", "/tmp", {
+      signal: abortController.signal,
+      onData: () => undefined,
+    });
+    let settled = false;
+    void command.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    abortController.abort();
+    await teardownStarted;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    proveExit();
+    await expect(command).rejects.toThrow("aborted");
+    expect(settled).toBe(true);
+  });
+});
 
 function makePiModel(input: {
   reasoning: boolean;
@@ -68,6 +130,21 @@ describe("getPiSupportedThinkingOptions", () => {
 });
 
 describe("Pi extension UI helpers", () => {
+  it("stamps events from the lifecycle generation captured by the session context", () => {
+    const eventBase = makePiRuntimeEventBase({
+      lifecycleGeneration: "generation-pi-7",
+      session: { threadId: "thread-pi" as never },
+      activeTurnId: "turn-pi" as never,
+    });
+
+    expect(eventBase).toMatchObject({
+      provider: "pi",
+      threadId: "thread-pi",
+      turnId: "turn-pi",
+      lifecycleGeneration: "generation-pi-7",
+    });
+  });
+
   it("keeps original select values while showing normalized unique labels", () => {
     const mappings = makePiUserInputOptions(["  OpenRouter  ", "", "OpenRouter"]);
 

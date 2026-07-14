@@ -1587,6 +1587,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         yield* adapter.startSession({
           provider: "opencode",
           threadId: asThreadId("thread-1"),
+          lifecycleGeneration: "generation-opencode-a",
           runtimeMode: "full-access",
         });
 
@@ -1647,6 +1648,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "turn.started",
       "turn.aborted",
     ]);
+    expect(
+      result.events.every(
+        (event) => event.lifecycleGeneration === "generation-opencode-a",
+      ),
+    ).toBe(true);
     expect(result.events[3]).toMatchObject({
       type: "turn.aborted",
       payload: {

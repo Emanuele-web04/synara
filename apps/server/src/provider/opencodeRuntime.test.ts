@@ -3,7 +3,7 @@
 // Layer: Provider runtime tests
 // Exports: Vitest suites for opencodeRuntime.ts
 
-import { Duration, Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type { ChatAttachment } from "@synara/contracts";
@@ -13,7 +13,7 @@ import {
   buildOpenCodeServerProcessEnv,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
-  OpenCodeRuntimeLive,
+  makeOpenCodeRuntimeLive,
   OPENCODE_LOCAL_SERVER_IDLE_TTL_MS,
   parseOpenCodeCliModelsOutput,
   parseOpenCodeCredentialProviderIDs,
@@ -25,11 +25,12 @@ const encoder = new TextEncoder();
 function mockOpenCodeServerHandle(input: {
   stdout: string;
   stderr: string;
+  pid?: number;
   exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode, never>;
   kill?: () => Effect.Effect<void, never>;
 }) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
+    pid: ChildProcessSpawner.ProcessId(input.pid ?? 1),
     exitCode: input.exitCode ?? Effect.never,
     isRunning: Effect.succeed(true),
     kill: input.kill ?? (() => Effect.void),
@@ -53,6 +54,7 @@ function mockPooledOpenCodeServerSpawnerLayer(state: {
   spawnUrls: Array<string>;
   spawnCwds?: Array<string | undefined>;
   killUrls: Array<string>;
+  processUrls?: Map<number, string>;
 }) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
@@ -61,12 +63,15 @@ function mockPooledOpenCodeServerSpawnerLayer(state: {
         options?: { cwd?: string };
       };
       const url = `http://127.0.0.1:${59000 + state.spawnUrls.length}`;
+      const pid = 59_000 + state.spawnUrls.length;
       state.spawnUrls.push(url);
       state.spawnCwds?.push(cmd.options?.cwd);
+      state.processUrls?.set(pid, url);
       return Effect.succeed(
         mockOpenCodeServerHandle({
           stdout: `opencode server listening on ${url}\n`,
           stderr: "",
+          pid,
           kill: () =>
             Effect.sync(() => {
               state.killUrls.push(url);
@@ -93,8 +98,17 @@ function openCodeRuntimePoolTestLayer(state: {
   spawnUrls: Array<string>;
   killUrls: Array<string>;
 }) {
+  const processUrls = new Map<number, string>();
   return Layer.merge(
-    OpenCodeRuntimeLive.pipe(Layer.provide(mockPooledOpenCodeServerSpawnerLayer(state))),
+    makeOpenCodeRuntimeLive({
+      teardownProcessTree: async ({ rootPid }) => {
+        const url = processUrls.get(rootPid);
+        if (url) state.killUrls.push(url);
+        return { escalated: false, signalErrors: [] };
+      },
+    }).pipe(
+      Layer.provide(mockPooledOpenCodeServerSpawnerLayer({ ...state, processUrls })),
+    ),
     TestClock.layer(),
   );
 }
@@ -163,6 +177,20 @@ describe("buildOpenCodeServerProcessEnv", () => {
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBe('{"provider":{"openai":{}}}');
   });
+
+  it("strips inherited Synara authority from managed server processes", () => {
+    const env = buildOpenCodeServerProcessEnv({
+      baseEnv: {
+        OPENAI_API_KEY: "provider-key",
+        SYNARA_AUTH_TOKEN: "server-secret",
+        SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/browser.sock",
+      },
+    });
+
+    expect(env.OPENAI_API_KEY).toBe("provider-key");
+    expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+    expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
+  });
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
@@ -182,7 +210,9 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         }),
       ).pipe(
         Effect.provide(
-          OpenCodeRuntimeLive.pipe(
+          makeOpenCodeRuntimeLive({
+            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+          }).pipe(
             Layer.provide(
               mockOpenCodeServerSpawnerLayer({
                 stdout: "booting custom OpenCode wrapper\n",
@@ -220,7 +250,9 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         }),
       ).pipe(
         Effect.provide(
-          OpenCodeRuntimeLive.pipe(
+          makeOpenCodeRuntimeLive({
+            teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+          }).pipe(
             Layer.provide(
               mockOpenCodeServerSpawnerLayer({
                 stdout: "OPENAI_API_KEY=sk-live-123\nauth_token: token-abc\nsafe line\n",
@@ -246,6 +278,49 @@ describe("OpenCodeRuntime startup diagnostics", () => {
 });
 
 describe("OpenCodeRuntime local server pool", () => {
+  it("keeps server scope closure pending until process-tree exit is proven", async () => {
+    let proveExit: (() => void) | undefined;
+    const exitProof = new Promise<void>((resolve) => {
+      proveExit = resolve;
+    });
+    let teardownCalls = 0;
+    const layer = makeOpenCodeRuntimeLive({
+      teardownProcessTree: async ({ rootPid }) => {
+        teardownCalls += 1;
+        expect(rootPid).toBe(1);
+        await exitProof;
+        return { escalated: false, signalErrors: [] };
+      },
+    }).pipe(
+      Layer.provide(
+        mockOpenCodeServerSpawnerLayer({
+          stdout: "opencode server listening on http://127.0.0.1:59000\n",
+          stderr: "",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const serverScope = yield* Scope.make("sequential");
+          yield* runtime
+            .startOpenCodeServerProcess({ binaryPath: "opencode" })
+            .pipe(Effect.provideService(Scope.Scope, serverScope));
+
+          const closing = yield* Scope.close(serverScope, Exit.void).pipe(Effect.forkChild);
+          yield* Effect.yieldNow;
+          expect(teardownCalls).toBe(1);
+          expect(closing.pollUnsafe()).toBeUndefined();
+
+          proveExit?.();
+          yield* Fiber.join(closing);
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+  });
+
   it("reuses a local server while scoped sessions are active and closes it after idling", async () => {
     const state = { spawnUrls: [] as Array<string>, killUrls: [] as Array<string> };
 

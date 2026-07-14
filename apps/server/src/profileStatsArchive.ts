@@ -24,6 +24,8 @@ import {
   resolveProjectCwdForKind,
 } from "./checkpointing/Utils";
 import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
+import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "./persistence/Services/OrchestrationEventDeliveries";
+import { isProviderIntentEventType } from "./orchestration/providerIntentClassification";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
 
 interface PurgeThreadRow {
@@ -340,6 +342,10 @@ export function aggregateThreadTokenRows(
 // ── Service ────────────────────────────────────────────────────────────
 
 export interface ProfileStatsArchiveShape {
+  /** True while hard deletion would erase unresolved provider delivery evidence. */
+  readonly hasThreadPurgeFence: (input: {
+    readonly threadId: string;
+  }) => Effect.Effect<boolean, unknown>;
   // Snapshots the thread's stat aggregates and hard-deletes all of its rows in
   // one transaction. Returns false when the thread row is already gone.
   readonly purgeThreadWithStatsSnapshot: (input: {
@@ -368,6 +374,49 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     unread: true,
     archivedAt: null,
   });
+
+  const hasThreadPurgeFence: ProfileStatsArchiveShape["hasThreadPurgeFence"] = ({
+    threadId,
+  }) =>
+    Effect.gen(function* () {
+      const durableRows = yield* sql<{ readonly fenced: number }>`
+        SELECT CASE WHEN
+          EXISTS (
+            SELECT 1
+            FROM orchestration_event_deliveries
+            WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+              AND thread_id = ${threadId}
+              AND state IN ('inflight', 'retry', 'dead', 'uncertain')
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM queued_turn_promotions
+            WHERE thread_id = ${threadId}
+              AND state IN ('queued', 'promoting')
+          )
+        THEN 1 ELSE 0 END AS fenced
+      `;
+      if ((durableRows[0]?.fenced ?? 0) === 1) return true;
+
+      const unconsumedRows = yield* sql<{ readonly eventType: string }>`
+        SELECT e.event_type AS "eventType"
+        FROM orchestration_events e
+        WHERE e.sequence > COALESCE(
+          (
+            SELECT last_acked_sequence
+            FROM orchestration_consumer_state
+            WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+          ),
+          0
+        )
+          AND e.aggregate_kind = 'thread'
+          AND (
+            e.stream_id = ${threadId}
+            OR json_extract(e.payload_json, '$.threadId') = ${threadId}
+          )
+      `;
+      return unconsumedRows.some((row) => isProviderIntentEventType(row.eventType));
+    });
 
   const loadThreadCheckpointCleanup = (threadId: string) =>
     Effect.gen(function* () {
@@ -517,6 +566,9 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       if (!thread) {
         return false;
       }
+      if (yield* hasThreadPurgeFence({ threadId })) {
+        return false;
+      }
       const deletedAt = thread.deletedAt ?? new Date().toISOString();
       const projectId = thread.projectId ?? null;
 
@@ -637,6 +689,19 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       // The event delete mirrors the snapshot scope above (stream id OR
       // payload threadId, thread aggregate only) so no snapshotted event can
       // survive the purge.
+      // Settled delivery rows are no longer recovery evidence. Remove them
+      // before their source events; unresolved rows were fenced above.
+      yield* sql`
+        DELETE FROM orchestration_event_deliveries
+        WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
+          AND thread_id = ${threadId}
+          AND state = 'succeeded'
+      `;
+      yield* sql`
+        DELETE FROM queued_turn_promotions
+        WHERE thread_id = ${threadId}
+          AND state IN ('promoted', 'cancelled')
+      `;
       yield* sql`
         DELETE FROM orchestration_events
         WHERE aggregate_kind = 'thread'
@@ -647,7 +712,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       `;
       yield* sql`DELETE FROM checkpoint_diff_blobs WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = ${threadId}`;
-      yield* sql`DELETE FROM projection_pending_approvals WHERE thread_id = ${threadId}`;
+      yield* sql`DELETE FROM projection_pending_interactions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_activities WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}`;
@@ -745,6 +810,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     });
 
   return {
+    hasThreadPurgeFence,
     purgeThreadWithStatsSnapshot,
     purgeSoftDeletedManualThreads,
   } satisfies ProfileStatsArchiveShape;

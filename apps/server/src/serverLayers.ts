@@ -36,6 +36,8 @@ import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResol
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
+import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
+import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -53,6 +55,9 @@ export function makeServerRuntimeServicesLayer() {
     checkpointDiffQueryLayer,
     RuntimeReceiptBusLive,
   );
+  const managedAttachmentCleanupLayer = ManagedAttachmentCleanupLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
@@ -61,6 +66,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
@@ -126,8 +132,10 @@ export function makeServerRuntimeServicesLayer() {
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
     orchestrationReactorLayer,
+    providerCommandReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,
     GitLayerLive,

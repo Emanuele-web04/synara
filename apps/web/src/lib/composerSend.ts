@@ -4,6 +4,8 @@
 // Depends on: provider/model contracts plus composer draft attachment shapes.
 
 import {
+  type ChatFileAttachment,
+  type ChatImageAttachment,
   MessageId,
   type ModelSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -13,6 +15,10 @@ import {
   type ProviderKind,
   type UploadChatAttachment,
 } from "@synara/contracts";
+import {
+  ATTACHMENT_CANCEL_ROUTE_PATH,
+  ATTACHMENT_UPLOAD_ROUTE_PATH,
+} from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 
 import type {
@@ -21,6 +27,10 @@ import type {
   ComposerImageAttachment,
 } from "../composerDraftStore";
 import { randomUUID } from "./utils";
+import { resolveWsHttpUrl } from "./wsHttpUrl";
+
+const ATTACHMENT_CANCEL_CONCURRENCY = 2;
+const ATTACHMENT_CANCEL_BODY_MAX_BYTES = 512;
 
 export const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024),
@@ -126,15 +136,14 @@ export function buildComposerFileAttachmentsFromFiles(input: {
   return { files, error: result.error };
 }
 
+// Draft persistence and previews still need a local data URL. Network sends use
+// the bounded binary upload path below and never place this value on RPC.
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Could not read attachment data."));
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
       reject(reader.error ?? new Error("Failed to read attachment."));
@@ -202,32 +211,141 @@ export function resolvePromptEffortFromModelSelection(
   }
 }
 
+export interface StagedComposerAttachments {
+  readonly attachments: UploadChatAttachment[];
+  /** Marks an accepted dispatch as authoritative. Cleanup becomes a no-op. */
+  readonly commit: () => void;
+  /** Best-effort compensation for a rejected/abandoned dispatch. Never rejects. */
+  readonly cleanup: () => Promise<void>;
+  /** Runs dispatch with commit-on-success and cleanup-on-failure semantics. */
+  readonly runWithDispatch: <A>(
+    dispatch: (attachments: UploadChatAttachment[]) => Promise<A>,
+  ) => Promise<A>;
+}
+
+function isManagedAttachmentId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    /^[a-z0-9_-]+$/i.test(value)
+  );
+}
+
+async function cancelManagedAttachments(attachmentIds: readonly string[]): Promise<void> {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < attachmentIds.length) {
+      const attachmentId = attachmentIds[nextIndex];
+      nextIndex += 1;
+      if (!attachmentId) continue;
+      const body = JSON.stringify({ attachmentId });
+      if (new TextEncoder().encode(body).byteLength > ATTACHMENT_CANCEL_BODY_MAX_BYTES) continue;
+      try {
+        await fetch(resolveWsHttpUrl(ATTACHMENT_CANCEL_ROUTE_PATH), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+      } catch {
+        // Staged attachments also have a server-owned expiry. Compensation is
+        // deliberately best-effort and must never replace the dispatch/upload error.
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ATTACHMENT_CANCEL_CONCURRENCY, attachmentIds.length) },
+      () => worker(),
+    ),
+  );
+}
+
+export async function stageUploadComposerAttachments(input: {
+  threadId: string;
+  images: ReadonlyArray<ComposerImageAttachment>;
+  files?: ReadonlyArray<ComposerFileAttachment>;
+  assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
+}): Promise<StagedComposerAttachments> {
+  const attachments: UploadChatAttachment[] = input.assistantSelections.map((selection) => ({
+    type: "assistant-selection" as const,
+    assistantMessageId: MessageId.makeUnsafe(selection.assistantMessageId),
+    text: selection.text,
+  }));
+
+  // Upload sequentially so selecting several maximum-size files never creates a
+  // burst of concurrent body buffers. The RPC turn then carries only short ids.
+  const managedAttachmentIds: string[] = [];
+  try {
+    for (const attachment of [...input.images, ...(input.files ?? [])]) {
+      const params = new URLSearchParams({
+        threadId: input.threadId,
+        type: attachment.type,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+      });
+      const response = await fetch(
+        resolveWsHttpUrl(`${ATTACHMENT_UPLOAD_ROUTE_PATH}?${params.toString()}`),
+        {
+          method: "POST",
+          credentials: "include",
+          body: attachment.file,
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | ChatImageAttachment
+        | ChatFileAttachment
+        | { readonly error?: unknown }
+        | null;
+      if (!response.ok || !payload || !("id" in payload) || !isManagedAttachmentId(payload.id)) {
+        const message =
+          payload && "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : `Attachment upload failed with status ${response.status}.`;
+        throw new Error(message);
+      }
+      managedAttachmentIds.push(payload.id);
+      attachments.push(payload);
+    }
+  } catch (error) {
+    await cancelManagedAttachments(managedAttachmentIds);
+    throw error;
+  }
+
+  let disposition: "pending" | "committed" | "cleaned" = "pending";
+  const cleanup = async () => {
+    if (disposition !== "pending") return;
+    disposition = "cleaned";
+    await cancelManagedAttachments(managedAttachmentIds);
+  };
+  const commit = () => {
+    if (disposition === "pending") disposition = "committed";
+  };
+  const runWithDispatch = async <A>(
+    dispatch: (dispatchAttachments: UploadChatAttachment[]) => Promise<A>,
+  ): Promise<A> => {
+    try {
+      const result = await dispatch(attachments);
+      commit();
+      return result;
+    } catch (error) {
+      await cleanup();
+      throw error;
+    }
+  };
+
+  return { attachments, commit, cleanup, runWithDispatch };
+}
+
+// Compatibility wrapper for callers that have not yet adopted the explicit
+// commit/cleanup lifecycle. Sequential upload failure compensation still applies.
 export async function buildUploadComposerAttachments(input: {
+  threadId: string;
   images: ReadonlyArray<ComposerImageAttachment>;
   files?: ReadonlyArray<ComposerFileAttachment>;
   assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
 }): Promise<UploadChatAttachment[]> {
-  return Promise.all([
-    ...input.assistantSelections.map((selection) =>
-      Promise.resolve({
-        type: "assistant-selection" as const,
-        assistantMessageId: MessageId.makeUnsafe(selection.assistantMessageId),
-        text: selection.text,
-      }),
-    ),
-    ...input.images.map(async (image) => ({
-      type: "image" as const,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      dataUrl: await readFileAsDataUrl(image.file),
-    })),
-    ...(input.files ?? []).map(async (file) => ({
-      type: "file" as const,
-      name: file.name,
-      mimeType: file.mimeType,
-      sizeBytes: file.sizeBytes,
-      dataUrl: await readFileAsDataUrl(file.file),
-    })),
-  ]);
+  return (await stageUploadComposerAttachments(input)).attachments;
 }

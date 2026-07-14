@@ -2305,9 +2305,7 @@ function SingleChatSurface(props: {
 
 function ChatThreadRouteView() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const hasKnownServerThreads = useStore(
-    (store) => (store.threadIds?.length ?? 0) > 0 || store.threads.length > 0,
-  );
+  const hasKnownServerThreads = useStore((store) => (store.threadIds?.length ?? 0) > 0);
   const threadId = Route.useParams({
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });

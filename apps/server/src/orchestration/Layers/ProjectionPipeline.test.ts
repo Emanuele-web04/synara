@@ -11,7 +11,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, FileSystem, Layer, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -24,6 +24,7 @@ import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
   ORCHESTRATION_PROJECTOR_NAMES,
@@ -31,8 +32,12 @@ import {
 } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
-import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
+import {
+  OrchestrationProjectionPipeline,
+  type OrchestrationProjectionPipelineShape,
+} from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -49,13 +54,22 @@ const makeObservedEventStoreLayer = (readCursors: Array<number>) =>
       const eventStore = yield* OrchestrationEventStore;
       return {
         ...eventStore,
-        readFromSequence(sequenceExclusive, limit) {
+        readFromSequence(sequenceExclusive, limit, throughSequenceInclusive) {
           readCursors.push(sequenceExclusive);
-          return eventStore.readFromSequence(sequenceExclusive, limit);
+          return eventStore.readFromSequence(sequenceExclusive, limit, throughSequenceInclusive);
         },
       } satisfies OrchestrationEventStoreShape;
     }),
   ).pipe(Layer.provide(OrchestrationEventStoreLive));
+
+const makeAppendAndProject = (
+  eventStore: OrchestrationEventStoreShape,
+  projectionPipeline: OrchestrationProjectionPipelineShape,
+) =>
+  (event: Parameters<OrchestrationEventStoreShape["append"]>[0]) =>
+    eventStore
+      .append(event)
+      .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
 
 const exists = (filePath: string) =>
   Effect.gen(function* () {
@@ -295,6 +309,363 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
+it.layer(
+  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-identity-scope-")),
+)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("keeps reused provider message ids thread-scoped through replay", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const messageId = MessageId.makeUnsafe("shared-provider-message-id");
+      const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-a");
+      const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-b");
+
+      const appendMessage = (input: {
+        readonly eventId: string;
+        readonly commandId: string;
+        readonly threadId: ThreadId;
+        readonly text: string;
+        readonly streaming: boolean;
+        readonly attachmentId?: string;
+        readonly occurredAt: string;
+      }) =>
+        eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(input.eventId),
+          aggregateKind: "thread",
+          aggregateId: input.threadId,
+          occurredAt: input.occurredAt,
+          commandId: CommandId.makeUnsafe(input.commandId),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(input.commandId),
+          metadata: {},
+          payload: {
+            threadId: input.threadId,
+            messageId,
+            role: "assistant" as const,
+            text: input.text,
+            ...(input.attachmentId
+              ? {
+                  attachments: [
+                    {
+                      type: "file" as const,
+                      id: input.attachmentId,
+                      name: `${input.attachmentId}.txt`,
+                      mimeType: "text/plain",
+                      sizeBytes: 1,
+                    },
+                  ],
+                }
+              : {}),
+            turnId: null,
+            streaming: input.streaming,
+            createdAt: input.occurredAt,
+            updatedAt: input.occurredAt,
+          },
+        });
+
+      yield* appendMessage({
+        eventId: "evt-shared-provider-message-a-1",
+        commandId: "cmd-shared-provider-message-a-1",
+        threadId: firstThreadId,
+        text: "first",
+        streaming: false,
+        attachmentId: "attachment-shared-provider-a",
+        occurredAt: "2026-07-14T11:00:00.000Z",
+      });
+      yield* appendMessage({
+        eventId: "evt-shared-provider-message-b-1",
+        commandId: "cmd-shared-provider-message-b-1",
+        threadId: secondThreadId,
+        text: "second",
+        streaming: false,
+        attachmentId: "attachment-shared-provider-b",
+        occurredAt: "2026-07-14T11:00:01.000Z",
+      });
+      yield* appendMessage({
+        eventId: "evt-shared-provider-message-a-2",
+        commandId: "cmd-shared-provider-message-a-2",
+        threadId: firstThreadId,
+        text: " thread",
+        streaming: true,
+        occurredAt: "2026-07-14T11:00:02.000Z",
+      });
+
+      const readRows = () =>
+        sql<{ readonly threadId: string; readonly text: string; readonly attachments: string }>`
+          SELECT
+            thread_id AS "threadId",
+            text,
+            attachments_json AS attachments
+          FROM projection_thread_messages
+          WHERE message_id = ${messageId}
+          ORDER BY thread_id ASC
+        `;
+      const expectedRows = [
+        {
+          threadId: firstThreadId,
+          text: "first thread",
+          attachments: JSON.stringify([
+            {
+              type: "file",
+              id: "attachment-shared-provider-a",
+              name: "attachment-shared-provider-a.txt",
+              mimeType: "text/plain",
+              sizeBytes: 1,
+            },
+          ]),
+        },
+        {
+          threadId: secondThreadId,
+          text: "second",
+          attachments: JSON.stringify([
+            {
+              type: "file",
+              id: "attachment-shared-provider-b",
+              name: "attachment-shared-provider-b.txt",
+              mimeType: "text/plain",
+              sizeBytes: 1,
+            },
+          ]),
+        },
+      ];
+
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRows(), expectedRows);
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}
+      `;
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRows(), expectedRows);
+    }),
+  );
+});
+
+it.layer(
+  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-identity-scope-")),
+)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("keeps reused provider request ids thread-scoped through replay", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const requestId = ApprovalRequestId.makeUnsafe("shared-provider-request-id");
+      const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-a");
+      const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-b");
+
+      const appendRequest = (input: {
+        readonly eventId: string;
+        readonly commandId: string;
+        readonly activityId: string;
+        readonly threadId: ThreadId;
+        readonly occurredAt: string;
+      }) =>
+        eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(input.eventId),
+          aggregateKind: "thread",
+          aggregateId: input.threadId,
+          occurredAt: input.occurredAt,
+          commandId: CommandId.makeUnsafe(input.commandId),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(input.commandId),
+          metadata: {},
+          payload: {
+            threadId: input.threadId,
+            activity: {
+              id: EventId.makeUnsafe(input.activityId),
+              tone: "approval" as const,
+              kind: "approval.requested" as const,
+              summary: "Approval requested",
+              payload: { requestId, requestKind: "command" },
+              turnId: null,
+              createdAt: input.occurredAt,
+            },
+          },
+        });
+
+      yield* appendRequest({
+        eventId: "evt-shared-provider-request-a",
+        commandId: "cmd-shared-provider-request-a",
+        activityId: "activity-shared-provider-request-a",
+        threadId: firstThreadId,
+        occurredAt: "2026-07-14T12:30:00.000Z",
+      });
+      yield* appendRequest({
+        eventId: "evt-shared-provider-request-b",
+        commandId: "cmd-shared-provider-request-b",
+        activityId: "activity-shared-provider-request-b",
+        threadId: secondThreadId,
+        occurredAt: "2026-07-14T12:30:01.000Z",
+      });
+      yield* eventStore.append({
+        type: "thread.approval-response-requested",
+        eventId: EventId.makeUnsafe("evt-shared-provider-request-a-response"),
+        aggregateKind: "thread",
+        aggregateId: firstThreadId,
+        occurredAt: "2026-07-14T12:30:02.000Z",
+        commandId: CommandId.makeUnsafe("cmd-shared-provider-request-a-response"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-shared-provider-request-a-response"),
+        metadata: {},
+        payload: {
+          threadId: firstThreadId,
+          requestId,
+          decision: "accept",
+          createdAt: "2026-07-14T12:30:02.000Z",
+        },
+      });
+
+      const readRows = () =>
+        sql<{
+          readonly threadId: string;
+          readonly status: string;
+          readonly decision: string | null;
+        }>`
+          SELECT thread_id AS "threadId", status, decision
+          FROM projection_pending_interactions
+          WHERE interaction_kind = 'approval' AND request_id = ${requestId}
+          ORDER BY thread_id ASC
+        `;
+      const expectedRows = [
+        { threadId: firstThreadId, status: "responding", decision: "accept" },
+        { threadId: secondThreadId, status: "pending", decision: null },
+      ];
+
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRows(), expectedRows);
+
+      yield* sql`DELETE FROM projection_pending_interactions`;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.pendingInteractions}
+      `;
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRows(), expectedRows);
+    }),
+  );
+
+  it.effect("does not let an older provider generation settle a reused request id", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-reused-request-generation");
+      const requestId = ApprovalRequestId.makeUnsafe("reused-provider-request");
+
+      const appendRequest = (generation: string, suffix: string, occurredAt: string) =>
+        eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(`evt-request-${suffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(`cmd-request-${suffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-request-${suffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`activity-request-${suffix}`),
+              tone: "approval" as const,
+              kind: "approval.requested" as const,
+              summary: "Approval requested",
+              payload: { requestId, requestKind: "command", lifecycleGeneration: generation },
+              turnId: null,
+              createdAt: occurredAt,
+            },
+          },
+        });
+      const appendResponse = (generation: string, suffix: string, occurredAt: string) =>
+        eventStore.append({
+          type: "thread.approval-response-requested",
+          eventId: EventId.makeUnsafe(`evt-response-${suffix}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(`cmd-response-${suffix}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-response-${suffix}`),
+          metadata: {},
+          payload: {
+            threadId,
+            requestId,
+            lifecycleGeneration: generation,
+            decision: "accept" as const,
+            createdAt: occurredAt,
+          },
+        });
+      const readRow = () =>
+        sql<{
+          readonly lifecycleGeneration: string | null;
+          readonly status: string;
+          readonly decision: string | null;
+        }>`
+          SELECT
+            lifecycle_generation AS "lifecycleGeneration",
+            status,
+            decision
+          FROM projection_pending_interactions
+          WHERE thread_id = ${threadId}
+            AND interaction_kind = 'approval'
+            AND request_id = ${requestId}
+        `;
+
+      yield* appendRequest("generation-a", "a", "2026-07-14T13:00:00.000Z");
+      yield* projectionPipeline.bootstrap;
+      yield* appendRequest("generation-b", "b", "2026-07-14T13:00:01.000Z");
+      yield* appendResponse("generation-a", "stale-a", "2026-07-14T13:00:02.000Z");
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRow(), [
+        { lifecycleGeneration: "generation-b", status: "pending", decision: null },
+      ]);
+
+      yield* appendResponse("generation-b", "current-b", "2026-07-14T13:00:03.000Z");
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRow(), [
+        { lifecycleGeneration: "generation-b", status: "responding", decision: "accept" },
+      ]);
+
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("evt-response-confirmed-b"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-14T13:00:04.000Z",
+        commandId: CommandId.makeUnsafe("cmd-response-confirmed-b"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-response-confirmed-b"),
+        metadata: { requestId },
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("activity-response-confirmed-b"),
+            tone: "approval",
+            kind: "approval.resolved",
+            summary: "Approval resolved",
+            payload: {
+              requestId,
+              lifecycleGeneration: "generation-b",
+              decision: "accept",
+            },
+            turnId: null,
+            createdAt: "2026-07-14T13:00:04.000Z",
+          },
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual(yield* readRow(), [
+        { lifecycleGeneration: "generation-b", status: "confirmed", decision: "accept" },
+      ]);
+    }),
+  );
+});
+
 it.effect("fast-forwards lagging hot projector cursors before restart replay", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
@@ -419,6 +790,163 @@ it.effect("fast-forwards lagging hot projector cursors before restart replay", (
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "synara-projection-pipeline-fast-forward-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
+
+it.effect("drains 2,501 file-backed events to a captured high-water fence", () =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig;
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const eventStoreLayer = OrchestrationEventStoreLive.pipe(
+      Layer.provideMerge(persistenceLayer),
+    );
+    const projectId = ProjectId.makeUnsafe("project-bootstrap-paged");
+    const occurredAt = "2026-07-14T01:00:00.000Z";
+
+    yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-bootstrap-paged-created"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt,
+        commandId: CommandId.makeUnsafe("cmd-bootstrap-paged-created"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-paged-created"),
+        metadata: {},
+        payload: {
+          projectId,
+          title: "Project 0",
+          workspaceRoot: "/tmp/project-bootstrap-paged",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      });
+      yield* sql`
+        WITH RECURSIVE digits(n) AS (
+          SELECT 0
+          UNION ALL
+          SELECT n + 1 FROM digits WHERE n < 49
+        ), numbered(n) AS (
+          SELECT (high.n * 50) + low.n + 1
+          FROM digits AS high
+          CROSS JOIN digits AS low
+        )
+        INSERT INTO orchestration_events (
+          event_id,
+          aggregate_kind,
+          stream_id,
+          stream_version,
+          event_type,
+          occurred_at,
+          command_id,
+          causation_event_id,
+          correlation_id,
+          actor_kind,
+          payload_json,
+          metadata_json
+        )
+        SELECT
+          'evt-bootstrap-paged-' || n,
+          'project',
+          ${projectId},
+          n,
+          'project.meta-updated',
+          ${occurredAt},
+          'cmd-bootstrap-paged-' || n,
+          NULL,
+          'cmd-bootstrap-paged-' || n,
+          'user',
+          json_object(
+            'projectId', ${projectId},
+            'title', 'Project ' || n,
+            'updatedAt', ${occurredAt}
+          ),
+          '{}'
+        FROM numbered
+      `;
+    }).pipe(Effect.provide(eventStoreLayer));
+
+    let appendedAfterFence = false;
+    const appendAfterFenceLayer = Layer.effect(
+      OrchestrationEventStore,
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        return {
+          ...eventStore,
+          readFromSequence(sequenceExclusive, limit, throughSequenceInclusive) {
+            return Stream.unwrap(
+              Effect.gen(function* () {
+                if (!appendedAfterFence) {
+                  appendedAfterFence = true;
+                  yield* eventStore.append({
+                    type: "project.meta-updated",
+                    eventId: EventId.makeUnsafe("evt-bootstrap-paged-after-fence"),
+                    aggregateKind: "project",
+                    aggregateId: projectId,
+                    occurredAt,
+                    commandId: CommandId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
+                    causationEventId: null,
+                    correlationId: CorrelationId.makeUnsafe("cmd-bootstrap-paged-after-fence"),
+                    metadata: {},
+                    payload: {
+                      projectId,
+                      title: "Project after fence",
+                      updatedAt: occurredAt,
+                    },
+                  });
+                }
+                return eventStore.readFromSequence(
+                  sequenceExclusive,
+                  limit,
+                  throughSequenceInclusive,
+                );
+              }),
+            );
+          },
+        } satisfies OrchestrationEventStoreShape;
+      }),
+    ).pipe(Layer.provide(OrchestrationEventStoreLive));
+    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(appendAfterFenceLayer),
+      Layer.provideMerge(persistenceLayer),
+    );
+
+    const result = yield* Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      yield* projectionPipeline.bootstrap;
+      const projects = yield* sql<{ readonly title: string }>`
+        SELECT title FROM projection_projects WHERE project_id = ${projectId}
+      `;
+      const cursors = yield* sql<{ readonly lastAppliedSequence: number }>`
+        SELECT last_applied_sequence AS "lastAppliedSequence" FROM projection_state
+      `;
+      const eventCount = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM orchestration_events
+      `;
+      return { projects, cursors, eventCount: eventCount[0]?.count ?? 0 };
+    }).pipe(Effect.provide(projectionLayer));
+
+    assert.deepEqual(result.projects, [{ title: "Project 2500" }]);
+    assert.equal(result.eventCount, 2_502);
+    assert.equal(result.cursors.length, Object.keys(ORCHESTRATION_PROJECTOR_NAMES).length);
+    for (const cursor of result.cursors) {
+      assert.equal(cursor.lastAppliedSequence, 2_501);
+    }
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-pipeline-paged-",
         }),
         NodeServices.layer,
       ),
@@ -846,7 +1374,8 @@ it.layer(
 
       // Simulate rows written by older projectors that treated user-input requests as approvals.
       yield* sql`
-            INSERT INTO projection_pending_approvals (
+            INSERT INTO projection_pending_interactions (
+              interaction_kind,
               request_id,
               thread_id,
               turn_id,
@@ -856,6 +1385,7 @@ it.layer(
               resolved_at
             )
             VALUES (
+              'approval',
               ${requestId},
               ${threadId},
               ${null},
@@ -905,6 +1435,143 @@ it.layer(
           pendingApprovalCount: 0,
           pendingUserInputCount: 0,
           updatedAt: respondedAt,
+        },
+      ]);
+
+      const interactionRowsAfterRespond = yield* sql<{
+        readonly interactionKind: string;
+        readonly status: string;
+        readonly responseCommandId: string | null;
+      }>`
+        SELECT
+          interaction_kind AS "interactionKind",
+          status,
+          response_command_id AS "responseCommandId"
+        FROM projection_pending_interactions
+        WHERE thread_id = ${threadId} AND request_id = ${requestId}
+        ORDER BY interaction_kind
+      `;
+      assert.deepEqual(interactionRowsAfterRespond, [
+        { interactionKind: "approval", status: "pending", responseCommandId: null },
+        {
+          interactionKind: "userInput",
+          status: "responding",
+          responseCommandId: "cmd-user-input-responded",
+        },
+      ]);
+
+      const failedAt = "2026-03-05T11:00:03.000Z";
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("evt-user-input-response-failed"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: failedAt,
+        commandId: CommandId.makeUnsafe("cmd-user-input-response-failed"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-user-input-response-failed"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("activity-user-input-response-failed"),
+            tone: "error",
+            kind: "provider.user-input.respond.failed",
+            summary: "User input response failed",
+            payload: {
+              requestId,
+              responseCommandId: "cmd-user-input-responded",
+              settlementStatus: "retryable",
+              detail: "No active provider session is bound to this thread.",
+            },
+            turnId: null,
+            createdAt: failedAt,
+          },
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const retryableRows = yield* sql<{
+        readonly status: string;
+        readonly pendingUserInputCount: number;
+      }>`
+        SELECT
+          interactions.status,
+          threads.pending_user_input_count AS "pendingUserInputCount"
+        FROM projection_pending_interactions AS interactions
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = interactions.thread_id
+        WHERE interactions.thread_id = ${threadId}
+          AND interactions.interaction_kind = 'userInput'
+          AND interactions.request_id = ${requestId}
+      `;
+      assert.deepEqual(retryableRows, [{ status: "retryable", pendingUserInputCount: 1 }]);
+
+      const retryAt = "2026-03-05T11:00:04.000Z";
+      yield* eventStore.append({
+        type: "thread.user-input-response-requested",
+        eventId: EventId.makeUnsafe("evt-user-input-retried"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: retryAt,
+        commandId: CommandId.makeUnsafe("cmd-user-input-retried"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-user-input-retried"),
+        metadata: {},
+        payload: {
+          threadId,
+          requestId,
+          answers: { q1: "yes" },
+          createdAt: retryAt,
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const confirmedAt = "2026-03-05T11:00:05.000Z";
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("evt-user-input-confirmed"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: confirmedAt,
+        commandId: CommandId.makeUnsafe("cmd-user-input-confirmed"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-user-input-confirmed"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("activity-user-input-confirmed"),
+            tone: "info",
+            kind: "user-input.resolved",
+            summary: "User input answered",
+            payload: { requestId, answers: { q1: "yes" } },
+            turnId: null,
+            createdAt: confirmedAt,
+          },
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const confirmedRows = yield* sql<{
+        readonly status: string;
+        readonly responseCommandId: string | null;
+        readonly resolvedAt: string;
+      }>`
+        SELECT
+          status,
+          response_command_id AS "responseCommandId",
+          resolved_at AS "resolvedAt"
+        FROM projection_pending_interactions
+        WHERE thread_id = ${threadId}
+          AND interaction_kind = 'userInput'
+          AND request_id = ${requestId}
+      `;
+      assert.deepEqual(confirmedRows, [
+        {
+          status: "confirmed",
+          responseCommandId: "cmd-user-input-retried",
+          resolvedAt: confirmedAt,
         },
       ]);
     }),
@@ -1272,10 +1939,7 @@ it.layer(
       const sql = yield* SqlClient.SqlClient;
       const now = new Date().toISOString();
 
-      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
-        eventStore
-          .append(event)
-          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
 
       yield* appendAndProject({
         type: "project.created",
@@ -1387,12 +2051,14 @@ it.layer(
 it.layer(
   Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-projection-attachments-overwrite-")),
 )("OrchestrationProjectionPipeline", (it) => {
-  it.effect("removes unreferenced attachment files when a thread is reverted", () =>
+  it.effect("prunes legacy and managed attachments through their existing authorities", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
+      const managedAttachments = yield* ManagedAttachmentRepository;
+      const sql = yield* SqlClient.SqlClient;
       const { attachmentsDir } = yield* ServerConfig;
       const now = new Date().toISOString();
       const threadId = ThreadId.makeUnsafe("Thread Revert.Files");
@@ -1401,11 +2067,74 @@ it.layer(
       const removeFileAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000004";
       const otherThreadAttachmentId =
         "thread-revert-files-extra-00000000-0000-4000-8000-000000000003";
+      const keepManagedAttachmentId = "att_v2_33333333333333333333333333333333";
+      const removeManagedAttachmentId = "att_v2_44444444444444444444444444444444";
+      const keepManagedRelativePath = `objects/33/${keepManagedAttachmentId}.txt`;
+      const removeManagedRelativePath = `objects/44/${removeManagedAttachmentId}.txt`;
 
-      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
-        eventStore
-          .append(event)
-          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
+
+      for (const [attachmentId, relativePath, commandId, messageId] of [
+        [
+          keepManagedAttachmentId,
+          keepManagedRelativePath,
+          "command-managed-coexist-keep",
+          "message-keep",
+        ],
+        [
+          removeManagedAttachmentId,
+          removeManagedRelativePath,
+          "command-managed-coexist-remove",
+          "message-remove",
+        ],
+      ] as const) {
+        assert.strictEqual(
+          (
+            yield* managedAttachments.reserve({
+              attachmentId,
+              ownerThreadId: threadId,
+              ownerKind: "principal",
+              ownerId: "principal-managed-coexist",
+              kind: "file",
+              originalName: `${attachmentId}.txt`,
+              mimeType: "text/plain",
+              reservedBytes: 5,
+              relativePath,
+              now,
+            })
+          ).status,
+          "reserved",
+        );
+        assert.strictEqual(
+          (
+            yield* managedAttachments.finalizeStaged({
+              attachmentId,
+              ownerThreadId: threadId,
+              ownerKind: "principal",
+              ownerId: "principal-managed-coexist",
+              sizeBytes: 5,
+              sha256: "b".repeat(64),
+              stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+              now,
+            })
+          ).status,
+          "staged",
+        );
+        assert.strictEqual(
+          (
+            yield* managedAttachments.claimForAcceptedTurn({
+              attachmentIds: [attachmentId],
+              ownerThreadId: threadId,
+              ownerKind: "principal",
+              ownerId: "principal-managed-coexist",
+              commandId,
+              messageId,
+              now,
+            })
+          ).status,
+          "claimed",
+        );
+      }
 
       yield* appendAndProject({
         type: "project.created",
@@ -1501,6 +2230,13 @@ it.layer(
               mimeType: "image/png",
               sizeBytes: 5,
             },
+            {
+              type: "file",
+              id: keepManagedAttachmentId,
+              name: "managed-keep.txt",
+              mimeType: "text/plain",
+              sizeBytes: 5,
+            },
           ],
           turnId: TurnId.makeUnsafe("turn-keep"),
           streaming: false,
@@ -1563,6 +2299,13 @@ it.layer(
               mimeType: "text/plain",
               sizeBytes: 5,
             },
+            {
+              type: "file",
+              id: removeManagedAttachmentId,
+              name: "managed-remove.txt",
+              mimeType: "text/plain",
+              sizeBytes: 5,
+            },
           ],
           turnId: TurnId.makeUnsafe("turn-remove"),
           streaming: false,
@@ -1574,16 +2317,24 @@ it.layer(
       const keepPath = path.join(attachmentsDir, `${keepAttachmentId}.png`);
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
       const removeFilePath = path.join(attachmentsDir, `${removeFileAttachmentId}.txt`);
+      const keepManagedPath = path.join(attachmentsDir, keepManagedRelativePath);
+      const removeManagedPath = path.join(attachmentsDir, removeManagedRelativePath);
       yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(keepManagedPath), { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(removeManagedPath), { recursive: true });
       yield* fileSystem.writeFileString(keepPath, "keep");
       yield* fileSystem.writeFileString(removePath, "remove");
       yield* fileSystem.writeFileString(removeFilePath, "remove-file");
+      yield* fileSystem.writeFileString(keepManagedPath, "keep!");
+      yield* fileSystem.writeFileString(removeManagedPath, "drop!");
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
       assert.isTrue(yield* exists(keepPath));
       assert.isTrue(yield* exists(removePath));
       assert.isTrue(yield* exists(removeFilePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(keepManagedPath));
+      assert.isTrue(yield* exists(removeManagedPath));
 
       yield* appendAndProject({
         type: "thread.reverted",
@@ -1605,6 +2356,40 @@ it.layer(
       assert.isFalse(yield* exists(removePath));
       assert.isFalse(yield* exists(removeFilePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(keepManagedPath));
+      assert.isTrue(yield* exists(removeManagedPath));
+
+      const statesBeforeCleanup = yield* sql<{
+        readonly attachmentId: string;
+        readonly state: string;
+      }>`
+        SELECT attachment_id AS "attachmentId", state
+        FROM managed_attachment_blobs
+        WHERE attachment_id IN (${keepManagedAttachmentId}, ${removeManagedAttachmentId})
+        ORDER BY attachment_id ASC
+      `;
+      assert.deepStrictEqual(statesBeforeCleanup, [
+        { attachmentId: keepManagedAttachmentId, state: "claimed" },
+        { attachmentId: removeManagedAttachmentId, state: "deleting" },
+      ]);
+
+      yield* runManagedAttachmentCleanupBatch;
+
+      assert.isTrue(yield* exists(keepManagedPath));
+      assert.isFalse(yield* exists(removeManagedPath));
+      const statesAfterCleanup = yield* sql<{
+        readonly attachmentId: string;
+        readonly state: string;
+      }>`
+        SELECT attachment_id AS "attachmentId", state
+        FROM managed_attachment_blobs
+        WHERE attachment_id IN (${keepManagedAttachmentId}, ${removeManagedAttachmentId})
+        ORDER BY attachment_id ASC
+      `;
+      assert.deepStrictEqual(statesAfterCleanup, [
+        { attachmentId: keepManagedAttachmentId, state: "claimed" },
+        { attachmentId: removeManagedAttachmentId, state: "deleted" },
+      ]);
     }),
   );
 });
@@ -1625,10 +2410,7 @@ it.layer(
       const otherThreadAttachmentId =
         "thread-delete-files-extra-00000000-0000-4000-8000-000000000002";
 
-      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
-        eventStore
-          .append(event)
-          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
 
       yield* appendAndProject({
         type: "project.created",
@@ -2050,10 +2832,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
         const eventStore = yield* OrchestrationEventStore;
         const sql = yield* SqlClient.SqlClient;
-        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
-          eventStore
-            .append(event)
-            .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+        const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
 
         yield* appendAndProject({
           type: "project.created",
@@ -2195,10 +2974,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const eventStore = yield* OrchestrationEventStore;
       const sql = yield* SqlClient.SqlClient;
-      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
-        eventStore
-          .append(event)
-          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const appendAndProject = makeAppendAndProject(eventStore, projectionPipeline);
 
       yield* appendAndProject({
         type: "project.created",
@@ -2988,6 +3764,229 @@ it.layer(
       `;
 
       assert.deepEqual(rows, [{ dispatchOrigin: "automation" }]);
+    }),
+  );
+
+  it.effect("preserves exact managed attachment references during projection rebuild", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const managedAttachments = yield* ManagedAttachmentRepository;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { attachmentsDir } = yield* ServerConfig;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-managed-rebuild");
+      const retainedAttachmentId = "att_v2_11111111111111111111111111111111";
+      const prunedAttachmentId = "att_v2_22222222222222222222222222222222";
+      const retainedLegacyId =
+        "thread-managed-rebuild-11111111-1111-4111-8111-111111111111";
+      const prunedLegacyId =
+        "thread-managed-rebuild-22222222-2222-4222-8222-222222222222";
+      const retainedMessageId = MessageId.makeUnsafe("message-managed-retained");
+      const prunedMessageId = MessageId.makeUnsafe("message-managed-pruned");
+      const createdAt = "2020-07-14T14:00:00.000Z";
+
+      for (const [attachmentId, messageId, commandId] of [
+        [retainedAttachmentId, retainedMessageId, "command-managed-retained"],
+        [prunedAttachmentId, prunedMessageId, "command-managed-pruned"],
+      ] as const) {
+        const reserved = yield* managedAttachments.reserve({
+          attachmentId,
+          ownerThreadId: threadId,
+          ownerKind: "principal",
+          ownerId: "principal-managed-rebuild",
+          kind: "file",
+          originalName: `${attachmentId}.txt`,
+          mimeType: "text/plain",
+          reservedBytes: 4,
+          relativePath: `objects/${attachmentId.slice(7, 9)}/${attachmentId}.txt`,
+          now: createdAt,
+        });
+        assert.strictEqual(reserved.status, "reserved");
+        const staged = yield* managedAttachments.finalizeStaged({
+          attachmentId,
+          ownerThreadId: threadId,
+          ownerKind: "principal",
+          ownerId: "principal-managed-rebuild",
+          sizeBytes: 4,
+          sha256: "a".repeat(64),
+          stagingExpiresAt: "2020-07-14T15:00:00.000Z",
+          now: "2020-07-14T14:00:01.000Z",
+        });
+        assert.strictEqual(staged.status, "staged");
+        const claimed = yield* managedAttachments.claimForAcceptedTurn({
+          attachmentIds: [attachmentId],
+          ownerThreadId: threadId,
+          ownerKind: "principal",
+          ownerId: "principal-managed-rebuild",
+          commandId,
+          messageId,
+          now: "2020-07-14T14:00:02.000Z",
+        });
+        assert.strictEqual(claimed.status, "claimed");
+      }
+
+      for (const [eventId, commandId, messageId, attachmentId, text, occurredAt] of [
+        [
+          "evt-managed-rebuild-retained",
+          "cmd-managed-rebuild-retained",
+          retainedMessageId,
+          retainedAttachmentId,
+          "retained",
+          "2020-07-14T14:00:03.000Z",
+        ],
+        [
+          "evt-managed-rebuild-pruned",
+          "cmd-managed-rebuild-pruned",
+          prunedMessageId,
+          prunedAttachmentId,
+          "pruned",
+          "2020-07-14T14:00:04.000Z",
+        ],
+      ] as const) {
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe(eventId),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(commandId),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(commandId),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "user",
+            text,
+            attachments: [
+              {
+                type: "file",
+                id: attachmentId,
+                name: `${text}.txt`,
+                mimeType: "text/plain",
+                sizeBytes: 4,
+              },
+              {
+                type: "file",
+                id: text === "retained" ? retainedLegacyId : prunedLegacyId,
+                name: `${text}-legacy.txt`,
+                mimeType: "text/plain",
+                sizeBytes: 4,
+              },
+            ],
+            turnId: null,
+            streaming: false,
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+
+      yield* eventStore.append({
+        type: "thread.conversation-rolled-back",
+        eventId: EventId.makeUnsafe("evt-managed-rebuild-rollback"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2020-07-14T14:00:05.000Z",
+        commandId: CommandId.makeUnsafe("cmd-managed-rebuild-rollback"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-managed-rebuild-rollback"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId: prunedMessageId,
+          numTurns: 1,
+          removedTurnIds: [],
+        },
+      });
+
+      const retainedManagedPath = path.join(
+        attachmentsDir,
+        `objects/11/${retainedAttachmentId}.txt`,
+      );
+      const prunedManagedPath = path.join(
+        attachmentsDir,
+        `objects/22/${prunedAttachmentId}.txt`,
+      );
+      const retainedLegacyPath = path.join(attachmentsDir, `${retainedLegacyId}.txt`);
+      const prunedLegacyPath = path.join(attachmentsDir, `${prunedLegacyId}.txt`);
+      for (const filePath of [
+        retainedManagedPath,
+        prunedManagedPath,
+        retainedLegacyPath,
+        prunedLegacyPath,
+      ]) {
+        yield* fileSystem.makeDirectory(path.dirname(filePath), { recursive: true });
+        yield* fileSystem.writeFileString(filePath, "data");
+      }
+
+      const highWaterSequence = yield* eventStore.getHighWaterSequence();
+      yield* projectionPipeline.bootstrap;
+      yield* projectionPipeline.bootstrap;
+
+      assert.isTrue(yield* exists(retainedLegacyPath));
+      assert.isFalse(yield* exists(prunedLegacyPath));
+      assert.isTrue(yield* exists(retainedManagedPath));
+      assert.isTrue(yield* exists(prunedManagedPath));
+
+      const messages = yield* sql<{ readonly messageId: string }>`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+        ORDER BY sequence ASC
+      `;
+      assert.deepStrictEqual(messages, [{ messageId: retainedMessageId }]);
+
+      const blobs = yield* sql<{ readonly attachmentId: string; readonly state: string }>`
+        SELECT attachment_id AS "attachmentId", state
+        FROM managed_attachment_blobs
+        WHERE owner_thread_id = ${threadId}
+        ORDER BY attachment_id ASC
+      `;
+      assert.deepStrictEqual(blobs, [
+        { attachmentId: retainedAttachmentId, state: "claimed" },
+        { attachmentId: prunedAttachmentId, state: "deleting" },
+      ]);
+
+      const cleanupJobs = yield* sql<{
+        readonly attachmentId: string;
+        readonly reason: string;
+      }>`
+        SELECT attachment_id AS "attachmentId", reason
+        FROM managed_attachment_cleanup_jobs
+        WHERE attachment_id IN (${retainedAttachmentId}, ${prunedAttachmentId})
+        ORDER BY attachment_id ASC
+      `;
+      assert.deepStrictEqual(cleanupJobs, [
+        { attachmentId: prunedAttachmentId, reason: "projection-pruned" },
+      ]);
+
+      const projectorState = yield* sql<{ readonly lastAppliedSequence: number }>`
+        SELECT last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}
+      `;
+      assert.deepStrictEqual(projectorState, [{ lastAppliedSequence: highWaterSequence }]);
+
+      yield* runManagedAttachmentCleanupBatch;
+      assert.isTrue(yield* exists(retainedLegacyPath));
+      assert.isTrue(yield* exists(retainedManagedPath));
+      assert.isFalse(yield* exists(prunedManagedPath));
+      const completedBlobs = yield* sql<{
+        readonly attachmentId: string;
+        readonly state: string;
+      }>`
+        SELECT attachment_id AS "attachmentId", state
+        FROM managed_attachment_blobs
+        WHERE owner_thread_id = ${threadId}
+        ORDER BY attachment_id ASC
+      `;
+      assert.deepStrictEqual(completedBlobs, [
+        { attachmentId: retainedAttachmentId, state: "claimed" },
+        { attachmentId: prunedAttachmentId, state: "deleted" },
+      ]);
     }),
   );
 });

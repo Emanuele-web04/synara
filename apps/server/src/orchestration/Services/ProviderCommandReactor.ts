@@ -9,6 +9,19 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
+import type {
+  ProviderBlockingDeliveryEvidence,
+  ProviderDeliveryReconciliationOutcome,
+} from "../../persistence/Services/OrchestrationEventDeliveries.ts";
+
+export interface ProviderDeliveryReconciliationResult {
+  readonly eventSequence: number;
+  readonly threadId: string;
+  readonly outcome: ProviderDeliveryReconciliationOutcome;
+  readonly state: "retry" | "succeeded" | "dead" | "uncertain";
+  readonly reconciledAt: string;
+}
+
 /**
  * ProviderCommandReactorShape - Service API for provider command reactors.
  */
@@ -29,6 +42,20 @@ export interface ProviderCommandReactorShape {
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
+
+  readonly listBlockingDeliveries: (input: {
+    readonly threadId?: string | undefined;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<ProviderBlockingDeliveryEvidence>, unknown>;
+
+  readonly reconcileDelivery: (input: {
+    readonly eventSequence: number;
+    readonly threadId: string;
+    readonly expectedState: "dead" | "uncertain";
+    readonly outcome: ProviderDeliveryReconciliationOutcome;
+    readonly reconciledBy: string;
+    readonly note?: string | undefined;
+  }) => Effect.Effect<ProviderDeliveryReconciliationResult | null, unknown>;
 }
 
 /**

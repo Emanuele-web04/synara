@@ -16,6 +16,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
+      signed: true,
     });
     const mac = config.mac as Record<string, unknown>;
     const extendInfo = mac.extendInfo as Record<string, unknown>;
@@ -24,6 +25,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
+    assert.equal(mac.notarize, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
@@ -63,23 +65,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
+      publisherName: "Synara",
       azureSignOptions: { publisherName: "Synara" },
     });
   });
 
-  it("keeps Windows signing optional", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "win",
-      target: "nsis",
-    });
-
-    assert.deepStrictEqual(config.win, {
-      target: ["nsis"],
-      icon: "icon.ico",
-    });
-  });
-
-  it("keeps Windows signing optional", () => {
+  it("omits Azure signing options for unsigned build-only artifacts", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",

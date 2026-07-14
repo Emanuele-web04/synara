@@ -17,12 +17,10 @@ import { it, assert } from "@effect/vitest";
 import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import * as AcpError from "./errors.ts";
-import { encodeJsonl, jsonRpcRequest, jsonRpcResponse } from "./_internal/shared.ts";
+import { encodeJsonl, jsonRpcResponse } from "./_internal/shared.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
-const InitializeRequest = jsonRpcRequest("initialize", AcpSchema.InitializeRequest);
 const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
-const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const CHILD_PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 
@@ -412,21 +410,14 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       const firstOutbound = yield* Queue.take(output);
       const secondOutbound = yield* Queue.take(output);
 
-      const decodedInitialize = Schema.decodeEffect(Schema.fromJsonString(InitializeRequest));
-      const decodedExt = Schema.decodeEffect(Schema.fromJsonString(ExtRequest));
-      const firstIsInitialize = yield* decodedInitialize(firstOutbound).pipe(
-        Effect.match({
-          onFailure: () => false,
-          onSuccess: () => true,
-        }),
+      const decoded = [firstOutbound, secondOutbound].map(
+        (outbound) =>
+          JSON.parse(
+            typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound),
+          ) as { id: string | number; method: string },
       );
-
-      const initializeRequest = firstIsInitialize
-        ? yield* decodedInitialize(firstOutbound)
-        : yield* decodedInitialize(secondOutbound);
-      const extRequest = firstIsInitialize
-        ? yield* decodedExt(secondOutbound)
-        : yield* decodedExt(firstOutbound);
+      const initializeRequest = decoded.find((request) => request.method === "initialize")!;
+      const extRequest = decoded.find((request) => request.method === "x/test")!;
 
       assert.notEqual(initializeRequest.id, extRequest.id);
 

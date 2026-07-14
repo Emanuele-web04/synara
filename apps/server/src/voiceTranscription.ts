@@ -10,9 +10,13 @@ import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "@synara/contracts";
+import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
+import { requestChatGptVoiceTranscription } from "@synara/shared/chatGptVoiceTranscription";
+import {
+  decodeOutboundJson,
+  type OutboundHttpResponse,
+} from "@synara/shared/outboundHttp";
 
-const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
-const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_DURATION_MS = 120_000;
 
 export interface ChatGptVoiceAuthContext {
@@ -24,42 +28,39 @@ export interface ChatGptVoiceAuthContext {
 export async function transcribeVoiceWithChatGptSession(input: {
   readonly request: ServerVoiceTranscriptionInput;
   readonly resolveAuth: (refreshToken: boolean) => Promise<ChatGptVoiceAuthContext>;
-  readonly fetchImpl?: typeof fetch;
+  readonly signal?: AbortSignal;
 }): Promise<ServerVoiceTranscriptionResult> {
-  const fetchImpl = input.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") {
-    throw new Error("Voice transcription is unavailable in this runtime.");
-  }
-
   const audioBuffer = decodeVoiceAudio(input.request);
   let auth = await input.resolveAuth(false);
   let response = await requestTranscription({
-    fetchImpl,
     audioBuffer,
     mimeType: input.request.mimeType,
     token: auth.token,
+    ...(input.signal ? { signal: input.signal } : {}),
     ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
   });
 
   if (response.status === 401 || response.status === 403) {
     auth = await input.resolveAuth(true);
     response = await requestTranscription({
-      fetchImpl,
       audioBuffer,
       mimeType: input.request.mimeType,
       token: auth.token,
+      ...(input.signal ? { signal: input.signal } : {}),
       ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
     });
   }
 
-  if (!response.ok) {
-    throw new Error(await readTranscriptionErrorMessage(response));
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(readTranscriptionErrorMessage(response));
   }
 
-  const payload = (await response.json().catch(() => null)) as {
-    text?: unknown;
-    transcript?: unknown;
-  } | null;
+  let payload: { text?: unknown; transcript?: unknown } | null = null;
+  try {
+    payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as typeof payload;
+  } catch {
+    payload = null;
+  }
   const text = readString(payload?.text) ?? readString(payload?.transcript);
   if (!text) {
     throw new Error("The transcription response did not include any text.");
@@ -92,7 +93,7 @@ function decodeVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   if (!audioBuffer.length || audioBuffer.toString("base64") !== normalizedBase64) {
     throw new Error("The recorded audio could not be decoded.");
   }
-  if (audioBuffer.length > MAX_AUDIO_BYTES) {
+  if (audioBuffer.length > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
     throw new Error("Voice messages are limited to 10 MB.");
   }
   if (!isLikelyWavBuffer(audioBuffer)) {
@@ -103,28 +104,25 @@ function decodeVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
 }
 
 async function requestTranscription(input: {
-  readonly fetchImpl: typeof fetch;
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
   readonly token: string;
   readonly transcriptionUrl?: string;
-}): Promise<Response> {
-  const formData = new FormData();
-  formData.append("file", new Blob([input.audioBuffer], { type: input.mimeType }), "voice.wav");
-
-  return input.fetchImpl(input.transcriptionUrl ?? CHATGPT_TRANSCRIPTIONS_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.token}`,
-    },
-    body: formData,
+  readonly signal?: AbortSignal;
+}): Promise<OutboundHttpResponse> {
+  return requestChatGptVoiceTranscription({
+    audio: input.audioBuffer,
+    mimeType: input.mimeType,
+    token: input.token,
+    ...(input.transcriptionUrl ? { transcriptionUrl: input.transcriptionUrl } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   });
 }
 
-async function readTranscriptionErrorMessage(response: Response): Promise<string> {
+function readTranscriptionErrorMessage(response: OutboundHttpResponse): string {
   let errorMessage = `Transcription failed with status ${response.status}.`;
   try {
-    const payload = (await response.json()) as {
+    const payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
       error?: { message?: unknown };
       message?: unknown;
     } | null;

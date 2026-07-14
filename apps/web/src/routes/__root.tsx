@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
+  type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
 import {
@@ -21,7 +22,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
-import { APP_DISPLAY_NAME } from "../branding";
+import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -48,6 +49,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useStore } from "../store";
+import { createAllThreadsSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
 import {
@@ -56,6 +58,10 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
 } from "../wsNativeApi";
+import {
+  addWsCompatibilityIssueListener,
+  readLatestWsCompatibilityIssue,
+} from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
@@ -64,10 +70,10 @@ import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
-  subscribeRetainedThreadDetailIdChanges,
+  resolveThreadDetailSubscriptionLeaseIds,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
-import { getThreadFromState } from "../threadDerivation";
+import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadSettingsRoute } from "../hooks/usePreloadSettingsRoute";
@@ -152,6 +158,16 @@ function RootRouteView() {
   useNativeFontSmoothing();
   useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
+  const [compatibilityIssue, setCompatibilityIssue] = useState<WsCompatibilityError | null>(() =>
+    readLatestWsCompatibilityIssue(),
+  );
+  useEffect(
+    () =>
+      addWsCompatibilityIssueListener(setCompatibilityIssue, {
+        replayCurrent: true,
+      }),
+    [],
+  );
 
   // Single mount point for the Windows caption buttons. The cluster is pinned to the
   // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
@@ -169,6 +185,15 @@ function RootRouteView() {
   // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
   // so it also stays clickable while a modal is open.)
   const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+
+  if (compatibilityIssue) {
+    return (
+      <>
+        <TransportCompatibilityView issue={compatibilityIssue} />
+        {desktopWindowControls}
+      </>
+    );
+  }
 
   if (!readNativeApi()) {
     return (
@@ -202,6 +227,48 @@ function RootRouteView() {
       </ToastProvider>
       {desktopWindowControls}
     </>
+  );
+}
+
+function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) {
+  const title =
+    issue.action === "update-client"
+      ? "This Synara client needs an update."
+      : issue.action === "update-server"
+        ? "The Synara server needs an update."
+        : "Synara needs to reconnect with a matching build.";
+  const guidance =
+    issue.action === "update-client"
+      ? "Update or reload this client, then reconnect."
+      : issue.action === "update-server"
+        ? "Update or restart the server, then reload this client."
+        : "Reload the app. If this repeats, restart Synara so the client and server use matching builds.";
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pointer-events-none absolute inset-0 opacity-80">
+        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-amber-500)_16%,transparent),transparent)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
+      </div>
+      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{title}</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{issue.message}</p>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{guidance}</p>
+        <p className="mt-4 text-xs text-muted-foreground/80">
+          Client {APP_VERSION} · Server {issue.serverBuild}
+        </p>
+        <div className="mt-5">
+          <Button
+            size="sm"
+            className={dialogActionButtonClassName}
+            onClick={() => window.location.reload()}
+          >
+            Reload app
+          </Button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -785,7 +852,7 @@ function EventRouter() {
   );
   const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
-  const serverThreads = useStore((store) => store.threads);
+  const serverThreads = useStore(selectAllThreads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -806,25 +873,18 @@ function EventRouter() {
     () => new Set(serverThreads.map((thread) => thread.id)),
     [serverThreads],
   );
-  const subscribedThreadIds = useMemo(() => {
-    const nextThreadIds = new Set<ThreadId>();
-    for (const threadId of visibleThreadIds) {
-      // Visible draft routes need a detail subscription before their shell row exists.
-      // Otherwise fast provider responses can complete before the promoted thread is
-      // known to the shell list, leaving the chat detail stuck on its optimistic state.
-      nextThreadIds.add(threadId);
-    }
-    for (const threadId of retainedThreadIds) {
-      if (serverThreadIds.has(threadId)) {
-        nextThreadIds.add(threadId);
-      }
-    }
-    return [...nextThreadIds];
-  }, [retainedThreadIds, serverThreadIds, visibleThreadIds]);
+  const subscribedThreadIds = useMemo(
+    () =>
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds,
+        retainedThreadIds,
+        serverThreadIds,
+      }),
+    [retainedThreadIds, serverThreadIds, visibleThreadIds],
+  );
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
-  const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
@@ -832,7 +892,6 @@ function EventRouter() {
 
   workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
-  routeVisibleThreadIdsRef.current = visibleThreadIds;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
@@ -941,16 +1000,6 @@ function EventRouter() {
       return reconcileThreadSubscriptionsChain;
     };
 
-    const unsubscribeRetainedThreadIdChanges = subscribeRetainedThreadDetailIdChanges(
-      (nextRetainedThreadIds) => {
-        const nextThreadIds = new Set(routeVisibleThreadIdsRef.current);
-        for (const threadId of nextRetainedThreadIds) {
-          nextThreadIds.add(threadId);
-        }
-        void enqueueThreadSubscriptionReconcile([...nextThreadIds]);
-      },
-    );
-
     const shouldApplyBootstrapShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
       if (disposed) {
         return false;
@@ -982,9 +1031,9 @@ function EventRouter() {
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
-      subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
+      threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
@@ -995,7 +1044,7 @@ function EventRouter() {
         useComposerDraftStore.getState().draftThreadsByThreadId,
       ) as ThreadId[];
       const activeThreadIds = collectActiveTerminalThreadIds({
-        snapshotThreads: useStore.getState().threads.map((thread) => ({
+        snapshotThreads: getThreadsFromState(useStore.getState()).map((thread) => ({
           id: thread.id,
           deletedAt: null,
           archivedAt: thread.archivedAt ?? null,
@@ -1426,7 +1475,6 @@ function EventRouter() {
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
         ),
       );
-      unsubscribeRetainedThreadIdChanges();
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
@@ -1462,7 +1510,7 @@ function EventRouter() {
 function DesktopProjectBootstrap() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const projects = useStore((store) => store.projects);
-  const threads = useStore((store) => store.threads);
+  const threads = useStore(selectAllThreads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const attemptedRecoveryRef = useRef(false);
 
@@ -1505,3 +1553,4 @@ function DesktopProjectBootstrap() {
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
 }
+const selectAllThreads = createAllThreadsSelector();

@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 import * as Path from "effect/Path";
 import * as AcpError from "./errors.ts";
 import * as Effect from "effect/Effect";
@@ -41,7 +43,6 @@ const RequestPermissionRequest = jsonRpcRequest(
 );
 const CHILD_PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
-const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
 const CursorUpdateTodosRequest = jsonRpcRequest(
   "cursor/update_todos",
@@ -51,6 +52,10 @@ const CursorUpdateTodosRequest = jsonRpcRequest(
   }),
 );
 const textEncoder = new TextEncoder();
+const stdioDiagnosticFixturePath = new URL(
+  "../test/fixtures/acp-protocol-stdio-diagnostic.ts",
+  import.meta.url,
+);
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
@@ -172,10 +177,167 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         {
           direction: "outgoing",
           stage: "raw",
-          payload:
-            '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session-1"},"id":"","headers":[]}\n',
+          payload: '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session-1"}}\n',
         },
       ]);
+    }),
+  );
+
+  it.effect("maps generic request interruption to and from $/cancel_request", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(["session/request_permission"]),
+      });
+
+      yield* transport.clientProtocol.send({
+        _tag: "Interrupt",
+        requestId: "7",
+      });
+      const outbound = yield* Queue.take(output);
+      assert.deepEqual(
+        JSON.parse(typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound)),
+        {
+          jsonrpc: "2.0",
+          method: "$/cancel_request",
+          params: { requestId: 7 },
+        },
+      );
+
+      const messages = yield* Deferred.make<ReadonlyArray<unknown>>();
+      const received = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      yield* transport.serverProtocol
+        .run((_clientId, message) =>
+          Ref.updateAndGet(
+            received,
+            (current) => [...current, message],
+          ).pipe(
+            Effect.flatMap((current) =>
+              current.length === 2 ? Deferred.succeed(messages, current) : Effect.void,
+            ),
+            Effect.asVoid,
+          ),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{}}\n',
+        ),
+      );
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":0}}\n',
+        ),
+      );
+
+      const [requestMessage, interruptMessage] = yield* Deferred.await(messages);
+      assert.match((requestMessage as { id: string }).id, /^-\d+$/);
+      assert.deepEqual(requestMessage, {
+        _tag: "Request",
+        id: (requestMessage as { id: string }).id,
+        tag: "session/request_permission",
+        payload: {},
+        headers: [],
+      });
+      assert.deepEqual(interruptMessage, {
+        _tag: "Interrupt",
+        requestId: (requestMessage as { id: string }).id,
+      });
+    }),
+  );
+
+  it.effect("ignores unknown wire cancellations without entering the internal id namespace", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(["x/test"]),
+      });
+      const received = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const messages = yield* Deferred.make<ReadonlyArray<unknown>>();
+      yield* transport.serverProtocol
+        .run((_clientId, message) =>
+          Ref.updateAndGet(received, (current) => [...current, message]).pipe(
+            Effect.flatMap((current) =>
+              current.length === 2 ? Deferred.succeed(messages, current) : Effect.void,
+            ),
+            Effect.asVoid,
+          ),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":5,"method":"x/test","params":{}}\n',
+        ),
+      );
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":-1}}\n',
+        ),
+      );
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":5}}\n',
+        ),
+      );
+
+      assert.deepEqual(yield* Deferred.await(messages), [
+        {
+          _tag: "Request",
+          id: "-1",
+          tag: "x/test",
+          payload: {},
+          headers: [],
+        },
+        { _tag: "Interrupt", requestId: "-1" },
+      ]);
+    }),
+  );
+
+  it.effect("rejects invalid and non-finite wire ids consistently", () =>
+    Effect.gen(function* () {
+      const cases = [
+        {
+          line: '{"jsonrpc":"2.0","id":{"invalid":true},"method":"x/test","params":{}}\n',
+          expected: /Invalid ACP JSON-RPC request id/,
+        },
+        {
+          line: '{"jsonrpc":"2.0","id":1e400,"method":"x/test","params":{}}\n',
+          expected: /Invalid ACP JSON-RPC request id/,
+        },
+        {
+          line: '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":1e400}}\n',
+          expected: /Invalid \$\/cancel_request requestId/,
+        },
+        {
+          line: '{"jsonrpc":"2.0","id":1e400,"result":{}}\n',
+          expected: /Invalid ACP JSON-RPC response id/,
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const { stdio, input } = yield* makeInMemoryStdio();
+        const termination = yield* Deferred.make<AcpError.AcpError>();
+        yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(["x/test"]),
+          onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+        });
+
+        yield* Queue.offer(input, textEncoder.encode(testCase.line));
+
+        const error = yield* Deferred.await(termination);
+        assert.equal(error._tag, "AcpProtocolParseError");
+        assert.match(String(error.cause), testCase.expected);
+      }
     }),
   );
 
@@ -211,15 +373,17 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         .request("x/test", { hello: "world" })
         .pipe(Effect.forkScoped);
       const outbound = yield* Queue.take(output);
-      assert.deepEqual(yield* Schema.decodeEffect(Schema.fromJsonString(ExtRequest))(outbound), {
+      assert.deepEqual(
+        JSON.parse(typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound)),
+        {
         jsonrpc: "2.0",
         id: 1,
         method: "x/test",
         params: {
           hello: "world",
         },
-        headers: [],
-      });
+        },
+      );
 
       yield* Queue.offer(
         input,
@@ -312,6 +476,63 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("keeps built-in dropped-message diagnostics off ACP stdout", () =>
+    Effect.gen(function* () {
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let ready: (() => void) | undefined;
+      const readyOutput = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const child = yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const process = spawn("bun", [stdioDiagnosticFixturePath.pathname], {
+            cwd: import.meta.dirname,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          process.stdout.on("data", (chunk: Buffer) => {
+            stdoutChunks.push(chunk);
+            if (Buffer.concat(stdoutChunks).includes(0x0a)) {
+              ready?.();
+            }
+          });
+          process.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+          return process;
+        }),
+        (process) =>
+          Effect.sync(() => {
+            if (process.exitCode === null && process.signalCode === null) {
+              process.kill("SIGTERM");
+            }
+          }),
+      );
+
+      yield* Effect.promise(() => readyOutput);
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => child.once("close", (code, signal) => resolve({ code, signal })),
+      );
+      child.stdin.end('{"jsonrpc":"2.0","id":"orphan","result":{"ok":true}}\n');
+      assert.deepEqual(yield* Effect.promise(() => closed), { code: 0, signal: null });
+
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const messages = stdout
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as unknown);
+      assert.deepEqual(messages, [
+        {
+          jsonrpc: "2.0",
+          method: "conformance/ready",
+          params: { ready: true },
+        },
+      ]);
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      assert.match(stderr, /acp\.protocol\.dropped/);
+      assert.match(stderr, /untracked-string-response-id/);
+    }),
+    CHILD_PROCESS_FIXTURE_TIMEOUT_MS,
+  );
+
   it.effect("accepts agent response metadata with primitive extension values", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -333,7 +554,11 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       );
 
       const resolved = yield* Fiber.join(response);
-      assert.deepEqual(resolved, { ok: true, agentCapabilities: {} });
+      assert.deepEqual(resolved, {
+        ok: true,
+        _meta: { grokShell: true },
+        agentCapabilities: { _meta: { "x.ai/fs_notify": true } },
+      });
     }),
   );
 
@@ -358,7 +583,7 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       );
 
       const resolved = yield* Fiber.join(response);
-      assert.deepEqual(resolved, [{ ok: true }]);
+      assert.deepEqual(resolved, [{ ok: true, _meta: { grokShell: true } }]);
     }),
   );
 
@@ -394,9 +619,11 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       );
 
       const message = yield* Deferred.await(inboundRequest);
+      const requestId = (message as { id: string }).id;
+      assert.match(requestId, /^-\d+$/);
       assert.deepEqual(message, {
         _tag: "Request",
-        id: "0",
+        id: requestId,
         tag: "session/request_permission",
         payload: {
           sessionId: "session-1",
@@ -411,7 +638,7 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
 
       yield* transport.serverProtocol.send(0, {
         _tag: "Exit",
-        requestId: "0",
+        requestId,
         exit: {
           _tag: "Success",
           value: {
@@ -474,9 +701,11 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       );
 
       const message = yield* Deferred.await(inboundRequest);
+      const requestId = (message as { id: string }).id;
+      assert.match(requestId, /^-\d+$/);
       assert.deepEqual(message, {
         _tag: "Request",
-        id: "perm-1",
+        id: requestId,
         tag: "session/request_permission",
         payload: {
           sessionId: "session-1",
@@ -491,7 +720,7 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
 
       yield* transport.serverProtocol.send(0, {
         _tag: "Exit",
-        requestId: "perm-1",
+        requestId,
         exit: {
           _tag: "Success",
           value: {
@@ -518,6 +747,82 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         },
       );
     }),
+  );
+
+  it.effect(
+    "correlates concurrent 0, '0', empty-string, and discouraged null ids out of order",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, input, output } = yield* makeInMemoryStdio();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(["x/test"]),
+        });
+        const received = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const allMessages = yield* Deferred.make<ReadonlyArray<unknown>>();
+        yield* transport.serverProtocol
+          .run((_clientId, message) =>
+            Ref.updateAndGet(received, (current) => [...current, message]).pipe(
+              Effect.flatMap((current) =>
+              current.length === 6 ? Deferred.succeed(allMessages, current) : Effect.void,
+              ),
+              Effect.asVoid,
+            ),
+          )
+          .pipe(Effect.forkScoped);
+
+        for (const id of [0, "0", "", null] as const) {
+          yield* Queue.offer(
+            input,
+            textEncoder.encode(
+              `${JSON.stringify({ jsonrpc: "2.0", id, method: "x/test", params: { id } })}\n`,
+            ),
+          );
+        }
+        yield* Queue.offer(
+          input,
+          textEncoder.encode(
+            '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"0"}}\n',
+          ),
+        );
+        yield* Queue.offer(
+          input,
+          textEncoder.encode(
+            '{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":null}}\n',
+          ),
+        );
+
+        const messages = yield* Deferred.await(allMessages);
+        const requests = messages.slice(0, 4) as ReadonlyArray<{ id: string }>;
+        assert.equal(new Set(requests.map((request) => request.id)).size, 4);
+        assert.deepEqual(messages[4], {
+          _tag: "Interrupt",
+          requestId: requests[1]!.id,
+        });
+        assert.deepEqual(messages[5], {
+          _tag: "Interrupt",
+          requestId: requests[3]!.id,
+        });
+
+        const responseOrder = [requests[3]!, requests[2]!, requests[1]!, requests[0]!];
+        const wireIds: unknown[] = [];
+        for (const request of responseOrder) {
+          yield* transport.serverProtocol.send(0, {
+            _tag: "Exit",
+            requestId: request.id,
+            exit: { _tag: "Success", value: { ok: true } },
+          });
+          const outbound = yield* Queue.take(output);
+          wireIds.push(
+            (
+              JSON.parse(
+                typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound),
+              ) as { id: unknown }
+            ).id,
+          );
+        }
+        assert.deepEqual(wireIds, [null, "", "0", 0]);
+      }),
   );
 
   it.effect("does not rewrite nested zero-valued ids in extension request payloads", () =>
@@ -664,15 +969,17 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         .request("x/test", { hello: "world" })
         .pipe(Effect.forkScoped);
       const outbound = yield* Queue.take(output);
-      assert.deepEqual(yield* Schema.decodeEffect(Schema.fromJsonString(ExtRequest))(outbound), {
+      assert.deepEqual(
+        JSON.parse(typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound)),
+        {
         jsonrpc: "2.0",
         id: 1,
         method: "x/test",
         params: {
           hello: "world",
         },
-        headers: [],
-      });
+        },
+      );
 
       yield* Fiber.interrupt(response);
       yield* Queue.offer(

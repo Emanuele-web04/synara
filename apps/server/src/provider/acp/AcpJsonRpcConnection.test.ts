@@ -17,7 +17,7 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
-const bunExe = "bun";
+const bunExe = process.execPath;
 
 describe("AcpSessionRuntime", () => {
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
@@ -121,7 +121,7 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: bunExe,
             args: [mockAgentPath],
-            env: { SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
+            env: { VITEST: "true", SYNARA_ACP_SUPPORT_SESSION_RESUME: "1" },
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",
@@ -152,7 +152,7 @@ describe("AcpSessionRuntime", () => {
           spawn: {
             command: bunExe,
             args: [mockAgentPath],
-            env: { SYNARA_ACP_SUPPORT_SESSION_LOAD: "0" },
+            env: { VITEST: "true", SYNARA_ACP_SUPPORT_SESSION_LOAD: "0" },
           },
           cwd: process.cwd(),
           resumeSessionId: "mock-session-1",
@@ -195,6 +195,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_SUPPORT_SESSION_FORK: "1",
               SYNARA_ACP_EMIT_AVAILABLE_COMMANDS: "1",
               SYNARA_ACP_MODE_CONFIG_ID: "autonomy_level",
@@ -354,6 +355,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS: "1",
             },
           },
@@ -399,6 +401,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_EMIT_UPSTREAM_ASSISTANT_MESSAGE_IDS: "1",
             },
           },
@@ -447,6 +450,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
             },
           },
@@ -489,6 +493,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_EMIT_REASONING_THEN_TOOL_CALL: "1",
             },
           },
@@ -673,6 +678,7 @@ describe("AcpSessionRuntime", () => {
             command: bunExe,
             args: [mockAgentPath],
             env: {
+              VITEST: "true",
               SYNARA_ACP_REQUEST_LOG_PATH: requestLogPath,
             },
           },

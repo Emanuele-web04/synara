@@ -17,10 +17,12 @@ import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
 import {
   AuthError,
   ServerAuth,
+  type AuthenticatedHttpSession,
   type AuthenticatedSession,
   type ServerAuthShape,
 } from "../Services/ServerAuth";
 import {
+  SessionCapacityError,
   SessionCredentialError,
   SessionCredentialService,
 } from "../Services/SessionCredentialService";
@@ -102,8 +104,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const authenticateRequest: ServerAuthShape["authenticateHttpRequest"] = (request) => {
     const cookieToken = request.cookies[sessions.cookieName];
     const bearerToken = parseBearerToken(request.headers);
-    const credential = cookieToken ?? bearerToken;
-    if (!credential) {
+    if (!bearerToken && !cookieToken) {
       return Effect.fail(
         new AuthError({
           message: "Authentication required.",
@@ -111,7 +112,13 @@ export const makeServerAuth = Effect.gen(function* () {
         }),
       );
     }
-    return authenticateToken(credential);
+    const credentialSource = bearerToken ? "bearer" : "cookie";
+    return authenticateToken(bearerToken ?? cookieToken!).pipe(
+      Effect.map(
+        (session) =>
+          ({ ...session, credentialSource }) satisfies AuthenticatedHttpSession,
+      ),
+    );
   };
 
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
@@ -327,15 +334,32 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
-  const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
-    sessions.issueWebSocketToken(session.sessionId).pipe(
+  const logoutSession: ServerAuthShape["logoutSession"] = (sessionId) =>
+    authControlPlane.revokeSession(sessionId).pipe(
       Effect.mapError(
         (cause) =>
           new AuthError({
-            message: "Failed to issue websocket token.",
+            message: "Failed to log out authenticated session.",
             status: 500,
             cause,
           }),
+      ),
+    );
+
+  const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
+    sessions.issueWebSocketToken(session.sessionId).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof SessionCapacityError
+          ? new AuthError({
+              message: cause.message,
+              status: 429,
+              cause,
+            })
+          : new AuthError({
+              message: "Failed to issue websocket token.",
+              status: 500,
+              cause,
+            }),
       ),
       Effect.map(
         (issued) =>
@@ -389,6 +413,7 @@ export const makeServerAuth = Effect.gen(function* () {
     listClientSessions,
     revokeClientSession,
     revokeOtherClientSessions,
+    logoutSession,
     authenticateHttpRequest: authenticateRequest,
     authenticateWebSocketUpgrade,
     issueWebSocketToken,

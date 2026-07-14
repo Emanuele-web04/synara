@@ -4,6 +4,7 @@
 // Depends on: provider display metadata from contracts and providerOrdering helpers.
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -19,6 +20,15 @@ describe("providerOrdering", () => {
   it("includes every displayable provider in the default order", () => {
     expect(DEFAULT_PROVIDER_ORDER).toHaveLength(ALL_PROVIDER_KINDS.length);
     expect(new Set(DEFAULT_PROVIDER_ORDER)).toEqual(new Set(ALL_PROVIDER_KINDS));
+  });
+
+  it("keeps the shared descriptor exhaustive and aligned with contract labels", () => {
+    expect(PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind)).toEqual(
+      DEFAULT_PROVIDER_ORDER,
+    );
+    for (const descriptor of PROVIDER_DESCRIPTORS) {
+      expect(descriptor.displayName).toBe(PROVIDER_DISPLAY_NAMES[descriptor.kind]);
+    }
   });
 
   it("keeps Pi as a valid provider for persisted order and visibility settings", () => {

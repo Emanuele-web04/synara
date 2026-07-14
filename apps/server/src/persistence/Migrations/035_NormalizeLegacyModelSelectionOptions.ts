@@ -8,6 +8,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { normalizePersistedModelSelection } from "../modelSelectionCompatibility.ts";
 
 type JsonObject = Record<string, unknown>;
+export const MIGRATION_035_PAGE_SIZE = 128;
 
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,70 +71,91 @@ function normalizeEventPayloadJson(json: string): {
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const projectRows = yield* sql<{
-    readonly projectId: string;
-    readonly defaultModelSelection: string | null;
-  }>`
-    SELECT
-      project_id AS "projectId",
-      default_model_selection_json AS "defaultModelSelection"
-    FROM projection_projects
-    WHERE default_model_selection_json IS NOT NULL
-  `;
-
-  for (const row of projectRows) {
-    const normalized = normalizeModelSelectionJson(row.defaultModelSelection);
-    if (!normalized.changed) {
-      continue;
-    }
-    yield* sql`
-      UPDATE projection_projects
-      SET default_model_selection_json = ${normalized.value}
-      WHERE project_id = ${row.projectId}
+  let projectCursor: string | null = null;
+  while (true) {
+    const projectRows = yield* sql<{
+      readonly projectId: string;
+      readonly defaultModelSelection: string | null;
+    }>`
+      SELECT
+        project_id AS "projectId",
+        default_model_selection_json AS "defaultModelSelection"
+      FROM projection_projects
+      WHERE default_model_selection_json IS NOT NULL
+        AND (${projectCursor} IS NULL OR project_id > ${projectCursor})
+      ORDER BY project_id ASC
+      LIMIT ${MIGRATION_035_PAGE_SIZE}
     `;
+    if (projectRows.length === 0) break;
+
+    for (const row of projectRows) {
+      const normalized = normalizeModelSelectionJson(row.defaultModelSelection);
+      if (normalized.changed) {
+        yield* sql`
+          UPDATE projection_projects
+          SET default_model_selection_json = ${normalized.value}
+          WHERE project_id = ${row.projectId}
+        `;
+      }
+    }
+    projectCursor = projectRows[projectRows.length - 1]!.projectId;
   }
 
-  const threadRows = yield* sql<{
-    readonly threadId: string;
-    readonly modelSelection: string;
-  }>`
-    SELECT
-      thread_id AS "threadId",
-      model_selection_json AS "modelSelection"
-    FROM projection_threads
-  `;
-
-  for (const row of threadRows) {
-    const normalized = normalizeModelSelectionJson(row.modelSelection);
-    if (!normalized.changed) {
-      continue;
-    }
-    yield* sql`
-      UPDATE projection_threads
-      SET model_selection_json = ${normalized.value}
-      WHERE thread_id = ${row.threadId}
+  let threadCursor: string | null = null;
+  while (true) {
+    const threadRows = yield* sql<{
+      readonly threadId: string;
+      readonly modelSelection: string;
+    }>`
+      SELECT
+        thread_id AS "threadId",
+        model_selection_json AS "modelSelection"
+      FROM projection_threads
+      WHERE ${threadCursor} IS NULL OR thread_id > ${threadCursor}
+      ORDER BY thread_id ASC
+      LIMIT ${MIGRATION_035_PAGE_SIZE}
     `;
+    if (threadRows.length === 0) break;
+
+    for (const row of threadRows) {
+      const normalized = normalizeModelSelectionJson(row.modelSelection);
+      if (normalized.changed) {
+        yield* sql`
+          UPDATE projection_threads
+          SET model_selection_json = ${normalized.value}
+          WHERE thread_id = ${row.threadId}
+        `;
+      }
+    }
+    threadCursor = threadRows[threadRows.length - 1]!.threadId;
   }
 
-  const eventRows = yield* sql<{
-    readonly sequence: number;
-    readonly payloadJson: string;
-  }>`
-    SELECT
-      sequence,
-      payload_json AS "payloadJson"
-    FROM orchestration_events
-  `;
-
-  for (const row of eventRows) {
-    const normalized = normalizeEventPayloadJson(row.payloadJson);
-    if (!normalized.changed) {
-      continue;
-    }
-    yield* sql`
-      UPDATE orchestration_events
-      SET payload_json = ${normalized.value}
-      WHERE sequence = ${row.sequence}
+  let eventCursor = 0;
+  while (true) {
+    const eventRows = yield* sql<{
+      readonly sequence: number;
+      readonly payloadJson: string;
+    }>`
+      SELECT
+        sequence,
+        payload_json AS "payloadJson"
+      FROM orchestration_events
+      WHERE sequence > ${eventCursor}
+      ORDER BY sequence ASC
+      LIMIT ${MIGRATION_035_PAGE_SIZE}
     `;
+    if (eventRows.length === 0) break;
+
+    for (const row of eventRows) {
+      const normalized = normalizeEventPayloadJson(row.payloadJson);
+      if (normalized.changed) {
+        yield* sql`
+          UPDATE orchestration_events
+          SET payload_json = ${normalized.value}
+          WHERE sequence = ${row.sequence}
+        `;
+      }
+    }
+    eventCursor = eventRows[eventRows.length - 1]!.sequence;
   }
 });

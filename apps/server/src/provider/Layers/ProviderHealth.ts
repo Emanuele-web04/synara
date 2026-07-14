@@ -49,6 +49,10 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ServerConfig } from "../../config";
+import {
+  buildProviderChildEnvironment,
+  type ProviderChildKind,
+} from "../../providerChildEnvironment.ts";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import {
@@ -130,6 +134,12 @@ const PROVIDERS = [
   OPENCODE_PROVIDER,
   PI_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
+
+const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
+  provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider;
+
+const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
+  buildProviderChildEnvironment({ provider: providerChildKind(provider) });
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
@@ -612,7 +622,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runProviderCommand = (
   executable: string,
   args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -640,7 +650,7 @@ const runProviderCommand = (
 const runCodexCommand = (
   args: ReadonlyArray<string>,
   executable = "codex",
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = providerCommandEnv(CODEX_PROVIDER),
 ) =>
   runProviderCommand(executable, args, env).pipe(
     Effect.flatMap((result) =>
@@ -673,7 +683,7 @@ const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
   );
 
 const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
-  runProviderCommand(executable, args).pipe(
+  runProviderCommand(executable, args, providerCommandEnv(GROK_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -682,7 +692,7 @@ const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
   );
 
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
-  runProviderCommand(executable, args).pipe(
+  runProviderCommand(executable, args, providerCommandEnv(OPENCODE_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -691,7 +701,7 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode"
   );
 
 const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
-  runProviderCommand(executable, args).pipe(
+  runProviderCommand(executable, args, providerCommandEnv(KILO_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -786,7 +796,7 @@ function cursorModelsOutputHasNoModels(output: string): boolean {
 }
 
 const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
-  runProviderCommand(executable, args).pipe(
+  runProviderCommand(executable, args, providerCommandEnv(PI_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -994,9 +1004,7 @@ export const makeCheckClaudeProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
-    const claudeEnv = buildClaudeProcessEnv(
-      homeDir ? { env: process.env, homeDir } : { env: process.env },
-    );
+    const claudeEnv = buildClaudeProcessEnv(homeDir ? { homeDir } : undefined);
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* runClaudeCommand(["--version"], executable, claudeEnv).pipe(
@@ -1330,7 +1338,7 @@ export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 // ── Droid health check ─────────────────────────────────────────────
 
 const runDroidCommand = (args: ReadonlyArray<string>, executable = "droid") =>
-  runProviderCommand(executable, args);
+  runProviderCommand(executable, args, providerCommandEnv(DROID_PROVIDER));
 
 export const makeCheckDroidProviderStatus = (
   binaryPath?: string,
@@ -2129,7 +2137,7 @@ export const ProviderHealthLive = Layer.effect(
         }
         return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
           binaryPath: getProviderBinaryPath(provider, settings),
-          env: process.env,
+          env: providerCommandEnv(provider),
           platform: process.platform,
         }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
       },
@@ -2340,11 +2348,16 @@ export const ProviderHealthLive = Layer.effect(
       );
 
     const refreshNow = Effect.gen(function* () {
+      const refreshRevision = (yield* serverSettings.getSnapshot).revision;
       // Drop the cached Claude subscription probe so switching accounts (login
       // / logout / add account outside the app) is reflected on the next
       // refresh instead of being pinned to the old account for up to 5 minutes.
       yield* Cache.invalidate(claudeSubscriptionCache, "claude");
       const loadedStatuses = yield* loadProviderStatuses;
+      if ((yield* serverSettings.getSnapshot).revision !== refreshRevision) {
+        const currentStatuses = yield* Ref.get(statusesRef);
+        return yield* projectStatusesForCurrentSettings(currentStatuses);
+      }
       const previousRawStatuses = yield* Ref.get(statusesRef);
       const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
       const stabilizedLoadedStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
@@ -2427,15 +2440,17 @@ export const ProviderHealthLive = Layer.effect(
     };
 
     const runUpdateCommand = Effect.fn("runProviderUpdateCommand")(function* (input: {
+      readonly provider: ProviderKind;
       readonly command: string;
       readonly args: ReadonlyArray<string>;
     }) {
-      const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: process.env });
+      const env = providerCommandEnv(input.provider);
+      const prepared = prepareWindowsSafeProcess(input.command, input.args, { env });
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
           ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-          env: process.env,
+          env,
         }),
       );
       yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
@@ -2502,6 +2517,7 @@ export const ProviderHealthLive = Layer.effect(
         );
 
         const commandResult = yield* runUpdateCommand({
+          provider,
           command: update.executable,
           args: update.args,
         }).pipe(

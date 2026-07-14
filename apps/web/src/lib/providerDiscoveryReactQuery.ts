@@ -144,7 +144,6 @@ export function providerCommandsQueryOptions(input: {
   threadId?: string | null;
   binaryPath?: string | null;
   serverUrl?: string | null;
-  serverPassword?: string | null;
   // Undefined means "not applicable" (non-OpenCode providers); the body normalizes it.
   experimentalWebSockets?: boolean | undefined;
   agentDir?: string | null;
@@ -153,7 +152,6 @@ export function providerCommandsQueryOptions(input: {
   const connectionKey = JSON.stringify({
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
-    hasServerPassword: Boolean(input.serverPassword),
     experimentalWebSockets: input.experimentalWebSockets ?? null,
   });
   return queryOptions({
@@ -174,7 +172,6 @@ export function providerCommandsQueryOptions(input: {
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
-        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
         ...(input.experimentalWebSockets !== undefined
           ? { experimentalWebSockets: input.experimentalWebSockets }
           : {}),

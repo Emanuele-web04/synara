@@ -6,7 +6,14 @@ import { delimiter as pathDelimiter, join as pathJoin } from "node:path";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { NetService } from "@synara/shared/Net";
+import {
+  getBooleanFlagValue,
+  optionalBooleanEnvironmentConfig,
+  optionalBooleanFlag,
+  type BooleanFlagInput,
+} from "@synara/shared/cli";
 import { Config, Data, Effect, Hash, Layer, Logger, Option, Path, Schema } from "effect";
+import * as ConfigProvider from "effect/ConfigProvider";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
@@ -49,11 +56,6 @@ const optionalStringConfig = (name: string): Config.Config<string | undefined> =
     Config.option,
     Config.map((value) => Option.getOrUndefined(value)),
   );
-const optionalBooleanConfig = (name: string): Config.Config<boolean | undefined> =>
-  Config.boolean(name).pipe(
-    Config.option,
-    Config.map((value) => Option.getOrUndefined(value)),
-  );
 const optionalPortConfig = (name: string): Config.Config<number | undefined> =>
   Config.port(name).pipe(
     Config.option,
@@ -75,6 +77,28 @@ const OffsetConfig = Config.all({
   devInstance: optionalStringConfig("SYNARA_DEV_INSTANCE"),
 });
 const HomeConfig = optionalStringConfig("SYNARA_HOME");
+const BooleanEnvConfig = Config.all({
+  noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
+  autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
+    "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+  ),
+  logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
+});
+
+export const readDevRunnerBooleanEnvironment = (environment: NodeJS.ProcessEnv) => {
+  const definedEnvironment = Object.fromEntries(
+    Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  return BooleanEnvConfig.parse(ConfigProvider.fromEnv({ env: definedEnvironment })).pipe(
+    Effect.mapError(
+      (cause) =>
+        new DevRunnerError({
+          message: "Failed to read boolean development-runner configuration.",
+          cause,
+        }),
+    ),
+  );
+};
 
 export function resolveOffset(config: {
   readonly portOffset: number | undefined;
@@ -149,15 +173,29 @@ export function createDevRunnerEnv({
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
     const resolvedBaseDir = yield* resolveBaseDir(synaraHome);
+    const configuredHost = host ?? "127.0.0.1";
+    // Brackets are URL syntax, not valid listen-host syntax. Keep the bind host
+    // portable while adding brackets back only when constructing an IPv6 URL.
+    const serverHost = configuredHost.replace(/^\[([^\]]+)\]$/, "$1");
+    const clientHost =
+      serverHost === "0.0.0.0"
+        ? "127.0.0.1"
+        : serverHost === "::"
+          ? "::1"
+          : serverHost;
+    const formattedClientHost = clientHost.includes(":")
+      ? `[${clientHost.replace(/^\[|\]$/g, "")}]`
+      : clientHost;
 
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
       SYNARA_PORT: String(serverPort),
       PORT: String(webPort),
       ELECTRON_RENDERER_PORT: String(webPort),
-      VITE_WS_URL: `ws://[::1]:${serverPort}`,
+      VITE_WS_URL: `ws://${formattedClientHost}:${serverPort}`,
       VITE_DEV_SERVER_URL: devUrl?.toString() ?? `http://localhost:${webPort}`,
       SYNARA_HOME: resolvedBaseDir,
+      SYNARA_HOST: serverHost,
     };
 
     const pathKey = process.platform === "win32" ? "Path" : "PATH";
@@ -170,10 +208,6 @@ export function createDevRunnerEnv({
       if (pathKey === "Path") {
         output.PATH = augmentedPath;
       }
-    }
-
-    if (host !== undefined) {
-      output.SYNARA_HOST = host;
     }
 
     if (authToken !== undefined) {
@@ -350,9 +384,9 @@ interface DevRunnerCliInput {
   readonly mode: DevMode;
   readonly synaraHome: string | undefined;
   readonly authToken: string | undefined;
-  readonly noBrowser: boolean | undefined;
-  readonly autoBootstrapProjectFromCwd: boolean | undefined;
-  readonly logWebSocketEvents: boolean | undefined;
+  readonly noBrowser: BooleanFlagInput;
+  readonly autoBootstrapProjectFromCwd: BooleanFlagInput;
+  readonly logWebSocketEvents: BooleanFlagInput;
   readonly host: string | undefined;
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
@@ -360,34 +394,28 @@ interface DevRunnerCliInput {
   readonly turboArgs: ReadonlyArray<string>;
 }
 
-const readOptionalBooleanEnv = (name: string): boolean | undefined => {
-  const value = process.env[name];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "1" || value.toLowerCase() === "true") {
-    return true;
-  }
-  if (value === "0" || value.toLowerCase() === "false") {
-    return false;
-  }
-  return undefined;
-};
+interface DevRunnerBooleanEnv {
+  readonly noBrowser: boolean | undefined;
+  readonly autoBootstrapProjectFromCwd: boolean | undefined;
+  readonly logWebSocketEvents: boolean | undefined;
+}
 
-const resolveOptionalBooleanOverride = (
-  explicitValue: boolean | undefined,
-  envValue: boolean | undefined,
-): boolean | undefined => {
-  if (explicitValue === true) {
-    return true;
-  }
-
-  if (explicitValue === false) {
-    return envValue;
-  }
-
-  return envValue;
-};
+export function resolveDevRunnerBooleanOverrides(
+  input: Pick<
+    DevRunnerCliInput,
+    "noBrowser" | "autoBootstrapProjectFromCwd" | "logWebSocketEvents"
+  >,
+  environment: DevRunnerBooleanEnv,
+): DevRunnerBooleanEnv {
+  return {
+    noBrowser: getBooleanFlagValue(input.noBrowser) ?? environment.noBrowser,
+    autoBootstrapProjectFromCwd:
+      getBooleanFlagValue(input.autoBootstrapProjectFromCwd) ??
+      environment.autoBootstrapProjectFromCwd,
+    logWebSocketEvents:
+      getBooleanFlagValue(input.logWebSocketEvents) ?? environment.logWebSocketEvents,
+  };
+}
 
 export function runDevRunnerWithInput(input: DevRunnerCliInput) {
   return Effect.gen(function* () {
@@ -410,11 +438,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         }),
     });
 
-    const envOverrides = {
-      noBrowser: readOptionalBooleanEnv("SYNARA_NO_BROWSER"),
-      autoBootstrapProjectFromCwd: readOptionalBooleanEnv("SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD"),
-      logWebSocketEvents: readOptionalBooleanEnv("SYNARA_LOG_WS_EVENTS"),
-    };
+    const envOverrides = yield* readDevRunnerBooleanEnvironment(process.env);
 
     const { serverOffset, webOffset } = yield* resolveModePortOffsets({
       mode: input.mode,
@@ -422,6 +446,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       hasExplicitServerPort: input.port !== undefined,
       hasExplicitDevUrl: input.devUrl !== undefined,
     });
+    const booleanOverrides = resolveDevRunnerBooleanOverrides(input, envOverrides);
 
     const env = yield* createDevRunnerEnv({
       mode: input.mode,
@@ -430,15 +455,9 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       webOffset,
       synaraHome: input.synaraHome,
       authToken: input.authToken,
-      noBrowser: resolveOptionalBooleanOverride(input.noBrowser, envOverrides.noBrowser),
-      autoBootstrapProjectFromCwd: resolveOptionalBooleanOverride(
-        input.autoBootstrapProjectFromCwd,
-        envOverrides.autoBootstrapProjectFromCwd,
-      ),
-      logWebSocketEvents: resolveOptionalBooleanOverride(
-        input.logWebSocketEvents,
-        envOverrides.logWebSocketEvents,
-      ),
+      noBrowser: booleanOverrides.noBrowser,
+      autoBootstrapProjectFromCwd: booleanOverrides.autoBootstrapProjectFromCwd,
+      logWebSocketEvents: booleanOverrides.logWebSocketEvents,
       host: input.host,
       port: input.port,
       devUrl: input.devUrl,
@@ -507,21 +526,19 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withAlias("token"),
     Flag.withFallbackConfig(optionalStringConfig("SYNARA_AUTH_TOKEN")),
   ),
-  noBrowser: Flag.boolean("no-browser").pipe(
-    Flag.withDescription("Browser auto-open toggle (equivalent to SYNARA_NO_BROWSER)."),
-    Flag.withFallbackConfig(optionalBooleanConfig("SYNARA_NO_BROWSER")),
-  ),
-  autoBootstrapProjectFromCwd: Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
-    Flag.withDescription(
-      "Auto-bootstrap toggle (equivalent to SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD).",
-    ),
-    Flag.withFallbackConfig(optionalBooleanConfig("SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD")),
-  ),
-  logWebSocketEvents: Flag.boolean("log-websocket-events").pipe(
-    Flag.withDescription("WebSocket event logging toggle (equivalent to SYNARA_LOG_WS_EVENTS)."),
-    Flag.withAlias("log-ws-events"),
-    Flag.withFallbackConfig(optionalBooleanConfig("SYNARA_LOG_WS_EVENTS")),
-  ),
+  noBrowser: optionalBooleanFlag("no-browser", {
+    description: "Disable browser auto-open (equivalent to SYNARA_NO_BROWSER).",
+    negativeName: "browser",
+    negativeDescription: "Enable browser auto-open.",
+  }),
+  autoBootstrapProjectFromCwd: optionalBooleanFlag("auto-bootstrap-project-from-cwd", {
+    description:
+      "Enable project auto-bootstrap (equivalent to SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD).",
+  }),
+  logWebSocketEvents: optionalBooleanFlag("log-websocket-events", {
+    description: "Enable WebSocket event logging (equivalent to SYNARA_LOG_WS_EVENTS).",
+    aliases: ["log-ws-events"],
+  }),
   host: Flag.string("host").pipe(
     Flag.withDescription("Server host/interface override (forwards to SYNARA_HOST)."),
     Flag.withFallbackConfig(optionalStringConfig("SYNARA_HOST")),

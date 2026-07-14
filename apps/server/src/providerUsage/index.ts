@@ -1,6 +1,6 @@
 // FILE: providerUsage/index.ts
-// Purpose: Orchestrate the live provider-usage fetchers — per-provider TTL cache, defensive
-// batch fetch (one failure never blocks the others), and enrichment of Codex/Claude live
+// Purpose: Orchestrate the live provider-usage fetchers — defensive batch fetch (one failure never
+// blocks the others), and enrichment of Codex/Claude live
 // snapshots with the locally-derived token-total usage lines. Exposes both a plain async API
 // (for tests) and an Effect that reads ServerConfig (for the WS RPC handler).
 
@@ -13,23 +13,20 @@ import type {
 import { Effect } from "effect";
 
 import { ServerConfig } from "../config";
+import {
+  buildProviderChildEnvironment,
+  type ProviderChildKind,
+} from "../providerChildEnvironment";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";
 import type { ProviderUsageContext } from "./types";
 
-const LIVE_USAGE_TTL_MS = 60_000;
-
 // Providers whose live snapshot is enriched with on-disk token-total lines (24h/7d/30d).
 const LOCAL_ARCHIVE_PROVIDERS: ReadonlySet<ProviderKind> = new Set(["codex", "claudeAgent"]);
 
-interface CacheEntry {
-  expiresAtMs: number;
-  value: ServerProviderUsageSnapshot | null;
-  pending: Promise<ServerProviderUsageSnapshot> | null;
-}
-
-const liveUsageCache = new Map<string, CacheEntry>();
+const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
+  provider === "claudeAgent" ? "claude" : provider;
 
 function buildContext(): ProviderUsageContext {
   return {
@@ -40,47 +37,27 @@ function buildContext(): ProviderUsageContext {
   };
 }
 
-async function fetchProviderUsageCached(
+async function fetchProviderUsage(
   provider: ProviderKind,
   ctx: ProviderUsageContext,
-  options: { forceRefresh?: boolean } = {},
 ): Promise<ServerProviderUsageSnapshot | null> {
   const fetcher = PROVIDER_USAGE_FETCHERS[provider];
   if (!fetcher) {
     return null;
   }
 
-  const cacheKey = `${provider}:${ctx.homeDir}`;
-  const existing = liveUsageCache.get(cacheKey);
-  if (!options.forceRefresh && existing && existing.value && existing.expiresAtMs > ctx.nowMs) {
-    return existing.value;
-  }
-  if (!options.forceRefresh && existing?.pending) {
-    return existing.pending;
-  }
-
-  const pending = fetcher
-    .fetch(ctx)
+  const providerContext: ProviderUsageContext = {
+    ...ctx,
+    env: buildProviderChildEnvironment({
+      provider: providerChildKind(provider),
+      baseEnv: ctx.env,
+    }),
+  };
+  return fetcher
+    .fetch(providerContext)
     .catch(() =>
       errorSnapshot(provider, ctx.nowMs, "live-usage", "Usage fetch failed unexpectedly."),
-    )
-    .then((value) => {
-      const status = value.status ?? "ok";
-      liveUsageCache.set(cacheKey, {
-        expiresAtMs: status === "ok" ? Date.now() + LIVE_USAGE_TTL_MS : 0,
-        value,
-        pending: null,
-      });
-      return value;
-    });
-
-  liveUsageCache.set(cacheKey, {
-    expiresAtMs: existing?.expiresAtMs ?? 0,
-    value: existing?.value ?? null,
-    pending,
-  });
-
-  return pending;
+    );
 }
 
 async function enrichWithLocalUsage(
@@ -110,7 +87,7 @@ export async function collectProviderUsageSnapshots(
     : (Object.keys(PROVIDER_USAGE_FETCHERS) as ProviderKind[]);
   const settled = await Promise.allSettled(
     providers.map(async (provider) => {
-      const snapshot = await fetchProviderUsageCached(provider, ctx, options);
+      const snapshot = await fetchProviderUsage(provider, ctx);
       return snapshot ? enrichWithLocalUsage(snapshot, ctx) : null;
     }),
   );

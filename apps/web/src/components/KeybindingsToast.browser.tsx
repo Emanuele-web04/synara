@@ -279,28 +279,6 @@ function queryToastTitles(): string[] {
   );
 }
 
-async function waitForElement<T extends Element>(
-  query: () => T | null,
-  errorMessage: string,
-): Promise<T> {
-  let element: T | null = null;
-  await vi.waitFor(
-    () => {
-      element = query();
-      expect(element, errorMessage).toBeTruthy();
-    },
-    { timeout: 8_000, interval: 16 },
-  );
-  return element!;
-}
-
-async function waitForComposerEditor(): Promise<HTMLElement> {
-  return waitForElement(
-    () => document.querySelector<HTMLElement>('[data-testid="composer-editor"]'),
-    "App should render composer editor",
-  );
-}
-
 async function waitForToast(title: string, count = 1): Promise<void> {
   await vi.waitFor(
     () => {
@@ -333,12 +311,18 @@ async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${THREAD_ID}`] }));
 
   const screen = await render(<RouterProvider router={router} />, { container: host });
-  await waitForComposerEditor();
+  await vi.waitFor(() => expect(serverConfigStreamRequestId).toBeTruthy(), {
+    timeout: 8_000,
+    interval: 16,
+  });
+  let cleanedUp = false;
 
   return {
     cleanup: async () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       await screen.unmount();
-      host.remove();
+      if (host.isConnected) host.remove();
     },
   };
 }

@@ -4,6 +4,7 @@
 // Depends on: DesktopBrowserManager and Node net server primitives
 
 import * as FS from "node:fs";
+import * as Crypto from "node:crypto";
 import * as Net from "node:net";
 import * as OS from "node:os";
 import * as Path from "node:path";
@@ -14,6 +15,9 @@ import type { DesktopBrowserManager } from "./browserManager";
 
 const BROWSER_USE_HEADER_BYTES = 4;
 const BROWSER_USE_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+const BROWSER_USE_MAX_CLIENTS = 8;
+const BROWSER_USE_MAX_IN_FLIGHT_REQUESTS = 16;
+const BROWSER_USE_MAX_QUEUED_OUTPUT_BYTES = 1024 * 1024;
 const BROWSER_USE_INITIAL_URL = "about:blank";
 const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
 const BROWSER_USE_PANEL_READY_POLL_MS = 50;
@@ -31,8 +35,19 @@ interface BrowserUseRpcRequest {
 
 interface BrowserUseTrackedTab {
   id: number;
+  leaseId: string;
   threadId: ThreadId;
   tabId: string;
+}
+
+interface BrowserUseClient {
+  readonly leaseId: string;
+  readonly socket: Net.Socket;
+  pending: Buffer;
+  inFlightRequests: number;
+  boundThreadId: ThreadId | null;
+  selectedTrackedTabId: number | null;
+  disposeCdpListener: (() => void) | null;
 }
 
 interface BrowserUsePipeServerOptions {
@@ -41,13 +56,11 @@ interface BrowserUsePipeServerOptions {
 }
 
 export function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
-  if (platform === "win32") {
-    return String.raw`\\.\pipe\codex-browser-use-${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}`;
-  }
+  if (platform === "win32") return "";
   return Path.join(
     OS.tmpdir(),
     BROWSER_USE_PIPE_DIR,
-    `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}.sock`,
+    `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}-${Crypto.randomUUID()}.sock`,
   );
 }
 
@@ -55,6 +68,7 @@ export function resolveConfiguredBrowserUsePipePath(
   env: NodeJS.ProcessEnv = process.env,
   platform = process.platform,
 ): string {
+  if (platform === "win32") return "";
   const configured = env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim();
   return configured || resolveDefaultBrowserUsePipePath(platform);
 }
@@ -76,12 +90,11 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function requireSessionId(params: unknown): string {
+function requireLeaseId(params: unknown, expectedLeaseId: string): void {
   const sessionId = asString(asObject(params)?.session_id);
-  if (!sessionId) {
-    throw new Error("Missing required browser session_id");
+  if (sessionId !== expectedLeaseId) {
+    throw new Error("Missing or invalid browser capability lease");
   }
-  return sessionId;
 }
 
 function encodeBrowserUseFrame(message: unknown): Buffer {
@@ -120,34 +133,37 @@ function decodeBrowserUseFrames(buffer: Buffer): { messages: string[]; remaining
 }
 
 function ensurePipeParentDirectory(pipePath: string): void {
-  if (process.platform === "win32") {
-    return;
+  const parent = Path.dirname(pipePath);
+  FS.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const stat = FS.lstatSync(parent);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Browser-use pipe parent is not a private directory: ${parent}`);
   }
-  FS.mkdirSync(Path.dirname(pipePath), { recursive: true });
+  if (process.getuid && stat.uid !== process.getuid()) {
+    throw new Error(`Browser-use pipe parent is not owned by this user: ${parent}`);
+  }
+  FS.chmodSync(parent, 0o700);
 }
 
 function cleanupPipePath(pipePath: string): void {
-  if (process.platform === "win32") {
-    return;
-  }
   try {
     const stat = FS.lstatSync(pipePath);
-    if (!stat.isSocket() && !stat.isFile()) {
-      return;
+    if (stat.isSymbolicLink() || (!stat.isSocket() && !stat.isFile())) {
+      throw new Error(`Refusing to replace unsafe browser-use pipe path: ${pipePath}`);
     }
     FS.unlinkSync(pipePath);
-  } catch {
-    // Ignore stale socket cleanup failures.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
   }
 }
 
 export class BrowserUsePipeServer {
   private readonly sockets = new Set<Net.Socket>();
-  private readonly pendingBySocket = new Map<Net.Socket, Buffer>();
+  private readonly clientBySocket = new Map<Net.Socket, BrowserUseClient>();
   private readonly trackedTabByKey = new Map<string, BrowserUseTrackedTab>();
   private readonly trackedTabById = new Map<number, BrowserUseTrackedTab>();
-  private readonly selectedTrackedTabIdBySessionId = new Map<string, number>();
-  private readonly cdpListenerDisposeBySessionId = new Map<string, () => void>();
   private readonly server: Net.Server;
   private readonly pipePath: string;
   private readonly requestOpenPanel: (() => void | Promise<void>) | undefined;
@@ -168,28 +184,34 @@ export class BrowserUsePipeServer {
     if (this.started) {
       return;
     }
+    if (!this.pipePath) {
+      throw new Error("Browser-use native pipe is disabled without a proven private Windows ACL");
+    }
     ensurePipeParentDirectory(this.pipePath);
     cleanupPipePath(this.pipePath);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
-      this.server.listen(this.pipePath, () => {
-        this.server.off("error", reject);
-        resolve();
-      });
+      this.server.listen(
+        { path: this.pipePath, readableAll: false, writableAll: false },
+        () => {
+          this.server.off("error", reject);
+          resolve();
+        },
+      );
     });
+    FS.chmodSync(this.pipePath, 0o600);
     this.started = true;
   }
 
   async dispose(): Promise<void> {
-    for (const dispose of this.cdpListenerDisposeBySessionId.values()) {
-      dispose();
+    for (const client of this.clientBySocket.values()) {
+      client.disposeCdpListener?.();
     }
-    this.cdpListenerDisposeBySessionId.clear();
     for (const socket of this.sockets) {
       socket.destroy();
     }
     this.sockets.clear();
-    this.pendingBySocket.clear();
+    this.clientBySocket.clear();
     if (this.started) {
       await new Promise<void>((resolve) => {
         this.server.close(() => resolve());
@@ -200,36 +222,62 @@ export class BrowserUsePipeServer {
   }
 
   private handleSocketConnection(socket: Net.Socket): void {
-    this.sockets.add(socket);
-    this.pendingBySocket.set(socket, Buffer.alloc(0));
-    socket.on("data", (chunk) => this.handleSocketData(socket, chunk));
-    socket.on("close", () => {
-      this.sockets.delete(socket);
-      this.pendingBySocket.delete(socket);
-    });
-    socket.on("error", () => {
-      this.sockets.delete(socket);
-      this.pendingBySocket.delete(socket);
-      socket.destroy();
-    });
-  }
-
-  private handleSocketData(socket: Net.Socket, chunk: Buffer): void {
-    const decoded = decodeBrowserUseFrames(
-      Buffer.concat([this.pendingBySocket.get(socket) ?? Buffer.alloc(0), chunk]),
-    );
-    if (!decoded) {
-      this.pendingBySocket.delete(socket);
+    if (this.sockets.size >= BROWSER_USE_MAX_CLIENTS) {
       socket.destroy();
       return;
     }
-    this.pendingBySocket.set(socket, decoded.remaining);
-    for (const message of decoded.messages) {
-      void this.handleIncomingMessage(socket, message);
+    const client: BrowserUseClient = {
+      leaseId: Crypto.randomUUID(),
+      socket,
+      pending: Buffer.alloc(0),
+      inFlightRequests: 0,
+      boundThreadId: null,
+      selectedTrackedTabId: null,
+      disposeCdpListener: null,
+    };
+    this.sockets.add(socket);
+    this.clientBySocket.set(socket, client);
+    socket.on("data", (chunk) => this.handleSocketData(socket, chunk));
+    socket.on("close", () => this.releaseClient(client));
+    socket.on("error", () => this.releaseClient(client));
+  }
+
+  private releaseClient(client: BrowserUseClient): void {
+    client.disposeCdpListener?.();
+    client.disposeCdpListener = null;
+    this.sockets.delete(client.socket);
+    this.clientBySocket.delete(client.socket);
+    for (const [id, tracked] of this.trackedTabById) {
+      if (tracked.leaseId !== client.leaseId) continue;
+      this.trackedTabById.delete(id);
+      this.trackedTabByKey.delete(`${tracked.leaseId}:${tracked.threadId}:${tracked.tabId}`);
     }
   }
 
-  private async handleIncomingMessage(socket: Net.Socket, rawMessage: string): Promise<void> {
+  private handleSocketData(socket: Net.Socket, chunk: Buffer): void {
+    const client = this.clientBySocket.get(socket);
+    if (!client) return;
+    const decoded = decodeBrowserUseFrames(
+      Buffer.concat([client.pending, chunk]),
+    );
+    if (!decoded) {
+      socket.destroy();
+      return;
+    }
+    client.pending = decoded.remaining;
+    for (const message of decoded.messages) {
+      if (client.inFlightRequests >= BROWSER_USE_MAX_IN_FLIGHT_REQUESTS) {
+        socket.destroy();
+        return;
+      }
+      client.inFlightRequests += 1;
+      void this.handleIncomingMessage(client, message).finally(() => {
+        client.inFlightRequests -= 1;
+      });
+    }
+  }
+
+  private async handleIncomingMessage(client: BrowserUseClient, rawMessage: string): Promise<void> {
     let request: BrowserUseRpcRequest;
     try {
       request = JSON.parse(rawMessage) as BrowserUseRpcRequest;
@@ -242,50 +290,56 @@ export class BrowserUsePipeServer {
     }
 
     try {
-      const result = await this.handleRequest(request.method, request.params);
-      socket.write(encodeBrowserUseFrame({ jsonrpc: "2.0", id: request.id, result }));
+      const result = await this.handleRequest(client, request.method, request.params);
+      this.writeToClient(client, { jsonrpc: "2.0", id: request.id, result });
     } catch (error) {
-      socket.write(
-        encodeBrowserUseFrame({
+      this.writeToClient(client, {
           jsonrpc: "2.0",
           id: request.id,
           error: {
             code: 1,
             message: error instanceof Error ? error.message : String(error),
           },
-        }),
-      );
+      });
     }
   }
 
-  private async handleRequest(method: string, params: unknown): Promise<unknown> {
+  private async handleRequest(
+    client: BrowserUseClient,
+    method: string,
+    params: unknown,
+  ): Promise<unknown> {
     switch (method) {
       case "ping":
         return "pong";
       case "getInfo":
-        const sessionId = asString(asObject(params)?.session_id);
         return {
           name: "Synara In-app Browser",
           version: "0.1.0",
           type: "iab",
-          ...(sessionId ? { metadata: { codexSessionId: sessionId } } : {}),
+          metadata: { sessionId: client.leaseId },
         };
       case "getTabs":
-        return this.getTabsForSession(requireSessionId(params));
+        requireLeaseId(params, client.leaseId);
+        return this.getTabsForClient(client);
       case "createTab":
-        return this.createTabForSession(requireSessionId(params));
+        requireLeaseId(params, client.leaseId);
+        return this.createTabForClient(client);
       case "nameSession":
-        requireSessionId(params);
+        requireLeaseId(params, client.leaseId);
         if (!asString(asObject(params)?.name)) {
           throw new Error("nameSession requires a name");
         }
         return {};
       case "attach":
-        return this.attachForSession(requireSessionId(params), params);
+        requireLeaseId(params, client.leaseId);
+        return this.attachForClient(client, params);
       case "detach":
-        return this.detachForSession(requireSessionId(params));
+        requireLeaseId(params, client.leaseId);
+        return this.detachForClient(client);
       case "executeCdp":
-        return this.executeCdpForSession(requireSessionId(params), params);
+        requireLeaseId(params, client.leaseId);
+        return this.executeCdpForClient(client, params);
       default:
         throw new Error(`No handler registered for method: ${method}`);
     }
@@ -323,14 +377,26 @@ export class BrowserUsePipeServer {
     return null;
   }
 
-  private trackTab(threadId: ThreadId, tabId: string): BrowserUseTrackedTab {
-    const key = `${threadId}:${tabId}`;
+  private bindClientToThread(client: BrowserUseClient, threadId: ThreadId): void {
+    if (client.boundThreadId !== null && client.boundThreadId !== threadId) {
+      throw new Error("Browser capability lease is stale for the active thread");
+    }
+    client.boundThreadId = threadId;
+  }
+
+  private trackTab(
+    client: BrowserUseClient,
+    threadId: ThreadId,
+    tabId: string,
+  ): BrowserUseTrackedTab {
+    const key = `${client.leaseId}:${threadId}:${tabId}`;
     const existing = this.trackedTabByKey.get(key);
     if (existing) {
       return existing;
     }
     const tracked = {
       id: this.nextTrackedTabId,
+      leaseId: client.leaseId,
       threadId,
       tabId,
     } satisfies BrowserUseTrackedTab;
@@ -340,7 +406,7 @@ export class BrowserUsePipeServer {
     return tracked;
   }
 
-  private getTabsForSession(sessionId: string): Array<{
+  private getTabsForClient(client: BrowserUseClient): Array<{
     id: number;
     title: string;
     active: boolean;
@@ -350,21 +416,21 @@ export class BrowserUsePipeServer {
     if (!snapshot) {
       return [];
     }
-    const selectedTrackedTabId = this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
+    this.bindClientToThread(client, snapshot.threadId);
     return snapshot.state.tabs.map((tab) => {
-      const tracked = this.trackTab(snapshot.threadId, tab.id);
+      const tracked = this.trackTab(client, snapshot.threadId, tab.id);
       return {
         id: tracked.id,
         title: tab.title,
         active:
-          selectedTrackedTabId === tracked.id ||
-          (selectedTrackedTabId === null && snapshot.state.activeTabId === tab.id),
+          client.selectedTrackedTabId === tracked.id ||
+          (client.selectedTrackedTabId === null && snapshot.state.activeTabId === tab.id),
         url: tab.lastCommittedUrl ?? tab.url,
       };
     });
   }
 
-  private async createTabForSession(sessionId: string): Promise<{
+  private async createTabForClient(client: BrowserUseClient): Promise<{
     id: number;
     title: string;
     active: boolean;
@@ -374,6 +440,7 @@ export class BrowserUsePipeServer {
     if (!snapshot) {
       throw new Error("No active Synara browser pane available");
     }
+    this.bindClientToThread(client, snapshot.threadId);
     const nextState = this.browserManager.newTab({
       threadId: snapshot.threadId,
       url: BROWSER_USE_INITIAL_URL,
@@ -384,8 +451,8 @@ export class BrowserUsePipeServer {
     if (!activeTab) {
       throw new Error("Could not create a browser tab.");
     }
-    const tracked = this.trackTab(snapshot.threadId, activeTab.id);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    const tracked = this.trackTab(client, snapshot.threadId, activeTab.id);
+    client.selectedTrackedTabId = tracked.id;
     return {
       id: tracked.id,
       title: activeTab.title,
@@ -394,27 +461,38 @@ export class BrowserUsePipeServer {
     };
   }
 
-  private resolveTrackedTabForSession(sessionId: string, params: unknown): BrowserUseTrackedTab {
+  private resolveTrackedTabForClient(
+    client: BrowserUseClient,
+    params: unknown,
+  ): BrowserUseTrackedTab {
     const requestedTrackedTabId = asNumber(asObject(params)?.tabId);
-    const trackedTabId =
-      requestedTrackedTabId ?? this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
+    const trackedTabId = requestedTrackedTabId ?? client.selectedTrackedTabId;
     if (trackedTabId === null) {
       throw new Error("No browser tab selected for this session.");
     }
     const tracked = this.trackedTabById.get(trackedTabId);
-    if (!tracked) {
+    if (!tracked || tracked.leaseId !== client.leaseId) {
       throw new Error(`Unknown tab: ${trackedTabId}`);
     }
+    const snapshot = this.getActiveBrowserHostState();
+    if (
+      !snapshot ||
+      snapshot.threadId !== tracked.threadId ||
+      !snapshot.state.tabs.some((tab) => tab.id === tracked.tabId)
+    ) {
+      throw new Error(`Stale tab: ${trackedTabId}`);
+    }
+    this.bindClientToThread(client, tracked.threadId);
     return tracked;
   }
 
-  private async attachForSession(
-    sessionId: string,
+  private async attachForClient(
+    client: BrowserUseClient,
     params: unknown,
   ): Promise<Record<string, never>> {
-    const tracked = this.resolveTrackedTabForSession(sessionId, params);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
-    this.cdpListenerDisposeBySessionId.get(sessionId)?.();
+    const tracked = this.resolveTrackedTabForClient(client, params);
+    client.selectedTrackedTabId = tracked.id;
+    client.disposeCdpListener?.();
     await this.browserManager.attachBrowserUseTab({
       threadId: tracked.threadId,
       tabId: tracked.tabId,
@@ -425,33 +503,37 @@ export class BrowserUsePipeServer {
         tabId: tracked.tabId,
       },
       (event) => {
-        this.broadcastNotification("onCDPEvent", {
+        this.writeToClient(client, {
+          jsonrpc: "2.0",
+          method: "onCDPEvent",
+          params: {
           source: {
             tabId: tracked.id,
           },
           method: event.method,
           ...(event.params !== undefined ? { params: event.params } : {}),
+          },
         });
       },
     );
-    this.cdpListenerDisposeBySessionId.set(sessionId, dispose);
+    client.disposeCdpListener = dispose;
     return {};
   }
 
-  private async detachForSession(sessionId: string): Promise<Record<string, never>> {
-    this.cdpListenerDisposeBySessionId.get(sessionId)?.();
-    this.cdpListenerDisposeBySessionId.delete(sessionId);
+  private async detachForClient(client: BrowserUseClient): Promise<Record<string, never>> {
+    client.disposeCdpListener?.();
+    client.disposeCdpListener = null;
     return {};
   }
 
-  private async executeCdpForSession(sessionId: string, params: unknown): Promise<unknown> {
+  private async executeCdpForClient(client: BrowserUseClient, params: unknown): Promise<unknown> {
     const request = asObject(params);
     const method = asString(request?.method);
     if (!method) {
       throw new Error("executeCdp requires a method");
     }
-    const tracked = this.resolveTrackedTabForSession(sessionId, asObject(request?.target) ?? null);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    const tracked = this.resolveTrackedTabForClient(client, asObject(request?.target) ?? null);
+    client.selectedTrackedTabId = tracked.id;
     const commandParams = asObject(request?.commandParams);
     return this.browserManager.executeCdp({
       threadId: tracked.threadId,
@@ -461,16 +543,15 @@ export class BrowserUsePipeServer {
     } satisfies BrowserExecuteCdpInput);
   }
 
-  private broadcastNotification(method: string, params: unknown): void {
-    const payload = encodeBrowserUseFrame({
-      jsonrpc: "2.0",
-      method,
-      params,
-    });
-    for (const socket of this.sockets) {
-      if (!socket.destroyed) {
-        socket.write(payload);
-      }
+  private writeToClient(client: BrowserUseClient, message: unknown): void {
+    const { socket } = client;
+    if (socket.destroyed || socket.writableLength > BROWSER_USE_MAX_QUEUED_OUTPUT_BYTES) {
+      socket.destroy();
+      return;
+    }
+    const didAccept = socket.write(encodeBrowserUseFrame(message));
+    if (!didAccept && socket.writableLength > BROWSER_USE_MAX_QUEUED_OUTPUT_BYTES) {
+      socket.destroy();
     }
   }
 }

@@ -20,10 +20,6 @@ import {
 } from "./_internal/shared.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
-const RequestPermissionRequest = jsonRpcRequest(
-  "session/request_permission",
-  AcpSchema.RequestPermissionRequest,
-);
 const InitializeRequest = jsonRpcRequest("initialize", AcpSchema.InitializeRequest);
 const InitializeResponse = jsonRpcResponse(AcpSchema.InitializeResponse);
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
@@ -32,8 +28,11 @@ const SessionCancelNotification = jsonRpcNotification(
   AcpSchema.CancelNotification,
 );
 const ExtPingNotification = jsonRpcNotification("x/ping", Schema.Struct({ count: Schema.Number }));
-const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+
+function decodeWireJson(value: string | Uint8Array): unknown {
+  return JSON.parse(typeof value === "string" ? value : new TextDecoder().decode(value));
+}
 
 it.effect("effect-acp agent handles core agent requests and outbound client requests", () =>
   Effect.gen(function* () {
@@ -83,9 +82,12 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
         })
         .pipe(Effect.forkScoped);
 
-      const permissionRequest = yield* Schema.decodeEffect(
-        Schema.fromJsonString(RequestPermissionRequest),
-      )(yield* Queue.take(output));
+      const permissionRequest = decodeWireJson(yield* Queue.take(output)) as {
+        jsonrpc: string;
+        id: string | number;
+        method: string;
+        params: typeof AcpSchema.RequestPermissionRequest.Type;
+      };
       assert.equal(permissionRequest.jsonrpc, "2.0");
       assert.equal(permissionRequest.method, "session/request_permission");
       assert.deepEqual(permissionRequest.params, {
@@ -96,7 +98,6 @@ it.effect("effect-acp agent handles core agent requests and outbound client requ
         },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
       });
-      assert.deepEqual(permissionRequest.headers, []);
 
       yield* Queue.offer(
         input,
@@ -205,23 +206,17 @@ it.effect("effect-acp agent uses distinct ids for RPC calls and extension reques
       const firstOutbound = yield* Queue.take(output);
       const secondOutbound = yield* Queue.take(output);
 
-      const decodedPermission = Schema.decodeEffect(
-        Schema.fromJsonString(RequestPermissionRequest),
+      const decoded = [firstOutbound, secondOutbound].map(
+        (outbound) =>
+          decodeWireJson(outbound) as {
+            id: string | number;
+            method: string;
+          },
       );
-      const decodedExt = Schema.decodeEffect(Schema.fromJsonString(ExtRequest));
-      const firstIsPermission = yield* decodedPermission(firstOutbound).pipe(
-        Effect.match({
-          onFailure: () => false,
-          onSuccess: () => true,
-        }),
-      );
-
-      const permissionRequest = firstIsPermission
-        ? yield* decodedPermission(firstOutbound)
-        : yield* decodedPermission(secondOutbound);
-      const extRequest = firstIsPermission
-        ? yield* decodedExt(secondOutbound)
-        : yield* decodedExt(firstOutbound);
+      const permissionRequest = decoded.find(
+        (request) => request.method === "session/request_permission",
+      )!;
+      const extRequest = decoded.find((request) => request.method === "x/test")!;
 
       assert.notEqual(permissionRequest.id, extRequest.id);
 

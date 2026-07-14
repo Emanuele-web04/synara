@@ -309,24 +309,33 @@ async function mountApp(options?: {
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${routeThreadId}`] }));
   const screen = await render(<RouterProvider router={router} />, { container: host });
 
-  await vi.waitFor(
-    () => {
-      if (options?.waitForThreadId === null) {
-        expect(useStore.getState().threadsHydrated).toBe(true);
-        return;
-      }
-      const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
-      expect(useStore.getState().threads.some((thread) => thread.id === expectedThreadId)).toBe(
-        true,
-      );
-    },
-    { timeout: 8_000, interval: 16 },
-  );
+  try {
+    await vi.waitFor(
+      () => {
+        if (options?.waitForThreadId === null) {
+          expect(useStore.getState().threadsHydrated).toBe(true);
+          return;
+        }
+        const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
+        expect(useStore.getState().threads.some((thread) => thread.id === expectedThreadId)).toBe(
+          true,
+        );
+      },
+      { timeout: 8_000, interval: 16 },
+    );
+  } catch (cause) {
+    await screen.unmount();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
+  let cleanedUp = false;
 
   return {
     cleanup: async () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       await screen.unmount();
-      host.remove();
+      if (host.isConnected) host.remove();
     },
   };
 }
@@ -484,15 +493,6 @@ describe("EventRouter scoped orchestration sync", () => {
 
       sendThreadEventPush(firstAssistantChunk);
 
-      await new Promise((resolve) => window.setTimeout(resolve, 120));
-
-      const threadAfterDuplicate = useStore.getState();
-      expect(
-        getThreadFromState(threadAfterDuplicate, THREAD_ID)?.messages.filter(
-          (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
-        ),
-      ).toHaveLength(1);
-
       const secondAssistantChunk = {
         ...firstAssistantChunk,
         sequence: 3,
@@ -516,6 +516,11 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello world");
           expect(message?.streaming).toBe(false);
+          expect(
+            thread?.messages.filter(
+              (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
+            ),
+          ).toHaveLength(1);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -830,40 +835,98 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   it("recovers buffered thread events by re-requesting the missing thread snapshot", async () => {
-    delayNextThreadSnapshot = true;
-    const mounted = await mountApp();
+    const recoveryThreadId = ThreadId.makeUnsafe("thread-buffered-recovery");
+    const bufferedEvent = {
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-buffered-message"),
+      aggregateKind: "thread",
+      aggregateId: recoveryThreadId,
+      occurredAt: "2026-03-04T12:00:07.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: recoveryThreadId,
+        messageId: MessageId.makeUnsafe("msg-buffered-assistant"),
+        role: "assistant",
+        text: "buffered reply",
+        turnId: TurnId.makeUnsafe("turn-2"),
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:07.000Z",
+        updatedAt: "2026-03-04T12:00:07.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {
+        [recoveryThreadId]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          isTemporary: false,
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [PROJECT_ID]: recoveryThreadId,
+      },
+    });
+    const mounted = await mountApp({ routeThreadId: recoveryThreadId, waitForThreadId: null });
 
     try {
-      const bufferedEvent = {
-        sequence: 2,
-        eventId: EventId.makeUnsafe("event-buffered-message"),
-        aggregateKind: "thread",
-        aggregateId: THREAD_ID,
-        occurredAt: "2026-03-04T12:00:07.000Z",
-        commandId: null,
-        causationEventId: null,
-        correlationId: null,
-        metadata: {},
-        type: "thread.message-sent",
-        payload: {
-          threadId: THREAD_ID,
-          messageId: MessageId.makeUnsafe("msg-buffered-assistant"),
-          role: "assistant",
-          text: "buffered reply",
-          turnId: TurnId.makeUnsafe("turn-2"),
-          source: "native",
-          streaming: false,
-          createdAt: "2026-03-04T12:00:07.000Z",
-          updatedAt: "2026-03-04T12:00:07.000Z",
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
         },
-      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-
+        { timeout: 4_000, interval: 16 },
+      );
       sendThreadEventPush(bufferedEvent);
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const baseThread = fixture.snapshot.threads[0]!;
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: 2,
+        threads: [
+          ...fixture.snapshot.threads,
+          {
+            ...baseThread,
+            id: recoveryThreadId,
+            title: "Buffered recovery thread",
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            checkpoints: [],
+            latestTurn: null,
+            updatedAt: "2026-03-04T12:00:08.000Z",
+          } satisfies OrchestrationReadModel["threads"][number],
+        ],
+      };
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 2,
+        thread: createShellSnapshotFromReadModel(fixture.snapshot).threads.find(
+          (thread) => thread.id === recoveryThreadId,
+        )!,
+      });
 
       let thread;
       await vi.waitFor(
         () => {
-          thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(3);
+          thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
           );
@@ -876,7 +939,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
       await new Promise((resolve) => window.setTimeout(resolve, 120));
 
-      thread = getThreadFromState(useStore.getState(), THREAD_ID);
+      thread = getThreadFromState(useStore.getState(), recoveryThreadId);
       expect(
         thread?.messages.filter(
           (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),

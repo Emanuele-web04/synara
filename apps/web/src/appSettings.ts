@@ -10,10 +10,11 @@ import {
   type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_SERVER_SETTINGS_VIEW,
   TrimmedNonEmptyString,
   ProviderKind,
   type ProviderStartOptions,
-  type ServerSettings,
+  type ServerSettingsView,
   type ServerSettingsPatch,
 } from "@synara/contracts";
 import {
@@ -152,6 +153,7 @@ export const AppSettingsSchema = Schema.Struct({
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  kiloServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -159,6 +161,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
   ),
+  openCodeServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -429,6 +432,10 @@ function normalizeProviderBinaryPathOverride(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    // Password fields are accepted only as write-only update patches. Never retain
+    // reusable provider credentials in browser state or localStorage.
+    kiloServerPassword: "",
+    openCodeServerPassword: "",
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
@@ -460,7 +467,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   };
 }
 
-function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
+function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     codexBinaryPath: settings.providers.codex.binaryPath,
@@ -474,11 +481,11 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
-    kiloServerPassword: settings.providers.kilo.serverPassword,
+    kiloServerPasswordConfigured: settings.providers.kilo.serverPasswordConfigured,
     kiloServerUrl: settings.providers.kilo.serverUrl,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
     openCodeExperimentalWebSockets: settings.providers.opencode.experimentalWebSockets,
-    openCodeServerPassword: settings.providers.opencode.serverPassword,
+    openCodeServerPasswordConfigured: settings.providers.opencode.serverPasswordConfigured,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
     piAgentDir: settings.providers.pi.agentDir,
     piBinaryPath: settings.providers.pi.binaryPath,
@@ -700,6 +707,15 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     }
   }
 
+  // Migrate legacy browser-stored passwords once before normalizeAppSettings
+  // scrubs them from local state. All subsequent reads use redacted server views.
+  if (settings.kiloServerPassword.trim()) {
+    patch.kiloServerPassword = settings.kiloServerPassword;
+  }
+  if (settings.openCodeServerPassword.trim()) {
+    patch.openCodeServerPassword = settings.openCodeServerPassword;
+  }
+
   for (const key of [
     "customCodexModels",
     "customClaudeModels",
@@ -919,11 +935,9 @@ export function getProviderStartOptions(
     | "grokBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
-    | "kiloServerPassword"
     | "kiloServerUrl"
     | "openCodeBinaryPath"
     | "openCodeExperimentalWebSockets"
-    | "openCodeServerPassword"
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
@@ -947,8 +961,7 @@ export function getProviderStartOptions(
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets ||
-    settings.openCodeServerUrl ||
-    settings.openCodeServerPassword,
+    settings.openCodeServerUrl,
   );
   const providerOptions: ProviderStartOptions = {
     ...(codexBinaryPath || settings.codexHomePath
@@ -995,12 +1008,11 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
+    ...(kiloBinaryPath || settings.kiloServerUrl
       ? {
           kilo: {
             ...(kiloBinaryPath ? { binaryPath: kiloBinaryPath } : {}),
             ...(settings.kiloServerUrl ? { serverUrl: settings.kiloServerUrl } : {}),
-            ...(settings.kiloServerPassword ? { serverPassword: settings.kiloServerPassword } : {}),
           },
         }
       : {}),
@@ -1010,9 +1022,6 @@ export function getProviderStartOptions(
             ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
             ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
-            ...(settings.openCodeServerPassword
-              ? { serverPassword: settings.openCodeServerPassword }
-              : {}),
           },
         }
       : {}),
@@ -1090,7 +1099,7 @@ export function useAppSettings() {
     () =>
       normalizeAppSettings({
         ...DEFAULT_APP_SETTINGS,
-        ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS),
+        ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
       }),
     [],
   );
@@ -1144,7 +1153,18 @@ export function useAppSettings() {
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+      setSettings((prev) =>
+        normalizeAppSettings({
+          ...prev,
+          ...patch,
+          ...(hasOwn(patch, "kiloServerPassword")
+            ? { kiloServerPasswordConfigured: Boolean(patch.kiloServerPassword?.trim()) }
+            : {}),
+          ...(hasOwn(patch, "openCodeServerPassword")
+            ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+            : {}),
+        }),
+      );
       if (touchesProviderDiscoverySettings(patch)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }

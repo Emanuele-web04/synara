@@ -1,5 +1,8 @@
 import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
+import {
+  makeDrainableWorker,
+  startDrainableWorkerProducers,
+} from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -20,6 +23,7 @@ const RECONCILE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.conversation-rolled-back",
   "thread.session-set",
 ]);
+const AUTOMATION_RUN_REACTOR_CAPACITY = 128;
 
 function reconcileThreadIdOf(event: OrchestrationEvent): ThreadId | null {
   if (!RECONCILE_EVENT_TYPES.has(event.type)) {
@@ -47,10 +51,12 @@ const make = Effect.gen(function* () {
     );
 
   const queuedThreadIds = new Set<ThreadId>();
-  const worker = yield* makeDrainableWorker((threadId: ThreadId) =>
-    reconcileSafely(threadId).pipe(
-      Effect.ensuring(Effect.sync(() => queuedThreadIds.delete(threadId))),
-    ),
+  const worker = yield* makeDrainableWorker(
+    (threadId: ThreadId) =>
+      reconcileSafely(threadId).pipe(
+        Effect.ensuring(Effect.sync(() => queuedThreadIds.delete(threadId))),
+      ),
+    { capacity: AUTOMATION_RUN_REACTOR_CAPACITY },
   );
   const enqueueReconcile = (threadId: ThreadId) =>
     Effect.sync(() => {
@@ -60,7 +66,19 @@ const make = Effect.gen(function* () {
       queuedThreadIds.add(threadId);
       return true;
     }).pipe(
-      Effect.flatMap((shouldEnqueue) => (shouldEnqueue ? worker.enqueue(threadId) : Effect.void)),
+      Effect.flatMap((shouldEnqueue) =>
+        shouldEnqueue
+          ? worker.enqueue(threadId).pipe(
+              Effect.tap((accepted) =>
+                accepted
+                  ? Effect.void
+                  : Effect.sync(() => {
+                      queuedThreadIds.delete(threadId);
+                    }),
+              ),
+            )
+          : Effect.void,
+      ),
     );
 
   const start: AutomationRunReactorShape["start"] = Effect.fn(function* () {
@@ -73,11 +91,14 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        const threadId = reconcileThreadIdOf(event);
-        return threadId ? enqueueReconcile(threadId) : Effect.void;
-      }),
+    yield* startDrainableWorkerProducers(
+      worker,
+      Effect.forkScoped(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          const threadId = reconcileThreadIdOf(event);
+          return threadId ? enqueueReconcile(threadId) : Effect.void;
+        }),
+      ).pipe(Effect.asVoid),
     );
   });
 

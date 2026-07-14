@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { constants as NodeFsConstants } from "node:fs";
 import * as NodeFs from "node:fs/promises";
+import * as NodePath from "node:path";
 
 import { isLocalAbsolutePath } from "@synara/shared/path";
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";
 import {
@@ -12,7 +15,11 @@ import {
 import { WorkspaceEntries } from "../Services/WorkspaceEntries";
 import { WorkspacePathOutsideRootError } from "../Services/WorkspacePaths";
 import { WorkspacePaths } from "../Services/WorkspacePaths";
-import { resolveRealPathWithinRoot } from "../realPathContainment";
+import {
+  prepareRealPathForWriteWithinRoot,
+  resolveRealPathForCreateWithinRoot,
+  resolveRealPathWithinRoot,
+} from "../realPathContainment";
 
 const DEFAULT_READ_FILE_MAX_BYTES = 1_000_000;
 
@@ -22,6 +29,106 @@ function isBinaryLike(bytes: Uint8Array): boolean {
 
 function isFileNotFoundError(cause: unknown): boolean {
   return (cause as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
+
+async function writeFileStringAtomically(
+  workspaceRoot: string,
+  filePath: string,
+  contents: string,
+): Promise<void> {
+  const realRoot = await NodeFs.realpath(workspaceRoot);
+  const targetStat = await NodeFs.stat(filePath).catch((cause: unknown) => {
+    if (isFileNotFoundError(cause)) return null;
+    throw cause;
+  });
+  const mode = targetStat === null ? 0o666 : targetStat.mode & 0o777;
+  const temporaryPath = NodePath.join(
+    NodePath.dirname(filePath),
+    `.${NodePath.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let handle: NodeFs.FileHandle | undefined;
+  let temporaryPathValidated = false;
+  let temporaryIdentity: { readonly dev: number | bigint; readonly ino: number | bigint } | null =
+    null;
+
+  try {
+    // O_EXCL prevents a pre-existing link at the temporary name. O_NOFOLLOW is
+    // an additional POSIX safeguard; Windows does not implement it reliably.
+    const noFollow = process.platform === "win32" ? 0 : NodeFsConstants.O_NOFOLLOW;
+    handle = await NodeFs.open(
+      temporaryPath,
+      NodeFsConstants.O_WRONLY |
+        NodeFsConstants.O_CREAT |
+        NodeFsConstants.O_EXCL |
+        noFollow,
+      mode,
+    );
+    const realTemporaryPath = await resolveRealPathWithinRoot(realRoot, temporaryPath);
+    if (realTemporaryPath !== temporaryPath) {
+      throw new Error("Temporary write path escaped the workspace root.");
+    }
+    temporaryPathValidated = true;
+    const temporaryHandleStat = await handle.stat();
+    const temporaryPathStat = await NodeFs.stat(realTemporaryPath);
+    if (!temporaryHandleStat.isFile() || !temporaryPathStat.isFile()) {
+      throw new Error("Workspace write temporary path is not a regular file.");
+    }
+    if (
+      temporaryHandleStat.dev !== temporaryPathStat.dev ||
+      temporaryHandleStat.ino !== temporaryPathStat.ino
+    ) {
+      throw new Error("Workspace write temporary path changed after open.");
+    }
+    temporaryIdentity = { dev: temporaryHandleStat.dev, ino: temporaryHandleStat.ino };
+    if (targetStat !== null) {
+      // open(2) always filters its requested mode through the process umask.
+      // Replacement writes must restore the existing file's exact permission
+      // bits through the already-validated descriptor before it is renamed.
+      await handle.chmod(mode);
+    }
+    await handle.writeFile(contents, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+
+    // Node does not expose portable openat/renameat APIs. Re-check the parent
+    // immediately before rename to narrow the remaining directory-swap race.
+    // Eliminating that final path-based rename race would require a native
+    // descriptor-relative rename primitive; do not weaken these checks as a
+    // substitute for one.
+    const realParent = await resolveRealPathWithinRoot(realRoot, NodePath.dirname(filePath));
+    const realTemporaryPathBeforeRename = await resolveRealPathWithinRoot(realRoot, temporaryPath);
+    const temporaryPathStatBeforeRename = await NodeFs.stat(temporaryPath);
+    if (
+      realParent !== NodePath.dirname(filePath) ||
+      realTemporaryPathBeforeRename !== temporaryPath ||
+      temporaryIdentity === null ||
+      temporaryPathStatBeforeRename.dev !== temporaryIdentity.dev ||
+      temporaryPathStatBeforeRename.ino !== temporaryIdentity.ino
+    ) {
+      throw new Error("Write target parent escaped the workspace root.");
+    }
+    await NodeFs.rename(temporaryPath, filePath);
+  } catch (cause) {
+    await handle?.close().catch(() => undefined);
+    if (temporaryPathValidated) {
+      const realTemporaryPath = await resolveRealPathWithinRoot(realRoot, temporaryPath).catch(
+        () => null,
+      );
+      if (realTemporaryPath === temporaryPath) {
+        const temporaryPathStat = await NodeFs.stat(temporaryPath).catch(() => null);
+        if (
+          temporaryPathStat !== null &&
+          temporaryIdentity !== null &&
+          temporaryPathStat.dev === temporaryIdentity.dev &&
+          temporaryPathStat.ino === temporaryIdentity.ino
+        ) {
+          await NodeFs.unlink(temporaryPath).catch(() => undefined);
+        }
+      }
+    }
+    throw cause;
+  }
 }
 
 // Outcome of canonicalizing a requested path against the workspace root:
@@ -34,7 +141,6 @@ type RealPathResolution =
   | { readonly status: "missing"; readonly cause: unknown };
 
 export const makeWorkspaceFileSystem = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries;
@@ -230,28 +336,47 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
       relativePath: input.relativePath,
     });
 
-    yield* fileSystem.makeDirectory(path.dirname(target.absolutePath), { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkspaceFileSystemError({
-            cwd: input.cwd,
-            relativePath: input.relativePath,
-            operation: "workspaceFileSystem.makeDirectory",
-            detail: cause.message,
-            cause,
-          }),
-      ),
-    );
-    yield* fileSystem.writeFileString(target.absolutePath, input.contents).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkspaceFileSystemError({
-            cwd: input.cwd,
-            relativePath: input.relativePath,
-            operation: "workspaceFileSystem.writeFile",
-            detail: cause.message,
-            cause,
-          }),
+    yield* Effect.tryPromise({
+      try: async () => {
+        const initialRealTarget = await prepareRealPathForWriteWithinRoot(
+          input.cwd,
+          target.absolutePath,
+        );
+        if (initialRealTarget === null) {
+          return "outside" as const;
+        }
+
+        // Re-resolve after parent creation so existing targets and any links
+        // introduced concurrently are canonicalized before replacement.
+        const finalRealTarget = await resolveRealPathForCreateWithinRoot(
+          input.cwd,
+          target.absolutePath,
+        );
+        if (finalRealTarget === null) {
+          return "outside" as const;
+        }
+
+        await writeFileStringAtomically(input.cwd, finalRealTarget, input.contents);
+        return "written" as const;
+      },
+      catch: (cause) =>
+        new WorkspaceFileSystemError({
+          cwd: input.cwd,
+          relativePath: input.relativePath,
+          operation: "workspaceFileSystem.writeFile",
+          detail: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    }).pipe(
+      Effect.flatMap((result) =>
+        result === "outside"
+          ? Effect.fail(
+              new WorkspacePathOutsideRootError({
+                workspaceRoot: input.cwd,
+                relativePath: input.relativePath,
+              }),
+            )
+          : Effect.void,
       ),
     );
     yield* workspaceEntries.invalidate(input.cwd);

@@ -4,19 +4,26 @@
 // Depends on: Codex auth discovery, Electron net uploads, and the shared server voice contract.
 
 import * as ChildProcess from "node:child_process";
-import * as Crypto from "node:crypto";
 
-import { app, ipcMain, net } from "electron";
+import { app, ipcMain } from "electron";
 import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "@synara/contracts";
+import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
+import {
+  CHATGPT_VOICE_TRANSCRIPTION_URL,
+  requestChatGptVoiceTranscription,
+} from "@synara/shared/chatGptVoiceTranscription";
+import {
+  decodeOutboundJson,
+  decodeOutboundText,
+  type OutboundHttpResponse,
+} from "@synara/shared/outboundHttp";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
 
-const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
-const MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_DURATION_MS = 120_000;
 
 // --- Input validation ------------------------------------------------------
@@ -61,7 +68,7 @@ function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   if (!audioBuffer.length || audioBuffer.toString("base64") !== normalizedBase64) {
     throw new Error("The recorded audio could not be decoded.");
   }
-  if (audioBuffer.length > MAX_VOICE_AUDIO_BYTES) {
+  if (audioBuffer.length > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
     throw new Error("Voice messages are limited to 10 MB.");
   }
   if (!isLikelyWavBuffer(audioBuffer)) {
@@ -172,7 +179,7 @@ async function resolveDesktopVoiceAuth(
         resolveOnce({
           token,
           transcriptionUrl:
-            readNonEmptyString(result?.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL,
+            readNonEmptyString(result?.transcriptionUrl) ?? CHATGPT_VOICE_TRANSCRIPTION_URL,
         });
       }
     });
@@ -201,50 +208,17 @@ async function resolveDesktopVoiceAuth(
 
 // --- Network upload --------------------------------------------------------
 
-async function requestDesktopVoiceTranscription(input: {
+export async function requestDesktopVoiceTranscription(input: {
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
   readonly token: string;
   readonly transcriptionUrl: string;
-}): Promise<{ statusCode: number; body: string }> {
-  const boundary = `SynaraVoice-${Crypto.randomUUID()}`;
-  const preamble = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.wav"\r\nContent-Type: ${input.mimeType}\r\n\r\n`,
-    "utf8",
-  );
-  const closing = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  const body = Buffer.concat([preamble, input.audioBuffer, closing]);
-
-  return new Promise((resolve, reject) => {
-    const requestUrl = readNonEmptyString(input.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL;
-    const request = net.request({
-      method: "POST",
-      url: requestUrl,
-    });
-    request.setHeader("Authorization", `Bearer ${input.token}`);
-    request.setHeader("Content-Type", `multipart/form-data; boundary=${boundary}`);
-
-    request.once("error", (error) => {
-      reject(new Error(`Voice transcription request failed: ${error.message}`));
-    });
-    request.on("response", (response) => {
-      let responseBody = "";
-      response.on("data", (chunk) => {
-        responseBody += chunk.toString();
-      });
-      response.once("end", () => {
-        resolve({
-          statusCode: response.statusCode,
-          body: responseBody,
-        });
-      });
-      response.once("error", (error) => {
-        reject(new Error(`Voice transcription response failed: ${error.message}`));
-      });
-    });
-
-    request.write(body);
-    request.end();
+}): Promise<OutboundHttpResponse> {
+  return requestChatGptVoiceTranscription({
+    audio: input.audioBuffer,
+    mimeType: input.mimeType,
+    token: input.token,
+    transcriptionUrl: input.transcriptionUrl,
   });
 }
 
@@ -283,11 +257,14 @@ async function transcribeVoiceViaDesktopBridge(
     token: auth.token,
     transcriptionUrl: auth.transcriptionUrl,
   });
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(readVoiceResponseErrorMessage(response.statusCode, response.body));
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(readVoiceResponseErrorMessage(response.status, decodeOutboundText(response)));
   }
 
-  const payload = JSON.parse(response.body) as { text?: unknown; transcript?: unknown };
+  const payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
+    text?: unknown;
+    transcript?: unknown;
+  };
   const text = readNonEmptyString(payload.text) ?? readNonEmptyString(payload.transcript);
   if (!text) {
     throw new Error("The transcription response did not include any text.");

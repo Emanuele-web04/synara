@@ -10,6 +10,7 @@ import {
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
 } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
@@ -59,6 +60,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { logoutCurrentBrowserSession } from "../authLogout";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
@@ -129,6 +131,7 @@ import {
 } from "../lib/icons";
 import {
   serverConfigQueryOptions,
+  serverAuthSessionQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
   serverWorktreesQueryOptions,
@@ -215,17 +218,7 @@ const THEME_OPTIONS = [
   },
 ] as const;
 
-const PROVIDER_SELECT_OPTIONS = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "droid",
-  "opencode",
-  "kilo",
-  "pi",
-] as const satisfies readonly ProviderKind[];
+const PROVIDER_SELECT_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -283,17 +276,11 @@ type InstallProviderSettings = {
   agentDirDescription?: ReactNode;
 };
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
-  { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
-  { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
-  { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
-  { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
-  { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
-  { provider: "droid", title: PROVIDER_DISPLAY_NAMES.droid },
-  { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
-  { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
-  { provider: "pi", title: PROVIDER_DISPLAY_NAMES.pi },
-];
+const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> =
+  PROVIDER_DESCRIPTORS.map((descriptor) => ({
+    provider: descriptor.kind,
+    title: descriptor.displayName,
+  }));
 
 // Pure helper kept at module scope so the toggle handler stays trivial and the
 // dedupe logic is shared between the toggle and the schema normalizer.
@@ -656,6 +643,7 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverAuthSessionQuery = useQuery(serverAuthSessionQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -684,6 +672,7 @@ function SettingsRouteView() {
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
@@ -697,12 +686,16 @@ function SettingsRouteView() {
     gemini: Boolean(settings.geminiBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
     droid: Boolean(settings.droidBinaryPath),
-    kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
+    kilo: Boolean(
+      settings.kiloBinaryPath ||
+        settings.kiloServerUrl ||
+        settings.kiloServerPasswordConfigured,
+    ),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
       settings.openCodeExperimentalWebSockets ||
       settings.openCodeServerUrl ||
-      settings.openCodeServerPassword,
+      settings.openCodeServerPasswordConfigured,
     ),
     pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
@@ -777,11 +770,11 @@ function SettingsRouteView() {
   const droidBinaryPath = settings.droidBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
   const kiloServerUrl = settings.kiloServerUrl;
-  const kiloServerPassword = settings.kiloServerPassword;
+  const kiloServerPasswordConfigured = settings.kiloServerPasswordConfigured;
   const openCodeBinaryPath = settings.openCodeBinaryPath;
   const openCodeExperimentalWebSockets = settings.openCodeExperimentalWebSockets;
   const openCodeServerUrl = settings.openCodeServerUrl;
-  const openCodeServerPassword = settings.openCodeServerPassword;
+  const openCodeServerPasswordConfigured = settings.openCodeServerPasswordConfigured;
   const piBinaryPath = settings.piBinaryPath;
   const piAgentDir = settings.piAgentDir;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
@@ -970,13 +963,13 @@ function SettingsRouteView() {
     settings.droidBinaryPath !== defaults.droidBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
     settings.kiloServerUrl !== defaults.kiloServerUrl ||
-    settings.kiloServerPassword !== defaults.kiloServerPassword ||
+    settings.kiloServerPasswordConfigured !== defaults.kiloServerPasswordConfigured ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets !== defaults.openCodeExperimentalWebSockets ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-    settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
+    settings.openCodeServerPasswordConfigured !== defaults.openCodeServerPasswordConfigured ||
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
   const changedSettingLabels = [
@@ -1345,6 +1338,29 @@ function SettingsRouteView() {
       setIsRepairingLocalState(false);
     }
   }, [isRepairingLocalState, syncServerReadModel]);
+
+  const logoutCurrentSession = useCallback(async () => {
+    if (isLoggingOut) return;
+    const api = readNativeApi() ?? ensureNativeApi();
+    setIsLoggingOut(true);
+    const result = await logoutCurrentBrowserSession({
+      confirm: () =>
+        api.dialogs.confirm(
+          "Sign out this browser?\n\nIts session and every live connection opened with it will be revoked.",
+        ),
+      logout: () => api.server.logoutAuthSession(),
+      navigate: (path) => window.location.assign(path),
+      onError: (error) =>
+        toastManager.add({
+          type: "error",
+          title: "Sign out failed",
+          description: error instanceof Error ? error.message : "Unable to revoke this session.",
+        }),
+    });
+    if (result !== "redirecting") {
+      setIsLoggingOut(false);
+    }
+  }, [isLoggingOut]);
 
   const deleteManagedWorktree = useCallback(
     async (input: { workspaceRoot: string; worktreePath: string }) => {
@@ -2833,7 +2849,8 @@ function SettingsRouteView() {
                               : providerSettings.provider === "kilo"
                                 ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
                                   settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                  settings.kiloServerPassword !== defaults.kiloServerPassword
+                                  settings.kiloServerPasswordConfigured !==
+                                    defaults.kiloServerPasswordConfigured
                                 : providerSettings.provider === "pi"
                                   ? settings.piBinaryPath !== defaults.piBinaryPath ||
                                     settings.piAgentDir !== defaults.piAgentDir
@@ -2841,8 +2858,8 @@ function SettingsRouteView() {
                                     settings.openCodeExperimentalWebSockets !==
                                       defaults.openCodeExperimentalWebSockets ||
                                     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                    settings.openCodeServerPassword !==
-                                      defaults.openCodeServerPassword;
+                                    settings.openCodeServerPasswordConfigured !==
+                                      defaults.openCodeServerPasswordConfigured;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
@@ -3177,11 +3194,7 @@ function SettingsRouteView() {
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
-                                  value={
-                                    providerSettings.serverPasswordKey === "kiloServerPassword"
-                                      ? kiloServerPassword
-                                      : openCodeServerPassword
-                                  }
+                                  value=""
                                   onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
@@ -3189,7 +3202,15 @@ function SettingsRouteView() {
                                         : { openCodeServerPassword: nextValue },
                                     )
                                   }
-                                  placeholder={providerSettings.serverPasswordPlaceholder}
+                                  placeholder={
+                                    (providerSettings.serverPasswordKey === "kiloServerPassword"
+                                      ? kiloServerPasswordConfigured
+                                      : openCodeServerPasswordConfigured)
+                                      ? "Configured — enter a replacement or leave blank"
+                                      : providerSettings.serverPasswordPlaceholder
+                                  }
+                                  type="password"
+                                  autoComplete="new-password"
                                   spellCheck={false}
                                 />
                                 {providerSettings.serverPasswordDescription ? (
@@ -3242,6 +3263,26 @@ function SettingsRouteView() {
 
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
+      {serverAuthSessionQuery.data?.authenticated ? (
+        <SettingsSection title="Session">
+          <SettingsRow
+            title="This browser"
+            description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
+            status={`Authenticated as ${serverAuthSessionQuery.data.role ?? "client"}.`}
+            control={
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                disabled={isLoggingOut}
+                onClick={() => void logoutCurrentSession()}
+              >
+                {isLoggingOut ? "Signing out..." : "Sign out"}
+              </Button>
+            }
+          />
+        </SettingsSection>
+      ) : null}
+
       <SettingsSection title="Developer tools">
         <SettingsRow
           title="Keybindings"

@@ -215,7 +215,16 @@ const generateSchemas = Effect.fn("generateSchemas")(function* (skipDownload: bo
     generator.addSchema(name, schema as never);
   }
 
-  const output = generator.generate("openapi-3.1", normalizedDefinitions as never, false).trim();
+  // OpenAPI `additionalProperties: {}` is arbitrary JSON, not an Effect `Unknown`
+  // transport value. RPC codecs encode `Unknown` as null; use the recursive JSON
+  // codec so ACP `_meta` values preserve primitives, arrays, and nested objects.
+  const output = generator
+    .generate("openapi-3.1", normalizedDefinitions as never, false)
+    .replaceAll(
+      "Schema.Record(Schema.String, Schema.Unknown)",
+      "Schema.Record(Schema.String, Schema.Json)",
+    )
+    .trim();
   if (output.length > 0) {
     for (const entry of collectSchemaEntries(output)) {
       if (!generatedEntries.has(entry.name)) {

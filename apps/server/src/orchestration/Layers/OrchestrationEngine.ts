@@ -9,6 +9,7 @@ import {
   Cause,
   Deferred,
   Effect,
+  Fiber,
   Layer,
   Option,
   PubSub,
@@ -21,21 +22,47 @@ import {
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { toPersistenceSqlError } from "../../persistence/Errors.ts";
-import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
-import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
+  toPersistenceSqlError,
+  type PersistenceSqlError,
+} from "../../persistence/Errors.ts";
+import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import {
+  OrchestrationCommandReceiptRepository,
+  type OrchestrationCommandReceipt,
+} from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import {
+  LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+  type ManagedAttachmentPrincipal,
+} from "../../managedAttachmentPrincipal.ts";
+import {
+  OrchestrationCommandAdmissionError,
+  OrchestrationCommandIdentityCollisionError,
   OrchestrationCommandInvariantError,
   OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandTimeoutError,
   type OrchestrationDispatchError,
 } from "../Errors.ts";
+import {
+  fingerprintOrchestrationCommand,
+  type OrchestrationCommandFingerprint,
+} from "../commandFingerprint.ts";
+import {
+  ORCHESTRATION_COMMAND_CONTROL_RESERVE,
+  ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
+  ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
+  tryAdmitOrchestrationCommand,
+  usesReservedCommandAdmission,
+} from "../orchestrationAdmission.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
+import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   OrchestrationEngineService,
@@ -43,15 +70,25 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
+const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
+const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
 type CommandExecutionState = "queued" | "in-flight" | "abandoned";
 type DispatchTimeoutDecision = { kind: "abandon" } | { kind: "wait" };
+type OrchestrationEnginePhase = "running" | "quiescing" | "draining" | "stopped";
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
+  attachmentPrincipal: ManagedAttachmentPrincipal;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   executionState: Ref.Ref<CommandExecutionState>;
   deadlineAtMs: number;
+}
+
+interface EngineAdmissionState {
+  readonly phase: OrchestrationEnginePhase;
+  readonly outstanding: number;
+  readonly idle: Deferred.Deferred<void>;
 }
 
 type CommittedCommandResult = {
@@ -94,17 +131,38 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const eventStore = yield* OrchestrationEventStore;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
+  const managedAttachments = yield* ManagedAttachmentRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   let commandReadModel = createEmptyReadModel(new Date().toISOString());
 
-  const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
-  const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const commandQueue = yield* Queue.bounded<CommandEnvelope>(
+    ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
+  );
+  const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
+    ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
+  );
+  const initiallyIdle = yield* Deferred.make<void>();
+  yield* Deferred.succeed(initiallyIdle, undefined).pipe(Effect.orDie);
+  const engineAdmissionState = yield* Ref.make<EngineAdmissionState>({
+    phase: "running",
+    outstanding: 0,
+    idle: initiallyIdle,
+  });
   const maintenanceLock = yield* Semaphore.make(1);
   const deferredProjectionDirty = yield* Ref.make(false);
   const deferredProjectionCatchUpInFlight = yield* Ref.make(false);
+  const deferredProjectionRetryAttempts = yield* Ref.make(0);
+  const deferredProjectionLastFailure = yield* Ref.make<string | null>(null);
   const deferredProjectionScope = yield* Scope.make("sequential");
+
+  // Committed events are durable before they reach this boundary. Once
+  // publication starts, a dispatch deadline must not interrupt it and leave
+  // live consumers behind the durable log. Bounded PubSub backpressure is
+  // therefore lossless; engine scope close shuts the bus to release it.
+  const publishCommittedEvent = (event: OrchestrationEvent) =>
+    Effect.uninterruptible(PubSub.publish(eventPubSub, event)).pipe(Effect.asVoid);
 
   const makeCommandTimeoutError = (command: OrchestrationCommand) =>
     new OrchestrationCommandTimeoutError({
@@ -123,8 +181,66 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       detail,
     });
 
+  const validateCommandReceiptIdentity = (
+    receipt: OrchestrationCommandReceipt,
+    fingerprint: OrchestrationCommandFingerprint,
+  ): Effect.Effect<void, OrchestrationCommandIdentityCollisionError> => {
+    if (
+      receipt.fingerprintVersion === fingerprint.version &&
+      receipt.commandFingerprint === fingerprint.value
+    ) {
+      return Effect.void;
+    }
+    const detail =
+      receipt.fingerprintVersion === null || receipt.commandFingerprint === null
+        ? "The stored receipt predates verifiable command fingerprints; retry with a new command ID."
+        : "The command ID is already bound to different command content.";
+    return Effect.fail(
+      new OrchestrationCommandIdentityCollisionError({
+        commandId: receipt.commandId,
+        detail,
+      }),
+    );
+  };
+
+  const validateAcceptedAttachmentRetry = (
+    command: OrchestrationCommand,
+    principal: ManagedAttachmentPrincipal,
+  ): Effect.Effect<
+    void,
+    OrchestrationCommandPreviouslyRejectedError | PersistenceSqlError
+  > =>
+    Effect.gen(function* () {
+      if (command.type !== "thread.turn.start") return;
+      const requestedIds = command.message.attachments
+        .filter((attachment) => attachment.type === "image" || attachment.type === "file")
+        .map((attachment) => attachment.id)
+        .sort();
+      const claimed = yield* managedAttachments.findClaimedForCommand({
+        commandId: command.commandId,
+      });
+      const claimedIds = claimed.map((attachment) => attachment.attachmentId).sort();
+      const exactIdentity =
+        requestedIds.length === claimedIds.length &&
+        requestedIds.every((attachmentId, index) => attachmentId === claimedIds[index]) &&
+        claimed.every(
+          (attachment) =>
+            attachment.ownerThreadId === command.threadId &&
+            attachment.ownerKind === principal.ownerKind &&
+            attachment.ownerId === principal.ownerId &&
+            attachment.claimMessageId === command.message.messageId,
+        );
+      if (!exactIdentity) {
+        return yield* new OrchestrationCommandPreviouslyRejectedError({
+          commandId: command.commandId,
+          detail: "The command ID was already accepted with a different managed attachment set or owner.",
+        });
+      }
+    });
+
   const resolveStoredCommandOutcome = (
     command: OrchestrationCommand,
+    principal: ManagedAttachmentPrincipal,
   ): Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never> =>
     Effect.gen(function* () {
       const receiptExit = yield* Effect.exit(
@@ -136,7 +252,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       if (Option.isNone(existingReceipt)) {
         return yield* makeCommandTimeoutError(command);
       }
+      const fingerprint = fingerprintOrchestrationCommand(command);
+      yield* validateCommandReceiptIdentity(existingReceipt.value, fingerprint);
       if (existingReceipt.value.status === "accepted") {
+        yield* validateAcceptedAttachmentRetry(command, principal);
         return {
           sequence: existingReceipt.value.resultSequence,
         };
@@ -147,8 +266,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       });
     });
 
-  // When deferred projection slips, recover with one background bootstrap replay instead of
-  // continuing to advance the inline cursor and potentially skipping the failed sequence.
+  // When deferred projection slips, supervise bootstrap retries while idle instead of waiting
+  // for unrelated future traffic to rediscover the dirty cursor.
   const scheduleDeferredProjectionCatchUp = Effect.fn(function* (input: {
     readonly eventType: OrchestrationEvent["type"];
     readonly sequence: number;
@@ -167,32 +286,67 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         sequence: input.sequence,
       }),
     );
-    yield* maintenanceLock
-      .withPermits(1)(
-        projectionPipeline.bootstrap.pipe(
-          Effect.tap(() => Ref.set(deferredProjectionDirty, false)),
-          Effect.tap(() =>
-            Effect.log("deferred orchestration projection catch-up completed").pipe(
-              Effect.annotateLogs({
-                eventType: input.eventType,
-                sequence: input.sequence,
-              }),
-            ),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("deferred orchestration projection catch-up failed").pipe(
-              Effect.annotateLogs({
-                eventType: input.eventType,
-                sequence: input.sequence,
-                cause: Cause.pretty(cause),
-              }),
-            ),
-          ),
-          Effect.ensuring(Ref.set(deferredProjectionCatchUpInFlight, false)),
-        ),
-      )
-      .pipe(Effect.forkIn(deferredProjectionScope), Effect.asVoid);
+    const recoverUntilHealthy = Effect.gen(function* () {
+      while (yield* Ref.get(deferredProjectionDirty)) {
+        const outcome = yield* Effect.exit(
+          maintenanceLock.withPermits(1)(projectionPipeline.bootstrap),
+        );
+        if (outcome._tag === "Success") {
+          yield* Ref.set(deferredProjectionDirty, false);
+          yield* Ref.set(deferredProjectionRetryAttempts, 0);
+          yield* Ref.set(deferredProjectionLastFailure, null);
+          yield* Effect.log("deferred orchestration projection catch-up completed").pipe(
+            Effect.annotateLogs({
+              eventType: input.eventType,
+              sequence: input.sequence,
+            }),
+          );
+          return;
+        }
+
+        const retryAttempts = yield* Ref.updateAndGet(
+          deferredProjectionRetryAttempts,
+          (attempts) => attempts + 1,
+        );
+        const failure = Cause.pretty(outcome.cause);
+        yield* Ref.set(deferredProjectionLastFailure, failure);
+        const retryDelayMs =
+          DEFERRED_PROJECTION_RETRY_DELAYS_MS[
+            Math.min(retryAttempts - 1, DEFERRED_PROJECTION_RETRY_DELAYS_MS.length - 1)
+          ] ?? 30_000;
+        yield* Effect.logWarning(
+          "deferred orchestration projection catch-up failed; retrying",
+        ).pipe(
+          Effect.annotateLogs({
+            eventType: input.eventType,
+            sequence: input.sequence,
+            retryAttempts,
+            retryDelayMs,
+            cause: failure,
+          }),
+        );
+        yield* Effect.sleep(`${retryDelayMs} millis`);
+      }
+    }).pipe(Effect.ensuring(Ref.set(deferredProjectionCatchUpInFlight, false)));
+
+    yield* recoverUntilHealthy.pipe(Effect.forkIn(deferredProjectionScope), Effect.asVoid);
   });
+
+  const getProjectionCatchUpStatus: OrchestrationEngineShape["getProjectionCatchUpStatus"] =
+    Effect.gen(function* () {
+      const [dirty, inFlight, retryAttempts, lastFailure] = yield* Effect.all([
+        Ref.get(deferredProjectionDirty),
+        Ref.get(deferredProjectionCatchUpInFlight),
+        Ref.get(deferredProjectionRetryAttempts),
+        Ref.get(deferredProjectionLastFailure),
+      ]);
+      return {
+        state: dirty ? "degraded" : "healthy",
+        inFlight,
+        retryAttempts,
+        lastFailure,
+      };
+    });
 
   const refreshCommandReadModelFromProjectionState = Effect.gen(function* () {
     const nextCommandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -323,9 +477,52 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }),
   );
 
+  const verifyProjectionRepairFence = (repairFence: number) =>
+    Effect.gen(function* () {
+      if (repairFence === 0) {
+        return;
+      }
+      const rows = yield* sql<{
+        readonly projector: string;
+        readonly lastAppliedSequence: number;
+      }>`
+        SELECT
+          projector,
+          last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        WHERE projector IN ${sql.in(REQUIRED_REPAIR_PROJECTORS)}
+      `;
+      const cursorByProjector = new Map(
+        rows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+      );
+      const laggingProjectors = REQUIRED_REPAIR_PROJECTORS.filter(
+        (projector) => (cursorByProjector.get(projector) ?? -1) < repairFence,
+      );
+      if (laggingProjectors.length > 0) {
+        return yield* new OrchestrationCommandInternalError({
+          commandId: "repair-local-state",
+          commandType: ORCHESTRATION_WS_METHODS.repairState,
+          detail:
+            `Rebuilt local projections did not reach captured event fence ${repairFence}. ` +
+            `Lagging projectors: ${laggingProjectors.join(", ")}.`,
+        });
+      }
+    }).pipe(
+      Effect.catchTag("SqlError", (sqlError) =>
+        Effect.fail(
+          new OrchestrationCommandInternalError({
+            commandId: "repair-local-state",
+            commandType: ORCHESTRATION_WS_METHODS.repairState,
+            detail: `Failed to verify the rebuilt projection fence: ${sqlError.message}`,
+          }),
+        ),
+      ),
+    );
+
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
+    const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
     const reconcileCommandReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
         eventStore.readFromSequence(dispatchStartSequence),
@@ -341,7 +538,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       commandReadModel = nextCommandReadModel;
 
       for (const persistedEvent of persistedEvents) {
-        yield* PubSub.publish(eventPubSub, persistedEvent);
+        yield* publishCommittedEvent(persistedEvent);
       }
     });
 
@@ -364,7 +561,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         commandId: envelope.command.commandId,
       });
       if (Option.isSome(existingReceipt)) {
+        const identityResult = yield* Effect.result(
+          validateCommandReceiptIdentity(existingReceipt.value, commandFingerprint),
+        );
+        if (identityResult._tag === "Failure") {
+          yield* Deferred.fail(envelope.result, identityResult.failure);
+          return;
+        }
         if (existingReceipt.value.status === "accepted") {
+          yield* validateAcceptedAttachmentRetry(
+            envelope.command,
+            envelope.attachmentPrincipal,
+          );
           yield* Deferred.succeed(envelope.result, {
             sequence: existingReceipt.value.resultSequence,
           });
@@ -380,9 +588,55 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return;
       }
 
-      const deciderReadModel = yield* buildDeciderReadModel(envelope.command);
+      const command =
+        envelope.command.type === "thread.turn.start"
+          ? yield* Effect.gen(function* () {
+              const attachments = yield* Effect.forEach(
+                envelope.command.message.attachments,
+                (attachment) => {
+                  if (attachment.type === "assistant-selection") return Effect.succeed(attachment);
+                  return managedAttachments
+                    .findServerOwned({
+                      attachmentId: attachment.id,
+                      ownerThreadId: envelope.command.threadId,
+                      ownerKind: envelope.attachmentPrincipal.ownerKind,
+                      ownerId: envelope.attachmentPrincipal.ownerId,
+                      now: new Date().toISOString(),
+                    })
+                    .pipe(
+                      Effect.flatMap((found) =>
+                        Option.match(found, {
+                          onNone: () =>
+                            Effect.fail(
+                              new OrchestrationCommandInvariantError({
+                                commandType: envelope.command.type,
+                                detail: `Managed attachment ${attachment.id} is unavailable, expired, or owned by another session/thread.`,
+                              }),
+                            ),
+                          onSome: (blob) =>
+                            Effect.succeed({
+                              type: blob.kind as "image" | "file",
+                              id: blob.attachmentId,
+                              name: blob.originalName,
+                              mimeType: blob.mimeType,
+                              sizeBytes: blob.sizeBytes!,
+                            }),
+                        }),
+                      ),
+                    );
+                },
+                { concurrency: 1 },
+              );
+              return {
+                ...envelope.command,
+                message: { ...envelope.command.message, attachments },
+              } satisfies OrchestrationCommand;
+            })
+          : envelope.command;
+
+      const deciderReadModel = yield* buildDeciderReadModel(command);
       const eventBase = yield* decideOrchestrationCommand({
-        command: envelope.command,
+        command,
         readModel: deciderReadModel,
       });
       const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
@@ -393,6 +647,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       > = Effect.gen(function* () {
         const committedEvents: OrchestrationEvent[] = [];
         let nextCommandReadModel = commandReadModel;
+
+        if (command.type === "thread.turn.start") {
+          const attachmentIds = command.message.attachments
+            .filter((attachment) => attachment.type === "image" || attachment.type === "file")
+            .map((attachment) => attachment.id);
+          const claim = yield* managedAttachments.claimForAcceptedTurn({
+            attachmentIds,
+            ownerThreadId: command.threadId,
+            ownerKind: envelope.attachmentPrincipal.ownerKind,
+            ownerId: envelope.attachmentPrincipal.ownerId,
+            commandId: command.commandId,
+            messageId: command.message.messageId,
+            now: new Date().toISOString(),
+          });
+          if (claim.status !== "claimed") {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Managed attachment claim was rejected: ${claim.reason}.`,
+            });
+          }
+        }
 
         for (const nextEvent of eventBases) {
           const savedEvent = yield* eventStore.append(nextEvent);
@@ -413,7 +688,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
-        yield* commandReceiptRepository.upsert({
+        const receiptInserted = yield* commandReceiptRepository.insert({
           commandId: envelope.command.commandId,
           aggregateKind: lastSavedEvent.aggregateKind,
           aggregateId: lastSavedEvent.aggregateId,
@@ -421,7 +696,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           resultSequence: lastSavedEvent.sequence,
           status: "accepted",
           error: null,
+          fingerprintVersion: commandFingerprint.version,
+          commandFingerprint: commandFingerprint.value,
         });
+        if (!receiptInserted) {
+          return yield* new OrchestrationCommandIdentityCollisionError({
+            commandId: envelope.command.commandId,
+            detail: "A receipt with this command ID appeared while the command was committing.",
+          });
+        }
 
         return {
           committedEvents,
@@ -432,6 +715,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Effect.catchCause((cause): Effect.Effect<never, OrchestrationDispatchError, never> => {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.interrupt;
+          }
+          const typedFailure = Cause.findErrorOption(cause);
+          if (
+            Option.isSome(typedFailure) &&
+            (typedFailure.value instanceof OrchestrationCommandInvariantError ||
+              typedFailure.value instanceof OrchestrationCommandIdentityCollisionError)
+          ) {
+            return Effect.fail(typedFailure.value);
           }
           return Effect.logError(
             "orchestration command crashed inside persistence transaction",
@@ -504,7 +795,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         { concurrency: 1 },
       );
       for (const event of committedCommand.committedEvents) {
-        yield* PubSub.publish(eventPubSub, event);
+        yield* publishCommittedEvent(event);
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
@@ -533,6 +824,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (Schema.is(OrchestrationCommandTimeoutError)(error)) {
             const resolvedTimeoutOutcome = yield* resolveStoredCommandOutcome(
               envelope.command,
+              envelope.attachmentPrincipal,
             ).pipe(
               Effect.match({
                 onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
@@ -549,7 +841,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (Schema.is(OrchestrationCommandInvariantError)(error)) {
             const aggregateRef = commandToAggregateRef(envelope.command);
             yield* commandReceiptRepository
-              .upsert({
+              .insert({
                 commandId: envelope.command.commandId,
                 aggregateKind: aggregateRef.aggregateKind,
                 aggregateId: aggregateRef.aggregateId,
@@ -557,6 +849,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 resultSequence: commandReadModel.snapshotSequence,
                 status: "rejected",
                 error: error.message,
+                fingerprintVersion: commandFingerprint.version,
+                commandFingerprint: commandFingerprint.value,
               })
               .pipe(Effect.catch(() => Effect.void));
           }
@@ -589,7 +883,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
           );
 
-          const resolvedCrashOutcome = yield* resolveStoredCommandOutcome(envelope.command).pipe(
+          const resolvedCrashOutcome = yield* resolveStoredCommandOutcome(
+            envelope.command,
+            envelope.attachmentPrincipal,
+          ).pipe(
             Effect.match({
               onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
               onSuccess: (value) => ({ _tag: "Right" as const, right: value }),
@@ -619,14 +916,94 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
 
-  const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
-  yield* Effect.forkScoped(worker);
+  const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
+    const outstanding = Math.max(0, current.outstanding - 1);
+    return [
+      outstanding === 0 ? current.idle : null,
+      {
+        ...current,
+        outstanding,
+      },
+    ] as const;
+  }).pipe(
+    Effect.flatMap((idle) =>
+      idle === null ? Effect.void : Deferred.succeed(idle, undefined).pipe(Effect.orDie),
+    ),
+  );
+
+  const worker = Effect.forever(
+    Queue.take(commandQueue).pipe(
+      Effect.flatMap((envelope) => processEnvelope(envelope).pipe(Effect.ensuring(finishEnvelope))),
+    ),
+  );
+  const workerFiber = yield* Effect.forkScoped(worker);
+
+  const drain: OrchestrationEngineShape["drain"] = Effect.suspend(function awaitIdle() {
+    return Ref.get(engineAdmissionState).pipe(
+      Effect.flatMap((current) => Deferred.await(current.idle)),
+      Effect.andThen(Ref.get(engineAdmissionState)),
+      Effect.flatMap((current) =>
+        current.outstanding === 0 ? Effect.void : Effect.suspend(awaitIdle),
+      ),
+    );
+  });
+
+  const quiesce: OrchestrationEngineShape["quiesce"] = Ref.update(
+    engineAdmissionState,
+    (current) =>
+      current.phase === "running"
+        ? {
+            ...current,
+            phase: "quiescing",
+          }
+        : current,
+  );
+
+  const stop: OrchestrationEngineShape["stop"] = Effect.uninterruptible(
+    Ref.update(engineAdmissionState, (current) =>
+      current.phase === "stopped"
+        ? current
+        : {
+            ...current,
+            phase: "draining",
+          },
+    ).pipe(
+      Effect.andThen(Queue.interrupt(commandQueue).pipe(Effect.asVoid)),
+      Effect.andThen(Fiber.await(workerFiber).pipe(Effect.asVoid)),
+      Effect.andThen(drain),
+      Effect.andThen(
+        Ref.update(engineAdmissionState, (current) => ({
+          ...current,
+          phase: "stopped",
+        })),
+      ),
+    ),
+  );
+
+  // Registered after the worker so LIFO finalization gracefully drains queued
+  // commands before forkScoped can interrupt the consumer. The event bus closes
+  // only after the worker has finished every durable publication.
+  yield* Effect.addFinalizer(() => stop.pipe(Effect.andThen(PubSub.shutdown(eventPubSub))));
   yield* Effect.log("orchestration engine started").pipe(
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
   );
 
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive) =>
     eventStore.readFromSequence(fromSequenceExclusive);
+  const readEventsThrough: OrchestrationEngineShape["readEventsThrough"] = (
+    fromSequenceExclusive,
+    throughSequenceInclusive,
+  ) =>
+    eventStore.readFromSequence(
+      fromSequenceExclusive,
+      Number.MAX_SAFE_INTEGER,
+      throughSequenceInclusive,
+    );
+  const getEventHighWaterSequence = eventStore.getHighWaterSequence();
+  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
+    PubSub.subscribe(eventPubSub).pipe(
+      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+    );
 
   // Compatibility bridge for older tests and out-of-tree callers. Production
   // code should use ProjectionSnapshotQuery directly instead of depending on
@@ -635,16 +1012,53 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
     maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
 
-  const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
+  const dispatch: OrchestrationEngineShape["dispatch"] = (command, context) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
       const executionState = yield* Ref.make<CommandExecutionState>("queued");
-      yield* Queue.offer(commandQueue, {
+      const envelope: CommandEnvelope = {
         command,
+        attachmentPrincipal:
+          context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
         result,
         executionState,
         deadlineAtMs: Date.now() + ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+      };
+      const nextIdle = yield* Deferred.make<void>();
+      const admission = yield* Ref.modify(engineAdmissionState, (current) => {
+        if (
+          current.phase === "draining" ||
+          current.phase === "stopped" ||
+          (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
+        ) {
+          return [{ accepted: false, reason: "stopped" as const }, current] as const;
+        }
+        const decision = tryAdmitOrchestrationCommand({
+          queue: commandQueue,
+          envelope,
+          commandType: command.type,
+        });
+        if (!decision.accepted) {
+          return [decision, current] as const;
+        }
+        return [
+          decision,
+          {
+            ...current,
+            outstanding: current.outstanding + 1,
+            idle: current.outstanding === 0 ? nextIdle : current.idle,
+          },
+        ] as const;
       });
+      if (!admission.accepted) {
+        return yield* new OrchestrationCommandAdmissionError({
+          commandId: command.commandId,
+          commandType: command.type,
+          capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
+          reservedCapacity: ORCHESTRATION_COMMAND_CONTROL_RESERVE,
+          reason: admission.reason,
+        });
+      }
       return yield* Deferred.await(result).pipe(
         Effect.timeoutOption(`${ORCHESTRATION_DISPATCH_TIMEOUT_MS} millis`),
         Effect.flatMap((outcome) =>
@@ -693,6 +1107,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* Effect.log("repairing orchestration projection state");
         const previousCommandReadModel = commandReadModel;
+        const repairFence = yield* eventStore.getHighWaterSequence().pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestrationCommandInternalError({
+                commandId: "repair-local-state",
+                commandType: ORCHESTRATION_WS_METHODS.repairState,
+                detail: `Failed to capture the durable event fence before repair: ${error.message}`,
+              }),
+          ),
+        );
 
         yield* backupDerivedProjectionState.pipe(
           Effect.catchTag("SqlError", (sqlError) =>
@@ -741,18 +1165,43 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           ),
         );
 
-        const rebuildResult = yield* Effect.exit(projectionPipeline.bootstrap);
+        const rebuildResult = yield* Effect.exit(
+          projectionPipeline.bootstrap.pipe(
+            Effect.flatMap(() => verifyProjectionRepairFence(repairFence)),
+          ),
+        );
         if (rebuildResult._tag === "Failure") {
-          yield* restoreDerivedProjectionState.pipe(
-            Effect.catchCause(() =>
-              Effect.logWarning(
-                "failed to restore orchestration projection backup after rebuild failure",
+          const restoreResult = yield* Effect.exit(restoreDerivedProjectionState);
+          if (restoreResult._tag === "Failure") {
+            commandReadModel = previousCommandReadModel;
+            return yield* Effect.logError(
+              "failed to restore orchestration projection backup after rebuild failure",
+            ).pipe(
+              Effect.annotateLogs({
+                rebuildCause: Cause.pretty(rebuildResult.cause),
+                restoreCause: Cause.pretty(restoreResult.cause),
+              }),
+              Effect.flatMap(() =>
+                Effect.fail(
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail:
+                      "Projection repair failed and its staged backup could not be restored. Restart Synara before retrying repair.",
+                  }),
+                ),
               ),
-            ),
-          );
+            );
+          }
+
           commandReadModel = previousCommandReadModel;
           yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
-
+          const typedFailure = Cause.findErrorOption(rebuildResult.cause);
+          const repairError = Option.filter(
+            typedFailure,
+            (error): error is OrchestrationCommandInternalError =>
+              Schema.is(OrchestrationCommandInternalError)(error),
+          );
           return yield* Effect.logError(
             "failed to rebuild orchestration projections from event log",
           ).pipe(
@@ -761,11 +1210,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
             Effect.flatMap(() =>
               Effect.fail(
-                new OrchestrationCommandInternalError({
-                  commandId: "repair-local-state",
-                  commandType: ORCHESTRATION_WS_METHODS.repairState,
-                  detail: "Failed to rebuild local projections from the saved event history.",
-                }),
+                Option.getOrElse(
+                  repairError,
+                  () =>
+                    new OrchestrationCommandInternalError({
+                      commandId: "repair-local-state",
+                      commandType: ORCHESTRATION_WS_METHODS.repairState,
+                      detail:
+                        "Failed to rebuild local projections from the saved event history.",
+                    }),
+                ),
               ),
             ),
           );
@@ -778,16 +1232,23 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     );
 
   return {
+    quiesce,
+    drain,
+    stop,
+    getProjectionCatchUpStatus,
     getReadModel,
     refreshCommandReadModel,
     readEvents,
+    readEventsThrough,
+    getEventHighWaterSequence,
+    subscribeDomainEvents,
     dispatch,
     repairState,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (Effect RPC, ProviderRuntimeIngestion, CheckpointReactor, etc.)
     // each independently receive all domain events.
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
-      return Stream.fromPubSub(eventPubSub);
+      return Stream.unwrap(subscribeDomainEvents);
     },
   } satisfies OrchestrationEngineShape;
 });
@@ -795,4 +1256,4 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 export const OrchestrationEngineLive = Layer.effect(
   OrchestrationEngineService,
   makeOrchestrationEngine,
-);
+).pipe(Layer.provideMerge(ManagedAttachmentRepositoryLive));

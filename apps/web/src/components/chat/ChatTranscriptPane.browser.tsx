@@ -30,6 +30,11 @@ const TIMELINE_ENTRIES = [
   },
 ];
 
+async function settleLayout(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
   const [composerValue, setComposerValue] = useState("");
   const composerImagesRef = useRef<readonly []>([]);
@@ -163,6 +168,9 @@ describe("ChatTranscriptPane", () => {
   it("expands collapsed user messages from the Show more control", async () => {
     const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
     const longUserText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
+    const host = document.createElement("div");
+    host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
+    document.body.append(host);
 
     const screen = await render(
       <ChatTranscriptPane
@@ -216,6 +224,7 @@ describe("ChatTranscriptPane", () => {
         turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
         workspaceRoot={undefined}
       />,
+      { container: host },
     );
     try {
       expect(screen.container.textContent).not.toContain(hiddenTail);
@@ -232,8 +241,11 @@ describe("ChatTranscriptPane", () => {
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
         "Show less",
       );
+      await settleLayout();
     } finally {
       await screen.unmount();
+      host.remove();
+      await settleLayout();
     }
   });
 

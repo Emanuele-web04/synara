@@ -3,14 +3,7 @@
 // Layer: Desktop update runtime
 // Exports: updater patching, shell-free PowerShell signature verification helpers.
 
-import {
-  execFile,
-  execFileSync,
-  spawnSync,
-  type ExecFileException,
-  type ExecFileOptions,
-} from "node:child_process";
-import * as OS from "node:os";
+import { execFile, spawnSync, type ExecFileException, type ExecFileOptions } from "node:child_process";
 import * as Path from "node:path";
 
 import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
@@ -44,12 +37,6 @@ type ExecFileLike = (
   callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ) => void;
 
-type ExecFileSyncLike = (
-  file: string,
-  args: ReadonlyArray<string>,
-  options: ExecFileOptions & { encoding: "utf8" },
-) => string | Buffer;
-
 interface PowerShellRunResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -61,9 +48,7 @@ interface PowerShellFailure extends Error {
 
 interface SignatureVerifierOptions {
   readonly execFile?: ExecFileLike;
-  readonly execFileSync?: ExecFileSyncLike;
   readonly env?: NodeJS.ProcessEnv;
-  readonly platformRelease?: string;
 }
 
 export function buildPowerShellExecutablePath(env: NodeJS.ProcessEnv = process.env): string {
@@ -136,22 +121,6 @@ function runPowerShell(
       },
     );
   });
-}
-
-function runPowerShellSync(
-  command: string,
-  timeout: number,
-  options: SignatureVerifierOptions,
-): void {
-  const env = options.env ?? process.env;
-  const execFileSyncImpl: ExecFileSyncLike =
-    options.execFileSync ??
-    ((file, args, execOptions) => execFileSync(file, [...args], execOptions));
-  execFileSyncImpl(
-    buildPowerShellExecutablePath(env),
-    buildPowerShellExecArgs(command),
-    buildPowerShellExecOptions(timeout, env),
-  );
 }
 
 export function parseDistinguishedName(seq: string): Map<string, string> {
@@ -254,44 +223,20 @@ function parseSignatureOutput(out: string): Record<string, unknown> {
   return data;
 }
 
-function isOldWin6(release: string = OS.release()): boolean {
-  return release.startsWith("6.") && !release.startsWith("6.3");
-}
-
 function handleSignatureError(
   logger: Logger,
   error: unknown,
   stderr: string | null,
-  options: SignatureVerifierOptions,
-): null {
-  if (isOldWin6(options.platformRelease)) {
-    logger.warn?.(
-      `Cannot execute Get-AuthenticodeSignature: ${String(
-        error ?? stderr,
-      )}. Ignoring signature validation due to unsupported powershell version. Please upgrade to powershell 3 or higher.`,
-    );
-    return null;
-  }
-
-  try {
-    runPowerShellSync("ConvertTo-Json test", 10 * 1000, options);
-  } catch (testError) {
-    const message = testError instanceof Error ? testError.message : String(testError);
-    logger.warn?.(
-      `Cannot execute ConvertTo-Json: ${message}. Ignoring signature validation due to unsupported powershell version. Please upgrade to powershell 3 or higher.`,
-    );
-    return null;
-  }
-
-  if (error != null) {
-    throw error;
-  }
-  if (stderr) {
-    throw new Error(
-      `Cannot execute Get-AuthenticodeSignature, stderr: ${stderr}. Failing signature validation due to unknown stderr.`,
-    );
-  }
-  return null;
+): string {
+  const detail =
+    error instanceof Error
+      ? error.message
+      : error != null
+        ? String(error)
+        : stderr?.trim() || "unknown PowerShell failure";
+  const result = `Windows update signature verification could not be completed: ${detail}`;
+  logger.warn?.(result);
+  return result;
 }
 
 export async function verifyWindowsUpdateCodeSignature(
@@ -311,7 +256,7 @@ export async function verifyWindowsUpdateCodeSignature(
       options,
     );
     if (result.stderr) {
-      return handleSignatureError(logger, null, result.stderr, options);
+      return handleSignatureError(logger, null, result.stderr);
     }
     stdout = result.stdout;
   } catch (error) {
@@ -319,7 +264,6 @@ export async function verifyWindowsUpdateCodeSignature(
       logger,
       error,
       error instanceof Error ? ((error as PowerShellFailure).stderr ?? null) : null,
-      options,
     );
   }
 
@@ -336,31 +280,32 @@ export async function verifyWindowsUpdateCodeSignature(
           : new Map<string, string>();
 
       const normalizedUpdateFile = Path.win32.normalize(unescapedTempUpdateFile);
-      const normalizedSignaturePath =
-        typeof data.Path === "string" ? Path.win32.normalize(data.Path) : null;
-      if (normalizedSignaturePath && normalizedSignaturePath !== normalizedUpdateFile) {
+      if (typeof data.Path !== "string" || data.Path.length === 0) {
+        return handleSignatureError(
+          logger,
+          new Error("Get-AuthenticodeSignature returned no signed file path"),
+          null,
+        );
+      }
+
+      const normalizedSignaturePath = Path.win32.normalize(data.Path);
+      if (normalizedSignaturePath !== normalizedUpdateFile) {
         return handleSignatureError(
           logger,
           new Error(
             `LiteralPath of ${normalizedSignaturePath} is different than ${normalizedUpdateFile}`,
           ),
           null,
-          options,
         );
       }
 
       for (const name of publisherNames) {
         const dn = parseDistinguishedName(name);
-        if (dn.size > 0) {
+        if (dn.has("CN") && dn.size >= 2) {
           const keys = Array.from(dn.keys());
           if (keys.every((key) => dn.get(key) === subject.get(key))) {
             return null;
           }
-        } else if (name === subject.get("CN")) {
-          logger.warn?.(
-            `Signature validated using only CN ${name}. Please add your full Distinguished Name (DN) to publisherNames configuration`,
-          );
-          return null;
         }
       }
     }
@@ -373,14 +318,27 @@ export async function verifyWindowsUpdateCodeSignature(
     );
     return result;
   } catch (error) {
-    return handleSignatureError(logger, error, null, options);
+    return handleSignatureError(logger, error, null);
   }
+}
+
+export function resolveWindowsUpdatePublisherNames(
+  feedPublisherNames: ReadonlyArray<string>,
+  embeddedPublisherSubjects: ReadonlyArray<string> | null,
+): string[] {
+  return (embeddedPublisherSubjects ?? feedPublisherNames)
+    .map((name) => name.trim())
+    .filter((name) => {
+      const dn = parseDistinguishedName(name);
+      return dn.has("CN") && dn.size >= 2;
+    });
 }
 
 export function hardenElectronUpdater(
   updaterModule: UpdaterModule,
   updater: unknown,
   platform: NodeJS.Platform = process.platform,
+  embeddedPublisherSubjects: ReadonlyArray<string> | null = [],
 ): void {
   if (platform !== "win32") {
     return;
@@ -423,7 +381,21 @@ export function hardenElectronUpdater(
 
   const nsisUpdater = updater as UpdaterWithSignatureVerifier | null;
   if (nsisUpdater && "verifyUpdateCodeSignature" in nsisUpdater) {
-    nsisUpdater.verifyUpdateCodeSignature = (publisherNames, unescapedTempUpdateFile) =>
-      verifyWindowsUpdateCodeSignature(publisherNames, unescapedTempUpdateFile, console);
+    nsisUpdater.verifyUpdateCodeSignature = (publisherNames, unescapedTempUpdateFile) => {
+      const allowedPublisherNames = resolveWindowsUpdatePublisherNames(
+        publisherNames,
+        embeddedPublisherSubjects,
+      );
+      if (allowedPublisherNames.length === 0) {
+        return Promise.resolve(
+          "Windows update signature verification blocked: no valid embedded publisher subject DN.",
+        );
+      }
+      return verifyWindowsUpdateCodeSignature(
+        allowedPublisherNames,
+        unescapedTempUpdateFile,
+        console,
+      );
+    };
   }
 }

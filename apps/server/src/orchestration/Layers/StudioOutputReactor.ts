@@ -26,7 +26,10 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
+import {
+  makeDrainableWorker,
+  startDrainableWorkerProducers,
+} from "@synara/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
@@ -47,6 +50,7 @@ import {
 // Baselines whose terminal event never arrives must not accumulate forever; one
 // entry per active turn stays far below this.
 const MAX_TRACKED_TURN_BASELINES = 128;
+const STUDIO_OUTPUT_REACTOR_CAPACITY = 128;
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
@@ -301,21 +305,26 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processEventSafely);
-
-  const start: StudioOutputReactorShape["start"] = Effect.gen(function* () {
-    yield* Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) =>
-        event.type === "turn.started" ||
-        event.type === "turn.completed" ||
-        event.type === "turn.aborted" ||
-        event.type === "session.exited" ||
-        event.type === "runtime.error"
-          ? worker.enqueue(event)
-          : Effect.void,
-      ),
-    );
+  const worker = yield* makeDrainableWorker(processEventSafely, {
+    capacity: STUDIO_OUTPUT_REACTOR_CAPACITY,
   });
+
+  const start: StudioOutputReactorShape["start"] = startDrainableWorkerProducers(
+    worker,
+    Effect.gen(function* () {
+      yield* Effect.forkScoped(
+        Stream.runForEach(providerService.streamEvents, (event) =>
+          event.type === "turn.started" ||
+          event.type === "turn.completed" ||
+          event.type === "turn.aborted" ||
+          event.type === "session.exited" ||
+          event.type === "runtime.error"
+            ? worker.enqueue(event)
+            : Effect.void,
+        ),
+      );
+    }),
+  );
 
   return {
     captureBaselineBeforeTurn,

@@ -1,4 +1,4 @@
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { GitCoreLive } from "./Layers/GitCore";
 import { GitHubCliLive } from "./Layers/GitHubCli";
@@ -7,17 +7,33 @@ import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
 import { CursorTextGenerationServiceLive } from "./Layers/CursorTextGeneration";
 import {
-  KiloTextGenerationServiceLive,
-  OpenCodeTextGenerationServiceLive,
+  makeKiloTextGenerationServiceLive,
+  makeOpenCodeTextGenerationServiceLive,
 } from "./Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
+import { ProviderCredentials, ProviderCredentialsLive } from "../providerCredentials";
+
+const resolveServerPassword = (provider: "kilo" | "opencode") =>
+  ProviderCredentials.pipe(
+    Effect.flatMap((credentials) => credentials.getServerPassword(provider)),
+    Effect.map((password) => password ?? undefined),
+    Effect.orDie,
+  );
+
+const kiloTextGenerationLayer = makeKiloTextGenerationServiceLive(resolveServerPassword).pipe(
+  Layer.provide(OpenCodeRuntimeLive),
+  Layer.provide(ProviderCredentialsLive),
+);
+const openCodeTextGenerationLayer = makeOpenCodeTextGenerationServiceLive(
+  resolveServerPassword,
+).pipe(Layer.provide(OpenCodeRuntimeLive), Layer.provide(ProviderCredentialsLive));
 
 export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
   Layer.provide(CodexTextGenerationServiceLive),
   Layer.provide(CursorTextGenerationServiceLive),
-  Layer.provide(KiloTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
-  Layer.provide(OpenCodeTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
+  Layer.provide(kiloTextGenerationLayer),
+  Layer.provide(openCodeTextGenerationLayer),
 );
 
 export const GitManagerLayerLive = GitManagerLive.pipe(

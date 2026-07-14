@@ -40,6 +40,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { NetService } from "@synara/shared/Net";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import {
+  teardownEffectProcessTree,
+  teardownProviderProcessTree,
+} from "./supervisedProcessTeardown.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
@@ -765,10 +770,14 @@ export function buildOpenCodeServerProcessEnv(input: {
   readonly experimentalWebSockets?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
-  return {
-    ...(input.baseEnv ?? process.env),
-    ...(input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {}),
-  };
+  return buildProviderChildEnvironment({
+    provider:
+      input.cliSpec?.dataDirectoryName === KILO_CLI_SPEC.dataDirectoryName ? "kilo" : "opencode",
+    baseEnv: input.baseEnv ?? process.env,
+    overrides: input.experimentalWebSockets
+      ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" }
+      : {},
+  });
 }
 
 export function toOpenCodePermissionReply(
@@ -822,7 +831,11 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-const makeOpenCodeRuntime = Effect.gen(function* () {
+export interface OpenCodeRuntimeLiveOptions {
+  readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+}
+
+const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) => Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const netService = yield* NetService;
   const pooledServerScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
@@ -833,16 +846,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
   const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
     Effect.gen(function* () {
+      const childEnv = buildOpenCodeServerProcessEnv({
+        ...(input.cliSpec ? { cliSpec: input.cliSpec } : {}),
+      });
       const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
         cwd: input.cwd,
-        env: process.env,
+        env: childEnv,
       });
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
           ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           ...(input.cwd ? { cwd: input.cwd } : {}),
-          env: process.env,
+          env: childEnv,
         }),
       );
       const [stdout, stderr, code] = yield* Effect.all(
@@ -921,7 +937,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         );
       yield* Scope.addFinalizer(
         runtimeScope,
-        child.kill({ killSignal: "SIGKILL", forceKillAfter: "1500 millis" }).pipe(Effect.ignore),
+        Effect.tryPromise({
+          try: () =>
+            teardownEffectProcessTree(
+              child,
+              options?.teardownProcessTree ?? teardownProviderProcessTree,
+            ),
+          catch: (cause) =>
+            new OpenCodeRuntimeError({
+              operation: "stopOpenCodeServerProcess",
+              detail: `Failed to prove ${cliSpec.displayName} server process-tree exit: ${openCodeRuntimeErrorDetail(cause)}`,
+              cause,
+            }),
+        }).pipe(Effect.asVoid, Effect.orDie),
       );
 
       const stdoutRef = yield* Ref.make("");
@@ -1067,7 +1095,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const closePooledServer = Effect.fn("closePooledServer")(function* (
     pooledServer: PooledOpenCodeServer,
   ) {
-    yield* detachPooledServer(pooledServer);
+    // Keep the pool entry authoritative while scope finalization proves the server tree exited.
+    // Acquirers serialize on pooledServerMutex and cannot observe a replacement before proof.
+    yield* cancelPooledServerIdleClose(pooledServer);
 
     const exitWatchFiber = pooledServer.exitWatchFiber;
     pooledServer.exitWatchFiber = null;
@@ -1075,7 +1105,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       yield* Fiber.interrupt(exitWatchFiber).pipe(Effect.ignore);
     }
 
-    yield* Scope.close(pooledServer.scope, Exit.void).pipe(Effect.ignore);
+    yield* Scope.close(pooledServer.scope, Exit.void);
+    yield* detachPooledServer(pooledServer);
   });
 
   const schedulePooledServerIdleClose = Effect.fn("schedulePooledServerIdleClose")(function* (
@@ -1110,8 +1141,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               return;
             }
             pooledServer.exitWatchFiber = null;
+            yield* Scope.close(pooledServer.scope, Exit.void);
             yield* detachPooledServer(pooledServer);
-            yield* Scope.close(pooledServer.scope, Exit.void).pipe(Effect.ignore);
           }),
         ),
       ),
@@ -1414,6 +1445,7 @@ export class OpenCodeRuntime extends ServiceMap.Service<OpenCodeRuntime, OpenCod
   "synara/provider/opencodeRuntime",
 ) {}
 
-export const OpenCodeRuntimeLive = Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime).pipe(
-  Layer.provide(NetService.layer),
-);
+export const makeOpenCodeRuntimeLive = (options?: OpenCodeRuntimeLiveOptions) =>
+  Layer.effect(OpenCodeRuntime, makeOpenCodeRuntime(options)).pipe(Layer.provide(NetService.layer));
+
+export const OpenCodeRuntimeLive = makeOpenCodeRuntimeLive();

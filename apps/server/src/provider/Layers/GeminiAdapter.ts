@@ -6,7 +6,7 @@
  *
  * @module GeminiAdapterLive
  */
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,11 +40,17 @@ import {
   resolveGeminiApiModelId,
 } from "@synara/shared/model";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import {
+  teardownChildProcessTree,
+  teardownProviderProcessTree,
+  type ProcessExitHandle,
+} from "../supervisedProcessTeardown.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -69,6 +75,23 @@ const GEMINI_SESSION_FILE_PREFIX = "session-";
 const SYNARA_GEMINI_SETTINGS_DIR = path.join(os.tmpdir(), "synara", "gemini");
 const GEMINI_3_THINKING_LEVELS: ReadonlyArray<GeminiThinkingLevel> = ["HIGH", "LOW"];
 const GEMINI_2_5_THINKING_BUDGETS: ReadonlyArray<GeminiThinkingBudget> = [-1, 512, 0];
+
+export function makeGeminiRuntimeEventBase(input: {
+  readonly threadId: ThreadId;
+  readonly lifecycleGeneration?: string;
+  readonly eventId?: EventId;
+  readonly createdAt?: string;
+}) {
+  return {
+    eventId: input.eventId ?? EventId.makeUnsafe(crypto.randomUUID()),
+    provider: PROVIDER,
+    threadId: input.threadId,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    ...(input.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: input.lifecycleGeneration }
+      : {}),
+  };
+}
 
 type JsonRpcId = number | string;
 type GeminiToolKind =
@@ -155,6 +178,7 @@ interface GeminiStoredTurn {
 
 interface GeminiSessionContext {
   session: ProviderSession;
+  readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
   readonly child: ChildProcessWithoutNullStreams;
   readonly stdout: readline.Interface;
@@ -179,6 +203,7 @@ interface GeminiSessionContext {
 export interface GeminiAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -626,17 +651,11 @@ function makeApprovalOutcome(
   };
 }
 
-function killChildProcess(child: ChildProcessWithoutNullStreams): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      return;
-    } catch {
-      // Fall back to direct kill below.
-    }
-  }
-
-  child.kill("SIGTERM");
+export async function teardownGeminiChildProcess(
+  child: ProcessExitHandle,
+  teardownProcessTree: typeof teardownProviderProcessTree = teardownProviderProcessTree,
+): Promise<void> {
+  await teardownChildProcessTree(child, teardownProcessTree);
 }
 
 function releaseProcessResources(context: GeminiSessionContext): void {
@@ -704,6 +723,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   const runFork = Effect.runForkWith(runtimeServices);
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, GeminiSessionContext>();
+  const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
   const nativeEventLogger =
     options?.nativeEventLogger ??
     (options?.nativeEventLogPath !== undefined
@@ -734,7 +754,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
     if (Object.keys(aliases).length === 0) {
       return {
-        env: process.env,
+        env: buildProviderChildEnvironment({ provider: "gemini" }),
         systemSettingsPath: undefined,
       };
     }
@@ -771,10 +791,10 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
     return {
       systemSettingsPath,
-      env: {
-        ...process.env,
-        GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
-      },
+      env: buildProviderChildEnvironment({
+        provider: "gemini",
+        overrides: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath },
+      }),
     };
   });
 
@@ -786,7 +806,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   ) {
     return yield* Effect.try({
       try: () => {
-        const childEnv = env ?? process.env;
+        const childEnv =
+          env ?? buildProviderChildEnvironment({ provider: "gemini", baseEnv: process.env });
         const prepared = prepareWindowsSafeProcess(binaryPath, ["--acp"], {
           cwd,
           env: childEnv,
@@ -812,6 +833,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
   const makeSessionContext = (input: {
     threadId: ThreadId;
+    lifecycleGeneration?: string;
     runtimeMode: ProviderSession["runtimeMode"];
     runtimeModeId: string;
     cwd: string;
@@ -832,6 +854,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         createdAt: now,
         updatedAt: now,
       },
+      ...(input.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: input.lifecycleGeneration }
+        : {}),
       binaryPath: input.binaryPath,
       child: input.child,
       stdout: readline.createInterface({ input: input.child.stdout }),
@@ -862,12 +887,13 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     })),
   });
 
-  const makeEventBase = (context: GeminiSessionContext) => ({
-    eventId: EventId.makeUnsafe(crypto.randomUUID()),
-    provider: PROVIDER,
-    threadId: context.session.threadId,
-    createdAt: new Date().toISOString(),
-  });
+  const makeEventBase = (context: GeminiSessionContext) =>
+    makeGeminiRuntimeEventBase({
+      threadId: context.session.threadId,
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+    });
 
   const offerRuntimeEvent = Effect.fn("offerRuntimeEvent")(function* (event: ProviderRuntimeEvent) {
     yield* Queue.offer(runtimeEventQueue, event);
@@ -1263,23 +1289,45 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     }
   };
 
-  const disposeSessionContext = (
+  const teardownSessionProcess = Effect.fn("teardownSessionProcess")(function* (
+    context: GeminiSessionContext,
+  ) {
+    yield* Effect.tryPromise({
+      try: () => teardownGeminiChildProcess(context.child, teardownProcessTree),
+      catch: (cause) =>
+        new ProviderAdapterProcessError({
+          provider: PROVIDER,
+          threadId: context.session.threadId,
+          detail: `Failed to prove Gemini process-tree exit: ${toMessage(cause, "exit unproven")}`,
+          cause,
+        }),
+    });
+  });
+
+  const disposeSessionContext = Effect.fn("disposeSessionContext")(function* (
     context: GeminiSessionContext,
     detail: string,
     options?: {
       readonly removeFromSessions?: boolean;
     },
-  ): void => {
+  ) {
     context.stopped = true;
     context.exitEmitted = true;
     rejectPendingRequests(context, detail);
     context.pendingApprovals.clear();
+    yield* teardownSessionProcess(context).pipe(
+      Effect.tapError(() =>
+        Effect.sync(() => {
+          // Keep the real exit listener authoritative if proof failed and the process exits later.
+          context.exitEmitted = false;
+        }),
+      ),
+    );
     releaseProcessResources(context);
-    killChildProcess(context.child);
     if (options?.removeFromSessions && sessions.get(context.session.threadId) === context) {
       sessions.delete(context.session.threadId);
     }
-  };
+  });
 
   const handleProcessExit = Effect.fn("handleProcessExit")(function* (
     context: GeminiSessionContext,
@@ -2098,9 +2146,11 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
       const existing = sessions.get(input.threadId);
       if (existing) {
-        disposeSessionContext(existing, "Session replaced while starting a new Gemini session.", {
-          removeFromSessions: true,
-        });
+        yield* disposeSessionContext(
+          existing,
+          "Session replaced while starting a new Gemini session.",
+          { removeFromSessions: true },
+        );
       }
 
       const cwd = input.cwd ?? process.cwd();
@@ -2132,6 +2182,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       const resumeTurns = readResumeTurns(input.resumeCursor);
       const context = makeSessionContext({
         threadId: input.threadId,
+        ...(input.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: input.lifecycleGeneration }
+          : {}),
         runtimeMode: input.runtimeMode,
         runtimeModeId,
         cwd,
@@ -2160,10 +2213,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       };
       yield* bootstrapSessionContext(context, bootstrapInput).pipe(
         Effect.tapError(() =>
-          Effect.sync(() => {
-            disposeSessionContext(context, "Gemini session failed during startup.", {
-              removeFromSessions: true,
-            });
+          disposeSessionContext(context, "Gemini session failed during startup.", {
+            removeFromSessions: true,
           }),
         ),
       );
@@ -2350,9 +2401,20 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
   const stopSession: GeminiAdapterShape["stopSession"] = (threadId) =>
     Effect.gen(function* () {
-      const context = yield* requireSession(threadId);
+      const context = sessions.get(threadId);
+      if (!context) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
       context.stopped = true;
-      killChildProcess(context.child);
+      yield* teardownSessionProcess(context);
+      yield* handleProcessExit(context, {
+        detail: "Gemini ACP session stopped.",
+        exitKind: "graceful",
+        recoverable: false,
+      });
     });
 
   const listSessions: GeminiAdapterShape["listSessions"] = () =>
@@ -2442,6 +2504,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         });
       }
 
+      // Retire the owned runtime before spawning its replacement. A failed replacement remains
+      // truthfully stopped instead of leaving two Gemini processes attached to one thread.
+      yield* disposeSessionContext(context, "Session replaced during rollback.", {
+        removeFromSessions: true,
+      });
+
       const launchConfig = yield* prepareGeminiLaunchConfig({
         threadId,
         ...(context.session.model ? { selectedModel: context.session.model } : {}),
@@ -2464,6 +2532,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       );
       const nextContext = makeSessionContext({
         threadId,
+        ...(context.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: context.lifecycleGeneration }
+          : {}),
         runtimeMode: context.session.runtimeMode,
         runtimeModeId: context.runtimeModeId,
         cwd,
@@ -2490,13 +2561,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       };
       yield* bootstrapSessionContext(nextContext, rollbackBootstrapInput).pipe(
         Effect.tapError(() =>
-          Effect.sync(() => {
-            disposeSessionContext(nextContext, "Gemini rollback session failed during startup.");
-          }),
+          disposeSessionContext(nextContext, "Gemini rollback session failed during startup."),
         ),
       );
-
-      disposeSessionContext(context, "Session replaced during rollback.");
 
       sessions.set(threadId, nextContext);
       return snapshotThread(nextContext);
@@ -2547,13 +2614,14 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     } satisfies ProviderComposerCapabilities);
 
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      for (const context of Array.from(sessions.values())) {
+    Effect.forEach(
+      Array.from(sessions.values()),
+      (context) =>
         disposeSessionContext(context, "Gemini adapter is shutting down.", {
           removeFromSessions: true,
-        });
-      }
-    }).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
+        }),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.ensuring(Queue.shutdown(runtimeEventQueue))),
   );
 
   return {
