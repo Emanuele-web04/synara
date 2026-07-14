@@ -99,6 +99,8 @@ describe("EnvironmentPullRequestSection", () => {
           gitCwd={cwd}
           enabled
           activeThreadId={threadId}
+          projectId={null}
+          configuredRepositories={[{ nameWithOwner: "example/synara" }]}
           onOpenUrl={vi.fn()}
           onClose={onClose}
         />
