@@ -183,6 +183,7 @@ export function EnvironmentPullRequestSection({
   enabled,
   activeThreadId,
   projectId,
+  configuredRepositories,
   onOpenUrl,
   onClose,
 }: {
@@ -191,6 +192,7 @@ export function EnvironmentPullRequestSection({
   enabled: boolean;
   activeThreadId: ThreadId | null;
   projectId: ProjectId | null;
+  configuredRepositories: ReadonlyArray<{ readonly nameWithOwner: string }>;
   /** Open non-PR URLs in the in-app browser panel. */
   onOpenUrl: (url: string) => void;
   onClose: () => void;
@@ -223,8 +225,12 @@ export function EnvironmentPullRequestSection({
   const diffStat = summarizePullRequestDiffStat(displayPr);
   const hasConflicts = settledState === null && displayPr.mergeability === "conflicting";
   const pullRequestRepository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(displayPr.url);
+  const repositoryBelongsToProject = configuredRepositories.some(
+    (repository) =>
+      repository.nameWithOwner.toLowerCase() === pullRequestRepository?.toLowerCase(),
+  );
   const openPullRequest = (initialTab: "summary" | "code" = "summary") => {
-    if (activeThreadId && projectId && pullRequestRepository) {
+    if (activeThreadId && projectId && pullRequestRepository && repositoryBelongsToProject) {
       openPane(activeThreadId, {
         kind: "pullRequest",
         pullRequestProjectId: projectId,
@@ -233,7 +239,7 @@ export function EnvironmentPullRequestSection({
         pullRequestInitialTab: initialTab,
       });
     } else {
-      onOpenUrl(displayPr.url);
+      onOpenUrl(initialTab === "code" ? `${displayPr.url}/files` : displayPr.url);
     }
     onClose();
   };

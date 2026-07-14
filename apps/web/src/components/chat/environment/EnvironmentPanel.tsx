@@ -84,6 +84,7 @@ export interface EnvironmentPanelProps {
     readonly nameWithOwner: string;
     readonly url: string;
   } | null;
+  githubRepositories?: ReadonlyArray<{ readonly nameWithOwner: string }>;
   isGitRepo: boolean;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -199,6 +200,7 @@ export function EnvironmentPanel({
   gitCwd,
   openInTarget,
   githubRepository = null,
+  githubRepositories = [],
   isGitRepo,
   keybindings,
   availableEditors,
@@ -339,6 +341,7 @@ export function EnvironmentPanel({
           enabled={open}
           activeThreadId={activeThreadId}
           projectId={activeProjectId}
+          configuredRepositories={githubRepositories}
           onOpenUrl={onOpenGithubRepository}
           onClose={onClose}
         />

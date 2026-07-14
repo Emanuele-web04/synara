@@ -189,7 +189,7 @@ layer("GitHubCliLive", (it) => {
         sshUrl: "git@github.com:octocat/sample-repo.git",
       });
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
-        expect.arrayContaining(["repo", "view", "github.com/octocat/sample-repo"]),
+        expect.arrayContaining(["repo", "view", "octocat/sample-repo"]),
       );
     }),
   );

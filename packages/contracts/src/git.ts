@@ -344,6 +344,12 @@ export const GitHubRepositoryResult = Schema.Struct({
       url: TrimmedNonEmptyStringSchema,
     }),
   ),
+  repositories: Schema.Array(
+    Schema.Struct({
+      nameWithOwner: TrimmedNonEmptyStringSchema,
+      url: TrimmedNonEmptyStringSchema,
+    }),
+  ),
 });
 export type GitHubRepositoryResult = typeof GitHubRepositoryResult.Type;
 

@@ -1095,7 +1095,9 @@ const makeGitHubCli = Effect.sync(() => {
             args: [
               "repo",
               "view",
-              repositorySelector(repository),
+              // Preserve gh's current-host selection for existing fork/Enterprise flows.
+              // The pull-request browser methods above intentionally pin github.com.
+              repository,
               "--json",
               "nameWithOwner,url,sshUrl",
             ],
