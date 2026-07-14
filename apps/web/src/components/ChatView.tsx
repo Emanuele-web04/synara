@@ -467,6 +467,10 @@ import {
   deriveComposerSubagentStripItems,
   type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
+import {
+  deriveSubagentToolTraceByThreadId,
+  type SubagentToolTrace,
+} from "./chat/subagentToolTrace.logic";
 import { WorkflowRunCard } from "./chat/WorkflowRunCard";
 import {
   buildWorkflowResumePrompt,
@@ -575,6 +579,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+const EMPTY_SUBAGENT_TOOL_TRACES: ReadonlyMap<string, SubagentToolTrace> = new Map();
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -2554,6 +2559,47 @@ export default function ChatView({
           )
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
+  );
+  // Native-CLI-style nested trace: transcript subagent rows show the child thread's
+  // recent tool calls. Retain child detail subscriptions only while a subagent runs
+  // so its activities stream in live; settled traces stay frozen from whatever the
+  // store already holds.
+  const liveSubagentThreadIdsKey = useMemo(() => {
+    if (!hasWorkLogSubagents) {
+      return "";
+    }
+    const threadIds = new Set<string>();
+    for (const entry of workLogEntries) {
+      for (const subagent of entry.subagents ?? []) {
+        if (subagent.isActive && subagent.resolvedThreadId) {
+          threadIds.add(subagent.resolvedThreadId);
+        }
+      }
+    }
+    return [...threadIds].toSorted().join("\n");
+  }, [hasWorkLogSubagents, workLogEntries]);
+  useEffect(() => {
+    if (!liveSubagentThreadIdsKey) {
+      return;
+    }
+    const releases = liveSubagentThreadIdsKey
+      .split("\n")
+      .map((threadId) => retainThreadDetailSubscription(ThreadId.makeUnsafe(threadId)));
+    return () => {
+      for (const release of releases) {
+        release();
+      }
+    };
+  }, [liveSubagentThreadIdsKey]);
+  const subagentToolTraceByThreadId = useMemo(
+    () =>
+      hasWorkLogSubagents
+        ? deriveSubagentToolTraceByThreadId({
+            workEntries: workLogEntries,
+            threads: relevantWorkLogThreads,
+          })
+        : EMPTY_SUBAGENT_TOOL_TRACES,
+    [hasWorkLogSubagents, relevantWorkLogThreads, workLogEntries],
   );
   // Native-CLI parity: while a subagent thread is open, the strip derives from the
   // PARENT thread's activities so all sibling subagents (plus a way back to the
@@ -11428,6 +11474,7 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    subagentToolTraceByThreadId={subagentToolTraceByThreadId}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}

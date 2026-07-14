@@ -34,6 +34,7 @@ import {
 import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
   humanizeSubagentStatus,
+  normalizeSubagentStatusKind,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
 import {
@@ -1226,6 +1227,23 @@ function humanizeSubagentRawStatus(rawStatus: string | undefined): string | unde
   return humanizeSubagentStatus(rawStatus);
 }
 
+// Terminal work-log statuses are authoritative over child-thread session state:
+// a finished subagent's thread merely parks in an "Idle"/"Closed" session status,
+// which must not mask Completed/Failed/Stopped. The per-agent rawStatus wins over
+// the collab item's own status, which only covers the whole tool call.
+function terminalSubagentStatusLabel(
+  rawStatus: string | undefined,
+  entryStatus: string | undefined,
+): string | undefined {
+  for (const candidate of rawStatus !== undefined ? [rawStatus] : [entryStatus]) {
+    const statusKind = normalizeSubagentStatusKind(candidate);
+    if (statusKind === "completed" || statusKind === "failed" || statusKind === "stopped") {
+      return humanizeSubagentStatus(candidate);
+    }
+  }
+  return undefined;
+}
+
 function resolveTimelineSubagentThread(input: {
   subagent: NonNullable<WorkLogEntry["subagents"]>[number];
   parentThreadId: ThreadIdType | null;
@@ -1292,6 +1310,9 @@ export function enrichSubagentWorkEntries(
       });
       const status = deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const terminalStatusLabel = status.isActive
+        ? undefined
+        : terminalSubagentStatusLabel(subagent.rawStatus, entry.subagentAction?.status);
       const matchedPresentation =
         matchedThread !== undefined
           ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
@@ -1303,8 +1324,8 @@ export function enrichSubagentWorkEntries(
       if (matchedPresentation) {
         nextSubagent.title = matchedPresentation.fullLabel;
       }
-      if (status.label ?? fallbackStatusLabel) {
-        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
+        nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
       if (status.isActive || fallbackStatusLabel === "Running") {
         nextSubagent.isActive = true;

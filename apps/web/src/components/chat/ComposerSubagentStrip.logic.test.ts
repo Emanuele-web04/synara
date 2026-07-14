@@ -373,6 +373,116 @@ describe("deriveComposerSubagentStripItems", () => {
     ).toEqual([]);
   });
 
+  describe("settled subagent status", () => {
+    const parentThreadId = ThreadId.makeUnsafe("thread-main");
+
+    // A finished subagent's thread parks in an idle session state; the row must
+    // surface the work log's terminal status instead of "Idle".
+    function settledSubagentThread(providerThreadId: string): Thread {
+      return {
+        id: localSubagentThreadId(parentThreadId, providerThreadId),
+        codexThreadId: null,
+        projectId: "project-1" as Thread["projectId"],
+        title: "Subagent task",
+        modelSelection: { provider: "claudeAgent", model: "sonnet" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          createdAt: "2026-07-14T00:00:01.000Z",
+          updatedAt: "2026-07-14T00:00:02.000Z",
+          orchestrationStatus: "idle",
+        },
+        messages: [],
+        proposedPlans: [],
+        error: null,
+        createdAt: "2026-07-14T00:00:01.000Z",
+        latestTurn: null,
+        parentThreadId,
+        turnDiffSummaries: [],
+        activities: [],
+        branch: null,
+        worktreePath: null,
+      };
+    }
+
+    function enrichedItems(entry: WorkLogEntry): ComposerSubagentStripItem[] {
+      const enriched = enrichSubagentWorkEntries(
+        [entry],
+        [settledSubagentThread("toolu_x")],
+        parentThreadId,
+      );
+      return subagentRows(
+        deriveComposerSubagentStripItems({
+          workEntries: enriched,
+          liveTurnId: TurnId.makeUnsafe("turn-1"),
+        }),
+      );
+    }
+
+    it("prefers a terminal rawStatus over the idle child-thread session state", () => {
+      const items = enrichedItems(
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          itemType: "collab_agent_tool_call",
+          subagents: [
+            subagent({
+              threadId: "toolu_x",
+              providerThreadId: "toolu_x",
+              nickname: "Ada",
+              rawStatus: "completed",
+            }),
+          ],
+        }),
+      );
+      expect(items[0]).toMatchObject({
+        statusLabel: "Completed",
+        statusKind: "completed",
+        isActive: false,
+      });
+    });
+
+    it("falls back to the settled collab item status when no per-agent status exists", () => {
+      const items = enrichedItems(
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          itemType: "collab_agent_tool_call",
+          subagentAction: { tool: "spawnAgent", status: "failed", summaryText: "Agent activity" },
+          subagents: [
+            subagent({ threadId: "toolu_x", providerThreadId: "toolu_x", nickname: "Ada" }),
+          ],
+        }),
+      );
+      expect(items[0]).toMatchObject({
+        statusLabel: "Failed",
+        statusKind: "failed",
+        isActive: false,
+      });
+    });
+
+    it("keeps Idle for a child thread idling mid-lifecycle without a terminal signal", () => {
+      const items = enrichedItems(
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          itemType: "collab_agent_tool_call",
+          subagentAction: {
+            tool: "spawnAgent",
+            status: "in_progress",
+            summaryText: "Agent activity",
+          },
+          subagents: [
+            subagent({ threadId: "toolu_x", providerThreadId: "toolu_x", nickname: "Ada" }),
+          ],
+        }),
+      );
+      expect(items[0]).toMatchObject({ statusLabel: "Idle", statusKind: "idle" });
+    });
+  });
+
   it("derives a strip row end-to-end from a routed collab activity omitted by the timeline", () => {
     const parentThreadId = ThreadId.makeUnsafe("thread-1");
     const activities: OrchestrationThreadActivity[] = [
