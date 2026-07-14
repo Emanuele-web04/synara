@@ -7,9 +7,7 @@ import { useCallback, useState } from "react";
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 
-import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
-import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -30,8 +28,6 @@ export function CodexResetCreditCard({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const queryClient = useQueryClient();
   const mutation = useMutation(consumeCodexResetCreditMutationOptions({ queryClient }));
-  const { settings, updateSettings } = useAppSettings();
-  const skipConfirm = settings.skipCodexRateLimitResetConfirm === true;
 
   const doConsume = useCallback(() => {
     mutation.mutate({ idempotencyKey: crypto.randomUUID() });
@@ -55,14 +51,14 @@ export function CodexResetCreditCard({
             </div>
           )}
         </div>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={mutation.isPending}
-          onClick={() => (skipConfirm ? doConsume() : setConfirmOpen(true))}
+
+        <button
+          type="button"
+          className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-transparent px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => setConfirmOpen(true)}
         >
           {mutation.isPending ? "Using reset…" : "Reset now"}
-        </Button>
+        </button>
       </div>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -74,15 +70,6 @@ export function CodexResetCreditCard({
               windows immediately.
             </DialogDescription>
           </DialogHeader>
-          <label className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs">
-            <Checkbox
-              checked={skipConfirm}
-              onCheckedChange={() =>
-                updateSettings({ skipCodexRateLimitResetConfirm: !skipConfirm })
-              }
-            />
-            <span>Don't ask again</span>
-          </label>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>
               Cancel

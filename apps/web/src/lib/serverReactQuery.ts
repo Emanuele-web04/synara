@@ -269,7 +269,7 @@ export function consumeCodexResetCreditMutationOptions(input: { queryClient: Que
       return api.server.consumeCodexResetCredit(body);
     },
     onSuccess: () => {
-      void input.queryClient.invalidateQueries({
+      void input.queryClient.refetchQueries({
         queryKey: serverQueryKeys.allProviderUsage(),
       });
     },
