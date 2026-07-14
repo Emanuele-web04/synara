@@ -23,6 +23,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -151,6 +152,11 @@ import {
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import {
+  readDesktopWindowState,
+  resolveVisibleWindowBounds,
+  writeDesktopWindowState,
+} from "./windowState";
+import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
   resolveSynaraStorageSnapshotPath,
@@ -197,6 +203,7 @@ const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BASE_DIR = process.env.SYNARA_HOME?.trim() || Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
+const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_SCHEME = SYNARA_DESKTOP_SCHEME;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -3161,9 +3168,24 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
 }
 
 function createWindow(): BrowserWindow {
+  const savedWindowState = readDesktopWindowState(DESKTOP_WINDOW_STATE_PATH);
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const restoredBounds = savedWindowState
+    ? resolveVisibleWindowBounds({
+        savedBounds: savedWindowState.bounds,
+        displayWorkAreas: [
+          primaryDisplay.workArea,
+          ...screen
+            .getAllDisplays()
+            .filter((display) => display.id !== primaryDisplay.id)
+            .map((display) => display.workArea),
+        ],
+        minimumWidth: 840,
+        minimumHeight: 620,
+      })
+    : { width: 1100, height: 780 };
   const window = new BrowserWindow({
-    width: 1100,
-    height: 780,
+    ...restoredBounds,
     minWidth: 840,
     minHeight: 620,
     show: false,
@@ -3238,9 +3260,12 @@ function createWindow(): BrowserWindow {
     emitUpdateState();
   });
   window.once("ready-to-show", () => {
-    // Launch filling the screen work area; the 1100x780 size above stays as the
-    // restore bounds when the user toggles the window back out of maximized.
-    window.maximize();
+    // Preserve the original first-launch behavior, then respect the state saved
+    // by subsequent closes. Normal bounds are restored before maximizing so the
+    // native restore control returns to the user's last windowed size.
+    if (!savedWindowState || savedWindowState.isMaximized) {
+      window.maximize();
+    }
     window.show();
     emitDesktopWindowState(window);
   });
@@ -3249,6 +3274,17 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
+  window.on("close", () => {
+    try {
+      writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
+        version: 1,
+        bounds: window.getNormalBounds(),
+        isMaximized: window.isMaximized(),
+      });
+    } catch (error) {
+      console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+  });
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
