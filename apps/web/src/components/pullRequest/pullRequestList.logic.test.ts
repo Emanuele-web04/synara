@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
 
-import { groupPullRequestEntriesByInvolvement } from "./pullRequestList.logic";
+import {
+  countUniqueViewerReviewRequests,
+  groupPullRequestEntriesByInvolvement,
+  pullRequestListEntryKey,
+} from "./pullRequestList.logic";
 
 function makeActor(login: string): PullRequestActor {
   return { login, name: null, avatarUrl: null, url: null };
@@ -89,5 +93,26 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     const groups = groupPullRequestEntriesByInvolvement([entry], null);
     expect(groups[0]?.key).toBe("others");
+  });
+});
+
+describe("pull request list identity", () => {
+  it("keeps rows from projects sharing one repository distinct", () => {
+    const first = makeEntry();
+    const second = makeEntry({
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      projectTitle: "Project Two",
+    });
+    expect(pullRequestListEntryKey(first)).not.toBe(pullRequestListEntryKey(second));
+  });
+
+  it("counts one review request once across shared-project rows", () => {
+    const first = makeEntry({ viewerReviewRequested: true });
+    const duplicate = makeEntry({
+      projectId: "project-2" as PullRequestListEntry["projectId"],
+      viewerReviewRequested: true,
+    });
+    const other = makeEntry({ number: 2, viewerReviewRequested: true });
+    expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
   });
 });

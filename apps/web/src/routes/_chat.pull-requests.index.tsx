@@ -17,7 +17,10 @@ import {
 import { PullRequestAvatar } from "~/components/pullRequest/PullRequestAvatar";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
 import { PullRequestDiffStat } from "~/components/pullRequest/PullRequestDiffStat";
-import { groupPullRequestEntriesByInvolvement } from "~/components/pullRequest/pullRequestList.logic";
+import {
+  groupPullRequestEntriesByInvolvement,
+  pullRequestListEntryKey,
+} from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestStateGlyph } from "~/components/pullRequest/PullRequestStateGlyph";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "~/components/pullRequest/PullRequestWarningNote";
@@ -216,7 +219,7 @@ function PullRequestList({
             </h2>
             {group.entries.map((entry) => (
               <PullRequestRow
-                key={`${entry.repository}#${entry.number}`}
+                key={pullRequestListEntryKey(entry)}
                 entry={entry}
                 selected={
                   selectedProjectId === entry.projectId &&
@@ -235,7 +238,7 @@ function PullRequestList({
     <div className="space-y-0.5">
       {entries.map((entry) => (
         <PullRequestRow
-          key={`${entry.repository}#${entry.number}`}
+          key={pullRequestListEntryKey(entry)}
           entry={entry}
           selected={
             selectedProjectId === entry.projectId &&

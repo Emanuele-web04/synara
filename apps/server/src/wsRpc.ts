@@ -1236,6 +1236,7 @@ export const makeWsRpcLayer = () =>
                   repositoryCache.clear();
                   pullRequestListCacheGeneration += 1;
                   pullRequestListCache.clear();
+                  mergeCapabilitiesCache.clear();
                   viewerCacheGeneration += 1;
                   viewerCache = null;
                 });

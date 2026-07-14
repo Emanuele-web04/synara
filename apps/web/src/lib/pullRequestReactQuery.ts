@@ -119,11 +119,12 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
         exact: true,
       });
     },
-    onSuccess: (result, input) => {
+    onSuccess: async (result, input) => {
       queryClient.setQueryData(
         pullRequestQueryKeys.list(normalizePullRequestListKeyInput(input)),
         result,
       );
+      await queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
     },
   });
 }

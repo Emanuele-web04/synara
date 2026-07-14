@@ -553,15 +553,15 @@ function normalizeDetailComments(
     ];
   });
   const reviews: PullRequestComment[] = (raw.reviews ?? []).flatMap((review, index) => {
-    const submittedAt = review.submittedAt?.trim();
-    if (!submittedAt) return [];
+    const createdAt = review.submittedAt?.trim() || review.updatedAt?.trim();
+    if (!createdAt) return [];
     return [
       {
-        id: review.id?.trim() || `review-${index}-${submittedAt}`,
+        id: review.id?.trim() || `review-${index}-${createdAt}`,
         kind: "review" as const,
         author: normalizeActor(review.author),
         body: review.body ?? "",
-        createdAt: submittedAt,
+        createdAt,
         updatedAt: review.updatedAt?.trim() || null,
         url: review.url?.trim() || null,
         path: null,

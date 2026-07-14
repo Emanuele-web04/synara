@@ -166,6 +166,7 @@ import {
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { countUniqueViewerReviewRequests } from "./pullRequest/pullRequestList.logic";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -1448,7 +1449,7 @@ export default function Sidebar() {
   const pullRequestsReviewBadgeCount = useMemo(() => {
     const entries = pullRequestsReviewingQuery.data?.entries;
     if (!entries) return 0;
-    return entries.filter((entry) => entry.viewerReviewRequested).length;
+    return countUniqueViewerReviewRequests(entries);
   }, [pullRequestsReviewingQuery.data]);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).

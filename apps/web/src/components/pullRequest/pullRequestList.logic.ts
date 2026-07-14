@@ -4,7 +4,7 @@
 //          render muted section headers the way the reference design does, without duplicating
 //          this classification in the route component itself.
 // Layer: Web domain helpers (no React)
-// Exports: PullRequestListGroupKey, PullRequestListGroup, groupPullRequestEntriesByInvolvement
+// Exports: PullRequestListGroupKey, PullRequestListGroup, grouping, identity, and badge helpers
 
 import type { PullRequestListEntry } from "@synara/contracts";
 
@@ -21,6 +21,19 @@ const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   authored: "Authored",
   others: "Others",
 };
+
+function pullRequestIdentity(entry: PullRequestListEntry): string {
+  return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
+}
+
+export function pullRequestListEntryKey(entry: PullRequestListEntry): string {
+  return `${entry.projectId}:${pullRequestIdentity(entry)}`;
+}
+
+export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
+  return new Set(entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestIdentity))
+    .size;
+}
 
 // We only claim relationships represented by list data. In particular, no "previously reviewed"
 // bucket is inferred from authorship because the API result has no review-history signal.

@@ -824,6 +824,15 @@ layer("GitHubCliLive", (it) => {
             },
             { oid: "def", committedDate: "2026-07-01T02:00:00Z" },
           ],
+          reviews: [
+            {
+              id: "pending-review",
+              body: "Draft feedback",
+              state: "PENDING",
+              updatedAt: "2026-07-01T03:00:00Z",
+              author: { login: "reviewer" },
+            },
+          ],
           reviewRequests: [{ __typename: "Team", name: "Platform", slug: "platform" }],
         }),
         stderr: "",
@@ -843,7 +852,16 @@ layer("GitHubCliLive", (it) => {
       );
       assert.deepStrictEqual(detail.reviewers, [
         { login: "platform", name: "Platform", avatarUrl: null, url: null },
+        { login: "reviewer", name: null, avatarUrl: null, url: null },
       ]);
+      expect(detail.comments).toContainEqual(
+        expect.objectContaining({
+          id: "pending-review",
+          body: "Draft feedback",
+          createdAt: "2026-07-01T03:00:00Z",
+          reviewState: "PENDING",
+        }),
+      );
       expect(mockedRunProcess.mock.calls[0]?.[1]?.at(-1)).not.toContain("files");
     }),
   );
