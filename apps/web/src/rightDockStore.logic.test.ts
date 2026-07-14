@@ -21,6 +21,7 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
       "terminal",
       "sidechat",
       "git",
+      "pullRequest",
     ]);
   });
 
@@ -33,7 +34,16 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
 
 describe("isRightDockPaneKind", () => {
   it("accepts the known pane kinds", () => {
-    for (const kind of ["browser", "diff", "explorer", "file", "terminal", "sidechat", "git"]) {
+    for (const kind of [
+      "browser",
+      "diff",
+      "explorer",
+      "file",
+      "terminal",
+      "sidechat",
+      "git",
+      "pullRequest",
+    ]) {
       expect(isRightDockPaneKind(kind)).toBe(true);
     }
   });
@@ -43,6 +53,49 @@ describe("isRightDockPaneKind", () => {
     expect(isRightDockPaneKind(undefined)).toBe(false);
     expect(isRightDockPaneKind(null)).toBe(false);
     expect(isRightDockPaneKind(42)).toBe(false);
+  });
+});
+
+describe("pull request pane", () => {
+  it("reuses the singleton pane and updates its PR identity", () => {
+    const first = openPaneInState(createDefaultRightDockState(), {
+      paneId: "pr-1",
+      kind: "pullRequest",
+      pullRequestProjectId: "project-1" as never,
+      pullRequestRepository: "acme/one",
+      pullRequestNumber: 12,
+      pullRequestInitialTab: "summary",
+    });
+    const reopened = openPaneInState(first, {
+      paneId: "pr-2",
+      kind: "pullRequest",
+      pullRequestProjectId: "project-2" as never,
+      pullRequestRepository: "acme/two",
+      pullRequestNumber: 24,
+      pullRequestInitialTab: "code",
+    });
+    expect(reopened.panes).toHaveLength(1);
+    expect(reopened.activePaneId).toBe("pr-1");
+    expect(reopened.panes[0]?.pullRequestProjectId).toBe("project-2");
+    expect(reopened.panes[0]?.pullRequestRepository).toBe("acme/two");
+    expect(reopened.panes[0]?.pullRequestNumber).toBe(24);
+    expect(reopened.panes[0]?.pullRequestInitialTab).toBe("code");
+  });
+
+  it("drops a non-integer persisted pull request number", () => {
+    const sanitized = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "pr-1",
+      panes: [
+        {
+          paneId: "ignored",
+          id: "pr-1",
+          kind: "pullRequest",
+          pullRequestNumber: 1.5,
+        },
+      ],
+    });
+    expect(sanitized.panes[0]?.pullRequestNumber).toBeNull();
   });
 });
 

@@ -11,9 +11,9 @@ describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
     expect(RIGHT_DOCK_ADD_MENU_KINDS).not.toContain("file");
   });
 
-  it("keeps the canonical kind order minus the file pane", () => {
+  it("keeps the canonical kind order minus context-only panes", () => {
     expect([...RIGHT_DOCK_ADD_MENU_KINDS]).toEqual(
-      RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "file"),
+      RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "file" && kind !== "pullRequest"),
     );
   });
 
