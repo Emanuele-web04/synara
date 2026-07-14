@@ -339,9 +339,18 @@ export function AppSnapCoordinator() {
       } else {
         const result = await handleNewChat({ fresh: true });
         if (!result.ok) throw new Error(result.error);
-        if (!result.threadId) throw new Error("Synara could not create a task for this AppSnap.");
-        target = { threadId: result.threadId };
-        openChatThreadPage(target.threadId);
+        if (result.threadId) {
+          target = { threadId: result.threadId };
+          openChatThreadPage(target.threadId);
+        } else {
+          // A null threadId means a concurrent navigation superseded the
+          // fresh-thread creation: the user actively went somewhere else, so
+          // follow them there instead of failing the capture.
+          const focused = focusedTargetRef.current;
+          if (!focused) throw new Error("Synara could not create a task for this AppSnap.");
+          target = focused;
+          openChatThreadPage(target.threadId);
+        }
       }
 
       const bytes = new Uint8Array(capture.bytes);

@@ -3,6 +3,8 @@
 // Layer: Browser storage adapter
 // Depends on: IndexedDB structured-clone support.
 
+import { awaitIdbRequest, openIndexedDbDatabase, waitForIdbTransaction } from "./indexedDb";
+
 const DATABASE_NAME = "synara-appsnap-icons";
 const DATABASE_VERSION = 1;
 const ICON_STORE_NAME = "icons";
@@ -46,37 +48,17 @@ function normalizeIconDataUrl(value: unknown): string | null {
 }
 
 function openAppSnapIconDatabase(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB is unavailable."));
-  }
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(ICON_STORE_NAME)) {
-        database.createObjectStore(ICON_STORE_NAME, { keyPath: "bundleIdentifier" });
-      }
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("Could not open the AppSnap icon cache.")),
-    );
-    request.addEventListener("blocked", () =>
-      reject(new Error("The AppSnap icon cache upgrade was blocked.")),
-    );
+  return openIndexedDbDatabase({
+    name: DATABASE_NAME,
+    version: DATABASE_VERSION,
+    storeName: ICON_STORE_NAME,
+    keyPath: "bundleIdentifier",
+    label: "AppSnap icon cache",
   });
 }
 
 function waitForTransaction(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve());
-    transaction.addEventListener("abort", () =>
-      reject(transaction.error ?? new Error("AppSnap icon storage was aborted.")),
-    );
-    transaction.addEventListener("error", () =>
-      reject(transaction.error ?? new Error("AppSnap icon storage failed.")),
-    );
-  });
+  return waitForIdbTransaction(transaction, "AppSnap icon storage");
 }
 
 export async function persistAppSnapIcon(input: {
@@ -117,15 +99,10 @@ export async function readAppSnapIcon(bundleIdentifier: string): Promise<string 
   try {
     const transaction = database.transaction(ICON_STORE_NAME, "readonly");
     const completion = waitForTransaction(transaction);
-    const request = transaction.objectStore(ICON_STORE_NAME).get(normalizedBundleIdentifier);
-    const stored = await new Promise<StoredAppSnapIcon | undefined>((resolve, reject) => {
-      request.addEventListener("success", () =>
-        resolve(request.result as StoredAppSnapIcon | undefined),
-      );
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("Could not read the AppSnap icon cache.")),
-      );
-    });
+    const stored = (await awaitIdbRequest(
+      transaction.objectStore(ICON_STORE_NAME).get(normalizedBundleIdentifier),
+      "Could not read the AppSnap icon cache.",
+    )) as StoredAppSnapIcon | undefined;
     await completion;
     return normalizeIconDataUrl(stored?.dataUrl);
   } finally {

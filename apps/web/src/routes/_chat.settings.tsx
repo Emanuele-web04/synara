@@ -1421,10 +1421,17 @@ function SettingsRouteView() {
   async function recheckAppSnapPermissions() {
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
+    // Same guard as setAppSnapEnabled: a slow recheck must not clobber the
+    // panel state written by a newer toggle or recheck.
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
     try {
       await bridge.requestPermissions();
-      setAppSnapState(await bridge.setEnabled(settings.enableAppSnap));
+      const state = await bridge.setEnabled(settings.enableAppSnap);
+      if (!requestGuard.isCurrent(requestId)) return;
+      setAppSnapState(state);
     } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
       toastManager.add({
         type: "error",
         title: "Could not check AppSnap permissions",
