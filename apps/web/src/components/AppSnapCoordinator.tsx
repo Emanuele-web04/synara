@@ -523,8 +523,11 @@ export function AppSnapCoordinator() {
 
     const unsubscribeCaptured = bridge.onCaptured((capture) => {
       // Shutter cue for live captures only; captures restored from the pending
-      // store on mount happened in the past and should land silently.
-      if (playCaptureSoundRef.current) void playAppSnapCaptureSound();
+      // store on mount, or replayed after a did-finish-load reload, were
+      // already handled and should land silently.
+      if (playCaptureSoundRef.current && !captureIdsRef.current.has(capture.id)) {
+        void playAppSnapCaptureSound();
+      }
       enqueueCapture(capture);
     });
     const unsubscribeError = bridge.onError((error) => {
