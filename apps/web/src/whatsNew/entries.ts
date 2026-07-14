@@ -22,6 +22,44 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.3",
+    date: "Jul 14",
+    features: [
+      {
+        id: "appsnap-capture",
+        title: "Capture any Mac app straight into your task",
+        description:
+          "Press both Option keys to capture the window you are using and attach it to the current Synara task.",
+        details:
+          "AppSnap is an opt-in macOS workflow with a dedicated setup panel, permission guidance, capture feedback, app icons, and a first-run introduction. Captures stay tied to the active task without stealing focus, and the desktop helper is included in packaged Mac builds.",
+      },
+      {
+        id: "durable-appsnap-drafts",
+        title: "AppSnaps wait safely until you send",
+        description:
+          "Captured windows remain available through navigation, restarts, retries, and manual attachment flows.",
+        details:
+          "Pending image blobs are persisted outside the lightweight draft record, restored into the composer on startup, counted against attachment limits, deduplicated across retry paths, and hydrated immediately before send. Failed or overlapping captures recover without duplicating attachments or replaying feedback sounds.",
+      },
+      {
+        id: "clearer-long-messages",
+        title: "Long messages are easier to scan",
+        description:
+          "Large user messages collapse into a focused preview while rich markdown and attachment chips remain readable.",
+        details:
+          "Transcript measurement, overflow detection, markdown chip rendering, and the simple non-virtualized timeline path now work together more predictably, reducing layout churn without losing the full message on demand.",
+      },
+      {
+        id: "steadier-agent-sessions",
+        title: "Agent sessions fail more clearly",
+        description:
+          "ACP errors preserve more useful detail, and session and transcript state stay steadier during active work.",
+        details:
+          "ACP request failures now retain structured provider context, while session orchestration and transcript handling avoid redundant state transitions and keep live output presentation predictable.",
+      },
+    ],
+  },
+  {
     version: "0.5.2",
     date: "Jul 13",
     features: [
