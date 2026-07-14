@@ -313,6 +313,51 @@ export interface BrowserCaptureScreenshotResult {
   bytes: Uint8Array;
 }
 
+export type DesktopAppSnapPlatform = "macos" | "windows" | "linux" | "other";
+export type DesktopAppSnapPermission =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
+export type DesktopAppSnapStatus =
+  | "unsupported"
+  | "disabled"
+  | "permission-required"
+  | "starting"
+  | "ready"
+  | "error";
+
+export interface DesktopAppSnapState {
+  platform: DesktopAppSnapPlatform;
+  supported: boolean;
+  enabled: boolean;
+  status: DesktopAppSnapStatus;
+  shortcut: "both-option-keys" | null;
+  inputMonitoringPermission: DesktopAppSnapPermission;
+  screenRecordingPermission: DesktopAppSnapPermission;
+  message: string | null;
+}
+
+export interface DesktopAppSnapCapture {
+  id: string;
+  capturedAt: string;
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  bytes: Uint8Array;
+  sourceAppName: string | null;
+  sourceBundleIdentifier: string | null;
+  sourceAppIconDataUrl: string | null;
+  sourceWindowTitle: string | null;
+}
+
+export interface DesktopAppSnapErrorEvent {
+  code: string;
+  message: string;
+  capturedAt: string;
+}
+
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
   method: string;
   params?: Record<string, unknown>;
@@ -384,6 +429,16 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  appSnap: {
+    getState: () => Promise<DesktopAppSnapState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
+    requestPermissions: () => Promise<DesktopAppSnapState>;
+    listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
+    acknowledgeCapture: (captureId: string) => Promise<void>;
+    onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
+    onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
+    onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
   };
   storageMigration: {
     readSnapshot: () => SynaraStorageSnapshot | null;

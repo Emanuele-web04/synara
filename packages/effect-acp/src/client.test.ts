@@ -154,6 +154,52 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
   );
 
   it.effect(
+    "returns agent prompt errors as typed ACP request failures",
+    () =>
+      Effect.gen(function* () {
+        const handle = yield* makeHandle({ ACP_MOCK_PROMPT_ERROR: "1" });
+        const scope = yield* Scope.make();
+        const context = yield* Layer.buildWithScope(AcpClient.layerChildProcess(handle), scope);
+
+        const result = yield* Effect.gen(function* () {
+          const acp = yield* AcpClient.AcpClient;
+          yield* acp.agent.initialize({
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: false, writeTextFile: false },
+              terminal: false,
+            },
+            clientInfo: {
+              name: "effect-acp-test",
+              version: "0.0.0",
+            },
+          });
+          yield* acp.agent.authenticate({ methodId: "cursor_login" });
+          const session = yield* acp.agent.createSession({
+            cwd: process.cwd(),
+            mcpServers: [],
+          });
+          return yield* Effect.exit(
+            acp.agent.prompt({
+              sessionId: session.sessionId,
+              prompt: [{ type: "text", text: "trigger prompt failure" }],
+            }),
+          );
+        }).pipe(Effect.provide(context), Effect.ensuring(Scope.close(scope, Exit.void)));
+
+        if (result._tag !== "Failure") {
+          assert.fail("Expected prompt to fail");
+        }
+        const failure = Cause.squash(result.cause);
+        if (!Schema.is(AcpError.AcpRequestError)(failure)) {
+          assert.fail("Expected an AcpRequestError failure");
+        }
+        assert.equal(failure.message, "Agent error");
+      }),
+    CHILD_PROCESS_FIXTURE_TIMEOUT_MS,
+  );
+
+  it.effect(
     "returns formatted invalid params when a typed extension request payload is wrong",
     () =>
       Effect.gen(function* () {

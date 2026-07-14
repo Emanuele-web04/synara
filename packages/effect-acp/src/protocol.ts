@@ -110,7 +110,7 @@ function stripAcpMetaProperties(value: unknown): unknown {
 }
 
 function normalizeTopLevelAcpJsonRpcLine(line: string): string {
-  if (!line.includes('"id"') && !line.includes('"_meta"')) {
+  if (!line.includes('"id"') && !line.includes('"_meta"') && !line.includes('"error"')) {
     return line;
   }
   try {
@@ -126,13 +126,35 @@ function normalizeTopLevelAcpJsonRpcLine(line: string): string {
 
     const result = parsed.result;
     const response = normalized ?? parsed;
+    const parsedError: unknown = parsed.error;
+    if (
+      "id" in parsed &&
+      isProtocolError(parsed.error) &&
+      (!isJsonObject(parsedError) || parsedError._tag !== "Cause")
+    ) {
+      // ACP agents return ordinary JSON-RPC errors. Effect RPC expects its own
+      // encoded Cause envelope and otherwise decodes the response as a defect,
+      // bypassing the client's typed request-error path. Adapt the wire shape
+      // before Effect's parser sees it so provider failures settle their turn.
+      const failure = [{ _tag: "Fail" as const, error: parsed.error }];
+      normalized = {
+        ...response,
+        error: {
+          _tag: "Cause",
+          code: 0,
+          message: JSON.stringify(failure),
+          data: failure,
+        },
+      };
+    }
+
     if (isJsonObject(result) || Array.isArray(result)) {
       // Compatibility shim: ACP allows arbitrary _meta, but Effect's RPC
       // envelope encoding currently rejects primitive extension values before
       // method schemas can accept them. Drop response metadata at the wire edge.
       const resultWithoutMeta = stripAcpMetaProperties(result);
       if (resultWithoutMeta !== result) {
-        normalized = { ...response, result: resultWithoutMeta };
+        normalized = { ...(normalized ?? response), result: resultWithoutMeta };
       }
     }
 

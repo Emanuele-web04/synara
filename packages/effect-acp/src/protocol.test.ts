@@ -700,6 +700,54 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("converts standard ACP error responses into typed RPC failures", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+      const response = yield* Deferred.make<unknown>();
+
+      yield* transport.clientProtocol
+        .run((message) => Deferred.succeed(response, message).pipe(Effect.asVoid))
+        .pipe(Effect.forkScoped);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id: 42,
+            error: {
+              code: -32603,
+              message: "Agent error",
+              data: { detail: "Error: 402 Payment Required" },
+            },
+          })}\n`,
+        ),
+      );
+
+      assert.deepEqual(yield* Deferred.await(response), {
+        _tag: "Exit",
+        requestId: "42",
+        exit: {
+          _tag: "Failure",
+          cause: [
+            {
+              _tag: "Fail",
+              error: {
+                code: -32603,
+                message: "Agent error",
+                data: { detail: "Error: 402 Payment Required" },
+              },
+            },
+          ],
+        },
+      });
+    }),
+  );
+
   it.effect("propagates the real child exit code when the input stream ends", () =>
     Effect.gen(function* () {
       const handle = yield* makeHandle({ ACP_MOCK_EXIT_IMMEDIATELY_CODE: "7" });

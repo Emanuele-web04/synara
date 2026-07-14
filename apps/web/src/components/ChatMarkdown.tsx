@@ -4,7 +4,7 @@
 // Exports: ChatMarkdown
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
-import type { ThreadMarker } from "@synara/contracts";
+import type { ProviderMentionReference, ThreadMarker } from "@synara/contracts";
 import "katex/dist/katex.min.css";
 import React, {
   Children,
@@ -25,6 +25,7 @@ import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -39,12 +40,26 @@ import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/works
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
+import type { ParsedTerminalContextEntry } from "../lib/terminalContext";
+import { formatInlineTerminalContextLabel } from "./chat/userMessageTerminalContexts";
 import {
   COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME,
   COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
 } from "./composerInlineChip";
 import { LinkChipIcon } from "./LinkChipIcon";
+import { InlineAgentChip } from "./chat/InlineAgentChip";
+import { InlineLinkChip } from "./InlineLinkChip";
 import { InlineMentionChip } from "./chat/InlineMentionChip";
+import { InlineSkillChip } from "./chat/InlineSkillChip";
+import {
+  COMPOSER_CHIP_SEGMENT_ATTRIBUTE,
+  COMPOSER_CHIP_TAG_NAME,
+  TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE,
+  TERMINAL_CONTEXT_CHIP_TAG_NAME,
+  createComposerChipsRemarkPlugin,
+  parseComposerChipSegment,
+} from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
@@ -89,6 +104,17 @@ interface ChatMarkdownProps {
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
   /**
+   * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
+   * survive the way they were typed), no math/KaTeX and no literal-dollar
+   * rewriting (`$50` and `$skill` stay verbatim), and composer inline tokens
+   * (skills, mentions, agents, bare links) render as the shared chips.
+   */
+  variant?: "assistant" | "user";
+  /** Mention metadata for chip icon resolution; only used by the user variant. */
+  mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
+  /** Terminal selections rendered as inline chips inside user-message markdown. */
+  terminalContexts?: ReadonlyArray<ParsedTerminalContextEntry> | undefined;
+  /**
    * Makes GFM task-list checkboxes interactive. Receives the 1-based line of
    * the task item in `text` so the caller can flip that `[ ]` marker at the
    * source (line numbers stay valid because the internal dollar protection is
@@ -131,6 +157,11 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
 ];
+// User prompts are casual typing, not authored markdown: hard-break single
+// newlines and skip math entirely (the composer chip plugin is appended per
+// render because it closes over the message's mention references).
+const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
+const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
 // `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
 // to shorten the protected string, which shifted every downstream offset (thread-marker positions
@@ -753,6 +784,36 @@ function OpenableFileChip(props: {
   );
 }
 
+// Renders the custom element emitted by the composer-chips remark plugin with the
+// shared chip components, so chips in a sent message match the composer exactly.
+function ComposerChipElement(props: {
+  serializedSegment: string | undefined;
+  theme: "light" | "dark";
+  mentionReferences: ReadonlyArray<ProviderMentionReference>;
+}) {
+  const segment = parseComposerChipSegment(props.serializedSegment);
+  if (!segment) {
+    return null;
+  }
+  if (segment.type === "skill") {
+    return <InlineSkillChip skillName={segment.name} />;
+  }
+  if (segment.type === "mention") {
+    return (
+      <InlineMentionChip
+        path={segment.path}
+        theme={props.theme}
+        mentionReferences={props.mentionReferences}
+        {...(segment.kind ? { kind: segment.kind } : {})}
+      />
+    );
+  }
+  if (segment.type === "agent-mention") {
+    return <InlineAgentChip alias={segment.alias} color={segment.color} />;
+  }
+  return <InlineLinkChip url={segment.url} interactive />;
+}
+
 function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
   if (fence.isFileReference && fence.fileName) {
     return (
@@ -956,15 +1017,24 @@ function ChatMarkdown({
   onImageExpand,
   markers,
   onTaskToggle,
+  variant = "assistant",
+  mentionReferences,
+  terminalContexts,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const isUserVariant = variant === "user";
   // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
   // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
   // streaming or under reduced motion. Governs cadence only; the deferred value below still
   // bounds the markdown re-parse cost.
   const smoothedText = useSmoothStreamedText(text, isStreaming);
-  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(smoothedText), [smoothedText]);
+  // The dollar rewrite exists to disambiguate math from currency; the user
+  // variant has no math, so its text must stay byte-for-byte what was typed.
+  const normalizedText = useMemo(
+    () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
+    [isUserVariant, smoothedText],
+  );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
@@ -976,13 +1046,28 @@ function ChatMarkdown({
       markers && markers.length > 0 ? createThreadMarkerRemarkPlugin({ text, markers }) : null,
     [markers, text],
   );
-  const remarkPlugins = useMemo<MarkdownRemarkPlugins>(
+  const composerChipsRemarkPlugin = useMemo(
     () =>
-      threadMarkerRemarkPlugin
-        ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
-        : MARKDOWN_REMARK_PLUGINS,
-    [threadMarkerRemarkPlugin],
+      isUserVariant
+        ? createComposerChipsRemarkPlugin(
+            mentionReferences ?? [],
+            (terminalContexts ?? []).map((context, index) => ({
+              label: formatInlineTerminalContextLabel(context.header),
+              index,
+            })),
+          )
+        : null,
+    [isUserVariant, mentionReferences, terminalContexts],
   );
+  const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
+    if (composerChipsRemarkPlugin) {
+      return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
+    }
+    return threadMarkerRemarkPlugin
+      ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
+      : MARKDOWN_REMARK_PLUGINS;
+  }, [composerChipsRemarkPlugin, threadMarkerRemarkPlugin]);
+  const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
@@ -992,6 +1077,20 @@ function ChatMarkdown({
       a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const isExternalHttp = isExternalHttpHref(restoredHref);
+        if (isUserVariant && isExternalHttp) {
+          // GFM autolinks a pasted URL before the chips plugin can see it; when the
+          // link text is just the URL itself, render the composer's link chip so a
+          // pasted link looks identical in the composer and in the sent bubble.
+          // Authored `[label](url)` links keep the regular anchor treatment below.
+          const plainText = nodeToPlainText(children);
+          if (
+            plainText === restoredHref ||
+            restoredHref === `http://${plainText}` ||
+            restoredHref === `https://${plainText}`
+          ) {
+            return <InlineLinkChip url={restoredHref} interactive />;
+          }
+        }
         const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
           return (
@@ -1105,15 +1204,57 @@ function ChatMarkdown({
         }
         return <input {...props} />;
       },
+      // Custom elements emitted by the composer-chips remark plugin (user
+      // variant only; they never appear in assistant markdown). `Components`
+      // only models intrinsic tags, so these entries are typed on their own
+      // and cast into the map.
+      ...({
+        [COMPOSER_CHIP_TAG_NAME]: (props: {
+          className?: string | undefined;
+          [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
+        }) => (
+          <ComposerChipElement
+            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+            theme={resolvedTheme}
+            mentionReferences={mentionReferences ?? []}
+          />
+        ),
+        [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
+          [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
+        }) => {
+          const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
+          const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
+          const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
+          if (!context) {
+            return null;
+          }
+          const tooltipText =
+            context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
+          return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+        },
+      } as unknown as Components),
     }),
-    [cwd, diffThemeName, isStreaming, onImageExpand, onTaskToggle, resolvedTheme],
+    [
+      cwd,
+      diffThemeName,
+      isStreaming,
+      isUserVariant,
+      mentionReferences,
+      onImageExpand,
+      onTaskToggle,
+      resolvedTheme,
+      terminalContexts,
+    ],
   );
 
   return (
-    <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
+    <div
+      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      style={style}
+    >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >

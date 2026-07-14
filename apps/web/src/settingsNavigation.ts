@@ -9,6 +9,7 @@ export const SETTINGS_SECTION_IDS = [
   "appearance",
   "notifications",
   "behavior",
+  "appsnap",
   "shortcuts",
   "worktrees",
   "archived",
@@ -94,6 +95,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Streaming, diff handling, and destructive confirmations.",
     icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
+  },
+  {
+    id: "appsnap",
+    group: "app",
+    label: "AppSnap",
+    description: "Snap another app's window straight into a task with one key chord.",
+    icon: "screen-capture",
+    eyebrow: "Screen capture",
   },
   {
     id: "shortcuts",

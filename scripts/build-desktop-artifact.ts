@@ -16,6 +16,7 @@ import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 import {
   createDesktopPlatformBuildConfig,
+  MAC_APPSNAP_HELPER_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
@@ -57,6 +58,11 @@ const ProductionWindowsIconSource = Effect.zipWith(
 );
 const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
   path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
+);
+const AppSnapHelperBuildScript = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/build-appsnap-helper.mjs"),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
@@ -599,6 +605,32 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
+const stageMacAppSnapHelper = Effect.fn("stageMacAppSnapHelper")(function* (
+  stageAppDir: string,
+  arch: typeof BuildArch.Type,
+  verbose: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const buildScript = yield* AppSnapHelperBuildScript;
+  const outputPath = path.join(stageAppDir, MAC_APPSNAP_HELPER_STAGE_PATH);
+
+  yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+  yield* Effect.log(`[desktop-artifact] Building native AppSnap helper (${arch})...`);
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      ...commandOutputOptions(verbose),
+    })`node ${buildScript} --arch ${arch} --release --output ${outputPath}`,
+  );
+
+  if (!(yield* fs.exists(outputPath))) {
+    return yield* new BuildScriptError({
+      message: `AppSnap helper build completed but output was not found at ${outputPath}`,
+    });
+  }
+});
+
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -726,6 +758,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
+
+  if (options.platform === "mac") {
+    yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
+  }
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
