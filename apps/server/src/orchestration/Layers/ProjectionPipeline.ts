@@ -1586,6 +1586,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.task-stop-requested": {
+          // Same as interrupts: intent only. Task state settles via the
+          // provider's task lifecycle events.
+          return;
+        }
+
         case "thread.turn-diff-completed": {
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
             threadId: event.payload.threadId,

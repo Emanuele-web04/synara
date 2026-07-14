@@ -170,6 +170,7 @@ export interface ActiveTaskListState {
 
 export interface ActiveBackgroundTasksState {
   activeCount: number;
+  taskIds: string[];
 }
 
 export interface LatestProposedPlanState {
@@ -218,7 +219,7 @@ function isActivityOrderStable(activities: ReadonlyArray<OrchestrationThreadActi
 
 // Thread activity arrays are immutable store values and most call sites need the
 // same order; cache it so chat startup does not sort the same array repeatedly.
-function orderedActivities(
+export function orderedActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
   const cached = orderedActivitiesCache.get(activities);
@@ -636,7 +637,8 @@ export function deriveActiveBackgroundTasksState(
       latestTurnId &&
       activity.turnId &&
       activity.turnId !== latestTurnId &&
-      activity.kind !== "task.completed"
+      activity.kind !== "task.completed" &&
+      activity.kind !== "task.updated"
     ) {
       continue;
     }
@@ -644,6 +646,7 @@ export function deriveActiveBackgroundTasksState(
     if (
       activity.kind !== "task.started" &&
       activity.kind !== "task.progress" &&
+      activity.kind !== "task.updated" &&
       activity.kind !== "task.completed"
     ) {
       continue;
@@ -663,6 +666,16 @@ export function deriveActiveBackgroundTasksState(
       continue;
     }
 
+    // Status patches can end a task (killed/completed/failed) without a
+    // task.completed notification following on the same turn.
+    if (activity.kind === "task.updated") {
+      const status = payload && typeof payload.status === "string" ? payload.status : undefined;
+      if (status === "completed" || status === "failed" || status === "killed") {
+        activeTasks.delete(taskId);
+      }
+      continue;
+    }
+
     const previous = activeTasks.get(taskId);
     const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
     activeTasks.set(taskId, {
@@ -670,8 +683,12 @@ export function deriveActiveBackgroundTasksState(
     });
   }
 
-  const activeCount = [...activeTasks.values()].filter((task) => task.taskType !== "plan").length;
-  return activeCount > 0 ? { activeCount } : null;
+  const activeTaskIds = [...activeTasks.entries()]
+    .filter(([, task]) => task.taskType !== "plan")
+    .map(([taskId]) => taskId);
+  return activeTaskIds.length > 0
+    ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
+    : null;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or
@@ -807,7 +824,12 @@ export function deriveWorkLogEntries(
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
-    .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
+    .filter(
+      (activity) =>
+        activity.kind !== "task.started" &&
+        activity.kind !== "task.updated" &&
+        activity.kind !== "task.completed",
+    )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(

@@ -41,6 +41,7 @@ const fakeClaudeAdapter: ClaudeAdapterShape = {
   startSession: vi.fn(),
   sendTurn: vi.fn(),
   interruptTurn: vi.fn(),
+  stopTask: vi.fn(),
   respondToRequest: vi.fn(),
   respondToUserInput: vi.fn(),
   stopSession: vi.fn(),

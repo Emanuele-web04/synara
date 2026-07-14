@@ -25,6 +25,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderStopTaskInput,
   ThreadId,
   ProviderTurnStartResult,
 } from "@synara/contracts";
@@ -83,6 +84,12 @@ export interface ProviderServiceShape {
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Stop a provider-native background task. No-op when the routed adapter does
+   * not support task control.
+   */
+  readonly stopTask: (input: ProviderStopTaskInput) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Respond to a provider approval request.

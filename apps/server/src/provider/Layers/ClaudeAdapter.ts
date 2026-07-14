@@ -262,6 +262,12 @@ interface ClaudeSessionContext {
   // Live Task tool spawns keyed by tool_use_id. Each run owns a scoped context
   // whose events carry `subagentRefs`, so ingestion routes them to the child thread.
   readonly subagentRuns: Map<string, ClaudeSubagentRun>;
+  // Live workflow runs (task_type "local_workflow") by task id. The SDK carries no
+  // parent-task linkage, so agent tasks that start while exactly one workflow is
+  // live get tagged with it (recorded in workflowTaskIdByMemberTaskId); with
+  // concurrent workflows membership is ambiguous and stays untagged.
+  readonly liveWorkflowTaskIds: Set<string>;
+  readonly workflowTaskIdByMemberTaskId: Map<string, string>;
   // Set on subagent-scoped contexts only: stamps providerThreadId (the Task
   // tool_use_id) + providerParentThreadId on every runtime event this context emits.
   readonly subagentRefs?: {
@@ -2405,6 +2411,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           stopped: false,
           warnedUnhandledSdkKinds: context.warnedUnhandledSdkKinds,
           subagentRuns: new Map(),
+          liveWorkflowTaskIds: new Set(),
+          workflowTaskIdByMemberTaskId: new Map(),
           subagentRefs: {
             providerThreadId: toolUseId,
             providerParentThreadId: context.session.threadId,
@@ -3012,12 +3020,50 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        // `task_updated` is an incremental task patch; for tracked subagent runs the
-        // status transitions keep the child thread truthful (paused/killed/etc.), the
-        // rest is already covered by task_started/progress/completed and stays dropped.
+        // `task_updated` is an incremental task patch. Status transitions surface as
+        // `task.updated` on the parent thread (workflow panels track pause/kill through
+        // them); tracked subagent runs additionally keep the child thread truthful via
+        // `session.state.changed`. Non-status patches stay dropped.
         if (message.subtype === "task_updated") {
+          const patch = message.patch;
+          const status = patch?.status;
+          if (status === undefined) {
+            return;
+          }
+          if (
+            (status === "completed" || status === "failed" || status === "killed") &&
+            context.liveWorkflowTaskIds.has(message.task_id)
+          ) {
+            context.liveWorkflowTaskIds.delete(message.task_id);
+          }
+          const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+          const raw = {
+            source: "claude.sdk.message" as const,
+            method: sdkNativeMethod(message),
+            messageType: `${message.type}:${message.subtype}`,
+            payload: message,
+          };
+          const taskStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "task.updated",
+            eventId: taskStamp.eventId,
+            provider: PROVIDER,
+            createdAt: taskStamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe(message.task_id),
+              status,
+              ...(patch?.error ? { error: patch.error } : {}),
+              ...(workflowTaskId
+                ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
+                : {}),
+            },
+            providerRefs: nativeProviderRefs(context),
+            raw,
+          });
           const run = subagentRunForTask(context, undefined, message.task_id);
-          const state = runtimeSessionStateFromClaudeTaskStatus(message.patch?.status);
+          const state = runtimeSessionStateFromClaudeTaskStatus(status);
           if (!run || state === undefined) {
             return;
           }
@@ -3033,16 +3079,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {}),
             payload: {
               state,
-              reason: `task:${message.patch.status}`,
+              reason: `task:${status}`,
               detail: message,
             },
             providerRefs: nativeProviderRefs(run.context),
-            raw: {
-              source: "claude.sdk.message",
-              method: sdkNativeMethod(message),
-              messageType: `${message.type}:${message.subtype}`,
-              payload: message,
-            },
+            raw,
           });
           return;
         }
@@ -3154,7 +3195,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          case "task_started":
+          case "task_started": {
             // Subagent tasks get a run entry so later task_progress/notification and
             // stopTask can be keyed by the Task tool_use_id ingestion routes on.
             if (
@@ -3164,6 +3205,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               const run = ensureSubagentRun(context, message.tool_use_id);
               run.taskId = message.task_id;
             }
+            if (message.task_type === "local_workflow") {
+              context.liveWorkflowTaskIds.add(message.task_id);
+            } else if (context.liveWorkflowTaskIds.size === 1) {
+              const [workflowTaskId] = context.liveWorkflowTaskIds;
+              context.workflowTaskIdByMemberTaskId.set(message.task_id, workflowTaskId!);
+            }
+            const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
             yield* offerRuntimeEvent({
               ...base,
               type: "task.started",
@@ -3171,11 +3219,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
                 description: message.description,
                 ...(message.task_type ? { taskType: message.task_type } : {}),
+                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
+                ...(workflowTaskId
+                  ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
+                  : {}),
+                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
               },
             });
             return;
-          case "task_progress":
+          }
+          case "task_progress": {
             yield* emitTaskUsageSnapshot(context, message);
+            const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
             yield* offerRuntimeEvent({
               ...base,
               type: "task.progress",
@@ -3185,11 +3241,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
                 ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+                ...(workflowTaskId
+                  ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
+                  : {}),
               },
             });
             return;
+          }
           case "task_notification": {
             yield* emitTaskUsageSnapshot(context, message);
+            const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
             yield* offerRuntimeEvent({
               ...base,
               type: "task.completed",
@@ -3198,8 +3259,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 status: message.status,
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
+                ...(workflowTaskId
+                  ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
+                  : {}),
               },
             });
+            context.liveWorkflowTaskIds.delete(message.task_id);
+            context.workflowTaskIdByMemberTaskId.delete(message.task_id);
             const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
             if (run) {
               context.subagentRuns.delete(run.toolUseId);
@@ -4052,6 +4118,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             stopped: false,
             warnedUnhandledSdkKinds: new Set(),
             subagentRuns: new Map(),
+            liveWorkflowTaskIds: new Set(),
+            workflowTaskIdByMemberTaskId: new Map(),
           };
           installationContext = context;
           yield* withSessionLifecycleLock(
@@ -4351,6 +4419,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Stops one background task by its SDK task id (workflow runs and their member
+    // agents included); the SDK answers with a task_notification status "stopped".
+    const stopTask: ClaudeAdapterShape["stopTask"] = (threadId, taskId) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        yield* Effect.tryPromise({
+          try: () => context.query.stopTask(taskId),
+          catch: (cause) => toRequestError(threadId, "task/stop", cause),
+        });
+      });
+
     const readThread: ClaudeAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
@@ -4638,6 +4717,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       startSession,
       sendTurn,
       interruptTurn,
+      stopTask,
       readThread,
       rollbackThread,
       respondToRequest,

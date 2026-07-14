@@ -1499,8 +1499,7 @@ describe("ClaudeAdapterLive", () => {
       const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
         Stream.takeUntil(
           (event) =>
-            event.type === "turn.completed" &&
-            event.providerRefs?.providerThreadId === undefined,
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
         ),
         Stream.runCollect,
         Effect.forkChild,
@@ -1599,9 +1598,7 @@ describe("ClaudeAdapterLive", () => {
         (event) => event.providerRefs?.providerThreadId === "tool-task-1",
       );
       assert.equal(
-        childEvents.every(
-          (event) => event.providerRefs?.providerParentThreadId === THREAD_ID,
-        ),
+        childEvents.every((event) => event.providerRefs?.providerParentThreadId === THREAD_ID),
         true,
       );
       assert.equal(
@@ -1696,6 +1693,171 @@ describe("ClaudeAdapterLive", () => {
       // Without a known task id (task_started not seen yet) fall back to backgrounding.
       yield* adapter.interruptTurn(session.threadId, undefined, "tool-task-unknown");
       assert.deepEqual(harness.query.backgroundTasksCalls, ["tool-task-unknown"]);
+      assert.equal(harness.query.interruptCalls.length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("tags workflow member tasks with the live workflow run and stops it by task id", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.started" && event.payload.taskId === "wf-agent-2",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // Workflow run itself: no tool_use_id, identified by task_type/workflow_name.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-1",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        description: "Draft the feature spec",
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-started-1",
+      } as unknown as SDKMessage);
+
+      // Member agent spawned by the workflow: no Task tool call, so no tool_use_id.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-agent-1",
+        subagent_type: "researcher",
+        description: "Research prior art",
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-agent-started-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "wf-agent-1",
+        description: "Research prior art",
+        usage: { total_tokens: 321, tool_uses: 2, duration_ms: 4_500 },
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-agent-progress-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "wf-agent-1",
+        patch: { status: "paused" },
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-agent-updated-1",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "wf-agent-1",
+        status: "completed",
+        output_file: "/tmp/wf-agent-1-output.md",
+        summary: "Research finished.",
+        usage: { total_tokens: 500, tool_uses: 3, duration_ms: 9_000 },
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-agent-notification-1",
+      } as unknown as SDKMessage);
+
+      // A second concurrent workflow makes membership ambiguous: later agent
+      // tasks must stay untagged instead of guessing.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-2",
+        task_type: "local_workflow",
+        workflow_name: "review",
+        description: "Review the feature spec",
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-started-2",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-agent-2",
+        subagent_type: "reviewer",
+        description: "Review the draft",
+        session_id: "sdk-session-workflow",
+        uuid: "workflow-agent-started-2",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const workflowStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "wf-1",
+      );
+      assert.equal(workflowStarted?.type, "task.started");
+      if (workflowStarted?.type === "task.started") {
+        assert.equal(workflowStarted.payload.taskType, "local_workflow");
+        assert.equal(workflowStarted.payload.workflowName, "spec");
+        assert.equal(workflowStarted.payload.workflowTaskId, undefined);
+      }
+
+      const agentStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "wf-agent-1",
+      );
+      assert.equal(agentStarted?.type, "task.started");
+      if (agentStarted?.type === "task.started") {
+        assert.equal(agentStarted.payload.subagentType, "researcher");
+        assert.equal(agentStarted.payload.workflowTaskId, "wf-1");
+      }
+
+      const agentProgress = runtimeEvents.find(
+        (event) => event.type === "task.progress" && event.payload.taskId === "wf-agent-1",
+      );
+      assert.equal(agentProgress?.type, "task.progress");
+      if (agentProgress?.type === "task.progress") {
+        assert.equal(agentProgress.payload.workflowTaskId, "wf-1");
+        assert.deepEqual(agentProgress.payload.usage, {
+          total_tokens: 321,
+          tool_uses: 2,
+          duration_ms: 4_500,
+        });
+      }
+
+      const agentUpdated = runtimeEvents.find(
+        (event) => event.type === "task.updated" && event.payload.taskId === "wf-agent-1",
+      );
+      assert.equal(agentUpdated?.type, "task.updated");
+      if (agentUpdated?.type === "task.updated") {
+        assert.equal(agentUpdated.payload.status, "paused");
+        assert.equal(agentUpdated.payload.workflowTaskId, "wf-1");
+      }
+
+      const agentCompleted = runtimeEvents.find(
+        (event) => event.type === "task.completed" && event.payload.taskId === "wf-agent-1",
+      );
+      assert.equal(agentCompleted?.type, "task.completed");
+      if (agentCompleted?.type === "task.completed") {
+        assert.equal(agentCompleted.payload.status, "completed");
+        assert.equal(agentCompleted.payload.workflowTaskId, "wf-1");
+      }
+
+      const ambiguousAgentStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "wf-agent-2",
+      );
+      assert.equal(ambiguousAgentStarted?.type, "task.started");
+      if (ambiguousAgentStarted?.type === "task.started") {
+        assert.equal(ambiguousAgentStarted.payload.workflowTaskId, undefined);
+      }
+
+      yield* adapter.stopTask(session.threadId, "wf-1");
+      assert.deepEqual(harness.query.stopTaskCalls, ["wf-1"]);
       assert.equal(harness.query.interruptCalls.length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -4401,10 +4563,7 @@ describe("ClaudeAdapterLive", () => {
       });
       const settings = harness.getLastCreateQueryInput()?.options.settings;
       assert.ok(settings && typeof settings === "object");
-      assert.equal(
-        (settings as { alwaysThinkingEnabled?: boolean }).alwaysThinkingEnabled,
-        false,
-      );
+      assert.equal((settings as { alwaysThinkingEnabled?: boolean }).alwaysThinkingEnabled, false);
 
       yield* adapter.sendTurn({
         threadId: session.threadId,

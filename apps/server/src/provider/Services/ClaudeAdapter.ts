@@ -20,6 +20,7 @@ import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
  */
 export interface ClaudeAdapterShape extends ProviderAdapterShape<ProviderAdapterError> {
   readonly provider: "claudeAgent";
+  readonly stopTask: NonNullable<ProviderAdapterShape<ProviderAdapterError>["stopTask"]>;
 }
 
 /**

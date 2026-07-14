@@ -412,6 +412,7 @@ import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
+import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -462,6 +463,11 @@ import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionAction
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
 import { deriveComposerSubagentStripItems } from "./chat/ComposerSubagentStrip.logic";
+import { WorkflowRunCard } from "./chat/WorkflowRunCard";
+import {
+  deriveWorkflowRunState,
+  type WorkflowSubagentThreadRef,
+} from "./chat/WorkflowRunCard.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
@@ -1284,6 +1290,7 @@ export default function ChatView({
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
+  const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
   // model name, traits label). Inputs live in a ref so the resize observer
@@ -2695,6 +2702,32 @@ export default function ChatView({
       }),
     [activeLatestTurn?.turnId, latestTurnSettled, workLogEntries],
   );
+  // Links workflow agent rows to their subagent child threads (and models) when the
+  // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
+  const workflowSubagentThreadsByToolUseId = useMemo(() => {
+    const refs = new Map<string, WorkflowSubagentThreadRef>();
+    for (const entry of workLogEntries) {
+      for (const subagent of entry.subagents ?? []) {
+        if (!subagent.providerThreadId) {
+          continue;
+        }
+        refs.set(subagent.providerThreadId, {
+          threadId: subagent.resolvedThreadId ?? subagent.threadId,
+          model: subagent.model,
+        });
+      }
+    }
+    return refs;
+  }, [workLogEntries]);
+  const workflowRunState = useMemo(
+    () =>
+      deriveWorkflowRunState({
+        activities: threadActivities,
+        subagentThreadsByToolUseId: workflowSubagentThreadsByToolUseId,
+      }),
+    [threadActivities, workflowSubagentThreadsByToolUseId],
+  );
+  const workflowNowMs = useNowMs(workflowRunState !== null);
   // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
   // the composer mounts/unmounts, and the observer catches every panel appearing,
   // resizing, or collapsing. Measuring the wrapper (rather than each panel) keeps one
@@ -5795,6 +5828,18 @@ export default function ChatView({
       createdAt: new Date().toISOString(),
     });
   }, [activeThread]);
+
+  const onStopWorkflowRun = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread || !workflowRunState) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.task.stop",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      taskId: workflowRunState.workflowTaskId,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread, workflowRunState]);
 
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: ModelSlug) => {
@@ -10344,7 +10389,14 @@ export default function ChatView({
 
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
+  const showComposerWorkflowRunCard = workflowRunState !== null;
   const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
+  // The workflow card already lists its run and member agents, so the generic
+  // "N background agents" footer only counts tasks outside the workflow.
+  const composerBackgroundTaskCount = workflowRunState
+    ? (activeBackgroundTasks?.taskIds.filter((taskId) => !workflowRunState.taskIds.includes(taskId))
+        .length ?? 0)
+    : (activeBackgroundTasks?.activeCount ?? 0);
 
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
@@ -10352,7 +10404,7 @@ export default function ChatView({
     activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
         activeTaskList={activeTaskList}
-        backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+        backgroundTaskCount={composerBackgroundTaskCount}
         compact={activeTaskListCompact}
         onCompactChange={setActiveTaskListCompact}
         onOpenSidebar={() => setPlanSidebarOpen(true)}
@@ -10390,6 +10442,19 @@ export default function ChatView({
                 />
               ) : null}
               {renderActiveTaskListCard(showComposerLiveChangesHeader)}
+              {workflowRunState ? (
+                <WorkflowRunCard
+                  workflowRun={workflowRunState}
+                  nowMs={workflowNowMs}
+                  compact={workflowRunCardCompact}
+                  onCompactChange={setWorkflowRunCardCompact}
+                  onOpenThread={onNavigateToThread}
+                  onStop={onStopWorkflowRun}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader || showComposerActiveTaskListCard
+                  }
+                />
+              ) : null}
               {showComposerSubagentStrip ? (
                 <ComposerSubagentStrip
                   items={composerSubagentStripItems}
@@ -10397,7 +10462,9 @@ export default function ChatView({
                   onCompactChange={setSubagentStripCompact}
                   onOpenThread={onNavigateToThread}
                   attachedToPrevious={
-                    showComposerLiveChangesHeader || showComposerActiveTaskListCard
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard
                   }
                 />
               ) : null}
@@ -10410,6 +10477,7 @@ export default function ChatView({
                 attachedToPrevious={
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
+                  showComposerWorkflowRunCard ||
                   showComposerSubagentStrip
                 }
               />

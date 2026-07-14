@@ -84,6 +84,7 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-queued"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.task-stop-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
@@ -446,6 +447,7 @@ const make = Effect.gen(function* () {
     readonly kind:
       | "provider.turn.start.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.task.stop.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -1925,6 +1927,28 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processTaskStopRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-stop-requested" }>,
+  ) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    const hasSession = providerThread?.session && providerThread.session.status !== "stopped";
+    if (!providerThread || !hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.task.stop.failed",
+        summary: "Provider task stop failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService.stopTask({
+      threadId: providerThread.id,
+      taskId: event.payload.taskId,
+    });
+  });
+
   const processApprovalResponseRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
@@ -2410,6 +2434,9 @@ const make = Effect.gen(function* () {
         case "thread.turn-interrupt-requested":
           yield* processTurnInterruptRequested(event);
           return;
+        case "thread.task-stop-requested":
+          yield* processTaskStopRequested(event);
+          return;
         case "thread.approval-response-requested":
           yield* processApprovalResponseRequested(event);
           return;
@@ -2478,6 +2505,7 @@ const make = Effect.gen(function* () {
             event.type !== "thread.turn-queued" &&
             event.type !== "thread.turn-start-requested" &&
             event.type !== "thread.turn-interrupt-requested" &&
+            event.type !== "thread.task-stop-requested" &&
             event.type !== "thread.approval-response-requested" &&
             event.type !== "thread.user-input-response-requested" &&
             event.type !== "thread.conversation-rollback-requested" &&

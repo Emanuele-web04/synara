@@ -592,6 +592,7 @@ describe("deriveActiveBackgroundTasksState", () => {
 
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       activeCount: 1,
+      taskIds: ["task-subagent-1"],
     });
   });
 });

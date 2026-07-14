@@ -132,7 +132,8 @@ function buildImportedMessagesBootstrapText(input: {
     // Keep the newest earlier-message summaries that fit the remaining budget;
     // older ones are dropped so long threads cannot inflate the bootstrap.
     let remaining =
-      maxChars - sections.reduce((total, section) => total + section.length + 2, 0) -
+      maxChars -
+      sections.reduce((total, section) => total + section.length + 2, 0) -
       (recentSection.length + 2);
     const summaryLines: string[] = [];
     for (let index = earlierMessages.length - 1; index >= 0; index -= 1) {
@@ -156,9 +157,7 @@ function buildImportedMessagesBootstrapText(input: {
             omittedCount === 1 ? "message" : "messages"
           } omitted to fit the context budget):`
         : "Earlier conversation summary:";
-    sections.push(
-      summaryLines.length > 0 ? `${header}\n${summaryLines.join("\n")}` : header,
-    );
+    sections.push(summaryLines.length > 0 ? `${header}\n${summaryLines.join("\n")}` : header);
   }
 
   sections.push(recentSection);

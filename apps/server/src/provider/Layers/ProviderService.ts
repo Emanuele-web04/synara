@@ -16,6 +16,7 @@ import {
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
+  ProviderStopTaskInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
@@ -1113,6 +1114,27 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const stopTask: ProviderServiceShape["stopTask"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.stopTask",
+          schema: ProviderStopTaskInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.stopTask",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.stopTask) {
+          return;
+        }
+        yield* routed.adapter.stopTask(routed.threadId, input.taskId);
+        yield* analytics.record("provider.task.stopped", {
+          provider: routed.adapter.provider,
+        });
+      });
+
     const respondToRequest: ProviderServiceShape["respondToRequest"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -1516,6 +1538,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       steerTurn,
       startReview,
       interruptTurn,
+      stopTask,
       respondToRequest,
       respondToUserInput,
       stopSession,
