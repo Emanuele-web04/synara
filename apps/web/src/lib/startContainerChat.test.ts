@@ -1,6 +1,8 @@
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  startContainerChat,
   startFreshChatForActiveSurface,
   type StartContainerChatResult,
 } from "./startContainerChat";
@@ -12,7 +14,7 @@ const paths = {
 };
 
 function successfulHandler() {
-  return vi.fn(async (): Promise<StartContainerChatResult> => ({ ok: true }));
+  return vi.fn(async (): Promise<StartContainerChatResult> => ({ ok: true, threadId: null }));
 }
 
 describe("startFreshChatForActiveSurface", () => {
@@ -72,5 +74,21 @@ describe("startFreshChatForActiveSurface", () => {
       expect(handleNewChat).toHaveBeenCalledWith({ fresh: true });
       expect(handleNewStudioChat).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("startContainerChat", () => {
+  it("returns the created thread so callers can attach context deterministically", async () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    await expect(
+      startContainerChat({
+        ensureProjectId: async () => projectId,
+        handleNewThread: async () => threadId,
+        fresh: true,
+        errorLabel: "failed",
+      }),
+    ).resolves.toEqual({ ok: true, threadId });
   });
 });

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.3 - 2026-07-14
+
+### Added
+
+- Added AppSnap, an opt-in macOS capture workflow that attaches the active app window to the current task when both Option keys are pressed.
+- Added a packaged native AppSnap helper with Screen Recording permission guidance, capture feedback, focus-safe window selection, parent-process monitoring, and app icon extraction.
+- Added a dedicated AppSnap settings panel and first-run welcome dialog so supported desktop installs can discover, configure, and disable the shortcut.
+- Added durable browser-side blob storage for pending image attachments so captures survive navigation and app restarts without inflating local-storage drafts.
+
+### Changed
+
+- Improved long user-message readability with overflow-aware collapsing, richer markdown attachment chips, and more predictable transcript measurement on the simple non-virtualized timeline path.
+- Refactored session orchestration, composer attachment persistence, and transcript rendering to reduce duplicated state transitions and keep live work predictable.
+- Included the native AppSnap helper and its Swift sources in macOS development and packaged desktop build paths.
+
+### Fixed
+
+- Fixed AppSnap recovery after permission changes, helper restarts, capture overlap, timeout, and transient probe failures.
+- Fixed pending AppSnap blobs being omitted from manual attach-and-send flows or attachment-limit calculations.
+- Fixed duplicate attachment persistence and duplicate feedback sounds during capture retries and already-handled capture events.
+- Fixed ACP request failures dropping useful structured error detail before it reached the UI.
+- Fixed rich user markdown, attachment chips, and long-message previews producing inconsistent layout or timeline height updates.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,106 files.
+- `bun run lint` passed with 189 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed and refreshed temporary install/lockfile state while retaining the pinned dependency set.
+- `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks in 8m43s; web passed 205 files / 2,544 tests, CLI passed 162 files / 1,772 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed. No targeted reruns were required.
+
 ## 0.5.2 - 2026-07-13
 
 ### Added
