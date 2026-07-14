@@ -1,4 +1,10 @@
-import type { PullRequestInvolvement, PullRequestState } from "@synara/contracts";
+import type {
+  PullRequestActor,
+  PullRequestInvolvement,
+  PullRequestMergeCapabilities,
+  PullRequestMergeMethod,
+  PullRequestState,
+} from "@synara/contracts";
 export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
 
 export function pullRequestListCacheKey(
@@ -8,4 +14,23 @@ export function pullRequestListCacheKey(
   viewer: string,
 ): string {
   return `${repository.trim().toLowerCase()}:${state}:${involvement}:${viewer.trim().toLowerCase()}`;
+}
+
+export function isViewerReviewRequested(
+  author: PullRequestActor | null,
+  reviewRequestLogins: ReadonlyArray<string>,
+  viewer: string,
+): boolean {
+  const normalizedViewer = viewer.trim().toLowerCase();
+  return (
+    author?.login.trim().toLowerCase() !== normalizedViewer &&
+    reviewRequestLogins.some((login) => login.trim().toLowerCase() === normalizedViewer)
+  );
+}
+
+export function isPullRequestMergeMethodAllowed(
+  capabilities: PullRequestMergeCapabilities,
+  method: PullRequestMergeMethod,
+): boolean {
+  return capabilities[method];
 }

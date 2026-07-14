@@ -77,6 +77,8 @@ import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { shouldRejectUntrustedRequestOrigin } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
 import {
+  isPullRequestMergeMethodAllowed,
+  isViewerReviewRequested,
   isValidGitHubRepositoryNameWithOwner,
   pullRequestListCacheKey,
 } from "./pullRequests.logic";
@@ -154,8 +156,9 @@ interface GitHubRepositoryLink {
   readonly url: string;
 }
 
-// Resolves every GitHub remote in preference order. The first entry drives the global list;
-// the complete set binds detail/action RPCs to repositories actually configured for the project.
+// Resolves every GitHub remote in preference order. The first entry remains the preferred
+// repository link; the complete set drives PR listing and binds detail/action RPCs to repositories
+// actually configured for the project.
 function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
   return Effect.gen(function* () {
     const branch = yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.currentBranch", [
@@ -195,7 +198,7 @@ function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
 // Resolves the preferred GitHub repository link from Git config without running full status.
 function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
   return resolveGitHubRepositories(git, cwd).pipe(
-    Effect.map((repositories) => ({ repository: repositories[0] ?? null })),
+    Effect.map((repositories) => ({ repository: repositories[0] ?? null, repositories })),
   );
 }
 
@@ -381,7 +384,11 @@ export const makeWsRpcLayer = () =>
 
       const repositoryCache = new Map<
         string,
-        { expiresAt: number; repositories: ReadonlyArray<GitHubRepositoryLink> }
+        {
+          expiresAt: number;
+          generation: number;
+          repositories: ReadonlyArray<GitHubRepositoryLink>;
+        }
       >();
       type ResolvedRepositories = ReadonlyArray<GitHubRepositoryLink>;
       const repositoryInFlight = new Map<string, Effect.Effect<ResolvedRepositories, unknown>>();
@@ -389,6 +396,7 @@ export const makeWsRpcLayer = () =>
         string,
         {
           expiresAt: number;
+          generation: number;
           value: {
             entries: ReadonlyArray<GitHubPullRequestListItem>;
             truncated: boolean;
@@ -440,13 +448,23 @@ export const makeWsRpcLayer = () =>
       const resolveProjectRepositories = (project: OrchestrationProject) =>
         Effect.gen(function* () {
           const cached = repositoryCache.get(project.workspaceRoot);
-          if (cached && cached.expiresAt > Date.now()) return cached.repositories;
           const generation = repositoryCacheGeneration;
+          if (
+            cached &&
+            cached.generation === generation &&
+            cached.expiresAt > Date.now()
+          ) {
+            return cached.repositories;
+          }
           const inFlightKey = `${generation}:${project.workspaceRoot}`;
           const shared = yield* repositoryCacheLock.withPermits(1)(
             Effect.gen(function* () {
               const freshCached = repositoryCache.get(project.workspaceRoot);
-              if (freshCached && freshCached.expiresAt > Date.now()) {
+              if (
+                freshCached &&
+                freshCached.generation === generation &&
+                freshCached.expiresAt > Date.now()
+              ) {
                 return Effect.succeed(freshCached.repositories);
               }
               const existing = repositoryInFlight.get(inFlightKey);
@@ -459,6 +477,7 @@ export const makeWsRpcLayer = () =>
                       if (repositoryCacheGeneration === generation) {
                         repositoryCache.set(project.workspaceRoot, {
                           expiresAt: Date.now() + 30_000,
+                          generation,
                           repositories,
                         });
                       }
@@ -479,11 +498,6 @@ export const makeWsRpcLayer = () =>
           );
           return yield* shared;
         });
-
-      const resolveProjectRepository = (project: OrchestrationProject) =>
-        resolveProjectRepositories(project).pipe(
-          Effect.map((repositories) => repositories[0] ?? null),
-        );
 
       const loadViewer = () =>
         Effect.gen(function* () {
@@ -533,13 +547,23 @@ export const makeWsRpcLayer = () =>
         Effect.gen(function* () {
           const cacheKey = pullRequestListCacheKey(repository, state, involvement, viewer);
           const cached = pullRequestListCache.get(cacheKey);
-          if (cached && cached.expiresAt > Date.now()) return cached.value;
           const generation = pullRequestListCacheGeneration;
+          if (
+            cached &&
+            cached.generation === generation &&
+            cached.expiresAt > Date.now()
+          ) {
+            return cached.value;
+          }
           const inFlightKey = `${generation}:${cacheKey}`;
           const shared = yield* pullRequestListCacheLock.withPermits(1)(
             Effect.gen(function* () {
               const freshCached = pullRequestListCache.get(cacheKey);
-              if (freshCached && freshCached.expiresAt > Date.now()) {
+              if (
+                freshCached &&
+                freshCached.generation === generation &&
+                freshCached.expiresAt > Date.now()
+              ) {
                 return Effect.succeed(freshCached.value);
               }
               const existing = pullRequestListInFlight.get(inFlightKey);
@@ -570,6 +594,7 @@ export const makeWsRpcLayer = () =>
                         if (pullRequestListCacheGeneration === generation) {
                           pullRequestListCache.set(cacheKey, {
                             expiresAt: Date.now() + 30_000,
+                            generation,
                             value,
                           });
                         }
@@ -1233,10 +1258,10 @@ export const makeWsRpcLayer = () =>
               const resolved = yield* Effect.forEach(
                 projects,
                 (project) =>
-                  resolveProjectRepository(project).pipe(
+                  resolveProjectRepositories(project).pipe(
                     Effect.match({
-                      onFailure: (error) => ({ project, error, repository: null }),
-                      onSuccess: (repository) => ({ project, error: null, repository }),
+                      onFailure: (error) => ({ project, error, repositories: [] }),
+                      onSuccess: (repositories) => ({ project, error: null, repositories }),
                     }),
                   ),
                 { concurrency: 6 },
@@ -1261,18 +1286,24 @@ export const makeWsRpcLayer = () =>
               const uniqueRepositories = new Map<
                 string,
                 {
-                  project: OrchestrationProject;
                   repository: { nameWithOwner: string; url: string };
+                  projects: OrchestrationProject[];
                 }
               >();
               for (const item of resolved) {
-                if (!item.repository) continue;
-                const key = item.repository.nameWithOwner.toLowerCase();
-                if (!uniqueRepositories.has(key)) {
-                  uniqueRepositories.set(key, {
-                    project: item.project,
-                    repository: item.repository,
-                  });
+                for (const repository of item.repositories) {
+                  const key = repository.nameWithOwner.toLowerCase();
+                  const existing = uniqueRepositories.get(key);
+                  if (existing) {
+                    if (!existing.projects.some((project) => project.id === item.project.id)) {
+                      existing.projects.push(item.project);
+                    }
+                  } else {
+                    uniqueRepositories.set(key, {
+                      repository,
+                      projects: [item.project],
+                    });
+                  }
                 }
               }
 
@@ -1289,60 +1320,62 @@ export const makeWsRpcLayer = () =>
               const viewer = yield* loadViewer();
               const batches = yield* Effect.forEach(
                 uniqueRepositories.values(),
-                ({ project, repository }) =>
+                ({ projects: repositoryProjects, repository }) =>
                   loadRepositoryPullRequests(
-                    project.workspaceRoot,
+                    repositoryProjects[0]!.workspaceRoot,
                     repository.nameWithOwner,
                     input.state,
                     involvement,
                     viewer,
                   ).pipe(
                     Effect.map((result) => ({
-                      entries: result.entries.map(
-                        (pullRequest): PullRequestListEntry => ({
-                          projectId: project.id,
-                          projectTitle: project.title,
-                          repository: repository.nameWithOwner,
-                          number: pullRequest.number,
-                          title: pullRequest.title,
-                          url: pullRequest.url,
-                          author: pullRequest.author,
-                          headBranch: pullRequest.headBranch,
-                          baseBranch: pullRequest.baseBranch,
-                          state: pullRequest.state,
-                          isDraft: pullRequest.isDraft,
-                          additions: pullRequest.additions,
-                          deletions: pullRequest.deletions,
-                          createdAt: pullRequest.createdAt,
-                          updatedAt: pullRequest.updatedAt,
-                          reviewDecision: pullRequest.reviewDecision,
-                          viewerReviewRequested:
-                            involvement === "reviewing" ||
-                            pullRequest.reviewRequestLogins.some(
-                              (login) => login.toLowerCase() === viewer.toLowerCase(),
+                      entries: repositoryProjects.flatMap((project) =>
+                        result.entries.map(
+                          (pullRequest): PullRequestListEntry => ({
+                            projectId: project.id,
+                            projectTitle: project.title,
+                            repository: repository.nameWithOwner,
+                            number: pullRequest.number,
+                            title: pullRequest.title,
+                            url: pullRequest.url,
+                            author: pullRequest.author,
+                            headBranch: pullRequest.headBranch,
+                            baseBranch: pullRequest.baseBranch,
+                            state: pullRequest.state,
+                            isDraft: pullRequest.isDraft,
+                            additions: pullRequest.additions,
+                            deletions: pullRequest.deletions,
+                            createdAt: pullRequest.createdAt,
+                            updatedAt: pullRequest.updatedAt,
+                            reviewDecision: pullRequest.reviewDecision,
+                            viewerReviewRequested: isViewerReviewRequested(
+                              pullRequest.author,
+                              pullRequest.reviewRequestLogins,
+                              viewer,
                             ),
-                          labels: pullRequest.labels,
-                        }),
+                            labels: pullRequest.labels,
+                          }),
+                        ),
                       ),
-                      repositoryBatch: {
+                      repositoryBatches: repositoryProjects.map((project) => ({
                         projectId: project.id,
                         projectTitle: project.title,
                         repository: repository.nameWithOwner,
                         truncated: result.truncated,
-                      },
-                      error: null,
+                      })),
+                      errors: [],
                     })),
                     Effect.catch((error) =>
                       error.reason === "not-installed" || error.reason === "not-authenticated"
                         ? Effect.fail(error)
                         : Effect.succeed({
                             entries: [] as PullRequestListEntry[],
-                            repositoryBatch: null,
-                            error: {
+                            repositoryBatches: [],
+                            errors: repositoryProjects.map((project) => ({
                               projectId: project.id,
                               projectTitle: project.title,
                               message: error.message,
-                            },
+                            })),
                           }),
                     ),
                   ),
@@ -1355,11 +1388,9 @@ export const makeWsRpcLayer = () =>
                   .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
                 errors: [
                   ...errors,
-                  ...batches.flatMap((batch) => (batch.error ? [batch.error] : [])),
+                  ...batches.flatMap((batch) => batch.errors),
                 ],
-                repositoryBatches: batches.flatMap((batch) =>
-                  batch.repositoryBatch ? [batch.repositoryBatch] : [],
-                ),
+                repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
               };
             }),
             "Failed to list pull requests",
@@ -1397,6 +1428,18 @@ export const makeWsRpcLayer = () =>
                 project,
                 input.repository,
               );
+              if (input.action === "merge") {
+                const mergeMethod = input.mergeMethod ?? "merge";
+                const capabilities = yield* loadMergeCapabilities(
+                  project.workspaceRoot,
+                  repository,
+                );
+                if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
+                  return yield* Effect.fail(
+                    new Error(`The repository does not allow the ${mergeMethod} merge method.`),
+                  );
+                }
+              }
               yield* github.runPullRequestAction({
                 cwd: project.workspaceRoot,
                 repository,

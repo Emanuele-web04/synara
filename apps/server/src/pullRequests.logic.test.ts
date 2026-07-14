@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isPullRequestMergeMethodAllowed,
   isValidGitHubRepositoryNameWithOwner,
+  isViewerReviewRequested,
   pullRequestListCacheKey,
 } from "./pullRequests.logic";
 
@@ -36,5 +38,32 @@ describe("pullRequestListCacheKey", () => {
     expect(pullRequestListCacheKey("openai/codex", "open", "authored", "alice")).not.toBe(
       pullRequestListCacheKey("openai/codex", "open", "authored", "bob"),
     );
+  });
+});
+
+describe("isViewerReviewRequested", () => {
+  const viewer = { login: "Viewer", name: null, avatarUrl: null, url: null };
+  const teammate = { login: "teammate", name: null, avatarUrl: null, url: null };
+
+  it("does not flag a self-authored pull request", () => {
+    expect(isViewerReviewRequested(viewer, ["viewer"], "VIEWER")).toBe(false);
+  });
+
+  it("flags a teammate pull request that explicitly requests the viewer", () => {
+    expect(isViewerReviewRequested(teammate, ["Viewer"], "viewer")).toBe(true);
+  });
+});
+
+describe("isPullRequestMergeMethodAllowed", () => {
+  const capabilities = {
+    merge: false,
+    squash: true,
+    rebase: false,
+    deleteBranchOnMerge: true,
+  };
+
+  it("uses repository capabilities for the requested method", () => {
+    expect(isPullRequestMergeMethodAllowed(capabilities, "squash")).toBe(true);
+    expect(isPullRequestMergeMethodAllowed(capabilities, "merge")).toBe(false);
   });
 });
