@@ -133,7 +133,10 @@ import {
   buildComposerImageAttachmentsFromFiles,
   buildUploadComposerAttachments,
   cloneComposerImageAttachment,
+  effectiveComposerAttachmentCount,
+  findPendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
+  hydratePendingBlobComposerAttachments,
   readFileAsDataUrl,
 } from "../lib/composerSend";
 import { composerImageBlobKey, persistComposerImageBlob } from "../lib/composerImageBlobStore";
@@ -6280,14 +6283,9 @@ export default function ChatView({
 
       const { images: nextImages, error } = buildComposerImageAttachmentsFromFiles({
         files,
-        existingAttachmentCount: (() => {
-          const currentDraft = useComposerDraftStore.getState().draftsByThreadId[activeThreadId];
-          return (
-            (currentDraft?.images.length ?? 0) +
-            (currentDraft?.files.length ?? 0) +
-            (currentDraft?.assistantSelections.length ?? 0)
-          );
-        })(),
+        existingAttachmentCount: effectiveComposerAttachmentCount(
+          useComposerDraftStore.getState().draftsByThreadId[activeThreadId],
+        ),
       });
 
       if (nextImages.length === 1 && nextImages[0]) {
@@ -6324,14 +6322,9 @@ export default function ChatView({
 
       const { files: nextFiles, error } = buildComposerFileAttachmentsFromFiles({
         files,
-        existingAttachmentCount: (() => {
-          const currentDraft = useComposerDraftStore.getState().draftsByThreadId[activeThreadId];
-          return (
-            (currentDraft?.images.length ?? 0) +
-            (currentDraft?.files.length ?? 0) +
-            (currentDraft?.assistantSelections.length ?? 0)
-          );
-        })(),
+        existingAttachmentCount: effectiveComposerAttachmentCount(
+          useComposerDraftStore.getState().draftsByThreadId[activeThreadId],
+        ),
       });
 
       if (nextFiles.length > 0) {
@@ -7056,6 +7049,27 @@ export default function ChatView({
       queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
     let promptForSend = queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
+    // AppSnap captures persist as IndexedDB blobs and hydrate into `images`
+    // asynchronously (see AppSnapCoordinator). Right after a reload the user can
+    // hit send before that hydration finishes; without this, the not-yet-hydrated
+    // capture would be silently dropped from the message and then have its blob
+    // deleted when the composer clears after send. Live sends only: a queued turn
+    // already captured a fully-resolved image snapshot when it was queued.
+    if (queuedChatTurn === null) {
+      const pendingBlobAttachments = findPendingBlobComposerAttachments({
+        persistedAttachments:
+          useComposerDraftStore.getState().draftsByThreadId[activeThread.id]
+            ?.persistedAttachments ?? [],
+        images: composerImagesForSend,
+      });
+      if (pendingBlobAttachments.length > 0) {
+        const hydratedPendingImages =
+          await hydratePendingBlobComposerAttachments(pendingBlobAttachments);
+        if (hydratedPendingImages.length > 0) {
+          composerImagesForSend = [...composerImagesForSend, ...hydratedPendingImages];
+        }
+      }
+    }
     const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;

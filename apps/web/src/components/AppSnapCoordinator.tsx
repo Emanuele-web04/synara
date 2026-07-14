@@ -12,7 +12,6 @@ import {
   type AppSnapThreadTarget,
   type TimedAppSnapThreadTarget,
   didAppSnapHydrationInputsChange,
-  effectiveComposerAttachmentCount,
   hasHydratedAppSnapCapture,
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
@@ -27,7 +26,10 @@ import {
 import { requestComposerFocus } from "../composerFocusRequestStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { buildComposerImageAttachmentsFromFiles } from "../lib/composerSend";
+import {
+  buildComposerImageAttachmentsFromFiles,
+  effectiveComposerAttachmentCount,
+} from "../lib/composerSend";
 import {
   deleteComposerImageBlob,
   deleteOrphanedComposerImageBlobs,
