@@ -1634,8 +1634,8 @@ async function waitForMountedChatReady(options: {
 
       if (!expectedThread) return;
       const state = useStore.getState();
-      expect(state.threadIds.includes(expectedThread.id)).toBe(true);
-      const hydratedMessageIds = state.messageIdsByThreadId[expectedThread.id] ?? [];
+      expect(state.threadIds?.includes(expectedThread.id)).toBe(true);
+      const hydratedMessageIds = state.messageIdsByThreadId?.[expectedThread.id] ?? [];
       expect(
         expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
         "Active thread detail did not hydrate.",

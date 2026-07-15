@@ -299,7 +299,8 @@ async function mountApp(options?: {
         expect(threadStreamRequestIdByThreadId.has(expectedThreadId)).toBe(true);
         const expectedThread = findThreadDetailFromFixtureSnapshot(expectedThreadId);
         if (!expectedThread) return;
-        const hydratedMessageIds = useStore.getState().messageIdsByThreadId[expectedThreadId] ?? [];
+        const hydratedMessageIds =
+          useStore.getState().messageIdsByThreadId?.[expectedThreadId] ?? [];
         expect(
           expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
         ).toBe(true);
