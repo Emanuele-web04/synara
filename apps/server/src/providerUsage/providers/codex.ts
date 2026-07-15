@@ -206,18 +206,25 @@ function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined
         .filter((c): c is NonNullable<typeof c> => c !== null)
     : [];
 
-  // nextExpiresAt = earliest available credit expiry
+  // nextExpiresAt: prefer the explicit top-level next_expires_at field (when the backend
+  // returns a count but omits per-credit details), then fall back to the earliest available
+  // credit expiry from the credits array.
+  const topLevelNextExpiresMs = parseResetCreditTimestamp(asFiniteNumber(record.next_expires_at));
   const availableExpiries = credits
     .filter((c) => c.status === "available")
     .map((c) => c.expiresAt)
     .filter((e): e is string => !!e)
     .sort();
+  const nextExpiresAt =
+    topLevelNextExpiresMs !== undefined
+      ? new Date(topLevelNextExpiresMs).toISOString()
+      : availableExpiries[0];
   const totalEarned = asFiniteNumber(record.total_earned_count);
 
   return {
     availableCount: Math.floor(availableCount),
     ...(totalEarned !== undefined ? { totalEarnedCount: Math.floor(totalEarned) } : {}),
-    ...(availableExpiries[0] ? { nextExpiresAt: availableExpiries[0] } : {}),
+    ...(nextExpiresAt ? { nextExpiresAt } : {}),
     ...(credits.length > 0 ? { credits } : {}),
   };
 }
