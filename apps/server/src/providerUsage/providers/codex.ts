@@ -181,8 +181,13 @@ export function parseCodexUsage(input: {
   });
 }
 
-function parseResetCreditTimestamp(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) return undefined;
+function parseResetCreditTimestamp(value: number | string | undefined | null): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  if (!Number.isFinite(value) || value <= 0) return undefined;
   // Handle both Unix seconds (< 1e10) and Unix milliseconds (>= 1e10)
   return value < 1e10 ? value * 1000 : value;
 }
@@ -204,11 +209,13 @@ function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined
           const r = asRecord(c);
           if (!r) return null;
           const status = asString(r.status) ?? "unknown";
+          const rawExpiresAt = r.expiresAt ?? r.expires_at;
+          const rawGrantedAt = r.grantedAt ?? r.granted_at;
           const expiresAtMs = parseResetCreditTimestamp(
-            asFiniteNumber(r.expiresAt ?? r.expires_at),
+            typeof rawExpiresAt === "string" ? rawExpiresAt : asFiniteNumber(rawExpiresAt),
           );
           const grantedAtMs = parseResetCreditTimestamp(
-            asFiniteNumber(r.grantedAt ?? r.granted_at),
+            typeof rawGrantedAt === "string" ? rawGrantedAt : asFiniteNumber(rawGrantedAt),
           );
           return {
             status,
@@ -219,8 +226,9 @@ function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined
         .filter((c): c is NonNullable<typeof c> => c !== null)
     : [];
 
+  const rawNextExpires = record.nextExpiresAt ?? record.next_expires_at;
   const topLevelNextExpiresMs = parseResetCreditTimestamp(
-    asFiniteNumber(record.nextExpiresAt ?? record.next_expires_at),
+    typeof rawNextExpires === "string" ? rawNextExpires : asFiniteNumber(rawNextExpires),
   );
   const availableExpiries = credits
     .filter((c) => c.status === "available")
