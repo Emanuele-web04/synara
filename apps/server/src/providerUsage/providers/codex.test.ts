@@ -80,6 +80,35 @@ describe("parseCodexUsage — reset credits", () => {
     expect(result.rateLimitResetCredits?.credits).toBeUndefined();
   });
 
+  it("supports snake_case backend REST response shape", () => {
+    const result = parseCodexUsage({
+      json: {
+        plan_type: "pro",
+        rate_limit: { primary_window: { used_percent: 50 } },
+        rate_limit_reset_credits: {
+          available_count: 2,
+          total_earned_count: 4,
+          next_expires_at: 1719326400,
+          credits: [
+            { status: "available", expires_at: 1719326400, granted_at: 1718721600000 },
+            { status: "available", expires_at: 1719412800, granted_at: 1718808000000 },
+          ],
+        },
+      },
+      nowMs: 1780000000000,
+    });
+
+    expect(result.rateLimitResetCredits?.availableCount).toBe(2);
+    expect(result.rateLimitResetCredits?.totalEarnedCount).toBe(4);
+    expect(result.rateLimitResetCredits?.nextExpiresAt).toBe(
+      new Date(1719326400 * 1000).toISOString(),
+    );
+    expect(result.rateLimitResetCredits?.credits).toHaveLength(2);
+    expect(result.rateLimitResetCredits?.credits?.[0]?.expiresAt).toBe(
+      new Date(1719326400 * 1000).toISOString(),
+    );
+  });
+
   it("returns undefined when availableCount is 0", () => {
     const result = parseCodexUsage({
       json: {

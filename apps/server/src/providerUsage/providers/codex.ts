@@ -161,8 +161,11 @@ export function parseCodexUsage(input: {
     usageLines.push({ label: "Credits", value: `${formatUsd(balance)} remaining` });
   }
 
-  // Parse reset credits from backend response (rateLimitResetCredits — camelCase from RPC)
-  const resetCredits = parseResetCredits(root?.rateLimitResetCredits);
+  // Parse reset credits from backend response (rateLimitResetCredits).
+  // Supports both RPC (camelCase) and backend REST (snake_case) response shapes.
+  const resetCredits = parseResetCredits(
+    root?.rateLimitResetCredits ?? root?.rate_limit_reset_credits,
+  );
 
   const planType = asString(root?.plan_type);
   return buildSnapshot({
@@ -183,23 +186,29 @@ function parseResetCreditTimestamp(value: number | undefined): number | undefine
   return value < 1e10 ? value * 1000 : value;
 }
 
-// Parse reset credits from the Codex RPC response. The app-server returns camelCase
-// fields (rateLimitResetCredits.availableCount, credits[].expiresAt, etc.), NOT the
-// snake_case format used by the backend REST API.
+// Parse reset credits. Supports both Codex RPC (camelCase) and backend REST (snake_case)
+// response shapes so we don't silently drop data depending on which transport produced it.
 function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined {
   const record = asRecord(raw);
   if (!record) return undefined;
-  const availableCount = asFiniteNumber(record.availableCount);
+
+  const availableCount =
+    asFiniteNumber(record.availableCount) ?? asFiniteNumber(record.available_count);
   if (availableCount === undefined || availableCount <= 0) return undefined;
 
-  const credits = Array.isArray(record.credits)
-    ? record.credits
+  const rawCredits = Array.isArray(record.credits) ? record.credits : undefined;
+  const credits = Array.isArray(rawCredits)
+    ? rawCredits
         .map((c) => {
           const r = asRecord(c);
           if (!r) return null;
           const status = asString(r.status) ?? "unknown";
-          const expiresAtMs = parseResetCreditTimestamp(asFiniteNumber(r.expiresAt));
-          const grantedAtMs = parseResetCreditTimestamp(asFiniteNumber(r.grantedAt));
+          const expiresAtMs = parseResetCreditTimestamp(
+            asFiniteNumber(r.expiresAt ?? r.expires_at),
+          );
+          const grantedAtMs = parseResetCreditTimestamp(
+            asFiniteNumber(r.grantedAt ?? r.granted_at),
+          );
           return {
             status,
             ...(expiresAtMs ? { expiresAt: new Date(expiresAtMs).toISOString() } : {}),
@@ -209,9 +218,9 @@ function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined
         .filter((c): c is NonNullable<typeof c> => c !== null)
     : [];
 
-  // nextExpiresAt: prefer the explicit top-level nextExpiresAt field, then fall back to
-  // the earliest available credit expiry from the credits array.
-  const topLevelNextExpiresMs = parseResetCreditTimestamp(asFiniteNumber(record.nextExpiresAt));
+  const topLevelNextExpiresMs = parseResetCreditTimestamp(
+    asFiniteNumber(record.nextExpiresAt ?? record.next_expires_at),
+  );
   const availableExpiries = credits
     .filter((c) => c.status === "available")
     .map((c) => c.expiresAt)
@@ -221,7 +230,8 @@ function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined
     topLevelNextExpiresMs !== undefined
       ? new Date(topLevelNextExpiresMs).toISOString()
       : availableExpiries[0];
-  const totalEarned = asFiniteNumber(record.totalEarnedCount);
+  const totalEarned =
+    asFiniteNumber(record.totalEarnedCount) ?? asFiniteNumber(record.total_earned_count);
 
   return {
     availableCount: Math.floor(availableCount),
