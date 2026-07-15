@@ -27,7 +27,6 @@ import { useStore } from "../store";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
-  isEffectRpcFeatureClient,
   readEffectRpcClientMessage,
   sendEffectRpcChunk,
   sendEffectRpcExit,
@@ -203,9 +202,6 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    if (isEffectRpcFeatureClient(client)) {
-      wsClient = client;
-    }
     client.addEventListener("message", (event) => {
       if (typeof event.data !== "string") {
         return;
@@ -214,6 +210,7 @@ const worker = setupWorker(
       if (parsed.kind !== "request") {
         return;
       }
+      wsClient = client;
       const request = parsed.request;
       const requestBody = flattenEffectRpcRequestPayload(request.tag, request.payload);
       const method = requestBody._tag;

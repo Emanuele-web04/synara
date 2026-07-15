@@ -5,7 +5,6 @@
 
 import {
   WS_BOOTSTRAP_METHOD,
-  WS_BOOTSTRAP_PATH,
   WS_PROTOCOL_EPOCH,
   WS_PROTOCOL_MAX_REVISION,
   WS_SERVER_CAPABILITIES,
@@ -28,10 +27,6 @@ export type EffectRpcReadResult =
   | { readonly kind: "request"; readonly request: EffectRpcRequest }
   | { readonly kind: "handled" }
   | { readonly kind: "ignored" };
-
-export function isEffectRpcFeatureClient(client: EffectRpcWebSocketClient): boolean {
-  return client.url?.pathname !== WS_BOOTSTRAP_PATH;
-}
 
 export function readEffectRpcClientMessage(
   client: EffectRpcWebSocketClient,
