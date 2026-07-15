@@ -4,9 +4,9 @@
 **PR:** [#357 — Audit and harden code quality across desktop and server paths](https://github.com/Emanuele-web04/synara/pull/357)
 **Remote head reconciled before closeout:** `e864533a3400a3cdcfb4102ff356088a1c48fdd7`
 **Base:** `main`
-**Status:** the local closeout is verified. The PR becomes merge-ready after this diff is published
-and replacement CI is green on the resulting head. A real Computer Use rerun remains pending because
-the backend was unavailable; Playwright fallback evidence is recorded below.
+**Status:** the verified closeout was published in `b92f585f4`. The PR becomes merge-ready when
+replacement CI is green on the final head. A real Computer Use rerun remains pending because the
+backend was unavailable; Playwright fallback evidence is recorded below.
 
 ## Executive decision
 
@@ -74,7 +74,7 @@ successful Computer Use run.
 | ACP providers        | Cursor, Droid, and Grok returned exact expected replies                         | Shared official-SDK foundation works               |
 | Shutdown             | Server, Vite, and every tested provider child exited after Ctrl-C               | Pass                                               |
 | Resource behavior    | OpenCode peaked at four processes in the broad run; clean reload reused one PID | Follow-up measurement; not a PR regression         |
-| Local closeout diff  | Regression and browser-fixture improvements remain local                        | Publish before calling the PR ready                |
+| Local closeout diff  | Regression and browser-fixture improvements published in `b92f585f4`            | Await replacement CI                               |
 
 ### Verification chronology
 
@@ -366,7 +366,8 @@ The following are fixes, not open audit items:
 
 ### Required before merging PR #357
 
-- [ ] Publish the reconciled local closeout diff and this audit document to the PR branch.
+- [x] Publish the reconciled local closeout diff and this audit document to the PR branch
+      (`b92f585f4`).
 - [x] Re-run and record the final repository unit/integration suite after the ACP transport
       closeout. Eight bundled tasks passed before the wrapper interrupted the serial server task;
       the server then passed in isolation (210 files, 2,125 passed, 7 skipped), and the reconciled
