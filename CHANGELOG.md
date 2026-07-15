@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.4 - 2026-07-15
+
+### Added
+
+- Added a native Pull Requests workspace backed by the GitHub CLI, with cross-project and project-scoped discovery, search, state filters, involvement groups, pinned pull requests, and explicit loading, empty, authentication, and partial-failure states.
+- Added pull-request detail views for summary, code, and timeline context, including checks, reviewers, commits, changed files, diffs, comments, and repository metadata.
+- Added in-place pull-request actions for comments, merge, close, reopen, and pinning, with confirmation and error handling around destructive or remote mutations.
+- Added a global feedback dialog available from the command menu and `/feedback` command.
+- Added durable desktop window-state restoration for position, size, and maximized state, with monitor-bound validation when the display layout changes.
+
+### Changed
+
+- Refactored transcript rendering and provider-session orchestration into clearer shared lifecycles, including temporary-thread cleanup and more predictable runtime state transitions.
+- Added shared pull-request UI primitives and centralized query, cache, mutation, and refresh coordination so list and detail surfaces stay consistent under overlapping requests.
+- Improved pull-request discovery under load with bounded concurrency, single-flight fetches, cached fallback data, project-aware invalidation, and per-repository partial results.
+- Updated the Pi SDK integration and model discovery behavior, including support for custom-provider authentication through `auth.json` semantics.
+- Aligned Grok reasoning-effort handling with provider capabilities, hid Cursor transport-only model variants from user-facing selection, and standardized more of the interface on the system UI font.
+- Refined theme initialization, browser navigation, external-link handling, sidebar behavior, composer actions, and shared disclosure/component styling as part of the workspace integration.
+
+### Fixed
+
+- Fixed pull-request refreshes, mutations, and route changes racing each other into stale lists or mismatched detail state.
+- Fixed unavailable or failing repositories preventing successful pull-request results from other projects from remaining usable.
+- Fixed desktop windows losing their prior bounds or reopening off-screen after restart or monitor changes.
+- Fixed Pi custom-provider models authenticated through local auth configuration being omitted from discoverable models.
+- Fixed temporary thread, transcript, and session transitions leaving inconsistent UI state during creation, navigation, reconnect, or cleanup.
+- Fixed provider model pickers exposing unsupported Cursor variants or inconsistent Grok effort choices.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,187 files.
+- `bun run lint` passed with 192 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed after rerunning with Bun temporary staging available; it retained the pinned dependency set and reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- The first full `bun run test` exposed a stale local Pi SDK install (`0.74.0` instead of lockfile version `0.80.6`) in one custom-provider discovery test. A frozen dependency sync corrected the local graph, and the focused regression passed.
+- Final full `bun run test` passed: 10 Turbo tasks in 18m46s; web passed 217 files / 2,670 tests, CLI passed 169 files / 1,852 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed.
+
 ## 0.5.3 - 2026-07-14
 
 ### Added
