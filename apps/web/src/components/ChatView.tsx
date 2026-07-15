@@ -4438,7 +4438,7 @@ export default function ChatView({
       },
       onTerminalMetadataChange: (
         terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | null; label: string },
+        metadata: { cliKind: "codex" | "claude" | "antigravity" | null; label: string },
       ) => {
         if (!activeThreadId) return;
         storeSetTerminalMetadata(activeThreadId, terminalId, metadata);

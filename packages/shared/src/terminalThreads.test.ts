@@ -4,7 +4,56 @@
 
 import { describe, expect, it } from "vitest";
 
-import { resolveTerminalVisualIdentity } from "./terminalThreads";
+import {
+  deriveTerminalCommandIdentity,
+  deriveTerminalOutputIdentity,
+  deriveTerminalProcessIdentity,
+  deriveTerminalTitleSignalIdentity,
+  resolveTerminalVisualIdentity,
+  terminalCliKindFromValue,
+} from "./terminalThreads";
+
+describe("Antigravity CLI identity", () => {
+  it.each(["agy", "antigravity", "antigravity-cli"])(
+    "detects the %s command",
+    (command) => {
+      expect(deriveTerminalCommandIdentity(command)).toEqual({
+        cliKind: "antigravity",
+        iconKey: "antigravity",
+        title: "Antigravity CLI",
+      });
+    },
+  );
+
+  it("detects the Antigravity CLI process, banner, and terminal title", () => {
+    expect(deriveTerminalProcessIdentity("/Users/dev/.local/bin/agy --model fast")).toMatchObject({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+    });
+    expect(deriveTerminalOutputIdentity("Welcome to Antigravity CLI")).toMatchObject({
+      cliKind: "antigravity",
+      title: "Antigravity CLI",
+    });
+    expect(deriveTerminalTitleSignalIdentity("AGY CLI")).toMatchObject({
+      cliKind: "antigravity",
+      title: "Antigravity CLI",
+    });
+  });
+
+  it("normalizes persisted Antigravity CLI metadata", () => {
+    expect(terminalCliKindFromValue(" antigravity ")).toBe("antigravity");
+    expect(
+      resolveTerminalVisualIdentity({
+        cliKind: "antigravity",
+        fallbackTitle: "Terminal 1",
+      }),
+    ).toMatchObject({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+      title: "Antigravity CLI",
+    });
+  });
+});
 
 describe("resolveTerminalVisualIdentity", () => {
   it("treats explicit null cliKind as a generic terminal even when the title looks provider-like", () => {
