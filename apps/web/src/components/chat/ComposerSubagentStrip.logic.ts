@@ -134,6 +134,15 @@ function collectStripItems(
   );
 }
 
+// Rows the header stop-all control targets: running subagent rows only.
+export function collectRunningSubagentStripItems(
+  rows: ReadonlyArray<ComposerSubagentStripRow>,
+): ComposerSubagentStripItem[] {
+  return rows.filter(
+    (row): row is ComposerSubagentStripItem => row.kind === "subagent" && row.isActive,
+  );
+}
+
 const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
 
 function withParentRow(

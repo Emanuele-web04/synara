@@ -186,6 +186,7 @@ import {
 import {
   createRelevantWorkLogThreadsSelector,
   createThreadLineageSelector,
+  localSubagentThreadId,
 } from "./ChatView.selectors";
 import {
   clampCollapsedComposerCursor,
@@ -464,6 +465,7 @@ import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionAction
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
 import {
+  collectRunningSubagentStripItems,
   deriveComposerSubagentStripItems,
   type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
@@ -6046,16 +6048,28 @@ export default function ChatView({
 
   // Stop goes through the interrupt seam: on a subagent thread the reactor
   // resolves the tool_use_id and stops that task instead of the whole turn.
-  const onStopSubagentStripItem = useCallback(async (item: ComposerSubagentStripItem) => {
-    const api = readNativeApi();
-    if (!api) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.interrupt",
-      commandId: newCommandId(),
-      threadId: item.threadId,
-      createdAt: new Date().toISOString(),
-    });
-  }, []);
+  // Target the canonical child id derived from the strip source thread —
+  // item.threadId can still be the raw tool_use_id while client-side thread
+  // resolution lags, which the server would reject as an unknown thread.
+  const onStopSubagentStripItem = useCallback(
+    async (item: ComposerSubagentStripItem) => {
+      const api = readNativeApi();
+      if (!api || !stripSourceThreadId) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.interrupt",
+        commandId: newCommandId(),
+        threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [stripSourceThreadId],
+  );
+
+  // Stop-all fans out through the same per-row stop so both paths share one seam.
+  const onStopAllSubagentStripItems = useCallback(async () => {
+    const running = collectRunningSubagentStripItems(composerSubagentStripItems);
+    await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
+  }, [composerSubagentStripItems, onStopSubagentStripItem]);
 
   // Pause is the same stop command; the local flag makes the settled card read
   // as paused (with a resume affordance) instead of plain stopped.
@@ -10743,6 +10757,7 @@ export default function ChatView({
                   onOpenThread={onNavigateToThread}
                   onBackgroundItem={onBackgroundSubagentStripItem}
                   onStopItem={onStopSubagentStripItem}
+                  onStopAll={onStopAllSubagentStripItems}
                   attachedToPrevious={
                     showComposerLiveChangesHeader ||
                     showComposerActiveTaskListCard ||

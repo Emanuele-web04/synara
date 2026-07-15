@@ -44,6 +44,18 @@ export interface ParsedSubagentIdentityDirectory {
   readonly byAgentId: ReadonlyMap<string, ParsedSubagentIdentityHint>;
 }
 
+// Internal agent definitions that only exist to carry effort (already surfaced
+// separately); they must never render as a subagent role/nickname suffix.
+const WORKER_TIER_ROLE_PATTERN = /^worker-(?:low|medium|high|xhigh)$/i;
+
+export function isWorkerTierSubagentRole(role: string | null | undefined): boolean {
+  return typeof role === "string" && WORKER_TIER_ROLE_PATTERN.test(role.trim());
+}
+
+function sanitizeSubagentRole(role: string | undefined): string | undefined {
+  return role !== undefined && isWorkerTierSubagentRole(role) ? undefined : role;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -98,10 +110,11 @@ function extractSubagentIdentityFromSource(
     firstStringValue(item, ["agentNickname", "agent_nickname", "nickname"]) ??
     firstStringValue(threadSpawn, ["agentNickname", "agent_nickname", "nickname", "name"]) ??
     firstStringValue(subagent, ["agentNickname", "agent_nickname", "nickname", "name"]);
-  const role =
+  const role = sanitizeSubagentRole(
     firstStringValue(item, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
-    firstStringValue(threadSpawn, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
-    firstStringValue(subagent, ["agentRole", "agent_role", "agentType", "agent_type"]);
+      firstStringValue(threadSpawn, ["agentRole", "agent_role", "agentType", "agent_type"]) ??
+      firstStringValue(subagent, ["agentRole", "agent_role", "agentType", "agent_type"]),
+  );
 
   if (!providerThreadId && !agentId && !nickname && !role) {
     return null;
@@ -218,16 +231,18 @@ export function decodeSubagentReceiverAgents(
         "nickname",
         "name",
       ]);
-      const role = firstStringValue(object, [
-        "agentRole",
-        "agent_role",
-        "receiverAgentRole",
-        "receiver_agent_role",
-        "newAgentRole",
-        "new_agent_role",
-        "agentType",
-        "agent_type",
-      ]);
+      const role = sanitizeSubagentRole(
+        firstStringValue(object, [
+          "agentRole",
+          "agent_role",
+          "receiverAgentRole",
+          "receiver_agent_role",
+          "newAgentRole",
+          "new_agent_role",
+          "agentType",
+          "agent_type",
+        ]),
+      );
       const directModel = firstStringValue(object, ["model", "modelName", "model_name"]);
       const requestedModel = firstStringValue(object, ["requestedModel", "requested_model"]);
       const model = directModel ?? requestedModel ?? topLevelModel;
@@ -270,16 +285,18 @@ export function decodeSubagentReceiverAgents(
     "receiverAgentNickname",
     "receiver_agent_nickname",
   ]);
-  const role = firstStringValue(item, [
-    "receiverAgentRole",
-    "receiver_agent_role",
-    "newAgentRole",
-    "new_agent_role",
-    "agentRole",
-    "agent_role",
-    "agentType",
-    "agent_type",
-  ]);
+  const role = sanitizeSubagentRole(
+    firstStringValue(item, [
+      "receiverAgentRole",
+      "receiver_agent_role",
+      "newAgentRole",
+      "new_agent_role",
+      "agentRole",
+      "agent_role",
+      "agentType",
+      "agent_type",
+    ]),
+  );
 
   return [
     {
@@ -321,23 +338,27 @@ function buildSubagentAgentState(
           ]),
         }
       : {}),
-    ...(firstStringValue(object, [
-      "agentRole",
-      "agent_role",
-      "receiverAgentRole",
-      "receiver_agent_role",
-      "agentType",
-      "agent_type",
-    ])
+    ...(sanitizeSubagentRole(
+      firstStringValue(object, [
+        "agentRole",
+        "agent_role",
+        "receiverAgentRole",
+        "receiver_agent_role",
+        "agentType",
+        "agent_type",
+      ]),
+    )
       ? {
-          role: firstStringValue(object, [
-            "agentRole",
-            "agent_role",
-            "receiverAgentRole",
-            "receiver_agent_role",
-            "agentType",
-            "agent_type",
-          ]),
+          role: sanitizeSubagentRole(
+            firstStringValue(object, [
+              "agentRole",
+              "agent_role",
+              "receiverAgentRole",
+              "receiver_agent_role",
+              "agentType",
+              "agent_type",
+            ]),
+          ),
         }
       : {}),
     ...(firstStringValue(object, [
@@ -507,16 +528,18 @@ export function extractSubagentIdentityHints(
       "agent_nickname",
       "nickname",
     ]),
-    role: firstStringValue(item, [
-      "newAgentRole",
-      "new_agent_role",
-      "receiverAgentRole",
-      "receiver_agent_role",
-      "agentRole",
-      "agent_role",
-      "agentType",
-      "agent_type",
-    ]),
+    role: sanitizeSubagentRole(
+      firstStringValue(item, [
+        "newAgentRole",
+        "new_agent_role",
+        "receiverAgentRole",
+        "receiver_agent_role",
+        "agentRole",
+        "agent_role",
+        "agentType",
+        "agent_type",
+      ]),
+    ),
   });
 
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);

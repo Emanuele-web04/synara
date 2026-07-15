@@ -42,6 +42,7 @@ interface ComposerSubagentStripProps {
   onOpenThread: (threadId: ThreadId) => void;
   onBackgroundItem?: (item: ComposerSubagentStripItem) => void;
   onStopItem?: (item: ComposerSubagentStripItem) => void;
+  onStopAll?: () => void;
   attachedToPrevious?: boolean;
 }
 
@@ -69,6 +70,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
   onOpenThread,
   onBackgroundItem,
   onStopItem,
+  onStopAll,
   attachedToPrevious = false,
 }: ComposerSubagentStripProps) {
   const subagentItems = items.filter(
@@ -95,6 +97,19 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
               : `${subagentItems.length} ${pluralize(subagentItems.length, "subagent")}`}
           </ComposerStackedPanelRowLabel>
         </ComposerStackedPanelRowMain>
+        {onStopAll && runningCount > 1 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+            onClick={onStopAll}
+            aria-label="Stop all subagents"
+            title="Stop all running subagents"
+          >
+            <StopIcon className="size-3" />
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"

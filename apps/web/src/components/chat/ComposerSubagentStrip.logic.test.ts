@@ -12,6 +12,7 @@ import type { Thread } from "../../types";
 import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import { localSubagentThreadId } from "../ChatView.selectors";
 import {
+  collectRunningSubagentStripItems,
   deriveComposerSubagentStripItems,
   type ComposerSubagentStripItem,
   type ComposerSubagentStripRow,
@@ -555,5 +556,118 @@ describe("deriveComposerSubagentStripItems", () => {
       statusKind: "running",
       isActive: true,
     });
+  });
+});
+
+describe("worker-tier role suppression", () => {
+  it("hides worker-tier agent types while keeping the effort in the model label", () => {
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                nickname: "Ada",
+                role: "worker-low",
+                model: "haiku-4.5",
+                effort: "low",
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "sub-2",
+                nickname: "Blue",
+                role: "reviewer",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
+
+    expect(items[0]).toMatchObject({
+      primaryLabel: "Ada",
+      role: null,
+      fullLabel: "Ada",
+    });
+    expect(items[0]?.modelLabel).toContain("low");
+    expect(items[1]).toMatchObject({
+      primaryLabel: "Blue",
+      role: "reviewer",
+      fullLabel: "Blue [reviewer]",
+    });
+  });
+
+  it("strips worker-tier suffixes from title-derived labels", () => {
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-1",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "sub-1",
+                title: "Research scheduling market - players [worker-low]",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
+
+    expect(items[0]).toMatchObject({
+      primaryLabel: "Research scheduling market - players",
+      role: null,
+      fullLabel: "Research scheduling market - players",
+    });
+  });
+});
+
+describe("collectRunningSubagentStripItems", () => {
+  it("collects only running subagent rows, skipping parent and settled rows", () => {
+    const rows = deriveComposerSubagentStripItems({
+      workEntries: [
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          subagents: [
+            subagent({ threadId: "sub-1", nickname: "Ada", rawStatus: "running", isActive: true }),
+            subagent({ threadId: "sub-2", nickname: "Blue", rawStatus: "completed" }),
+            subagent({ threadId: "sub-3", nickname: "Cass", rawStatus: "running", isActive: true }),
+          ],
+        }),
+      ],
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+      parentRow: { threadId: ThreadId.makeUnsafe("thread-1"), label: "Main thread" },
+    });
+
+    const running = collectRunningSubagentStripItems(rows);
+    expect(running.map((item) => item.threadId)).toEqual(["sub-1", "sub-3"]);
+    expect(running.every((item) => item.kind === "subagent" && item.isActive)).toBe(true);
+  });
+
+  it("returns no rows when nothing is running", () => {
+    const rows = deriveComposerSubagentStripItems({
+      workEntries: [
+        workEntry({
+          id: "entry-1",
+          turnId: "turn-1",
+          subagents: [subagent({ threadId: "sub-1", nickname: "Ada", rawStatus: "queued" })],
+        }),
+      ],
+      liveTurnId: TurnId.makeUnsafe("turn-1"),
+    });
+
+    expect(collectRunningSubagentStripItems(rows)).toEqual([]);
   });
 });
