@@ -134,7 +134,19 @@ const PROVIDERS = [
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
-const UPDATE_TIMEOUT_MS = 5 * 60_000;
+export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
+
+function formatProviderUpdateTimeout(timeoutMs: number): string {
+  if (timeoutMs < 1_000) {
+    return `${timeoutMs} ${timeoutMs === 1 ? "millisecond" : "milliseconds"}`;
+  }
+  if (timeoutMs % 60_000 === 0) {
+    const minutes = timeoutMs / 60_000;
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  const seconds = timeoutMs / 1_000;
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
@@ -153,7 +165,16 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
-const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
+function isKiloNativeCommandPath(commandPath: string): boolean {
+  const normalized = normalizeCommandPath(commandPath);
+  return (
+    normalized.endsWith("/.kilo/bin/kilo") ||
+    normalized.endsWith("/.local/bin/kilo") ||
+    normalized.includes("/.local/share/kilo/bin/")
+  );
+}
+
+export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
   Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>
 > = {
   codex: {
@@ -183,6 +204,20 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
     homebrew: { name: "gemini-cli", kind: "formula" },
     nativeUpdate: null,
   },
+  antigravity: {
+    provider: ANTIGRAVITY_PROVIDER,
+    binaryName: "agy",
+    // Antigravity is distributed as a native binary and owns its update channel.
+    npmPackageName: null,
+    homebrew: null,
+    latestVersionSource: null,
+    nativeUpdate: {
+      executable: "agy",
+      args: () => ["update"],
+      lockKey: "antigravity-native",
+      strategy: "always",
+    },
+  },
   droid: {
     provider: DROID_PROVIDER,
     binaryName: "droid",
@@ -204,7 +239,8 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       executable: "kilo",
       args: () => ["upgrade"],
       lockKey: "kilo-native",
-      strategy: "always",
+      strategy: "matching-path",
+      isCommandPath: isKiloNativeCommandPath,
     },
   },
   opencode: {
@@ -2088,9 +2124,12 @@ export function projectProviderStatusesForSettings(
 
 // ── Layer ───────────────────────────────────────────────────────────
 
-export const ProviderHealthLive = Layer.effect(
-  ProviderHealth,
-  Effect.gen(function* () {
+export function makeProviderHealthLive(options?: { readonly providerUpdateTimeoutMs?: number }) {
+  const providerUpdateTimeoutMs =
+    options?.providerUpdateTimeoutMs ?? PROVIDER_UPDATE_TIMEOUT_MS;
+  return Layer.effect(
+    ProviderHealth,
+    Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -2527,13 +2566,22 @@ export const ProviderHealthLive = Layer.effect(
     const runUpdateCommand = Effect.fn("runProviderUpdateCommand")(function* (input: {
       readonly command: string;
       readonly args: ReadonlyArray<string>;
+      readonly pathPrepend?: string;
     }) {
-      const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: process.env });
+      const updateEnv = input.pathPrepend
+        ? {
+            ...process.env,
+            PATH: [input.pathPrepend, process.env.PATH]
+              .filter((entry): entry is string => Boolean(entry))
+              .join(OS.platform() === "win32" ? ";" : ":"),
+          }
+        : process.env;
+      const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: updateEnv });
       const child = yield* spawner.spawn(
         ChildProcess.make(prepared.command, prepared.args, {
           shell: prepared.shell,
           ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-          env: process.env,
+          env: updateEnv,
         }),
       );
       yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
@@ -2602,9 +2650,10 @@ export const ProviderHealthLive = Layer.effect(
         const commandResult = yield* runUpdateCommand({
           command: update.executable,
           args: update.args,
+          ...(update.pathPrepend ? { pathPrepend: update.pathPrepend } : {}),
         }).pipe(
           Effect.scoped,
-          Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
+          Effect.timeoutOption(Duration.millis(providerUpdateTimeoutMs)),
           Effect.result,
         );
         const finishedAt = yield* nowIso;
@@ -2627,7 +2676,7 @@ export const ProviderHealthLive = Layer.effect(
         const failed = Option.isNone(result) || result.value.exitCode !== 0;
         if (failed) {
           const message = Option.isNone(result)
-            ? "Update timed out."
+            ? `Update timed out after ${formatProviderUpdateTimeout(providerUpdateTimeoutMs)}. The provider process was stopped.`
             : `Update command exited with code ${result.value.exitCode}.`;
           const providers = yield* setProviderUpdateState(
             provider,
@@ -2686,5 +2735,8 @@ export const ProviderHealthLive = Layer.effect(
         return Stream.fromPubSub(changesPubSub);
       },
     } satisfies ProviderHealthShape;
-  }),
-);
+    }),
+  );
+}
+
+export const ProviderHealthLive = makeProviderHealthLive();

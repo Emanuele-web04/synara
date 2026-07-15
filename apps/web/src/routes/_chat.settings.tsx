@@ -173,7 +173,9 @@ import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
 import {
   getVisibleProviderUpdateStatuses,
+  shouldOfferProviderUpdateAction,
   shouldShowProviderUpdateStatus,
+  withProviderUpdateTimeout,
 } from "../providerUpdates";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
@@ -1252,7 +1254,10 @@ function SettingsRouteView() {
       }
       setUpdatingProviders((current) => new Set(current).add(provider));
       try {
-        const result = await ensureNativeApi().server.updateProvider({ provider });
+        const result = await withProviderUpdateTimeout({
+          provider,
+          request: ensureNativeApi().server.updateProvider({ provider }),
+        });
         const refreshedProvider = result.providers.find((status) => status.provider === provider);
         const failureMessage = providerUpdateFailureMessage(refreshedProvider);
         if (failureMessage) {
@@ -3188,15 +3193,12 @@ function SettingsRouteView() {
                   providerUpdateState === "queued" ||
                   providerUpdateState === "running" ||
                   updatingProviders.has(providerSettings.provider);
+                const shouldShowProviderUpdateButton = providerStatus
+                  ? shouldOfferProviderUpdateAction(providerStatus) &&
+                    (showProviderUpdateStatus || updateAdvisory?.status === "unknown")
+                  : false;
                 const canUpdateProvider =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate &&
-                  !isProviderUpdateActive;
-                const shouldShowProviderUpdateButton =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate;
+                  shouldShowProviderUpdateButton && !isProviderUpdateActive;
 
                 return (
                   <Collapsible

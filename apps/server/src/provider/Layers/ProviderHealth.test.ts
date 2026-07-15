@@ -2,7 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { vi } from "vitest";
@@ -32,14 +33,17 @@ import {
   makeCheckGrokProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
+  makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
+  PACKAGE_MANAGED_PROVIDER_UPDATES,
   providerStatusesEqual,
   ProviderHealthLive,
   projectProviderStatusesForSettings,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
+import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -108,6 +112,25 @@ function failingSpawnerLayer(description: string) {
         }),
       ),
     ),
+  );
+}
+
+function hangingSpawnerLayer(onKill: () => void, onSpawn: Effect.Effect<void> = Effect.void) {
+  const handle = ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(2),
+    exitCode: Effect.never,
+    isRunning: Effect.succeed(true),
+    kill: () => Effect.sync(onKill),
+    stdin: Sink.drain,
+    stdout: Stream.never,
+    stderr: Stream.never,
+    all: Stream.never,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.never,
+  });
+  return Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make(() => onSpawn.pipe(Effect.as(handle))),
   );
 }
 
@@ -214,6 +237,113 @@ function withTempCodexHome(configContent?: string) {
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("provider update commands", () => {
+    it("registers Antigravity's native updater", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.antigravity;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "agy",
+        realCommandPath: "/Users/test/.local/bin/agy",
+        commandDirectory: "/Users/test/.local/bin",
+      });
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "agy update",
+        executable: "agy",
+        args: ["update"],
+        lockKey: "antigravity-native",
+        pathPrepend: "/Users/test/.local/bin",
+      });
+    });
+
+    it("updates npm-managed Kilo through its matching package manager and PATH", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.kilo;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "kilo",
+        realCommandPath:
+          "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+        commandDirectory: "/Users/test/.nvm/versions/node/v24.13.0/bin",
+      });
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "npm install -g @kilocode/cli@latest",
+        executable: "npm",
+        args: ["install", "-g", "@kilocode/cli@latest"],
+        lockKey: "npm-global",
+        pathPrepend: "/Users/test/.nvm/versions/node/v24.13.0/bin",
+      });
+    });
+
+    it.effect("stops a hung provider process and persists a failed update state", () =>
+      Effect.gen(function* () {
+        let killed = false;
+        const spawned = yield* Deferred.make<void>();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-update-timeout-",
+        });
+        yield* writeProviderStatusCache({
+          filePath: resolveProviderStatusCachePath({
+            stateDir: path.join(baseDir, "userdata"),
+            provider: "kilo",
+          }),
+          provider: {
+            provider: "kilo",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-07-15T12:00:00.000Z",
+            message: "Kilo CLI is installed and authenticated.",
+            version: "7.3.46",
+          },
+        });
+        const settings = {
+          ...allProvidersDisabledServerSettings,
+          providers: {
+            ...allProvidersDisabledServerSettings.providers,
+            kilo: {
+              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+              enabled: true,
+              binaryPath: "kilo",
+            },
+          },
+        } satisfies typeof DEFAULT_SERVER_SETTINGS;
+        const layer = makeProviderHealthLive({ providerUpdateTimeoutMs: 20 }).pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(settings)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            hangingSpawnerLayer(
+              () => (killed = true),
+              Deferred.succeed(spawned, undefined).pipe(Effect.asVoid),
+            ),
+          ),
+        );
+
+        const result = yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          const updateFiber = yield* providerHealth
+            .updateProvider({ provider: "kilo" })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(spawned);
+          yield* TestClock.adjust(Duration.millis(20));
+          return yield* Fiber.join(updateFiber);
+        }).pipe(Effect.provide(layer));
+        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+
+        assert.strictEqual(killed, true);
+        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(
+          kilo?.updateState?.message,
+          "Update timed out after 20 milliseconds. The provider process was stopped.",
+        );
+      }),
+    );
+  });
+
   describe("disabled provider handling", () => {
     it("builds an inert status for disabled providers", () => {
       assert.deepStrictEqual(makeDisabledProviderStatus("kilo", "2026-06-16T12:00:00.000Z"), {
