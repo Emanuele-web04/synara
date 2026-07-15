@@ -5,7 +5,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
-import type { CodexResetCredit, ServerProviderUsageSnapshot } from "@synara/contracts";
+import type {
+  CodexResetCredit,
+  ServerProviderUsageLimit,
+  ServerProviderUsageSnapshot,
+} from "@synara/contracts";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -45,10 +49,12 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
                 : `${credits.availableCount} reset credits available`}
               <ChevronDownIcon className="size-3 text-muted-foreground" aria-hidden="true" />
             </PopoverTrigger>
-            <PopoverPopup className="w-72 p-3" align="start">
-              <ResetCreditList
+            <PopoverPopup className="w-80 p-3" align="start">
+              <ResetCreditInfo
                 credits={credits.credits ?? []}
+                availableCount={credits.availableCount}
                 nextExpiresAt={credits.nextExpiresAt}
+                limits={snapshot.limits}
               />
             </PopoverPopup>
           </Popover>
@@ -90,12 +96,16 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
   );
 }
 
-function ResetCreditList({
+function ResetCreditInfo({
   credits,
+  availableCount,
   nextExpiresAt,
+  limits,
 }: {
   credits: ReadonlyArray<CodexResetCredit>;
-  nextExpiresAt?: string | undefined;
+  availableCount: number;
+  nextExpiresAt: string | undefined;
+  limits: ReadonlyArray<ServerProviderUsageLimit>;
 }) {
   const sorted = useMemo(
     () =>
@@ -107,52 +117,88 @@ function ResetCreditList({
     [credits],
   );
 
-  if (sorted.length === 0) {
-    return (
-      <div className="text-xs text-muted-foreground">
-        {nextExpiresAt ? (
-          <>
-            The next available credit will be consumed
-            <span className="ml-1 text-foreground">
-              (expires {formatRateLimitResetTime(nextExpiresAt)})
-            </span>
-            .
-          </>
-        ) : (
-          <>The next available credit will be consumed.</>
-        )}
-      </div>
-    );
-  }
+  // Prefer an explicit per-credit expiry. When the backend doesn't return one, fall back to the
+  // earliest known usage-window reset time so the user still has a concrete "use by" anchor.
+  const fallbackExpiry = useMemo(() => {
+    const resets = limits
+      .map((limit) => limit.resetsAt)
+      .filter((v): v is string => typeof v === "string")
+      .map((iso) => Date.parse(iso))
+      .filter((ms) => Number.isFinite(ms) && ms > Date.now())
+      .sort((a, b) => a - b);
+    return resets[0] !== undefined ? new Date(resets[0]).toISOString() : undefined;
+  }, [limits]);
+
+  const useByIso = nextExpiresAt ?? fallbackExpiry;
 
   return (
-    <div>
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Using earliest first
+    <div className="space-y-3">
+      <div>
+        <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          What it resets
+        </div>
+        {limits.length > 0 ? (
+          <ul className="mt-1.5 flex flex-wrap gap-1">
+            {limits.map((limit) => (
+              <li
+                key={limit.window}
+                className="rounded-md border border-[color:var(--color-border)] bg-background/40 px-2 py-0.5 text-[11px] text-foreground"
+              >
+                {limit.window}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-xs text-muted-foreground">
+            All eligible usage windows reset immediately.
+          </p>
+        )}
       </div>
-      <ul className="mt-2 space-y-1.5">
-        {sorted.map((credit, index) => {
-          const isNext = index === 0;
-          const label = credit.expiresAt
-            ? `Expires ${formatRateLimitResetTime(credit.expiresAt)}`
-            : "Expires later";
-          return (
-            <li
-              key={`${credit.expiresAt ?? "no-expiry"}-${index}`}
-              className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-border)] bg-background/40 px-2.5 py-1.5 text-xs"
-            >
-              <span className="text-muted-foreground">
-                {credit.grantedAt
-                  ? `Granted ${formatRateLimitResetTime(credit.grantedAt)}`
-                  : "Available"}
-              </span>
-              <span className={isNext ? "font-medium text-foreground" : "text-foreground"}>
-                {label}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+
+      {useByIso && (
+        <div>
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Use by
+          </div>
+          <div className="mt-0.5 text-xs text-foreground">
+            {formatRateLimitResetTime(useByIso)}
+            {availableCount > 1 && sorted.length > 0
+              ? " (earliest of " + availableCount + ")"
+              : null}
+          </div>
+        </div>
+      )}
+
+      {sorted.length > 0 && (
+        <div>
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Each credit
+          </div>
+          <ul className="mt-1.5 space-y-1.5">
+            {sorted.map((credit, index) => {
+              const isNext = index === 0;
+              const label = credit.expiresAt
+                ? `Expires ${formatRateLimitResetTime(credit.expiresAt)}`
+                : "Expires later";
+              return (
+                <li
+                  key={`${credit.expiresAt ?? "no-expiry"}-${index}`}
+                  className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-border)] bg-background/40 px-2.5 py-1.5 text-xs"
+                >
+                  <span className="text-muted-foreground">
+                    {credit.grantedAt
+                      ? `Granted ${formatRateLimitResetTime(credit.grantedAt)}`
+                      : "Available"}
+                  </span>
+                  <span className={isNext ? "font-medium text-foreground" : "text-foreground"}>
+                    {label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
