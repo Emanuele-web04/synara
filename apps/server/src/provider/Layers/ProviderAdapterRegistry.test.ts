@@ -13,6 +13,10 @@ import { GrokAdapter, GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { KiloAdapter, KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter, PiAdapterShape } from "../Services/PiAdapter.ts";
+import {
+  AntigravityAdapter,
+  AntigravityAdapterShape,
+} from "../Services/AntigravityAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
@@ -171,6 +175,23 @@ const fakePiAdapter: PiAdapterShape = {
   streamEvents: Stream.empty,
 };
 
+const fakeAntigravityAdapter: AntigravityAdapterShape = {
+  provider: "antigravity",
+  capabilities: { sessionModelSwitch: "restart-session" },
+  startSession: vi.fn(),
+  sendTurn: vi.fn(),
+  interruptTurn: vi.fn(),
+  respondToRequest: vi.fn(),
+  respondToUserInput: vi.fn(),
+  stopSession: vi.fn(),
+  listSessions: vi.fn(),
+  hasSession: vi.fn(),
+  readThread: vi.fn(),
+  rollbackThread: vi.fn(),
+  stopAll: vi.fn(),
+  streamEvents: Stream.empty,
+};
+
 const layer = it.layer(
   Layer.mergeAll(
     Layer.provide(
@@ -180,6 +201,7 @@ const layer = it.layer(
         Layer.succeed(ClaudeAdapter, fakeClaudeAdapter),
         Layer.succeed(CursorAdapter, fakeCursorAdapter),
         Layer.succeed(GeminiAdapter, fakeGeminiAdapter),
+        Layer.succeed(AntigravityAdapter, fakeAntigravityAdapter),
         Layer.succeed(GrokAdapter, fakeGrokAdapter),
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(KiloAdapter, fakeKiloAdapter),
@@ -199,6 +221,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const claude = yield* registry.getByProvider("claudeAgent");
       const cursor = yield* registry.getByProvider("cursor");
       const gemini = yield* registry.getByProvider("gemini");
+      const antigravity = yield* registry.getByProvider("antigravity");
       const grok = yield* registry.getByProvider("grok");
       const droid = yield* registry.getByProvider("droid");
       const kilo = yield* registry.getByProvider("kilo");
@@ -208,6 +231,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
       assert.equal(claude, fakeClaudeAdapter);
       assert.equal(cursor, fakeCursorAdapter);
       assert.equal(gemini, fakeGeminiAdapter);
+      assert.equal(antigravity, fakeAntigravityAdapter);
       assert.equal(grok, fakeGrokAdapter);
       assert.equal(droid, fakeDroidAdapter);
       assert.equal(kilo, fakeKiloAdapter);
@@ -220,6 +244,7 @@ layer("ProviderAdapterRegistryLive", (it) => {
         "claudeAgent",
         "cursor",
         "gemini",
+        "antigravity",
         "grok",
         "droid",
         "kilo",

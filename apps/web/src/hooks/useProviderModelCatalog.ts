@@ -83,6 +83,14 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "gemini",
     }),
   );
+  const antigravityModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "antigravity",
+      binaryPath: settings.antigravityBinaryPath || null,
+      cwd: discoveryCwd,
+      enabled: selectedProvider === "antigravity" || discoveryEnabled,
+    }),
+  );
   const grokDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "grok",
@@ -204,6 +212,12 @@ export function useProviderModelCatalog(input: {
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
+  const antigravityModelDiscoveryPending =
+    !(
+      antigravityModelsQuery.data?.source === "antigravity.cli" &&
+      (antigravityModelsQuery.data.models.length ?? 0) > 0
+    ) &&
+    (antigravityModelsQuery.isLoading || antigravityModelsQuery.isFetching);
 
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
@@ -222,6 +236,11 @@ export function useProviderModelCatalog(input: {
         "gemini",
         customModelsByProvider.gemini,
         modelHintByProvider?.gemini,
+      ),
+      antigravity: getAppModelOptions(
+        "antigravity",
+        customModelsByProvider.antigravity,
+        modelHintByProvider?.antigravity,
       ),
       grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
       droid: getAppModelOptions("droid", customModelsByProvider.droid, modelHintByProvider?.droid),
@@ -246,6 +265,7 @@ export function useProviderModelCatalog(input: {
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
+      antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
@@ -258,6 +278,7 @@ export function useProviderModelCatalog(input: {
       "codex",
       "cursor",
       "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
@@ -277,6 +298,7 @@ export function useProviderModelCatalog(input: {
     return result;
   }, [
     claudeDynamicModelsQuery.data,
+    antigravityModelsQuery.data,
     codexDynamicModelsQuery.data,
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
@@ -292,6 +314,7 @@ export function useProviderModelCatalog(input: {
 
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
     () => ({
+      antigravity: antigravityModelDiscoveryPending,
       cursor: cursorModelDiscoveryPending,
       droid: droidModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
@@ -299,6 +322,7 @@ export function useProviderModelCatalog(input: {
       pi: piModelDiscoveryPending,
     }),
     [
+      antigravityModelDiscoveryPending,
       cursorModelDiscoveryPending,
       droidModelDiscoveryPending,
       kiloModelDiscoveryPending,
@@ -315,6 +339,7 @@ export function useProviderModelCatalog(input: {
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
+      antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
@@ -323,6 +348,7 @@ export function useProviderModelCatalog(input: {
     }),
     [
       claudeDynamicModelsQuery.data?.models,
+      antigravityModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,

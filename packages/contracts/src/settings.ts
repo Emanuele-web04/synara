@@ -36,6 +36,12 @@ export const GeminiServerProviderSettings = Schema.Struct({
 });
 export type GeminiServerProviderSettings = typeof GeminiServerProviderSettings.Type;
 
+export const AntigravityServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "agy")),
+});
+export type AntigravityServerProviderSettings = typeof AntigravityServerProviderSettings.Type;
+
 export const GrokServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "grok")),
@@ -106,6 +112,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    antigravity: AntigravityServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -157,6 +164,7 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      antigravity: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       droid: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(

@@ -122,6 +122,11 @@ export const GeminiModelOptions = Schema.Struct({
 });
 export type GeminiModelOptions = typeof GeminiModelOptions.Type;
 
+export const AntigravityModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+});
+export type AntigravityModelOptions = typeof AntigravityModelOptions.Type;
+
 export const OpenCodeModelOptions = Schema.Struct({
   variant: Schema.optional(TrimmedNonEmptyString),
   agent: Schema.optional(TrimmedNonEmptyString),
@@ -156,6 +161,7 @@ export const ProviderModelOptions = Schema.Struct({
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
@@ -628,6 +634,70 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GEMINI_2_5_CAPABILITIES,
     },
   ],
+  antigravity: [
+    {
+      slug: "Gemini 3.5 Flash",
+      name: "Gemini 3.5 Flash",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "high", label: "High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "Gemini 3.1 Pro",
+      name: "Gemini 3.1 Pro",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low", isDefault: true },
+          { value: "high", label: "High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "Claude Sonnet 4.6",
+      name: "Claude Sonnet 4.6",
+      capabilities: {
+        reasoningEffortLevels: [{ value: "thinking", label: "Thinking", isDefault: true }],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "Claude Opus 4.6",
+      name: "Claude Opus 4.6",
+      capabilities: {
+        reasoningEffortLevels: [{ value: "thinking", label: "Thinking", isDefault: true }],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "GPT-OSS 120B",
+      name: "GPT-OSS 120B",
+      capabilities: {
+        reasoningEffortLevels: [{ value: "medium", label: "Medium", isDefault: true }],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   grok: [
     {
       slug: "grok-build-0.1",
@@ -920,6 +990,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   gemini: "auto-gemini-3",
+  antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
@@ -991,6 +1062,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  antigravity: {},
   droid: {
     droid: "claude-opus-4-8",
     factory: "claude-opus-4-8",
@@ -1077,6 +1149,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   gemini: "Gemini",
+  antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",
   kilo: "Kilo",

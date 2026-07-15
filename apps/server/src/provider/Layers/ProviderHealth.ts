@@ -111,6 +111,7 @@ const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
+const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
 const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
@@ -124,6 +125,7 @@ const PROVIDERS = [
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
+  ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
   DROID_PROVIDER,
   KILO_PROVIDER,
@@ -621,6 +623,9 @@ const runProviderCommand = (
       shell: prepared.shell,
       ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       env,
+      // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
+      // such as Antigravity waiting even after a read-only subcommand has finished.
+      stdin: "ignore",
     });
 
     const child = yield* spawner.spawn(command);
@@ -786,6 +791,15 @@ function cursorModelsOutputHasNoModels(output: string): boolean {
 }
 
 const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
@@ -1614,6 +1628,83 @@ export const checkPiProviderStatus = (
     } satisfies ServerProviderStatus;
   });
 
+// ── Antigravity CLI health check ──────────────────────────────────
+
+export const checkAntigravityProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "agy";
+    const versionProbe = yield* runAntigravityCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+    if (Result.isFailure(versionProbe)) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        status: "unavailable",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: isCommandMissingCause(versionProbe.failure)
+          ? "Antigravity CLI (`agy`) is not installed or is not on PATH."
+          : `Antigravity CLI health check failed: ${String(versionProbe.failure)}`,
+      } satisfies ServerProviderStatus;
+    }
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt,
+        message: "Antigravity CLI version check timed out.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        status: "unavailable",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: detailFromResult(version) ?? "Antigravity CLI version check failed.",
+      } satisfies ServerProviderStatus;
+    }
+    const models = yield* runAntigravityCommand(["models"], executable).pipe(
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
+      Effect.result,
+    );
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    if (
+      Result.isSuccess(models) &&
+      Option.isSome(models.success) &&
+      models.success.value.code === 0 &&
+      models.success.value.stdout.trim().length > 0
+    ) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: parsedVersion,
+        checkedAt,
+        message: "Antigravity CLI is installed, authenticated, and returned available models.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: ANTIGRAVITY_PROVIDER,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      version: parsedVersion,
+      checkedAt,
+      message: "Antigravity CLI is installed, but Synara could not verify login by listing models.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const makeCheckCursorProviderStatus = (
@@ -1902,7 +1993,7 @@ export function isProviderEnabledForSettings(
   provider: ProviderKind,
   settings: ServerSettings,
 ): boolean {
-  return settings.providers[provider].enabled !== false;
+  return settings.providers[provider]?.enabled !== false && settings.providers[provider] !== undefined;
 }
 
 export function makeDisabledProviderStatus(
@@ -2079,6 +2170,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.cursor.binaryPath;
         case "gemini":
           return settings.providers.gemini.binaryPath;
+        case "antigravity":
+          return settings.providers.antigravity.binaryPath;
         case "grok":
           return settings.providers.grok.binaryPath;
         case "droid":
@@ -2273,6 +2366,11 @@ export const ProviderHealthLive = Layer.effect(
                 settings,
                 GEMINI_PROVIDER,
                 makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                ANTIGRAVITY_PROVIDER,
+                checkAntigravityProviderStatus(settings.providers.antigravity.binaryPath),
               ),
               checkProviderWhenEnabled(
                 settings,

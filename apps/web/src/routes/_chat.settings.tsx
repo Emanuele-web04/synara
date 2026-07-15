@@ -226,6 +226,7 @@ const PROVIDER_SELECT_OPTIONS = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "antigravity",
   "grok",
   "droid",
   "opencode",
@@ -291,6 +292,7 @@ type InstallBinarySettingsKey =
   | "codexBinaryPath"
   | "cursorBinaryPath"
   | "geminiBinaryPath"
+  | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
   | "kiloBinaryPath"
@@ -330,6 +332,7 @@ const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title
   { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
   { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
+  { provider: "antigravity", title: PROVIDER_DISPLAY_NAMES.antigravity },
   { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
   { provider: "droid", title: PROVIDER_DISPLAY_NAMES.droid },
   { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
@@ -472,6 +475,22 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to use <code>gemini</code> from your PATH.
+      </>
+    ),
+  },
+  {
+    provider: "antigravity",
+    title: "Antigravity",
+    docs: [
+      { label: "Install", href: "https://antigravity.google/docs/cli-using" },
+      { label: "Reference", href: "https://antigravity.google/docs/cli-reference" },
+      { label: "Hooks", href: "https://antigravity.google/docs/hooks" },
+    ],
+    binaryPathKey: "antigravityBinaryPath",
+    binaryPlaceholder: "Antigravity CLI binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>agy</code> from your PATH.
       </>
     ),
   },
@@ -737,6 +756,7 @@ function SettingsRouteView() {
     claudeAgent: Boolean(settings.claudeBinaryPath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
+    antigravity: Boolean(settings.antigravityBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
     droid: Boolean(settings.droidBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
@@ -760,6 +780,7 @@ function SettingsRouteView() {
     claudeAgent: "",
     cursor: "",
     gemini: "",
+    antigravity: "",
     grok: "",
     droid: "",
     kilo: "",
@@ -839,6 +860,7 @@ function SettingsRouteView() {
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
   const geminiBinaryPath = settings.geminiBinaryPath;
+  const antigravityBinaryPath = settings.antigravityBinaryPath;
   const grokBinaryPath = settings.grokBinaryPath;
   const droidBinaryPath = settings.droidBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
@@ -1032,6 +1054,7 @@ function SettingsRouteView() {
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
+    settings.antigravityBinaryPath !== defaults.antigravityBinaryPath ||
     settings.grokBinaryPath !== defaults.grokBinaryPath ||
     settings.droidBinaryPath !== defaults.droidBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
@@ -1100,6 +1123,7 @@ function SettingsRouteView() {
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
+    settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
     settings.customDroidModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
@@ -1287,6 +1311,7 @@ function SettingsRouteView() {
       claudeAgent: false,
       cursor: false,
       gemini: false,
+      antigravity: false,
       grok: false,
       droid: false,
       kilo: false,
@@ -1299,6 +1324,7 @@ function SettingsRouteView() {
       claudeAgent: "",
       cursor: "",
       gemini: "",
+      antigravity: "",
       grok: "",
       droid: "",
       kilo: "",
@@ -2745,6 +2771,7 @@ function SettingsRouteView() {
                     customClaudeModels: defaults.customClaudeModels,
                     customCursorModels: defaults.customCursorModels,
                     customGeminiModels: defaults.customGeminiModels,
+                    customAntigravityModels: defaults.customAntigravityModels,
                     customGrokModels: defaults.customGrokModels,
                     customKiloModels: defaults.customKiloModels,
                     customOpenCodeModels: defaults.customOpenCodeModels,
@@ -2767,6 +2794,7 @@ function SettingsRouteView() {
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
                     value !== "gemini" &&
+                    value !== "antigravity" &&
                     value !== "grok" &&
                     value !== "droid" &&
                     value !== "kilo" &&
@@ -3049,6 +3077,7 @@ function SettingsRouteView() {
                     cursorBinaryPath: defaults.cursorBinaryPath,
                     cursorApiEndpoint: defaults.cursorApiEndpoint,
                     geminiBinaryPath: defaults.geminiBinaryPath,
+                    antigravityBinaryPath: defaults.antigravityBinaryPath,
                     grokBinaryPath: defaults.grokBinaryPath,
                     droidBinaryPath: defaults.droidBinaryPath,
                     kiloBinaryPath: defaults.kiloBinaryPath,
@@ -3066,6 +3095,7 @@ function SettingsRouteView() {
                     claudeAgent: false,
                     cursor: false,
                     gemini: false,
+                    antigravity: false,
                     grok: false,
                     droid: false,
                     kilo: false,
@@ -3092,23 +3122,25 @@ function SettingsRouteView() {
                           settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
                         : providerSettings.provider === "gemini"
                           ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                          : providerSettings.provider === "grok"
-                            ? settings.grokBinaryPath !== defaults.grokBinaryPath
-                            : providerSettings.provider === "droid"
-                              ? settings.droidBinaryPath !== defaults.droidBinaryPath
-                              : providerSettings.provider === "kilo"
-                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                  settings.kiloServerPassword !== defaults.kiloServerPassword
-                                : providerSettings.provider === "pi"
-                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                    settings.piAgentDir !== defaults.piAgentDir
-                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                    settings.openCodeExperimentalWebSockets !==
-                                      defaults.openCodeExperimentalWebSockets ||
-                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                    settings.openCodeServerPassword !==
-                                      defaults.openCodeServerPassword;
+                          : providerSettings.provider === "antigravity"
+                            ? settings.antigravityBinaryPath !== defaults.antigravityBinaryPath
+                            : providerSettings.provider === "grok"
+                              ? settings.grokBinaryPath !== defaults.grokBinaryPath
+                              : providerSettings.provider === "droid"
+                                ? settings.droidBinaryPath !== defaults.droidBinaryPath
+                                : providerSettings.provider === "kilo"
+                                  ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                    settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                    settings.kiloServerPassword !== defaults.kiloServerPassword
+                                  : providerSettings.provider === "pi"
+                                    ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                      settings.piAgentDir !== defaults.piAgentDir
+                                    : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                      settings.openCodeExperimentalWebSockets !==
+                                        defaults.openCodeExperimentalWebSockets ||
+                                      settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                      settings.openCodeServerPassword !==
+                                        defaults.openCodeServerPassword;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
@@ -3116,17 +3148,19 @@ function SettingsRouteView() {
                       ? cursorBinaryPath
                       : providerSettings.binaryPathKey === "geminiBinaryPath"
                         ? geminiBinaryPath
-                        : providerSettings.binaryPathKey === "grokBinaryPath"
-                          ? grokBinaryPath
-                          : providerSettings.binaryPathKey === "droidBinaryPath"
-                            ? droidBinaryPath
-                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                              ? kiloBinaryPath
-                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                                ? openCodeBinaryPath
-                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                  ? piBinaryPath
-                                  : codexBinaryPath;
+                        : providerSettings.binaryPathKey === "antigravityBinaryPath"
+                          ? antigravityBinaryPath
+                          : providerSettings.binaryPathKey === "grokBinaryPath"
+                            ? grokBinaryPath
+                            : providerSettings.binaryPathKey === "droidBinaryPath"
+                              ? droidBinaryPath
+                              : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                ? kiloBinaryPath
+                                : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                  ? openCodeBinaryPath
+                                  : providerSettings.binaryPathKey === "piBinaryPath"
+                                    ? piBinaryPath
+                                    : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
                 const showProviderUpdateStatus = providerStatus
                   ? shouldShowProviderUpdateStatus({
@@ -3281,19 +3315,23 @@ function SettingsRouteView() {
                                         ? { cursorBinaryPath: nextValue }
                                         : providerSettings.binaryPathKey === "geminiBinaryPath"
                                           ? { geminiBinaryPath: nextValue }
-                                          : providerSettings.binaryPathKey === "grokBinaryPath"
-                                            ? { grokBinaryPath: nextValue }
-                                            : providerSettings.binaryPathKey === "droidBinaryPath"
-                                              ? { droidBinaryPath: nextValue }
-                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                                ? { kiloBinaryPath: nextValue }
+                                          : providerSettings.binaryPathKey ===
+                                              "antigravityBinaryPath"
+                                            ? { antigravityBinaryPath: nextValue }
+                                            : providerSettings.binaryPathKey === "grokBinaryPath"
+                                              ? { grokBinaryPath: nextValue }
+                                              : providerSettings.binaryPathKey === "droidBinaryPath"
+                                                ? { droidBinaryPath: nextValue }
                                                 : providerSettings.binaryPathKey ===
-                                                    "openCodeBinaryPath"
-                                                  ? { openCodeBinaryPath: nextValue }
+                                                    "kiloBinaryPath"
+                                                  ? { kiloBinaryPath: nextValue }
                                                   : providerSettings.binaryPathKey ===
-                                                      "piBinaryPath"
-                                                    ? { piBinaryPath: nextValue }
-                                                    : { codexBinaryPath: nextValue },
+                                                      "openCodeBinaryPath"
+                                                    ? { openCodeBinaryPath: nextValue }
+                                                    : providerSettings.binaryPathKey ===
+                                                        "piBinaryPath"
+                                                      ? { piBinaryPath: nextValue }
+                                                      : { codexBinaryPath: nextValue },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}

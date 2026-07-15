@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildModelSelection,
+  buildNextProviderOptions,
   buildProviderOptionPatch,
   formatProviderModelOptionName,
   groupProviderModelOptions,
@@ -16,6 +18,21 @@ import {
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
+
+describe("Antigravity model options", () => {
+  it("keeps the base model and effort as separate selection fields", () => {
+    const options = buildNextProviderOptions("antigravity", undefined, {
+      reasoningEffort: "high",
+    });
+
+    expect(options).toEqual({ reasoningEffort: "high" });
+    expect(buildModelSelection("antigravity", "Gemini 3.5 Flash", options)).toEqual({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+  });
+});
 
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {

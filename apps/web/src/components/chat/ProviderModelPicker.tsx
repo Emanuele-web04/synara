@@ -110,9 +110,14 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" || provider === "gemini" || provider === "pi"
-    ? "text-foreground"
-    : fallbackClassName;
+  return (
+    provider === "claudeAgent" ||
+    provider === "gemini" ||
+    provider === "antigravity" ||
+    provider === "pi"
+      ? "text-foreground"
+      : fallbackClassName
+  );
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;

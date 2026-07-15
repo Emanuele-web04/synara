@@ -1305,6 +1305,75 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects narrated Antigravity planner steps as completed reasoning", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const detail = "I will inspect the current working directory before continuing.";
+    const baseEvent = {
+      provider: "antigravity" as const,
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-antigravity-reasoning"),
+      itemId: asItemId("antigravity-reasoning-1"),
+    };
+
+    harness.emit({
+      ...baseEvent,
+      type: "item.started",
+      eventId: asEventId("evt-antigravity-reasoning-started"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Reasoning",
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "content.delta",
+      eventId: asEventId("evt-antigravity-reasoning-delta"),
+      payload: {
+        streamKind: "reasoning_text",
+        delta: detail,
+      },
+    });
+    harness.emit({
+      ...baseEvent,
+      type: "item.completed",
+      eventId: asEventId("evt-antigravity-reasoning-completed"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Reasoning",
+        detail,
+      },
+    });
+
+    const stableActivityId =
+      "provider-reasoning:thread-1:antigravity-reasoning-1";
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    );
+
+    expect(
+      thread.activities.filter(
+        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "task.progress",
+        tone: "tool",
+        summary: "Reasoning trace",
+        payload: expect.objectContaining({
+          status: "completed",
+          detail,
+          data: { toolCallId: "antigravity-reasoning-1" },
+        }),
+      }),
+    ]);
+  });
+
   it("buffers Codex summary deltas into one completed reasoning activity", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1595,7 +1664,7 @@ describe("ProviderRuntimeIngestion", () => {
     ).toHaveLength(0);
   });
 
-  it("does not project non-Codex or unidentified reasoning lifecycle rows", async () => {
+  it("does not project unsupported or unidentified reasoning lifecycle rows", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 

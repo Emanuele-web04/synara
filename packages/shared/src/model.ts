@@ -3,6 +3,7 @@ import {
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  type AntigravityModelOptions,
   type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
@@ -32,6 +33,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  antigravity: new Set(MODEL_OPTIONS_BY_PROVIDER.antigravity.map((option) => option.slug)),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
@@ -880,6 +882,21 @@ export function normalizeGrokModelOptions(
     return undefined;
   }
   return { reasoningEffort: reasoningEffort as GrokReasoningEffort };
+}
+
+export function normalizeAntigravityModelOptions(
+  model: string | null | undefined,
+  modelOptions: AntigravityModelOptions | null | undefined,
+): AntigravityModelOptions | undefined {
+  const caps = getModelCapabilities("antigravity", model);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(caps)) {
+    return undefined;
+  }
+  return { reasoningEffort };
 }
 
 export function normalizeDroidModelOptions(

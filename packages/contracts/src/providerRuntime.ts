@@ -27,6 +27,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "gemini.acp.message",
   "gemini.acp.stdout",
   "gemini.acp.stderr",
+  "antigravity.cli.event",
   "acp.jsonrpc",
   "acp.cursor.extension",
   "kilo.sdk.event",

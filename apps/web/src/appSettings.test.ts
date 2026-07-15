@@ -183,6 +183,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          antigravity: [],
           grok: [],
           droid: [],
           kilo: [],
@@ -203,6 +204,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          antigravity: [],
           grok: [],
           droid: [],
           kilo: [],
@@ -223,6 +225,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          antigravity: [],
           grok: [],
           droid: [],
           kilo: [],
@@ -243,6 +246,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          antigravity: [],
           grok: [],
           droid: [],
           kilo: [],
@@ -263,6 +267,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          antigravity: [],
           grok: [],
           droid: [],
           kilo: [],
@@ -508,6 +513,7 @@ describe("provider-indexed custom model settings", () => {
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
+    customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
     customKiloModels: ["kilo/kilo-auto/free"],
@@ -521,6 +527,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
@@ -553,6 +560,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
+      customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
       customKiloModels: ["kilo/default-auto"],
@@ -566,6 +574,9 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "antigravity")).toEqual([
+      "Gemini 3.5 Flash (Experimental)",
+    ]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
@@ -588,6 +599,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for gemini", () => {
     expect(patchCustomModels("gemini", ["gemini/custom-flash"])).toEqual({
       customGeminiModels: ["gemini/custom-flash"],
+    });
+  });
+
+  it("patches custom models for Antigravity", () => {
+    expect(patchCustomModels("antigravity", ["Gemini 3.5 Flash (Experimental)"])).toEqual({
+      customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     });
   });
 
@@ -633,6 +650,7 @@ describe("provider-indexed custom model settings", () => {
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
+      antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
       kilo: ["kilo/kilo-auto/free"],
@@ -656,6 +674,11 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
+    expect(
+      modelOptionsByProvider.antigravity.some(
+        (option) => option.slug === "Gemini 3.5 Flash (Experimental)",
+      ),
+    ).toBe(true);
     expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok/custom-fast")).toBe(
       true,
     );
@@ -676,6 +699,11 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customAntigravityModels: [
+        " Gemini 3.5 Flash ",
+        "Gemini 3.5 Flash (Experimental)",
+        "Gemini 3.5 Flash (Experimental)",
+      ],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
@@ -713,6 +741,11 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.gemini.some((option) => option.slug === "auto-gemini-3")).toBe(
       true,
     );
+    expect(
+      modelOptionsByProvider.antigravity.filter(
+        (option) => option.slug === "Gemini 3.5 Flash (Experimental)",
+      ),
+    ).toHaveLength(1);
     expect(
       modelOptionsByProvider.grok.filter((option) => option.slug === "grok/custom-fast"),
     ).toHaveLength(1);

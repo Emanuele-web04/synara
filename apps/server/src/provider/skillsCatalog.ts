@@ -437,6 +437,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   claudeAgent: ["claude"],
   cursor: ["cursor", "agents", "claude", "codex"],
   gemini: ["agents", "gemini"],
+  antigravity: ["agents"],
   grok: ["grok", "claude", "agents"],
   droid: ["factory", "agents", "claude", "codex"],
   kilo: ["kilo", "agents", "claude"],

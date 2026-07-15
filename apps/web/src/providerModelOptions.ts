@@ -5,6 +5,8 @@ import {
   normalizeModelSlug,
 } from "@synara/shared/model";
 import type {
+  AntigravityModelOptions,
+  AntigravityModelSelection,
   ClaudeModelOptions,
   ClaudeModelSelection,
   CodexModelOptions,
@@ -300,6 +302,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as GeminiModelOptions;
   }
+  if (provider === "antigravity") {
+    return {
+      ...(modelOptions as AntigravityModelOptions | undefined),
+      ...patch,
+    } as AntigravityModelOptions;
+  }
   if (provider === "grok") {
     return {
       ...(modelOptions as GrokModelOptions | undefined),
@@ -360,6 +368,11 @@ export function buildModelSelection(
   options?: GeminiModelOptions | null | undefined,
 ): GeminiModelSelection;
 export function buildModelSelection(
+  provider: "antigravity",
+  model: string,
+  options?: AntigravityModelOptions | null | undefined,
+): AntigravityModelSelection;
+export function buildModelSelection(
   provider: "grok",
   model: string,
   options?: GrokModelOptions | null | undefined,
@@ -395,6 +408,14 @@ export function buildModelSelection(
   options?: ProviderOptions | null | undefined,
 ): ModelSelection {
   switch (provider) {
+    case "antigravity":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as AntigravityModelOptions,
+          }
+        : { provider, model };
     case "codex":
       return options
         ? {

@@ -1,5 +1,6 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
 import {
+  AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
   CursorModelOptions,
@@ -54,6 +55,7 @@ export const ProviderKind = Schema.Literals([
   "claudeAgent",
   "cursor",
   "gemini",
+  "antigravity",
   "grok",
   "droid",
   "kilo",
@@ -104,6 +106,13 @@ export const GeminiModelSelection = Schema.Struct({
 });
 export type GeminiModelSelection = typeof GeminiModelSelection.Type;
 
+export const AntigravityModelSelection = Schema.Struct({
+  provider: Schema.Literal("antigravity"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(AntigravityModelOptions),
+});
+export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
+
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
   model: TrimmedNonEmptyString,
@@ -144,6 +153,7 @@ export const ModelSelection = Schema.Union([
   ClaudeModelSelection,
   CursorModelSelection,
   GeminiModelSelection,
+  AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
   KiloModelSelection,
@@ -164,6 +174,10 @@ export const ClaudeProviderStartOptions = Schema.Struct({
 });
 
 export const GeminiProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
+export const AntigravityProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
@@ -203,6 +217,7 @@ export const ProviderStartOptions = Schema.Struct({
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   gemini: Schema.optional(GeminiProviderStartOptions),
+  antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
   kilo: Schema.optional(KiloProviderStartOptions),

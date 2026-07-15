@@ -90,6 +90,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "antigravity",
   "grok",
   "droid",
   "kilo",
@@ -398,6 +399,9 @@ export function PluginLibrary() {
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const antigravityCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("antigravity"),
+  );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
@@ -421,6 +425,10 @@ export function PluginLibrary() {
       gemini: {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
+      },
+      antigravity: {
+        plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
       },
       grok: {
         plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),

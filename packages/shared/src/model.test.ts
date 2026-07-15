@@ -24,6 +24,7 @@ import {
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeGeminiModelOptions,
@@ -818,6 +819,20 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
+  });
+});
+
+describe("normalizeAntigravityModelOptions", () => {
+  it("stores only supported non-default effort overrides", () => {
+    expect(
+      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "medium" }),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "ultra" }),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "high" }),
+    ).toEqual({ reasoningEffort: "high" });
   });
 });
 

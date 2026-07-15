@@ -93,6 +93,7 @@ type CustomModelSettingsKey =
   | "customClaudeModels"
   | "customCursorModels"
   | "customGeminiModels"
+  | "customAntigravityModels"
   | "customGrokModels"
   | "customDroidModels"
   | "customKiloModels"
@@ -113,6 +114,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
@@ -147,6 +149,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -211,6 +214,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -285,6 +289,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Gemini model slugs for the picker and `/model` command.",
     placeholder: "your-gemini-model-slug",
     example: "gemini-3.5-pro-preview",
+  },
+  antigravity: {
+    provider: "antigravity",
+    settingsKey: "customAntigravityModels",
+    defaultSettingsKey: "customAntigravityModels",
+    title: "Antigravity",
+    description: "Save additional Antigravity CLI base model names for the picker.",
+    placeholder: "Model Name",
+    example: "Gemini 4 Pro",
   },
   grok: {
     provider: "grok",
@@ -443,6 +456,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
+    antigravityBinaryPath: normalizeProviderBinaryPathOverride(
+      "antigravity",
+      settings.antigravityBinaryPath,
+    ),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
     droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
@@ -459,6 +476,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
+    customAntigravityModels: normalizeCustomModelSlugs(
+      settings.customAntigravityModels,
+      "antigravity",
+    ),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
     customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
@@ -481,6 +502,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
+    antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -496,6 +518,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
+    customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
@@ -602,6 +625,19 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
+  if (
+    hasOwn(patch, "antigravityBinaryPath") ||
+    hasOwn(patch, "customAntigravityModels")
+  ) {
+    providers.antigravity = {
+      ...(hasOwn(patch, "antigravityBinaryPath")
+        ? { binaryPath: patch.antigravityBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customAntigravityModels")
+        ? { customModels: patch.customAntigravityModels ?? [] }
+        : {}),
+    };
+  }
   if (hasOwn(patch, "grokBinaryPath") || hasOwn(patch, "customGrokModels")) {
     providers.grok = {
       ...(hasOwn(patch, "grokBinaryPath") ? { binaryPath: patch.grokBinaryPath ?? "" } : {}),
@@ -691,6 +727,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "geminiBinaryPath",
+    "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
     "kiloBinaryPath",
@@ -715,6 +752,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customClaudeModels",
     "customCursorModels",
     "customGeminiModels",
+    "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
     "customKiloModels",
@@ -737,14 +775,14 @@ export function getCustomModelsForProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey];
+  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
 }
 
 export function getDefaultCustomModelsForProvider(
   defaults: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey];
+  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey] ?? [];
 }
 
 export function patchCustomModels(
@@ -764,6 +802,7 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
+    antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
@@ -909,6 +948,7 @@ export function getCustomModelOptionsByProvider(
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    antigravity: getAppModelOptions("antigravity", customModelsByProvider.antigravity),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
@@ -926,6 +966,7 @@ export function getProviderStartOptions(
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
@@ -946,6 +987,10 @@ export function getProviderStartOptions(
   const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
+  const antigravityBinaryPath = normalizeProviderBinaryPathOverride(
+    "antigravity",
+    settings.antigravityBinaryPath,
+  );
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
   const droidBinaryPath = normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
@@ -988,6 +1033,13 @@ export function getProviderStartOptions(
       ? {
           gemini: {
             binaryPath: geminiBinaryPath,
+          },
+        }
+      : {}),
+    ...(antigravityBinaryPath
+      ? {
+          antigravity: {
+            binaryPath: antigravityBinaryPath,
           },
         }
       : {}),
@@ -1056,6 +1108,7 @@ export function getCustomBinaryPathForProvider(
     | "codexBinaryPath"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
@@ -1073,6 +1126,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
     case "gemini":
       return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
+    case "antigravity":
+      return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":
       return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
     case "droid":

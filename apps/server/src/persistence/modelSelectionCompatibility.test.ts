@@ -14,6 +14,34 @@ it("preserves canonical Pi model selections", () => {
   });
 });
 
+it("migrates combined Antigravity model and effort labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash (High)",
+    }),
+    {
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    },
+  );
+});
+
+it("infers Antigravity from persisted instance labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Antigravity CLI",
+      model: "Claude Sonnet 4.6 (Thinking)",
+    }),
+    {
+      provider: "antigravity",
+      model: "Claude Sonnet 4.6",
+      options: { reasoningEffort: "thinking" },
+    },
+  );
+});
+
 it("infers Pi from persisted instance labels", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

@@ -89,6 +89,7 @@ const COMPOSER_PROVIDER_KINDS = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "antigravity",
   "grok",
   "droid",
   "kilo",
@@ -97,6 +98,7 @@ const COMPOSER_PROVIDER_KINDS = [
 ] as const satisfies readonly ProviderKind[];
 const isProviderKind = Schema.is(ProviderKind);
 const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
+const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thinking"]);
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
@@ -1289,6 +1291,19 @@ function makeModelSelection(
   options?: ProviderModelOptions[ProviderKind],
 ): ModelSelection {
   switch (provider) {
+    case "antigravity":
+      return {
+        provider,
+        model,
+        ...(options
+          ? {
+              options: options as Extract<
+                ModelSelection,
+                { provider: "antigravity" }
+              >["options"],
+            }
+          : {}),
+      };
     case "codex":
       return {
         provider,
@@ -1387,6 +1402,10 @@ function normalizeProviderModelOptions(
   const geminiCandidate =
     candidate?.gemini && typeof candidate.gemini === "object"
       ? (candidate.gemini as Record<string, unknown>)
+      : null;
+  const antigravityCandidate =
+    candidate?.antigravity && typeof candidate.antigravity === "object"
+      ? (candidate.antigravity as Record<string, unknown>)
       : null;
   const grokCandidate =
     candidate?.grok && typeof candidate.grok === "object"
@@ -1521,6 +1540,13 @@ function normalizeProviderModelOptions(
           ...(geminiThinkingBudget !== undefined ? { thinkingBudget: geminiThinkingBudget } : {}),
         }
       : undefined;
+  const antigravityReasoningEffort = trimStringOrUndefined(
+    antigravityCandidate?.reasoningEffort,
+  );
+  const antigravity =
+    antigravityReasoningEffort !== undefined
+      ? { reasoningEffort: antigravityReasoningEffort }
+      : undefined;
   const grokReasoningEffort: GrokReasoningEffort | undefined = isGrokReasoningEffort(
     grokCandidate?.reasoningEffort,
   )
@@ -1561,7 +1587,18 @@ function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !gemini && !grok && !droid && !kilo && !opencode && !pi) {
+  if (
+    !codex &&
+    !claude &&
+    !cursor &&
+    !gemini &&
+    !antigravity &&
+    !grok &&
+    !droid &&
+    !kilo &&
+    !opencode &&
+    !pi
+  ) {
     return null;
   }
   return {
@@ -1569,6 +1606,7 @@ function normalizeProviderModelOptions(
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
+    ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
     ...(kilo ? { kilo } : {}),
@@ -1595,9 +1633,19 @@ function normalizeModelSelection(
   if (typeof rawModel !== "string") {
     return null;
   }
+  const antigravityLegacyMatch =
+    provider === "antigravity" ? rawModel.trim().match(/^(.*?)\s+\(([^()]+)\)$/u) : null;
+  const antigravityLegacyEffort = antigravityLegacyMatch?.[2]?.trim().toLowerCase();
+  const hasLegacyAntigravityEffort =
+    antigravityLegacyMatch?.[1] !== undefined &&
+    antigravityLegacyEffort !== undefined &&
+    ANTIGRAVITY_REASONING_EFFORT_SET.has(antigravityLegacyEffort);
+  const normalizedRawModel = hasLegacyAntigravityEffort
+    ? antigravityLegacyMatch[1]!.trim()
+    : rawModel;
   const inferredClaudeAutoCompactWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
-  const model = normalizeModelSlug(rawModel, provider);
+  const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;
   }
@@ -1619,20 +1667,28 @@ function normalizeModelSelection(
           : modelOptions?.claudeAgent
         : provider === "gemini"
           ? modelOptions?.gemini
-          : provider === "grok"
-            ? modelOptions?.grok
-            : provider === "droid"
-              ? modelOptions?.droid
-              : provider === "kilo"
-                ? modelOptions?.kilo
-                : provider === "cursor"
-                  ? modelOptions?.cursor
-                  : provider === "opencode"
-                    ? modelOptions?.opencode
-                    : provider === "pi"
-                      ? modelOptions?.pi
-                      : undefined;
-  return makeModelSelection(provider, model, options);
+          : provider === "antigravity"
+            ? modelOptions?.antigravity
+            : provider === "grok"
+              ? modelOptions?.grok
+              : provider === "droid"
+                ? modelOptions?.droid
+                : provider === "kilo"
+                  ? modelOptions?.kilo
+                  : provider === "cursor"
+                    ? modelOptions?.cursor
+                    : provider === "opencode"
+                      ? modelOptions?.opencode
+                      : provider === "pi"
+                        ? modelOptions?.pi
+                        : undefined;
+  const normalizedOptions =
+    provider === "antigravity" && hasLegacyAntigravityEffort
+      ? {
+          reasoningEffort: options?.reasoningEffort ?? antigravityLegacyEffort,
+        }
+      : options;
+  return makeModelSelection(provider, model, normalizedOptions);
 }
 
 function reconcileProviderScopedModelSelection(

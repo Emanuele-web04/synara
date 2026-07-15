@@ -855,6 +855,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
     case "gemini":
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "antigravity":
+      return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":
@@ -2045,6 +2047,7 @@ export default function ChatView({
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
+      antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
@@ -2084,6 +2087,17 @@ export default function ChatView({
       provider: "gemini",
       binaryPath: settings.geminiBinaryPath || null,
       enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+    }),
+  );
+  const antigravityModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "antigravity",
+      binaryPath: settings.antigravityBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled:
+        selectedProvider === "antigravity" ||
+        lockedProvider === "antigravity" ||
+        isModelPickerOpen,
     }),
   );
   const grokDynamicModelsQuery = useQuery(
@@ -2194,6 +2208,12 @@ export default function ChatView({
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
+  const antigravityModelDiscoveryPending =
+    !(
+      antigravityModelsQuery.data?.source === "antigravity.cli" &&
+      (antigravityModelsQuery.data.models.length ?? 0) > 0
+    ) &&
+    (antigravityModelsQuery.isLoading || antigravityModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -2215,6 +2235,11 @@ export default function ChatView({
         "gemini",
         customModelsByProvider.gemini,
         composerModelHintByProvider.gemini,
+      ),
+      antigravity: getAppModelOptions(
+        "antigravity",
+        customModelsByProvider.antigravity,
+        composerModelHintByProvider.antigravity,
       ),
       grok: getAppModelOptions(
         "grok",
@@ -2251,6 +2276,7 @@ export default function ChatView({
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
+      antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
@@ -2263,6 +2289,7 @@ export default function ChatView({
       "codex",
       "cursor",
       "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
@@ -2288,6 +2315,7 @@ export default function ChatView({
     cursorRuntimeModels,
     customModelsByProvider,
     droidDynamicModelsQuery.data,
+    antigravityModelsQuery.data,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
@@ -2308,6 +2336,7 @@ export default function ChatView({
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
+      antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
@@ -2319,6 +2348,7 @@ export default function ChatView({
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
+      antigravityModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
@@ -2331,6 +2361,7 @@ export default function ChatView({
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
+    antigravity: antigravityModelsQuery,
     grok: grokDynamicModelsQuery,
     droid: droidDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
@@ -2395,7 +2426,9 @@ export default function ChatView({
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
-    selectedProvider === "cursor"
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
       : selectedProvider === "droid"
         ? droidModelDiscoveryPending
@@ -2411,12 +2444,15 @@ export default function ChatView({
                     selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "antigravity" ||
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
-    selectedProvider === "cursor"
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
       : selectedProvider === "droid"
         ? droidModelDiscoveryPending
@@ -7794,12 +7830,11 @@ export default function ChatView({
       }
 
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedProviderForSend,
-        selectedModelSelectionForSend.provider === selectedProviderForSend
-          ? selectedModelSelectionForSend.model
-          : selectedModelForSend ||
-              targetProjectDefaultModelSelectionForSend?.model ||
-              DEFAULT_MODEL_BY_PROVIDER.codex,
+        selectedModelSelectionForSend.provider,
+        selectedModelSelectionForSend.model ||
+          selectedModelForSend ||
+          targetProjectDefaultModelSelectionForSend?.model ||
+          DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
 
@@ -8861,6 +8896,7 @@ export default function ChatView({
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
+          antigravity: antigravityModelDiscoveryPending,
           cursor: cursorModelDiscoveryPending,
           droid: droidModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
@@ -8903,6 +8939,7 @@ export default function ChatView({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={{
+        antigravity: antigravityModelDiscoveryPending,
         cursor: cursorModelDiscoveryPending,
         droid: droidModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,

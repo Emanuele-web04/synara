@@ -18,6 +18,7 @@ import {
   hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
@@ -191,6 +192,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
       break;
     }
+    case "antigravity": {
+      const providerOptions = modelOptions?.antigravity;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions);
+      break;
+    }
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
@@ -290,6 +297,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
+  },
+  antigravity: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("antigravity", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("antigravity", input),
   },
   grok: {
     getState: (input) => getProviderStateFromCapabilities(input),

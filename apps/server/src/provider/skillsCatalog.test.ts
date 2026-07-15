@@ -189,8 +189,14 @@ describe("discoverSkillsCatalog", () => {
       synaraBaseDir,
       provider: "gemini",
     });
+    const antigravityView = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "antigravity",
+    });
 
     expect(geminiView.find((skill) => skill.name === "shared")?.scope).toBe("agents");
+    expect(antigravityView.find((skill) => skill.name === "shared")?.scope).toBe("agents");
   });
 
   it("uses provider-native roots before shared aliases for Grok and Pi", async () => {

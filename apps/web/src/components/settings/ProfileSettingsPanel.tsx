@@ -340,6 +340,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Cursor";
     case "gemini":
       return "Gemini";
+    case "antigravity":
+      return "Antigravity";
     case "grok":
       return "Grok";
     case "droid":

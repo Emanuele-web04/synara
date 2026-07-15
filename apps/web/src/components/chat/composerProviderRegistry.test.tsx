@@ -77,6 +77,39 @@ const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
 };
 
 describe("getComposerProviderState", () => {
+  it("dispatches Antigravity effort separately from its base model", () => {
+    const state = getComposerProviderState({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      prompt: "",
+      modelOptions: { antigravity: { reasoningEffort: "high" } },
+    });
+
+    expect(state).toEqual({
+      provider: "antigravity",
+      promptEffort: "high",
+      modelOptionsForDispatch: { reasoningEffort: "high" },
+    });
+    expect(
+      getComposerTraitSelection(
+        "antigravity",
+        "Gemini 3.5 Flash",
+        "",
+        { reasoningEffort: "high" },
+      ).effortLevels.map((effort) => effort.value),
+    ).toEqual(["low", "medium", "high"]);
+    expect(
+      renderProviderTraitsPicker({
+        provider: "antigravity",
+        threadId: ThreadId.makeUnsafe("thread-antigravity-effort"),
+        model: "Gemini 3.5 Flash",
+        modelOptions: { reasoningEffort: "high" },
+        prompt: "",
+        onPromptChange: vi.fn(),
+      }),
+    ).not.toBeNull();
+  });
+
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
       provider: "codex",

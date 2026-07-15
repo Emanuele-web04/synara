@@ -18,6 +18,7 @@ import {
 } from "../providerStatusCache";
 import {
   checkClaudeProviderStatus,
+  checkAntigravityProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
   checkGrokProviderStatus,
@@ -116,6 +117,7 @@ const allProvidersDisabledSettings = {
     claudeAgent: { enabled: false },
     cursor: { enabled: false },
     gemini: { enabled: false },
+    antigravity: { enabled: false },
     grok: { enabled: false },
     droid: { enabled: false },
     kilo: { enabled: false },
@@ -131,6 +133,7 @@ const allProvidersDisabledServerSettings = {
     claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
+    antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
@@ -231,7 +234,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 9);
+      assert.strictEqual(statuses.length, 10);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -366,7 +369,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 9);
+        assert.strictEqual(statuses.length, 10);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -1655,6 +1658,53 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
         );
       }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
+    );
+  });
+
+  describe("checkAntigravityProviderStatus", () => {
+    it.effect("returns ready when Antigravity lists authenticated models", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus();
+        assert.strictEqual(status.provider, "antigravity");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.version, "1.1.2");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "agy");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return {
+                stdout: "Gemini 3.5 Flash (Medium)\nClaude Sonnet 4.6 (Thinking)\n",
+                stderr: "",
+                code: 0,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses the configured Antigravity binary", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/agy");
+            return args.join(" ") === "--version"
+              ? { stdout: "1.1.2\n", stderr: "", code: 0 }
+              : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
+          }),
+        ),
+      ),
     );
   });
 

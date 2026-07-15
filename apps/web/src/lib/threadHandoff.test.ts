@@ -8,96 +8,24 @@ import {
 
 describe("threadHandoff", () => {
   it("lists all supported handoff targets except the active provider", () => {
-    expect(resolveAvailableHandoffTargetProviders("codex")).toEqual([
+    const providers = [
+      "codex",
       "claudeAgent",
       "cursor",
       "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
       "opencode",
       "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual([
-      "codex",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("cursor")).toEqual([
-      "codex",
-      "claudeAgent",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("grok")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("droid")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("kilo")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("opencode")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("pi")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-    ]);
+    ] as const;
+
+    for (const source of providers) {
+      expect(resolveAvailableHandoffTargetProviders(source)).toEqual(
+        providers.filter((provider) => provider !== source),
+      );
+    }
   });
 
   it("preserves the source thread title for the created handoff thread", () => {

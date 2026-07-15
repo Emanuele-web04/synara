@@ -68,6 +68,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  antigravity: Gemini,
   grok: GrokIcon,
   droid: DroidIcon,
   kilo: KiloIcon,

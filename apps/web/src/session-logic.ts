@@ -52,6 +52,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "claudeAgent", label: "Claude", available: true },
   { value: "cursor", label: "Cursor", available: true },
   { value: "gemini", label: "Gemini", available: true },
+  { value: "antigravity", label: "Antigravity", available: true },
   { value: "grok", label: "Grok", available: true },
   { value: "droid", label: "Droid", available: true },
   { value: "kilo", label: "Kilo", available: true },

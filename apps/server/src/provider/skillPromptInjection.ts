@@ -33,6 +33,8 @@ function pathSegments(path: string): Set<string> {
 export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: string): boolean {
   const segments = pathSegments(skillPath);
   switch (provider) {
+    case "antigravity":
+      return true;
     case "codex":
       // Codex injects structured skill items only from roots it knows: its own
       // folders plus `~/.synara/skills`, which Synara registers at session start
