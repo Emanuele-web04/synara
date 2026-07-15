@@ -347,9 +347,10 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
             headers: codexApiHeaders(auth),
           });
           if (creditsResult.ok) {
-            const supplemental = parseResetCredits(
-              (asRecord(creditsResult.json) ?? {})?.rate_limit_reset_credits,
-            );
+            // The dedicated endpoint returns a flat object:
+            // { available_count, total_earned_count, credits: [{ status, expires_at, granted_at }] }
+            // NOT nested under rate_limit_reset_credits.
+            const supplemental = parseResetCredits(creditsResult.json);
             if (supplemental && supplemental.nextExpiresAt) {
               return {
                 ...snapshot,
