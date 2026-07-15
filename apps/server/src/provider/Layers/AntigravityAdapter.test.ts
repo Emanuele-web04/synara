@@ -1,9 +1,16 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  buildAntigravityHookConfig,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
+  readCompleteAntigravityLines,
   resolveAntigravityCliModelLabel,
+  runAntigravityHelperProcess,
 } from "./AntigravityAdapter";
 
 describe("Antigravity CLI model translation", () => {
@@ -98,5 +105,59 @@ Claude Sonnet 5 (Thinking)
         defaultReasoningEffort: "thinking",
       },
     ]);
+  });
+
+  it("dispatches a discovered model with its discovered default effort", () => {
+    expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
+      "Gemini 4 Pro (Low)",
+    );
+  });
+});
+
+describe("Antigravity CLI integration helpers", () => {
+  it("marks every generated hook as a command hook", () => {
+    expect(buildAntigravityHookConfig((event) => `capture ${event}`)).toEqual({
+      "synara-capture": {
+        PreToolUse: [
+          {
+            matcher: "*",
+            hooks: [{ type: "command", command: "capture pre-tool" }],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: "*",
+            hooks: [{ type: "command", command: "capture post-tool" }],
+          },
+        ],
+        PreInvocation: [{ type: "command", command: "capture pre-invocation" }],
+        PostInvocation: [{ type: "command", command: "capture post-invocation" }],
+        Stop: [{ type: "command", command: "capture stop" }],
+      },
+    });
+  });
+
+  it("advances file offsets only past complete JSONL records", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-test-"));
+    const file = path.join(directory, "events.ndjson");
+    try {
+      await fs.writeFile(file, '{"first":true}\n{"second"');
+      const first = await readCompleteAntigravityLines(file, 0);
+      expect(first).toEqual({ lines: ['{"first":true}'], nextOffset: 15 });
+
+      await fs.appendFile(file, ":true}\n");
+      const second = await readCompleteAntigravityLines(file, first.nextOffset);
+      expect(second).toEqual({ lines: ['{"second":true}'], nextOffset: 31 });
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("terminates helper processes that exceed their timeout", async () => {
+    await expect(
+      runAntigravityHelperProcess(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
 });

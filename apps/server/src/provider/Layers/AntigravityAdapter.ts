@@ -34,6 +34,9 @@ const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
 const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
+const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
+const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
 
 type TranscriptStep = {
   readonly step_index?: number;
@@ -73,6 +76,8 @@ type AntigravitySessionContext = {
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
+  processedTranscriptBytes: number;
+  processedTranscriptPath?: string | undefined;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
   sawAssistant: boolean;
@@ -138,22 +143,30 @@ process.stdin.on("end", () => {
 `;
 }
 
-function hookConfig(command: (event: string) => string): Record<string, unknown> {
+export function buildAntigravityHookConfig(
+  command: (event: string) => string,
+): Record<string, unknown> {
+  const hook = (event: string) => ({ type: "command", command: command(event) });
   return {
     "synara-capture": {
-      PreToolUse: [{ matcher: "*", hooks: [{ command: command("pre-tool") }] }],
-      PostToolUse: [{ matcher: "*", hooks: [{ command: command("post-tool") }] }],
-      PreInvocation: [{ command: command("pre-invocation") }],
-      PostInvocation: [{ command: command("post-invocation") }],
-      Stop: [{ command: command("stop") }],
+      PreToolUse: [{ matcher: "*", hooks: [hook("pre-tool")] }],
+      PostToolUse: [{ matcher: "*", hooks: [hook("post-tool")] }],
+      PreInvocation: [hook("pre-invocation")],
+      PostInvocation: [hook("post-invocation")],
+      Stop: [hook("stop")],
     },
   };
 }
 
-async function runProcess(
+function appendBoundedOutput(current: string, chunk: unknown): string {
+  const next = current + String(chunk);
+  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+}
+
+export async function runAntigravityHelperProcess(
   command: string,
   args: string[],
-  cwd?: string,
+  options: { cwd?: string; timeoutMs?: number } = {},
 ): Promise<{
   stdout: string;
   stderr: string;
@@ -161,19 +174,65 @@ async function runProcess(
 }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd,
+      cwd: options.cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(() =>
+        reject(
+          new Error(
+            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+          ),
+        ),
+      );
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+    child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
+    child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
+    child.once("error", (cause) => finish(() => reject(cause)));
+    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
   });
+}
+
+export async function readCompleteAntigravityLines(
+  filePath: string,
+  offset: number,
+): Promise<{ lines: string[]; nextOffset: number }> {
+  const file = await fs.open(filePath, "r");
+  try {
+    const stats = await file.stat();
+    const start = offset <= stats.size ? offset : 0;
+    const remaining = stats.size - start;
+    if (remaining === 0) return { lines: [], nextOffset: start };
+    const buffer = Buffer.allocUnsafe(remaining);
+    const { bytesRead } = await file.read(buffer, 0, remaining, start);
+    const contents = buffer.subarray(0, bytesRead);
+    const lastNewline = contents.lastIndexOf(0x0a);
+    if (lastNewline < 0) return { lines: [], nextOffset: start };
+    return {
+      lines: contents
+        .subarray(0, lastNewline + 1)
+        .toString("utf8")
+        .split(/\r?\n/g)
+        .filter(Boolean),
+      nextOffset: start + lastNewline + 1,
+    };
+  } finally {
+    await file.close();
+  }
 }
 
 async function ensureCapturePlugin(binaryPath: string): Promise<void> {
@@ -203,9 +262,13 @@ async function ensureCapturePlugin(binaryPath: string): Promise<void> {
     `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(event)}`;
   await fs.writeFile(
     path.join(pluginDir, "hooks.json"),
-    `${JSON.stringify(hookConfig(command), null, 2)}\n`,
+    `${JSON.stringify(buildAntigravityHookConfig(command), null, 2)}\n`,
   );
-  const installed = await runProcess(binaryPath, ["plugin", "install", pluginDir]);
+  const installed = await runAntigravityHelperProcess(
+    binaryPath,
+    ["plugin", "install", pluginDir],
+    { timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
+  );
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || installed.stdout.trim() || "Plugin install failed.");
   }
@@ -280,12 +343,15 @@ export function parseAntigravityModelLines(output: string): ProviderListModelsRe
 export function resolveAntigravityCliModelLabel(
   model: string,
   options?: AntigravityModelOptions,
+  discoveredDefaultEffort?: string,
 ): string {
   const parsed = parseAntigravityCliModelLabel(model);
   if (!parsed) return model;
   if (parsed.effort) return model.trim();
   const effort =
-    options?.reasoningEffort?.trim().toLowerCase() ?? DEFAULT_EFFORT_BY_MODEL[parsed.model];
+    options?.reasoningEffort?.trim().toLowerCase() ??
+    discoveredDefaultEffort?.trim().toLowerCase() ??
+    DEFAULT_EFFORT_BY_MODEL[parsed.model];
   return effort ? `${parsed.model} (${effortLabel(effort)})` : parsed.model;
 }
 
@@ -325,6 +391,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, AntigravitySessionContext>();
+  const defaultEffortByModel = new Map(Object.entries(DEFAULT_EFFORT_BY_MODEL));
 
   const offer = (event: ProviderRuntimeEvent) => {
     Effect.runPromise(Queue.offer(events, event)).catch(() => undefined);
@@ -473,29 +540,35 @@ const makeAntigravityAdapter = Effect.gen(function* () {
 
   const readTranscript = async (context: AntigravitySessionContext) => {
     if (!context.transcriptPath) return;
-    let text: string;
+    const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
+    if (isInitialRead) context.processedTranscriptBytes = 0;
+    let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
     try {
-      text = await fs.readFile(context.transcriptPath, "utf8");
+      batch = await readCompleteAntigravityLines(
+        context.transcriptPath,
+        context.processedTranscriptBytes,
+      );
     } catch {
       return;
     }
-    const steps = text
-      .split(/\r?\n/g)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          return [JSON.parse(line) as TranscriptStep];
-        } catch {
-          return [];
-        }
-      });
-    const latestUserIndex = steps.reduce(
-      (latest, step) =>
-        step.type === "USER_INPUT" && typeof step.step_index === "number"
-          ? Math.max(latest, step.step_index)
-          : latest,
-      -1,
-    );
+    context.processedTranscriptBytes = batch.nextOffset;
+    context.processedTranscriptPath = context.transcriptPath;
+    const steps = batch.lines.flatMap((line) => {
+      try {
+        return [JSON.parse(line) as TranscriptStep];
+      } catch {
+        return [];
+      }
+    });
+    const latestUserIndex = isInitialRead
+      ? steps.reduce(
+          (latest, step) =>
+            step.type === "USER_INPUT" && typeof step.step_index === "number"
+              ? Math.max(latest, step.step_index)
+              : latest,
+          -1,
+        )
+      : -1;
     for (const step of steps) {
       if (typeof step.step_index === "number" && step.step_index > latestUserIndex) {
         processTranscriptStep(context, step);
@@ -505,33 +578,25 @@ const makeAntigravityAdapter = Effect.gen(function* () {
 
   const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
     if (!context.transcriptPath) return;
-    let text: string;
     try {
-      text = await fs.readFile(context.transcriptPath, "utf8");
+      const batch = await readCompleteAntigravityLines(context.transcriptPath, 0);
+      context.processedTranscriptBytes = batch.nextOffset;
+      context.processedTranscriptPath = context.transcriptPath;
     } catch {
       return;
-    }
-    for (const line of text.split(/\r?\n/g).filter(Boolean)) {
-      try {
-        const step = JSON.parse(line) as TranscriptStep;
-        if (typeof step.step_index === "number") context.processedSteps.add(step.step_index);
-      } catch {
-        // The CLI may be in the middle of appending the final line.
-      }
     }
   };
 
   const pollHookFile = async (context: AntigravitySessionContext) => {
     if (!context.eventFile) return;
-    let text: string;
+    let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
     try {
-      text = await fs.readFile(context.eventFile, "utf8");
+      batch = await readCompleteAntigravityLines(context.eventFile, context.processedHookBytes);
     } catch {
       return;
     }
-    const next = text.slice(context.processedHookBytes);
-    context.processedHookBytes = text.length;
-    for (const line of next.split(/\r?\n/g).filter(Boolean)) {
+    context.processedHookBytes = batch.nextOffset;
+    for (const line of batch.lines) {
       const tab = line.indexOf("\t");
       if (tab < 0) continue;
       const eventName = line.slice(0, tab);
@@ -548,7 +613,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
       const learnedConversation = conversationId && conversationId !== context.conversationId;
       if (conversationId) context.conversationId = conversationId;
-      if (transcriptPath) context.transcriptPath = transcriptPath;
+      if (transcriptPath && transcriptPath !== context.transcriptPath) {
+        context.transcriptPath = transcriptPath;
+        context.processedTranscriptBytes = 0;
+        delete context.processedTranscriptPath;
+      }
       if (modelName) context.modelName = modelName;
       if (learnedConversation) {
         context.session = {
@@ -616,6 +685,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           ? { transcriptPath: transcriptPathForConversation(conversationId) }
           : {}),
         processedHookBytes: 0,
+        processedTranscriptBytes: 0,
         processedSteps: new Set(),
         pendingTools: [],
         sawAssistant: false,
@@ -668,7 +738,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
       const model = modelSelection?.model ?? context.session.model ?? DEFAULT_MODEL;
       const modelOptions = modelSelection?.options ?? context.modelOptions;
-      const cliModel = resolveAntigravityCliModelLabel(model, modelOptions);
+      const cliModel = resolveAntigravityCliModelLabel(
+        model,
+        modelOptions,
+        defaultEffortByModel.get(model),
+      );
       const runDir = yield* Effect.tryPromise({
         try: () => fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-")),
         catch: (cause) =>
@@ -786,7 +860,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           }
           delete context.activeProcess;
           delete context.activeTurnId;
-          const { activeTurnId: _activeTurnId, ...inactiveSession } = context.session;
+          const {
+            activeTurnId: _activeTurnId,
+            lastError: _lastError,
+            ...inactiveSession
+          } = context.session;
           context.session = {
             ...inactiveSession,
             status: failed ? "error" : "ready",
@@ -871,6 +949,8 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         // Antigravity has no rollback cursor; ProviderService will rebuild local context.
         delete context.conversationId;
         delete context.transcriptPath;
+        delete context.processedTranscriptPath;
+        context.processedTranscriptBytes = 0;
         context.processedSteps.clear();
         const { resumeCursor: _resumeCursor, ...sessionWithoutResume } = context.session;
         context.session = sessionWithoutResume;
@@ -881,10 +961,20 @@ const makeAntigravityAdapter = Effect.gen(function* () {
   const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
     Effect.tryPromise({
       try: async () => {
-        const result = await runProcess(trim(input.binaryPath) ?? "agy", ["models"], input.cwd);
+        const result = await runAntigravityHelperProcess(
+          trim(input.binaryPath) ?? "agy",
+          ["models"],
+          { cwd: input.cwd, timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS },
+        );
         if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
+        const models = parseModelLines(result.stdout);
+        for (const model of models) {
+          if (model.defaultReasoningEffort) {
+            defaultEffortByModel.set(model.slug, model.defaultReasoningEffort);
+          }
+        }
         return {
-          models: parseModelLines(result.stdout),
+          models,
           source: "antigravity.cli",
           cached: false,
         } satisfies ProviderListModelsResult;
