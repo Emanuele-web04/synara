@@ -16,10 +16,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { ChevronDownIcon } from "~/lib/icons";
 import { formatRateLimitResetTime } from "~/lib/rateLimits";
 import { consumeCodexResetCreditMutationOptions } from "~/lib/serverReactQuery";
-import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 
 export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
   const credits = snapshot.rateLimitResetCredits;
@@ -34,44 +32,37 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
 
   if (!credits || credits.availableCount <= 0) return null;
 
+  // Build a compact "Expires: Aug 13, Aug 31" string from per-credit expiry times.
+  // When per-credit details are unavailable, fall back to nextExpiresAt.
+  const expiryLabels = (credits.credits ?? [])
+    .filter((c) => c.status === "available" && c.expiresAt)
+    .map((c) => formatRateLimitResetTime(c.expiresAt!));
+  const expiryText =
+    expiryLabels.length > 0
+      ? expiryLabels.join(", ")
+      : credits.nextExpiresAt
+        ? formatRateLimitResetTime(credits.nextExpiresAt)
+        : null;
+
   return (
     <div className="border-t border-[color:var(--color-border)] pt-3">
       <div className="flex items-center justify-between gap-2">
-        <div>
-          <Popover>
-            <PopoverTrigger className="inline-flex items-center gap-1 rounded text-xs font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background">
-              {credits.availableCount === 1
-                ? "1 reset credit available"
-                : `${credits.availableCount} reset credits available`}
-              <ChevronDownIcon className="size-3 text-muted-foreground" aria-hidden="true" />
-            </PopoverTrigger>
-            <PopoverPopup className="w-64 p-3" align="start">
-              <div className="space-y-1">
-                <div className="text-xs text-foreground">
-                  {credits.availableCount === 1
-                    ? "1 reset credit"
-                    : `${credits.availableCount} reset credits`}
-                </div>
-                {credits.nextExpiresAt ? (
-                  <div className="text-[11px] text-muted-foreground">
-                    Expires {formatRateLimitResetTime(credits.nextExpiresAt)}
-                  </div>
-                ) : (
-                  <div className="text-[11px] text-muted-foreground">No expiry available</div>
-                )}
-              </div>
-            </PopoverPopup>
-          </Popover>
-          {credits.nextExpiresAt && (
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-foreground">
+            {credits.availableCount === 1
+              ? "1 reset credit available"
+              : `${credits.availableCount} reset credits available`}
+          </div>
+          {expiryText && (
             <div className="text-[11px] text-muted-foreground">
-              Expires {formatRateLimitResetTime(credits.nextExpiresAt)}
+              count: {credits.availableCount}, Expires: {expiryText}
             </div>
           )}
         </div>
 
         <button
           type="button"
-          className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-transparent px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-transparent px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
           onClick={() => setConfirmOpen(true)}
         >
           {mutation.isPending ? "Using reset…" : "Reset now"}
