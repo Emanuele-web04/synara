@@ -1,9 +1,10 @@
 /// <reference types="vite/client" />
 
-import type { NativeApi, DesktopBridge } from "@t3tools/contracts";
+import type { NativeApi, DesktopBridge } from "@synara/contracts";
 
 interface ImportMetaEnv {
   readonly APP_VERSION: string;
+  readonly VITE_FEEDBACK_ENDPOINT?: string;
 }
 
 interface ImportMeta {

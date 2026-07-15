@@ -22,6 +22,8 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("export")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("feedback")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -31,6 +33,7 @@ describe("composerSlashCommands", () => {
     expect(filterComposerSlashCommands("auto").map((entry) => entry.command)).toEqual([
       "automation",
     ]);
+    expect(filterComposerSlashCommands("feed").map((entry) => entry.command)).toEqual(["feedback"]);
   });
 
   it("ranks slash command name matches before description-only matches", () => {
@@ -57,6 +60,10 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/automation every 6h check the page")).toEqual({
       command: "automation",
       args: "every 6h check the page",
+    });
+    expect(parseComposerSlashInvocation("/feedback")).toEqual({
+      command: "feedback",
+      args: "",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
@@ -199,6 +206,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferExportCommand: true,
       providerNativeCommandNames: ["fast", "/model", "status"],
     });
 
@@ -217,6 +225,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferExportCommand: true,
       providerNativeCommandNames: ["review"],
     });
 
@@ -233,6 +242,7 @@ describe("composerSlashCommands", () => {
       canOfferReviewCommand: true,
       canOfferForkCommand: true,
       canOfferSideCommand: true,
+      canOfferExportCommand: true,
       providerNativeCommandNames: ["automation"],
     });
 
@@ -240,7 +250,23 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("gemini", "automation")).toBe(true);
   });
 
-  it("only exposes the app-level /side command for claude", () => {
+  it("keeps Feedback Synara ahead of provider-native /feedback", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "claudeAgent",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      canOfferExportCommand: true,
+      providerNativeCommandNames: ["feedback"],
+    });
+
+    expect(availableCommands).toContain("feedback");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("claudeAgent", "feedback")).toBe(true);
+  });
+
+  it("only exposes Synara-owned app commands for claude", () => {
     expect(
       getAvailableComposerSlashCommands({
         provider: "claudeAgent",
@@ -249,8 +275,69 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferExportCommand: true,
       }),
-    ).toEqual(["side", "automation"]);
+    ).toEqual(["side", "export", "feedback", "automation"]);
+  });
+
+  it("offers the app-level /export command on every provider", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "codex",
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+        canOfferSideCommand: true,
+        canOfferExportCommand: true,
+      }),
+    ).toContain("export");
+  });
+
+  it("omits the app-level /export command when no server thread exists", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "codex",
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+        canOfferSideCommand: true,
+        canOfferExportCommand: false,
+      }),
+    ).not.toContain("export");
+  });
+
+  it("keeps app-level /export available even if a provider exposes a native collision", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "claudeAgent",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      canOfferExportCommand: true,
+      providerNativeCommandNames: ["export"],
+    });
+
+    expect(availableCommands).toContain("export");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("claudeAgent", "export")).toBe(true);
+  });
+
+  it("keeps native /export visible on surfaces without app-level /export", () => {
+    const kanbanAppCommands = new Set(["clear", "default", "plan"]);
+    const mainComposerAppCommands = new Set(["clear", "export", "model"]);
+
+    expect(
+      shouldHideProviderNativeCommandFromComposerMenu("claudeAgent", "export", {
+        availableAppCommands: kanbanAppCommands,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHideProviderNativeCommandFromComposerMenu("claudeAgent", "export", {
+        availableAppCommands: mainComposerAppCommands,
+      }),
+    ).toBe(true);
   });
 
   it("only offers /compact when Codex compaction is available", () => {
@@ -262,6 +349,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferExportCommand: true,
       }),
     ).toContain("compact");
 
@@ -273,6 +361,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferExportCommand: true,
       }),
     ).not.toContain("compact");
   });
@@ -286,6 +375,7 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
         canOfferSideCommand: true,
+        canOfferExportCommand: true,
       }),
     ).toEqual([
       "clear",
@@ -297,6 +387,8 @@ describe("composerSlashCommands", () => {
       "side",
       "status",
       "subagents",
+      "export",
+      "feedback",
       "automation",
     ]);
   });

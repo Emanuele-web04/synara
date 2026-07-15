@@ -3,7 +3,7 @@
 // Layer: Web route lifecycle hook
 // Exports: useTemporaryThreadLifecycle
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -22,10 +22,10 @@ export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): vo
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
-  const initialDraftThread =
-    activeThreadId !== null
-      ? useComposerDraftStore.getState().draftThreadsByThreadId[activeThreadId]
-      : undefined;
+  const initialDraftIsTemporary = useComposerDraftStore(
+    (store) =>
+      activeThreadId !== null && store.draftThreadsByThreadId[activeThreadId]?.isTemporary === true,
+  );
   const previousThreadStateRef = useRef<{
     threadId: ThreadId | null;
     wasTemporary: boolean;
@@ -33,7 +33,7 @@ export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): vo
     threadId: activeThreadId,
     wasTemporary:
       (activeThreadId ? temporaryThreadIds[activeThreadId] === true : false) ||
-      initialDraftThread?.isTemporary === true,
+      initialDraftIsTemporary,
   });
   const disposingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
 

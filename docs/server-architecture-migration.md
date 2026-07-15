@@ -1,6 +1,6 @@
 # Server Architecture Migration Inventory
 
-This document tracks compatibility constraints for the controlled migration from the current legacy T3code-style server toward the newer upstream modular server architecture.
+This document tracks compatibility constraints for the controlled migration from the current legacy Synara-style server toward the newer upstream modular server architecture.
 
 ## Current Entry Points
 

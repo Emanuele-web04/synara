@@ -31,15 +31,15 @@ import {
   ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getModelCapabilities,
   getGeminiThinkingConfigKind,
   getGeminiThinkingModelAlias,
   hasEffortLevel,
   resolveGeminiApiModelId,
-} from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/shared/model";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
@@ -59,6 +59,7 @@ import { probeGeminiCapabilities } from "../geminiAcpProbe.ts";
 import { GeminiAdapter, type GeminiAdapterShape } from "../Services/GeminiAdapter.ts";
 import { asArray, asNumber, asRecord, asString, trimToUndefined } from "../geminiValue.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
+import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "gemini" as const;
@@ -803,6 +804,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
           stdio: ["pipe", "pipe", "pipe"],
           shell: prepared.shell,
           windowsHide: prepared.windowsHide,
+          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
         });
       },
       catch: (cause) =>
@@ -1606,30 +1608,16 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
           turnId: context.turnState.turnId,
           type: "turn.tasks.updated",
           payload: {
-            tasks: entries
-              .map((entry) => {
-                const taskEntry = asRecord(entry);
-                const task = trimToUndefined(taskEntry?.content);
-                const status = trimToUndefined(taskEntry?.status);
-                if (!task || !status) {
-                  return null;
-                }
-                return {
-                  task,
-                  status:
-                    status === "in_progress"
-                      ? "inProgress"
-                      : status === "completed"
-                        ? "completed"
-                        : "pending",
-                } as const;
-              })
-              .filter(
-                (
-                  entry,
-                ): entry is { task: string; status: "pending" | "inProgress" | "completed" } =>
-                  entry !== null,
-              ),
+            tasks: entries.flatMap((entry) => {
+              const taskEntry = asRecord(entry);
+              const task = trimToUndefined(taskEntry?.content);
+              const status = trimToUndefined(taskEntry?.status);
+              if (!task || !status) {
+                return [];
+              }
+              const item = makeRuntimeTaskListItem(task, status);
+              return item ? [item] : [];
+            }),
           },
           raw: {
             source: "gemini.acp.message",

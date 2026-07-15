@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -87,7 +87,7 @@ describe("sanitizeRecentHistoryByThreadId", () => {
         { url: "https://a.com", title: "A", tabId: "t1" },
         { url: "https://b.com", title: "B" },
         null,
-        { url: 5, title: "C", tabId: "t3" },
+        { url: 5, title: "C", tabId: "synara" },
       ],
       "thread-2": "not-an-array",
     });
@@ -99,7 +99,7 @@ describe("sanitizeRecentHistoryByThreadId", () => {
 
   it("drops threads whose history fully fails validation", () => {
     const result = sanitizeRecentHistoryByThreadId({
-      "thread-1": [null, { url: 5, title: "C", tabId: "t3" }],
+      "thread-1": [null, { url: 5, title: "C", tabId: "synara" }],
       "thread-2": [],
     });
 

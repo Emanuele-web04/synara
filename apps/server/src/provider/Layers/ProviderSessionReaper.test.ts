@@ -1,4 +1,4 @@
-import { ThreadId, TurnId, type OrchestrationThreadShell } from "@t3tools/contracts";
+import { ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
 import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -57,10 +57,12 @@ function makeLayer(input: {
         getProjectShellById: () => unsupported(),
         getFirstActiveThreadIdByProjectId: () => unsupported(),
         getThreadCheckpointContext: () => unsupported(),
+        listGeneratedImageActivitiesByTurn: () => unsupported(),
         getFullThreadDiffContext: () => unsupported(),
         getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
         findSyntheticSubagentParentThread: () => unsupported(),
         getThreadDetailById: () => unsupported(),
+        getThreadDetailForExportById: () => unsupported(),
         getThreadDetailSnapshotById: () => unsupported(),
       }),
     ),

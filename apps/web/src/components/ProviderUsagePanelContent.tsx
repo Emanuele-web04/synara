@@ -2,11 +2,11 @@
 // Purpose: Render a provider usage summary panel that can show both classic
 // rate-limit rows and archive-derived local usage lines in the same popover.
 
-import type { ProviderKind } from "@t3tools/contracts";
-import { providerUsageLabel } from "@t3tools/shared/providerUsage";
+import type { ProviderKind } from "@synara/contracts";
+import { providerUsageLabel } from "@synara/shared/providerUsage";
 import { memo, useMemo } from "react";
 
-import { ExternalLinkIcon } from "~/lib/icons";
+import { ExternalLinkIcon, TriangleAlertIcon } from "~/lib/icons";
 import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import {
   deriveProviderUsageLearnMoreHref,
@@ -25,6 +25,7 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   provider: ProviderKind | null | undefined;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
+  notice?: string | null | undefined;
   isLoading?: boolean | undefined;
   learnMoreHref?: string | null | undefined;
   showUsageLines?: boolean | undefined;
@@ -50,6 +51,12 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
         <div className="text-[length:var(--app-font-size-chat-meta,10px)] font-medium text-muted-foreground">
           {providerUsageLabel(props.provider)}
         </div>
+      ) : null}
+      {props.notice ? (
+        <p className="flex items-start gap-1.5 text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-amber-600 dark:text-amber-300/90">
+          <TriangleAlertIcon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+          <span>{props.notice}</span>
+        </p>
       ) : null}
       <ProviderUsageLimitRows rows={visibleRows} surface="popover" />
       {props.showUsageLines !== false && props.usageLines && props.usageLines.length > 0 ? (

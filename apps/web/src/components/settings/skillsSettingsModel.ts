@@ -3,8 +3,8 @@
 // Layer: Settings UI logic
 // Exports: origin metadata, canonical skill grouping, and section ordering helpers.
 
-import type { ProviderKind, ProviderSkillDescriptor } from "@t3tools/contracts";
-import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
+import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
+import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 
 export interface SkillOriginInfo {
   readonly label: string;
@@ -42,6 +42,7 @@ export const ORIGIN_SECTION_ORDER = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -54,6 +55,7 @@ export const PROVIDER_STACK_ORDER: readonly ProviderKind[] = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -73,6 +75,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.gemini, provider: "gemini" };
     case "grok":
       return { label: PROVIDER_DISPLAY_NAMES.grok, provider: "grok" };
+    case "droid":
+      return { label: PROVIDER_DISPLAY_NAMES.droid, provider: "droid" };
     case "kilo":
       return { label: PROVIDER_DISPLAY_NAMES.kilo, provider: "kilo" };
     case "opencode":

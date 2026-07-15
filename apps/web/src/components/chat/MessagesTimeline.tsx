@@ -9,14 +9,15 @@ import {
   ThreadId,
   type ThreadMarker,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { pluralize } from "@t3tools/shared/text";
+} from "@synara/contracts";
+import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -34,7 +35,11 @@ import {
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type TurnDiffSummary } from "../../types";
+import {
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -43,11 +48,13 @@ import {
   CheckIcon,
   ChangesIcon,
   CircleAlertIcon,
+  CircleCheckIcon,
   CircleQuestionIcon,
   ClockIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
+  LoaderIcon,
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
@@ -59,6 +66,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   WebSearchIcon,
+  WorktreeIcon,
   ZapIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
@@ -93,6 +101,7 @@ import {
   type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import {
@@ -104,9 +113,13 @@ import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { SynaraLogo } from "../SynaraLogo";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
-import { isAgentActivityWorkEntry } from "./agentActivity.logic";
+import {
+  formatAgentActivityEntryPreview,
+  isAgentActivityWorkEntry,
+  isCodexActivityStatusWorkEntry,
+  isReasoningUpdateWorkEntry,
+} from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -125,13 +138,13 @@ import {
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
-  formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   getChatMessageFooterTextStyle,
   getChatTranscriptTextStyle,
+  getChatTranscriptUserMessageLineHeightPx,
   getChatTranscriptUserMessageTextStyle,
   USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
@@ -147,7 +160,12 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
-import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import {
+  USER_MESSAGE_COLLAPSED_FADE_LINES,
+  USER_MESSAGE_COLLAPSED_MAX_LINES,
+  userMessageLikelyOverflows,
+} from "./userMessageCollapse";
+import { observeUserMessageOverflow } from "./userMessageOverflowObserver";
 import {
   resolveActiveTrailSnapshot,
   type ActiveTrailSnapshot,
@@ -296,11 +314,85 @@ function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLE
   return null;
 }
 
+// Per-step status glyph for the worktree setup stepper. Mirrors the active
+// task-list card: spinner while active, check when done, hollow node pending.
+function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"] }) {
+  if (status === "done") {
+    // Foreground (black) check, same box as the spinner so done/active nodes match.
+    return <CircleCheckIcon className="size-2.5 text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "active") {
+    // Spinner sized to match the pending nodes, in foreground (black) so the
+    // active step reads as the current work rather than an accent flourish.
+    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "error") {
+    return <CircleAlertIcon className="size-2.5 text-destructive" />;
+  }
+  // Lucide circles render at ~83% of their box, so an 8px ring matches the
+  // visible diameter of the size-2.5 spinner/check glyphs.
+  return <span className="block size-2 rounded-full border border-[color:var(--color-border)]" />;
+}
+
+// Transient "Preparing worktree..." panel: a compact bordered card with a
+// git-branch header and a connected stepper. Hugs its content so it reads as a
+// status chip rather than a full-width block.
+function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+  return (
+    <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
+      <div className="flex items-center gap-2">
+        <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
+        <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
+          Preparing worktree...
+        </span>
+      </div>
+      <ol className="mt-2 flex flex-col">
+        {steps.map((step, index) => {
+          const isLast = index === steps.length - 1;
+          return (
+            <li key={step.id} className="relative flex items-center gap-2.5 py-[3px]">
+              {isLast ? null : (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute left-[6.5px] top-1/2 h-full w-px",
+                    step.status === "done"
+                      ? "bg-[var(--color-text-foreground)]"
+                      : "bg-[color:var(--color-border)]",
+                  )}
+                />
+              )}
+              <span className="relative z-10 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-primary)]">
+                <WorktreeSetupStepGlyph status={step.status} />
+              </span>
+              <span
+                className={cn(
+                  "text-[13px] leading-5",
+                  step.status === "active" || step.status === "done"
+                    ? "text-[var(--color-text-foreground)]"
+                    : step.status === "error"
+                      ? "text-destructive"
+                      : "text-[var(--color-text-foreground-tertiary)] opacity-70",
+                )}
+              >
+                {step.label}
+                {step.status === "error" ? " — failed" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
+  worktreeSetup?: WorktreeSetupSnapshot | null;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
@@ -328,6 +420,7 @@ interface MessagesTimelineProps {
   onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
@@ -364,6 +457,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  worktreeSetup = null,
   followLiveOutput = false,
   listRef,
   controllerRef,
@@ -383,6 +477,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   activeTurnId,
   isRevertingCheckpoint,
@@ -505,11 +600,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [bottomSpacerHeightPx],
   );
 
+  const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         isWorking,
+        worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
+        worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
         activeTurnId,
         activeTurnStartedAt,
@@ -519,6 +617,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timelineEntries,
       isWorking,
+      presentedWorktreeSetup,
       activeTurnInProgress,
       activeTurnId,
       activeTurnStartedAt,
@@ -686,7 +785,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
-      if (row.kind !== "working") return row.id;
+      if (row.kind !== "working" && row.kind !== "worktree-setup") return row.id;
     }
     return null;
   }, [rows]);
@@ -726,19 +825,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeTurnId, rows]);
-  const userMessageIdByAssistantMessageId = useMemo(() => {
-    const map = new Map<MessageId, MessageId>();
-    let lastUserMessageId: MessageId | null = null;
-    for (const row of rows) {
-      if (row.kind !== "message") continue;
-      if (row.message.role === "user") {
-        lastUserMessageId = row.message.id;
-      } else if (row.message.role === "assistant" && lastUserMessageId) {
-        map.set(row.message.id, lastUserMessageId);
-      }
-    }
-    return map;
-  }, [rows]);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -865,7 +951,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
+        row.kind === "work" ||
+          row.kind === "working-header" ||
+          (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -969,19 +1057,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
           const renderedPastedTexts = displayedUserMessage.pastedTexts;
-          const userMessagePreview = deriveUserMessagePreviewState(
-            displayedUserMessage.visibleText,
-            {
-              expanded: expandedUserMessagesById[row.message.id] ?? false,
-            },
-          );
+          const userMessageText = displayedUserMessage.visibleText;
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
-          const showUserText =
-            userMessagePreview.text.trim().length > 0 || terminalContexts.length > 0;
+          const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
           const bubbleIsChipOnly =
             showUserText &&
             terminalContexts.length === 0 &&
-            hasOnlyInlineSkillChips(userMessagePreview.text, row.message.mentions ?? []);
+            hasOnlyInlineSkillChips(userMessageText, row.message.mentions ?? []);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           const isEditingThisMessage = editingUserMessageId === row.message.id;
           const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
@@ -1079,29 +1161,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
-                    <UserMessageBody
-                      text={userMessagePreview.text}
-                      mentionReferences={row.message.mentions ?? []}
-                      terminalContexts={terminalContexts}
-                      chatTypographyStyle={userMessageTypographyStyle}
-                      resolvedTheme={resolvedTheme}
-                    />
-                    {userMessagePreview.collapsible && (
-                      <button
-                        type="button"
-                        data-scroll-anchor-ignore
-                        className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
-                        style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                        onClick={() => {
-                          setExpandedUserMessagesById((previous) => ({
-                            ...previous,
-                            [row.message.id]: !(previous[row.message.id] ?? false),
-                          }));
-                        }}
-                      >
-                        {userMessageExpanded ? "Show less" : "Show more"}
-                      </button>
-                    )}
+                    <UserMessageCollapsibleText
+                      text={userMessageText}
+                      expanded={userMessageExpanded}
+                      chatFontSizePx={normalizedChatFontSizePx}
+                      onToggle={() => {
+                        setExpandedUserMessagesById((previous) => ({
+                          ...previous,
+                          [row.message.id]: !(previous[row.message.id] ?? false),
+                        }));
+                      }}
+                    >
+                      <UserMessageBody
+                        text={userMessageText}
+                        mentionReferences={row.message.mentions ?? []}
+                        terminalContexts={terminalContexts}
+                        chatTypographyStyle={userMessageTypographyStyle}
+                        resolvedTheme={resolvedTheme}
+                        markdownCwd={markdownCwd}
+                      />
+                    </UserMessageCollapsibleText>
                   </div>
                 ) : null}
                 {!isEditingThisMessage && (
@@ -1158,7 +1237,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageText = resolveAssistantMessageDisplayText(row);
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
@@ -1423,16 +1502,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
-                <div data-assistant-message-id={row.message.id}>
-                  <ChatMarkdown
-                    text={messageText}
-                    cwd={markdownCwd}
-                    isStreaming={Boolean(row.message.streaming)}
-                    style={chatTypographyStyle}
-                    onImageExpand={onImageExpand}
-                    markers={messageMarkers}
-                  />
-                </div>
+                {messageText !== null ? (
+                  <div data-assistant-message-id={row.message.id}>
+                    <ChatMarkdown
+                      text={messageText}
+                      cwd={markdownCwd}
+                      isStreaming={Boolean(row.message.streaming)}
+                      style={chatTypographyStyle}
+                      onImageExpand={onImageExpand}
+                      markers={messageMarkers}
+                    />
+                  </div>
+                ) : null}
                 {renderWorkDisplay(inlineWorkDisplay, "inline")}
                 {inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
@@ -1503,12 +1584,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const fileChangesExpanded =
                     expandedFileChangesByTurnId[turnSummary.turnId] ?? true;
                   const fileListExpanded = expandedFileListByTurnId[turnSummary.turnId] ?? false;
-                  const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
-                    row.message.id,
-                  );
+                  const checkpointTurnCount = turnSummary.checkpointTurnCount;
+                  const checkpointTurnCounts =
+                    turnSummary.checkpointTurnCounts ??
+                    (checkpointTurnCount === undefined ? [] : [checkpointTurnCount]);
                   const canUndo =
-                    correspondingUserMessageId != null &&
-                    revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                    turnSummary.status !== "missing" &&
+                    turnSummary.status !== "error" &&
+                    turnSummary.checkpointRef !== undefined &&
+                    !turnSummary.checkpointRef.startsWith("provider-diff:") &&
+                    checkpointTurnCounts.length > 0 &&
+                    onUndoTurnFiles !== undefined;
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -1566,7 +1652,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                          "flex items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--app-user-message-background)_40%,transparent)] px-3 py-1.5",
                           fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}
@@ -1599,7 +1685,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
                               style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
                             >
                               Undo
                               <Undo2Icon className="size-3" />
@@ -1683,29 +1769,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "working-header" && (
+        <div>
+          {/* Non-collapsible twin of the settled "Worked for" header: same label
+              tone, size, and full-width divider, but counting up live. -ml-0.5
+              optically aligns the leading "W" with the reply text below. */}
+          <div
+            className="-ml-0.5 pb-2 text-muted-foreground/70"
+            style={{ fontSize: chatTypographyStyle.fontSize }}
+          >
+            Working for{" "}
+            {nowIso ? (
+              (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+            ) : (
+              <WorkingTimer createdAt={row.createdAt} />
+            )}
+          </div>
+          <div className="h-px w-full bg-border" />
+        </div>
+      )}
+
       {row.kind === "working" && (
         <div
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {row.createdAt ? (
-            <>
-              Working for{" "}
-              {nowIso ? (
-                (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </>
-          ) : (
-            "Working..."
-          )}
+          Thinking
         </div>
+      )}
+
+      {row.kind === "worktree-setup" && (
+        <DisclosureRegion open={row.open}>
+          <div className="pt-0.5 pb-1">
+            <WorktreeSetupCard steps={row.steps} />
+          </div>
+        </DisclosureRegion>
       )}
     </div>
   );
 
-  if (!hasMessages && !isWorking) {
+  // Transient rows (for example failed first-send worktree setup) must be able
+  // to render even when there are no persisted chat messages yet.
+  const hasRenderableTranscriptContent = hasMessages || rows.length > 0;
+  if (!hasRenderableTranscriptContent && !isWorking) {
     if (emptyStateContent) {
       return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
     }
@@ -1895,6 +2001,60 @@ function useMessageSendEnterAnimations(
   return enteringRowIds;
 }
 
+interface WorktreeSetupPresentation {
+  snapshot: WorktreeSetupSnapshot;
+  open: boolean;
+}
+
+// Keeps the transient worktree-setup card mounted through one shared-disclosure
+// close animation after ChatView clears the snapshot, mirroring
+// useSettledTurnCollapseTransitions' rAF-flip + delayed-cleanup shape.
+function useWorktreeSetupPresentation(
+  worktreeSetup: WorktreeSetupSnapshot | null,
+): WorktreeSetupPresentation | null {
+  const [presented, setPresented] = useState<WorktreeSetupPresentation | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
+  const cleanupTimeoutRef = useRef<number | null>(null);
+
+  const clearCloseTimers = useCallback(() => {
+    if (closeFrameRef.current !== null) {
+      window.cancelAnimationFrame(closeFrameRef.current);
+      closeFrameRef.current = null;
+    }
+    if (cleanupTimeoutRef.current !== null) {
+      window.clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (worktreeSetup) {
+      clearCloseTimers();
+      setPresented((current) =>
+        current?.open && current.snapshot === worktreeSetup
+          ? current
+          : { snapshot: worktreeSetup, open: true },
+      );
+      return;
+    }
+    if (!presented?.open || closeFrameRef.current !== null) {
+      return;
+    }
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = null;
+      setPresented((current) => (current?.open ? { ...current, open: false } : current));
+      cleanupTimeoutRef.current = window.setTimeout(() => {
+        cleanupTimeoutRef.current = null;
+        setPresented(null);
+      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    });
+  }, [worktreeSetup, presented, clearCloseTimers]);
+
+  useLayoutEffect(() => clearCloseTimers, [clearCloseTimers]);
+
+  return presented;
+}
+
 // Keeps newly folded turn details mounted for one shared-disclosure close
 // animation, so settled turns do not disappear in one height recalculation.
 function useSettledTurnCollapseTransitions(
@@ -2077,17 +2237,6 @@ function formatWorkingTimerNow(startIso: string): string {
 function formatInlineWorkSummary(_groupedEntries: TimelineWorkEntry[]): string | null {
   return null;
 }
-
-const UserMessageTerminalContextInlineLabel = memo(
-  function UserMessageTerminalContextInlineLabel(props: { context: ParsedTerminalContextEntry }) {
-    const tooltipText =
-      props.context.body.length > 0
-        ? `${props.context.header}\n${props.context.body}`
-        : props.context.header;
-
-    return <TerminalContextInlineChip label={props.context.header} tooltipText={tooltipText} />;
-  },
-);
 
 const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
   image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
@@ -2284,12 +2433,86 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
+// Show more/less for long user messages: a visual max-height clamp (with a fade
+// mask) around the fully rendered message instead of the old character slice.
+const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
+  text: string;
+  expanded: boolean;
+  chatFontSizePx: number;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const contentId = useId();
+  const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
+  const collapsed = !props.expanded;
+
+  useLayoutEffect(() => {
+    if (!collapsed) {
+      return undefined;
+    }
+    const element = contentRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const measure = () => {
+      setOverflowing(element.scrollHeight - element.clientHeight > 1);
+    };
+    measure();
+    return observeUserMessageOverflow(element, measure);
+  }, [collapsed, props.text]);
+
+  const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
+  const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
+  const fadeStartPx = clampHeightPx - USER_MESSAGE_COLLAPSED_FADE_LINES * lineHeightPx;
+  const clamped = collapsed && overflowing;
+
+  return (
+    <>
+      <div
+        id={contentId}
+        ref={contentRef}
+        data-user-message-clamp={clamped ? "true" : "false"}
+        className={cn("min-w-0", collapsed && "overflow-hidden")}
+        style={
+          collapsed
+            ? {
+                maxHeight: `${clampHeightPx}px`,
+                ...(clamped
+                  ? {
+                      maskImage: `linear-gradient(to bottom, black ${fadeStartPx}px, transparent 100%)`,
+                    }
+                  : {}),
+              }
+            : undefined
+        }
+      >
+        {props.children}
+      </div>
+      {(clamped || props.expanded) && (
+        <button
+          type="button"
+          data-scroll-anchor-ignore
+          className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
+          style={{ fontSize: `${props.chatFontSizePx}px` }}
+          aria-expanded={props.expanded}
+          aria-controls={contentId}
+          onClick={props.onToggle}
+        >
+          {props.expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
+  );
+});
+
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   mentionReferences: ReadonlyArray<ProviderMentionReference>;
   terminalContexts: ParsedTerminalContextEntry[];
   chatTypographyStyle: CSSProperties;
   resolvedTheme: "light" | "dark";
+  markdownCwd: string | undefined;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -2297,94 +2520,22 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       props.terminalContexts,
     );
     const inlinePrefix = buildInlineTerminalContextText(props.terminalContexts);
-    const inlineNodes: ReactNode[] = [];
-
-    if (hasEmbeddedInlineLabels) {
-      let cursor = 0;
-
-      for (const context of props.terminalContexts) {
-        const label = formatInlineTerminalContextLabel(context.header);
-        const matchIndex = props.text.indexOf(label, cursor);
-        if (matchIndex === -1) {
-          inlineNodes.length = 0;
-          break;
-        }
-        if (matchIndex > cursor) {
-          inlineNodes.push(
-            ...renderUserMessageInlineText(
-              props.text.slice(cursor, matchIndex),
-              `user-terminal-context-inline-before:${context.header}:${cursor}`,
-              props.resolvedTheme,
-              props.mentionReferences,
-            ),
-          );
-        }
-        inlineNodes.push(
-          <UserMessageTerminalContextInlineLabel
-            key={`user-terminal-context-inline:${context.header}`}
-            context={context}
-          />,
-        );
-        cursor = matchIndex + label.length;
-      }
-
-      if (inlineNodes.length > 0) {
-        if (cursor < props.text.length) {
-          inlineNodes.push(
-            ...renderUserMessageInlineText(
-              props.text.slice(cursor),
-              `user-message-terminal-context-inline-rest:${cursor}`,
-              props.resolvedTheme,
-              props.mentionReferences,
-            ),
-          );
-        }
-
-        return (
-          <div
-            className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
-            style={props.chatTypographyStyle}
-          >
-            {inlineNodes}
-          </div>
-        );
-      }
-    }
-
-    for (const context of props.terminalContexts) {
-      inlineNodes.push(
-        <UserMessageTerminalContextInlineLabel
-          key={`user-terminal-context-inline:${context.header}`}
-          context={context}
-        />,
-      );
-      inlineNodes.push(
-        <span key={`user-terminal-context-inline-space:${context.header}`} aria-hidden="true">
-          {" "}
-        </span>,
-      );
-    }
-
-    if (props.text.length > 0) {
-      inlineNodes.push(
-        ...renderUserMessageInlineText(
-          props.text,
-          "user-message-terminal-context-inline-text",
-          props.resolvedTheme,
-          props.mentionReferences,
-        ),
-      );
-    } else if (inlinePrefix.length === 0) {
+    const markdownText = hasEmbeddedInlineLabels
+      ? props.text
+      : [inlinePrefix, props.text].filter((part) => part.length > 0).join(" ");
+    if (markdownText.length === 0) {
       return null;
     }
-
     return (
-      <div
-        className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+      <ChatMarkdown
+        text={markdownText}
+        cwd={props.markdownCwd}
+        variant="user"
+        mentionReferences={props.mentionReferences}
+        terminalContexts={props.terminalContexts}
+        className="font-system-ui wrap-break-word"
         style={props.chatTypographyStyle}
-      >
-        {inlineNodes}
-      </div>
+      />
     );
   }
 
@@ -2411,18 +2562,19 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     );
   }
 
+  // Plain sent text renders as markdown (same pipeline as assistant messages);
+  // the user variant keeps single newlines, skips math, and renders composer
+  // tokens as chips via the composer-chips remark plugin.
   return (
-    <div
-      className="block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
+    <ChatMarkdown
+      variant="user"
+      text={props.text}
+      cwd={props.markdownCwd}
+      isStreaming={false}
+      mentionReferences={props.mentionReferences}
+      className="font-system-ui"
       style={props.chatTypographyStyle}
-    >
-      {renderUserMessageInlineText(
-        props.text,
-        "user-message-inline",
-        props.resolvedTheme,
-        props.mentionReferences,
-      )}
-    </div>
+    />
   );
 });
 
@@ -2487,20 +2639,10 @@ function extractFilePathFromDetail(detail: string): string | null {
   return null;
 }
 
-function workEntryPreview(
-  workEntry: Pick<
-    TimelineWorkEntry,
-    | "detail"
-    | "command"
-    | "rawCommand"
-    | "preview"
-    | "changedFiles"
-    | "requestKind"
-    | "itemType"
-    | "subagents"
-    | "subagentAction"
-  >,
-): string | null {
+function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
+  if (isReasoningUpdateWorkEntry(workEntry)) {
+    return formatAgentActivityEntryPreview(workEntry);
+  }
   const isFileRelated =
     workEntry.requestKind === "file-read" ||
     workEntry.requestKind === "file-change" ||
@@ -2639,6 +2781,9 @@ function isSynaraMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // compact density so every tool-call line shares one height regardless of whether
 // it carries a disclosure chevron.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  if (isCodexActivityStatusWorkEntry(workEntry)) {
+    return true;
+  }
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
   // inspections like `cat` now use the file-read search icon).
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
@@ -2833,13 +2978,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onOpenAutomation,
   } = props;
   const compact = density === "compact";
+  const isCodexStatusRow = isCodexActivityStatusWorkEntry(workEntry);
   const EntryIcon = workEntryIcon(workEntry);
   // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
   // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
   // composer and markdown links so every site reference looks identical.
   const webFetchUrl = extractWebFetchUrl(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs discoverable
-  // for command rows and app-backed tool rows.
+  // Standard tool rows keep one discoverable left glyph. Codex status rows
+  // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isSynaraToolRow = !isGitHubToolRow && isSynaraMcpToolCall(workEntry);
   const isMcpToolRow =
@@ -2864,7 +3010,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const preview = workEntryPreview(workEntry);
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
-    : combineWorkEntryDisplayText(heading, preview);
+    : isReasoningUpdateWorkEntry(workEntry) && preview
+      ? preview
+      : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -3151,20 +3299,23 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         (() => {
           const rowContentChildren = (
             <>
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center",
-                  WORK_ROW_MUTED_HOVER_TONE["tool-row"],
-                  compact ? "size-4" : "size-5",
-                )}
-                data-tool-icon={leftIconKind}
-              >
-                {webFetchUrl ? (
-                  <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
-                ) : (
-                  <LeftIcon className={compact ? "size-3.5" : "size-4"} />
-                )}
-              </span>
+              {!isCodexStatusRow ? (
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center",
+                    WORK_ROW_MUTED_HOVER_TONE["tool-row"],
+                    compact ? "size-4" : "size-5",
+                  )}
+                  data-tool-icon={leftIconKind}
+                  data-work-entry-icon="true"
+                >
+                  {webFetchUrl ? (
+                    <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                  ) : (
+                    <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                  )}
+                </span>
+              ) : null}
               <div
                 className={cn(
                   "min-w-0 overflow-hidden",
@@ -3203,6 +3354,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                     )}
+                    data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>

@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckpointStoreLive } from "./CheckpointStore.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { GitCommandError } from "../../git/Errors.ts";
+import { CheckpointRef } from "@synara/contracts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();
@@ -205,5 +206,69 @@ describe("CheckpointStoreLive", () => {
         expect(captureArgs(`update-ref ${missingRef} commit-oid`)).toHaveLength(1);
       }),
     );
+  });
+
+  it("restores the worktree patch when resetting the index fails during file undo", async () => {
+    const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
+    const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
+    const commands: string[] = [];
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      commands.push(args);
+      if (args === `rev-parse --verify --quiet ${fromRef}^{commit}`) {
+        return Effect.succeed({ code: 0, stdout: "from-oid\n", stderr: "" });
+      }
+      if (args === `rev-parse --verify --quiet ${toRef}^{commit}`) {
+        return Effect.succeed({ code: 0, stdout: "to-oid\n", stderr: "" });
+      }
+      if (args.startsWith("diff --patch --binary --full-index")) {
+        return Effect.succeed({ code: 0, stdout: "turn patch", stderr: "" });
+      }
+      if (args === "diff --name-only --no-renames -z from-oid to-oid") {
+        return Effect.succeed({ code: 0, stdout: "src/file.ts\0", stderr: "" });
+      }
+      if (input.args[0] === "apply" && input.args[1] === "--reverse") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "reset --quiet from-oid -- src/file.ts") {
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: args,
+            cwd: input.cwd,
+            detail: "reset failed",
+          }),
+        );
+      }
+      if (input.args[0] === "apply" && input.args[1] === "--whitespace=nowarn") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store
+          .reverseCheckpointDiff({
+            cwd: "/repo",
+            fromCheckpointRef: fromRef,
+            toCheckpointRef: toRef,
+          })
+          .pipe(
+            Effect.map(() => "success" as const),
+            Effect.catch((error) => Effect.succeed(error._tag)),
+          );
+      }),
+    );
+
+    expect(result).toBe("GitCommandError");
+    expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
+    expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
   });
 });

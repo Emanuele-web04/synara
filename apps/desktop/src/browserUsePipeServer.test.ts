@@ -8,11 +8,9 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import {
-  DPCODE_BROWSER_USE_PIPE_ENV,
+  SYNARA_BROWSER_USE_PIPE_ENV,
   resolveConfiguredBrowserUsePipePath,
   resolveDefaultBrowserUsePipePath,
-  SYNARA_BROWSER_USE_PIPE_ENV,
-  T3CODE_BROWSER_USE_PIPE_ENV,
 } from "./browserUsePipeServer";
 
 describe("browser-use pipe path resolution", () => {
@@ -28,23 +26,15 @@ describe("browser-use pipe path resolution", () => {
       resolveConfiguredBrowserUsePipePath(
         {
           [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/synara.sock",
-          [DPCODE_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/custom.sock",
-          [T3CODE_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/legacy.sock",
         },
         "darwin",
       ),
     ).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
-  it("falls back to legacy desktop pipe environment names", () => {
-    expect(
-      resolveConfiguredBrowserUsePipePath(
-        {
-          [DPCODE_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/custom.sock",
-          [T3CODE_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/legacy.sock",
-        },
-        "darwin",
-      ),
-    ).toBe("/tmp/codex-browser-use/custom.sock");
+  it("falls back to the generated path when the environment is empty", () => {
+    expect(resolveConfiguredBrowserUsePipePath({}, "darwin")).toMatch(
+      /codex-browser-use\/synara-iab-\d+\.sock$/,
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { NonNegativeInt } from "@t3tools/contracts";
+import { NonNegativeInt } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema } from "effect";
@@ -35,8 +35,16 @@ const makeProjectionStateRepository = Effect.gen(function* () {
         )
         ON CONFLICT (projector)
         DO UPDATE SET
-          last_applied_sequence = excluded.last_applied_sequence,
-          updated_at = excluded.updated_at
+          last_applied_sequence = CASE
+            WHEN excluded.last_applied_sequence > projection_state.last_applied_sequence
+            THEN excluded.last_applied_sequence
+            ELSE projection_state.last_applied_sequence
+          END,
+          updated_at = CASE
+            WHEN excluded.last_applied_sequence >= projection_state.last_applied_sequence
+            THEN excluded.updated_at
+            ELSE projection_state.updated_at
+          END
       `,
   });
 

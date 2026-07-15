@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -14,6 +13,7 @@ import {
   getFallbackThreadIdAfterDelete,
   getVisibleSidebarEntriesForPreview,
   orderPinnedProjectsForSidebar,
+  pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdForJumpCommand,
@@ -26,13 +26,16 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
+  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
@@ -45,7 +48,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -67,6 +70,57 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("resolvePendingSidebarViewSelection", () => {
+  it("optimistically follows a destination segment", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "studio")).toBe("studio");
+  });
+
+  it("clears the optimistic segment when the user returns to the active view", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
+
+describe("resolvePullRequestReviewBadge", () => {
+  it("distinguishes complete, partial, and unavailable review counts", () => {
+    expect(resolvePullRequestReviewBadge({ count: 3, incomplete: false })).toEqual({
+      text: "3",
+      accessibleLabel: "3 pull requests are waiting for your review",
+    });
+    expect(resolvePullRequestReviewBadge({ count: 3, incomplete: true })).toEqual({
+      text: "3+",
+      accessibleLabel: "At least 3 pull requests are waiting for your review",
+    });
+    expect(resolvePullRequestReviewBadge({ count: 0, incomplete: true })).toEqual({
+      text: "?",
+      accessibleLabel: "The pull request review count is temporarily incomplete",
+    });
+    expect(resolvePullRequestReviewBadge({ count: 0, incomplete: false })).toBeNull();
+    expect(resolvePullRequestReviewBadge(undefined)).toBeNull();
+    expect(resolvePullRequestReviewBadge({ count: 1, incomplete: false })?.accessibleLabel).toBe(
+      "1 pull request is waiting for your review",
+    );
+  });
+});
+
+describe("pullRequestRepositoryConfigFingerprint", () => {
+  it("changes for repository-affecting project edits but not sidebar ordering or expansion", () => {
+    const first = makeProject({ id: ProjectId.makeUnsafe("project-1"), cwd: "/repo/one" });
+    const second = makeProject({ id: ProjectId.makeUnsafe("project-2"), cwd: "/repo/two" });
+    const baseline = pullRequestRepositoryConfigFingerprint([first, second]);
+
+    expect(pullRequestRepositoryConfigFingerprint([second, first])).toBe(baseline);
+    expect(
+      pullRequestRepositoryConfigFingerprint([{ ...first, expanded: !first.expanded }, second]),
+    ).toBe(baseline);
+    expect(
+      pullRequestRepositoryConfigFingerprint([{ ...first, cwd: "/repo/moved" }, second]),
+    ).not.toBe(baseline);
+    expect(
+      pullRequestRepositoryConfigFingerprint([{ ...first, name: "Renamed" }, second]),
+    ).not.toBe(baseline);
+  });
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
@@ -220,14 +274,9 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 
 describe("resolveSettingsBackTarget", () => {
   it("keeps fresh draft chats available as settings back targets", () => {
-    const availableThreadIds = buildSettingsBackAvailableThreadIds({
-      sidebarThreadSummaryById: {
-        "thread-latest": {},
-      },
-      draftThreadsByThreadId: {
-        "thread-draft": {},
-      },
-    });
+    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the
+    // segment's draft thread ids form the restorable set.
+    const availableThreadIds = new Set(["thread-latest", "thread-draft"]);
 
     expect(
       resolveSettingsBackTarget({
@@ -519,7 +568,7 @@ describe("add-project error helpers", () => {
 
   it("explains root-absolute add-project paths that probably missed the home directory", () => {
     expect(
-      describeAddProjectError("Failed to create project directory: /Developer/Testing/t3code"),
+      describeAddProjectError("Failed to create project directory: /Developer/Testing/synara"),
     ).toContain("/Users/<name>/Developer");
   });
 
@@ -1506,6 +1555,27 @@ function makeSidebarThreadSummary(
     ...overrides,
   };
 }
+
+describe("partitionSidebarThreadsByProjectIds", () => {
+  it("splits Studio threads from the regular Threads surface by project id", () => {
+    const projectThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-project"),
+      projectId: ProjectId.makeUnsafe("project-app"),
+    });
+    const studioThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-studio"),
+      projectId: ProjectId.makeUnsafe("project-studio"),
+    });
+
+    const partitioned = partitionSidebarThreadsByProjectIds(
+      [projectThread, studioThread],
+      new Set([ProjectId.makeUnsafe("project-studio")]),
+    );
+
+    expect(partitioned.nonStudioThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
+    expect(partitioned.studioThreads.map((thread) => thread.id)).toEqual(["thread-studio"]);
+  });
+});
 
 describe("deriveSidebarProjectData", () => {
   it("keeps pinned threads in the total project thread count", () => {

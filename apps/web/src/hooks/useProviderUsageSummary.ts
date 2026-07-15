@@ -6,7 +6,7 @@ import type {
   OrchestrationThread,
   ProviderKind,
   ServerGetProviderUsageSnapshotResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
@@ -38,23 +38,32 @@ export function useProviderUsageSummary(input: {
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  fetchProviderData?: boolean;
 }) {
+  const provider = input.provider ?? null;
+  const shouldFetchProviderData = input.fetchProviderData ?? true;
+  const shouldFetchLiveProviderUsage =
+    shouldFetchProviderData && provider !== null && input.providerSnapshot === undefined;
+  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
-      enabled: input.provider !== null && input.provider !== undefined,
+      enabled: shouldFetchLiveProviderUsage,
+      provider,
     }),
   );
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
-      provider: input.provider,
-      homePath: input.provider === "codex" ? input.codexHomePath || null : null,
+      provider,
+      homePath: provider === "codex" ? input.codexHomePath || null : null,
+      enabled: shouldFetchLocalProviderUsage,
     }),
   );
-  const openUsageSnapshotQuery = useQuery(openUsageProviderSnapshotQueryOptions(input.provider));
+  const openUsageSnapshotQuery = useQuery(
+    openUsageProviderSnapshotQueryOptions(provider, { enabled: shouldFetchProviderData }),
+  );
   const liveProviderSnapshot = useMemo(
-    () =>
-      (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === input.provider),
-    [allProviderUsageQuery.data, input.provider],
+    () => (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === provider),
+    [allProviderUsageQuery.data, provider],
   );
   const authoritativeLiveSnapshot = useMemo(
     () => liveProviderSnapshot ?? input.providerSnapshot ?? null,
@@ -74,14 +83,11 @@ export function useProviderUsageSummary(input: {
 
     const localSnapshot = localUsageSnapshotQuery.data ?? null;
     const derivedRateLimits = accountRateLimits.filter((rateLimit) =>
-      input.provider ? rateLimit.provider === input.provider : true,
+      provider ? rateLimit.provider === provider : true,
     );
     const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(authoritativeLiveSnapshot);
     const localUsageRateLimit = normalizeServerProviderUsageRateLimit(localSnapshot);
-    const openUsageSnapshot = normalizeOpenUsageSnapshot(
-      openUsageSnapshotQuery.data,
-      input.provider,
-    );
+    const openUsageSnapshot = normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, provider);
     return mergeProviderRateLimits(
       derivedRateLimits,
       mergeProviderRateLimits(
@@ -96,9 +102,9 @@ export function useProviderUsageSummary(input: {
     accountRateLimits,
     authoritativeLiveSnapshot,
     blocksProviderUsageFallback,
-    input.provider,
     localUsageSnapshotQuery.data,
     openUsageSnapshotQuery.data,
+    provider,
   ]);
 
   const usageLines = useMemo(() => {
@@ -122,15 +128,24 @@ export function useProviderUsageSummary(input: {
     openUsageSnapshotQuery.data,
   ]);
 
+  // A throttle/staleness note the server rides on an otherwise-ok snapshot (e.g. Claude serving the
+  // last values while Anthropic rate-limits). Only surfaced when the snapshot is actually shown —
+  // non-ok snapshots hide the section entirely, so their `detail` would never be seen anyway.
+  const usageNotice = useMemo(() => {
+    if (blocksProviderUsageFallback) {
+      return undefined;
+    }
+    const detail = authoritativeLiveSnapshot?.detail?.trim();
+    return detail ? detail : undefined;
+  }, [authoritativeLiveSnapshot, blocksProviderUsageFallback]);
+
   const learnMoreHref = useMemo(
-    () =>
-      deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(input.provider),
-    [input.provider, rateLimits],
+    () => deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(provider),
+    [provider, rateLimits],
   );
 
   const isLoading =
-    input.provider !== null &&
-    input.provider !== undefined &&
+    shouldFetchLiveProviderUsage &&
     allProviderUsageQuery.isPending &&
     localUsageSnapshotQuery.isPending &&
     rateLimits.length === 0 &&
@@ -141,5 +156,6 @@ export function useProviderUsageSummary(input: {
     learnMoreHref,
     rateLimits,
     usageLines,
+    usageNotice,
   } as const;
 }

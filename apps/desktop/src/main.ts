@@ -8,6 +8,9 @@ import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
+// Electron-only builtin that sees app.asar as a real file instead of a virtual
+// directory — required to stat the archive itself for swap detection.
+import * as OriginalFS from "original-fs";
 
 import {
   app,
@@ -20,6 +23,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -35,15 +39,29 @@ import type {
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 
-import type { ContextMenuItem } from "@t3tools/contracts";
-import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
-import { NetService } from "@t3tools/shared/Net";
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import type { ContextMenuItem } from "@synara/contracts";
+import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
+import {
+  SYNARA_DESKTOP_ENTRY_URL,
+  SYNARA_DESKTOP_SCHEME,
+  SYNARA_DESKTOP_UPDATE_CHANNEL,
+  synaraBundleId,
+} from "@synara/shared/desktopIdentity";
+import { NetService } from "@synara/shared/Net";
+import { RotatingFileSink } from "@synara/shared/logging";
+import { ensureStaticSnapshot, findAsarArchivePath } from "@synara/shared/staticSnapshot";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
+import {
+  bundleSignatureFromStats,
+  isBundleStable,
+  isBundleSwapped,
+  isWatchableBundlePath,
+  type BundleSignature,
+} from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -54,6 +72,7 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
+import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
@@ -88,14 +107,25 @@ import {
   reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
+  reduceDesktopUpdateStateOnInstallRestartFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import {
   PendingUpdateCacheClearQueue,
   resolveElectronUpdaterCacheDirName,
+  resolveElectronUpdaterLegacyZipPath,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
+import {
+  clearInstallMarker,
+  createUpdateInstallMarker,
+  markInstallHandoffSync,
+  readInstallMarker,
+  resolveInstallMarkerOutcome,
+  writeInstallMarker,
+  type UpdateInstallMarker,
+} from "./updateInstallMarker";
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
@@ -107,10 +137,8 @@ import {
 } from "./browserIpc";
 import {
   BrowserUsePipeServer,
-  DPCODE_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_PATH,
-  T3CODE_BROWSER_USE_PIPE_ENV,
 } from "./browserUsePipeServer";
 import {
   DESKTOP_WS_URL_CHANNEL,
@@ -118,11 +146,34 @@ import {
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
 import {
+  repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
-  resolveLegacyDesktopUserDataPaths,
-  seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import { isBrokenPipeError } from "./desktopProcessErrors";
+import {
+  readDesktopWindowState,
+  resolveVisibleWindowBounds,
+  writeDesktopWindowState,
+} from "./windowState";
+import {
+  acknowledgeSynaraStorageSnapshot,
+  readSynaraStorageSnapshot,
+  resolveSynaraStorageSnapshotPath,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
+import { DesktopAppSnapManager } from "./appSnapManager";
+import {
+  registerAppSnapIpcHandlers,
+  sendAppSnapCaptured,
+  sendAppSnapError,
+  sendAppSnapState,
+} from "./appSnapIpc";
+
+// Capture the real archive identity before any explicit app.asar lookup. Static
+// snapshotting and the runtime watcher both use this same generation as their
+// baseline, so a replacement during startup cannot silently become "normal."
+const startupBundleIdentity = captureStartupBundleIdentity();
 
 syncShellEnvironment();
 
@@ -150,17 +201,14 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const BASE_DIR =
-  process.env.SYNARA_HOME?.trim() ||
-  process.env.DPCODE_HOME?.trim() ||
-  process.env.T3CODE_HOME?.trim() ||
-  Path.join(OS.homedir(), ".synara");
+const BASE_DIR = process.env.SYNARA_HOME?.trim() || Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
-const DESKTOP_SCHEME = "t3";
+const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
+const DESKTOP_SCHEME = SYNARA_DESKTOP_SCHEME;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
-const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.synara.dev" : "com.t3tools.synara";
+const APP_USER_MODEL_ID = synaraBundleId(isDevelopment);
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -182,24 +230,18 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 // conclude the OS installer never started (unsigned/quarantined build, read-only
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
+const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
-const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
-  "SYNARA_BACKEND_MAX_OLD_SPACE_MB",
-  "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
-  "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
-] as const;
-const DESKTOP_UPDATE_CHANNEL = "latest";
+const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
 const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
 const SYNARA_BROWSER_LABEL = "Synara browser";
-const browserPerfLoggingEnabled =
-  process.env.SYNARA_BROWSER_PERF === "1" ||
-  process.env.DPCODE_BROWSER_PERF === "1" ||
-  process.env.T3CODE_BROWSER_PERF === "1";
+const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -229,6 +271,7 @@ let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
+let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
@@ -313,6 +356,16 @@ function writeBackendSessionBoundary(phase: "START" | "END", details: string): v
   backendLogSink.write(
     `[${logTimestamp()}] ---- APP SESSION ${phase} run=${APP_RUN_ID} ${normalizedDetails} ----\n`,
   );
+}
+
+function safeConsoleError(...args: Parameters<typeof console.error>): void {
+  try {
+    console.error(...args);
+  } catch (error: unknown) {
+    if (!isBrokenPipeError(error)) {
+      throw error;
+    }
+  }
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -430,8 +483,6 @@ async function reserveBackendEndpoint(reason: string): Promise<void> {
   backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
-  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
-  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
   writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
 }
 
@@ -606,6 +657,7 @@ let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
 let updateInstallWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+let automaticUpdateActivitySuppressed = false;
 let updateDownloadCancellationToken: CancellationToken | null = null;
 let rejectUpdateDownloadStall: ((error: Error) => void) | null = null;
 let lastUpdateDownloadProgressSample: DownloadProgressSample | null = null;
@@ -636,6 +688,63 @@ function clearUpdateInstallWatchdogTimer(): void {
   }
 }
 
+function getUpdateInstallMarkerPath(): string {
+  return Path.join(app.getPath("userData"), UPDATE_INSTALL_MARKER_FILE_NAME);
+}
+
+function recordInstallMarkerFailure(nowIso: string): number {
+  const result = readInstallMarker(getUpdateInstallMarkerPath());
+  if (result.status !== "valid") {
+    console.error(
+      `[desktop-updater] Could not record durable install failure: marker is ${result.status}${result.status === "invalid" ? ` (${result.error})` : ""}.`,
+    );
+    return Math.max(1, updateState.installFailureCount + 1);
+  }
+  if (result.marker.phase === "failed") {
+    return result.marker.consecutiveFailures;
+  }
+  const failedMarker: UpdateInstallMarker = {
+    ...result.marker,
+    phase: "failed",
+    consecutiveFailures: result.marker.consecutiveFailures + 1,
+    lastFailureAt: nowIso,
+  };
+  try {
+    writeInstallMarker(getUpdateInstallMarkerPath(), failedMarker);
+  } catch (error) {
+    console.error(
+      `[desktop-updater] Failed to persist install failure marker: ${formatErrorMessage(error)}`,
+    );
+  }
+  return failedMarker.consecutiveFailures;
+}
+
+async function logMacUpdateDiagnostics(context: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const diagnostics = await Promise.race([
+      collectMacUpdateDiagnostics(APP_USER_MODEL_ID),
+      new Promise<string>((resolve) => {
+        timeout = setTimeout(
+          () => resolve("Diagnostic collection timed out."),
+          AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (diagnostics) {
+      console.info(`[desktop-updater] diagnostics (${context})\n${diagnostics}`);
+    }
+  } catch (error) {
+    console.info(
+      `[desktop-updater] diagnostics (${context}) unavailable: ${formatErrorMessage(error)}`,
+    );
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 // quitAndInstall() is a fire-and-forget void call with no success signal: when
 // the OS installer silently fails the app never quits and the user is left with
 // no feedback (the "update doesn't work for some people" report). If the process
@@ -656,12 +765,14 @@ function armInstallWatchdog(): void {
     // Polling was stopped before the install attempt; resume it so background
     // update checks keep running after this recovery.
     scheduleUpdatePoll();
-    setUpdateState(
-      reduceDesktopUpdateStateOnInstallFailure(
+    const consecutiveFailures = recordInstallMarkerFailure(new Date().toISOString());
+    setUpdateState({
+      ...reduceDesktopUpdateStateOnInstallFailure(
         updateState,
         "The update couldn’t be installed automatically.",
       ),
-    );
+      installFailureCount: consecutiveFailures,
+    });
     console.error(
       "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
     );
@@ -740,8 +851,8 @@ function resolveEmbeddedCommitHash(): string | null {
 
   try {
     const raw = FS.readFileSync(packageJsonPath, "utf8");
-    const parsed = JSON.parse(raw) as { t3codeCommitHash?: unknown };
-    return normalizeCommitHash(parsed.t3codeCommitHash);
+    const parsed = JSON.parse(raw) as { synaraCommitHash?: unknown };
+    return normalizeCommitHash(parsed.synaraCommitHash);
   } catch {
     return null;
   }
@@ -752,7 +863,7 @@ function resolveAboutCommitHash(): string | null {
     return aboutCommitHashCache;
   }
 
-  const envCommitHash = normalizeCommitHash(process.env.T3CODE_COMMIT_HASH);
+  const envCommitHash = normalizeCommitHash(process.env.SYNARA_COMMIT_HASH);
   if (envCommitHash) {
     aboutCommitHashCache = envCommitHash;
     return aboutCommitHashCache;
@@ -794,6 +905,124 @@ function resolveDesktopStaticDir(): string | null {
   }
 
   return null;
+}
+
+interface ServedStaticRoot {
+  readonly dir: string;
+  /** True when serving a real-disk snapshot instead of reading through the asar. */
+  readonly snapshotted: boolean;
+}
+
+interface BundleIdentity {
+  readonly path: string;
+  readonly signature: BundleSignature | null;
+}
+
+class BundleChangedDuringStartupError extends Error {
+  readonly bundlePath: string;
+  readonly baseline: BundleSignature | null;
+  readonly current: BundleSignature | null;
+
+  constructor(input: {
+    bundlePath: string;
+    baseline: BundleSignature | null;
+    current: BundleSignature | null;
+  }) {
+    super("The packaged application changed while its static assets were being prepared.");
+    this.name = "BundleChangedDuringStartupError";
+    this.bundlePath = input.bundlePath;
+    this.baseline = input.baseline;
+    this.current = input.current;
+  }
+}
+
+let servedStaticRootCache: ServedStaticRoot | null | undefined;
+
+// Serving static assets straight out of app.asar is vulnerable to the archive
+// being replaced beneath the running app (Electron caches the header per process,
+// so every later read returns bytes from the wrong offsets). Extract the client
+// to a per-archive snapshot on real disk and serve that instead — both for the
+// synara:// protocol here and, via SYNARA_STATIC_DIR, for the backend's HTTP static
+// route. Memoized so one app run serves one coherent asset generation.
+function resolveServedStaticRoot(): ServedStaticRoot | null {
+  if (servedStaticRootCache === undefined) {
+    servedStaticRootCache = computeServedStaticRoot();
+  }
+  return servedStaticRootCache;
+}
+
+function computeServedStaticRoot(): ServedStaticRoot | null {
+  const sourceDir = resolveDesktopStaticDir();
+  if (!sourceDir) {
+    return null;
+  }
+  const archivePath = findAsarArchivePath(sourceDir);
+  if (!archivePath) {
+    // Plain-directory client (dev, unpacked build): real files already survive swaps.
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startupArchiveSignature =
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(archivePath)
+      ? startupBundleIdentity.signature
+      : undefined;
+  if (startupArchiveSignature === null) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: null,
+      current: readBundleSignature(archivePath),
+    });
+  }
+  const archiveSignature = startupArchiveSignature ?? readBundleSignature(archivePath);
+  if (!archiveSignature) {
+    return { dir: sourceDir, snapshotted: false };
+  }
+  const startedAtMs = Date.now();
+  let snapshot: ReturnType<typeof ensureStaticSnapshot>;
+  try {
+    snapshot = ensureStaticSnapshot({
+      sourceDir,
+      cacheRoot: Path.join(app.getPath("userData"), "static-snapshots"),
+      signature: `${archiveSignature.size}-${archiveSignature.mtimeMs}-${archiveSignature.inode}`,
+    });
+  } catch (error) {
+    const currentArchiveSignature = readBundleSignature(archivePath);
+    if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+      throw new BundleChangedDuringStartupError({
+        bundlePath: archivePath,
+        baseline: archiveSignature,
+        current: currentArchiveSignature,
+      });
+    }
+    console.warn(
+      "[desktop] Failed to snapshot static assets; serving from the archive",
+      formatErrorMessage(error),
+    );
+    return { dir: sourceDir, snapshotted: false };
+  }
+
+  const currentArchiveSignature = readBundleSignature(archivePath);
+  if (!isBundleStable(archiveSignature, currentArchiveSignature)) {
+    // A newly-created snapshot may contain reads from both archive generations.
+    // Never leave it behind for a future launch to reuse.
+    if (!snapshot.reused) {
+      try {
+        FS.rmSync(snapshot.dir, { recursive: true, force: true });
+      } catch {
+        // The signature changes the snapshot key, so failed cleanup is disk waste
+        // rather than a path the replacement generation can accidentally reuse.
+      }
+    }
+    throw new BundleChangedDuringStartupError({
+      bundlePath: archivePath,
+      baseline: archiveSignature,
+      current: currentArchiveSignature,
+    });
+  }
+
+  writeDesktopLogHeader(
+    `static snapshot ${snapshot.reused ? "reused" : "created"} dir=${snapshot.dir} in ${Date.now() - startedAtMs}ms`,
+  );
+  return { dir: snapshot.dir, snapshotted: true };
 }
 
 function resolveDesktopStaticPath(staticRoot: string, requestUrl: string): string {
@@ -846,7 +1075,17 @@ function handleFatalStartupError(stage: string, error: unknown): void {
 function registerDesktopProtocol(): void {
   if (isDevelopment || desktopProtocolRegistered) return;
 
-  const staticRoot = resolveDesktopStaticDir();
+  // An unreadable first observation cannot be replaced by a later baseline:
+  // Electron may already hold the header for the generation that disappeared.
+  if (startupBundleIdentity && !startupBundleIdentity.signature) {
+    throw new BundleChangedDuringStartupError({
+      bundlePath: startupBundleIdentity.path,
+      baseline: null,
+      current: readBundleSignature(startupBundleIdentity.path),
+    });
+  }
+
+  const staticRoot = resolveServedStaticRoot()?.dir ?? null;
   if (!staticRoot) {
     throw new Error(
       "Desktop static bundle missing. Build apps/server (with bundled client) first.",
@@ -940,7 +1179,7 @@ function adjustWindowZoomFromMenu(multiplier: number): void {
 // A configured app-update.yml (or the mock-updates flag) is the prerequisite for any
 // auto-update activity; centralized so the menu and the enable check stay in lockstep.
 function hasConfiguredUpdateFeed(): boolean {
-  return readAppUpdateYml() !== null || Boolean(process.env.T3CODE_DESKTOP_MOCK_UPDATES);
+  return readAppUpdateYml() !== null || Boolean(process.env.SYNARA_DESKTOP_MOCK_UPDATES);
 }
 
 function resolveAutoUpdateDisabledReason(): string | null {
@@ -949,7 +1188,7 @@ function resolveAutoUpdateDisabledReason(): string | null {
     isPackaged: app.isPackaged,
     platform: process.platform,
     appImage: process.env.APPIMAGE,
-    disabledByEnv: process.env.T3CODE_DISABLE_AUTO_UPDATE === "1",
+    disabledByEnv: process.env.SYNARA_DISABLE_AUTO_UPDATE === "1",
     hasUpdateFeedConfig: hasConfiguredUpdateFeed(),
   });
 }
@@ -1163,6 +1402,79 @@ function resolveNotificationIconPath(): string | null {
   return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
 
+function resolveAppSnapHelperPath(): string {
+  if (app.isPackaged) {
+    return Path.resolve(process.resourcesPath, "..", "Helpers", "synara-appsnap-helper");
+  }
+  return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
+}
+
+function ensureMainWindowForAppSnap(): BrowserWindow | null {
+  if (mainWindow?.isDestroyed()) {
+    mainWindow = null;
+  }
+  if (!mainWindow && backendPort > 0 && !isQuitting) {
+    mainWindow = createWindow();
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  focusMainWindow({ stealAppFocus: true });
+  return mainWindow;
+}
+
+function canSendAppSnapEvent(window: BrowserWindow | null): window is BrowserWindow {
+  return Boolean(
+    window &&
+    !window.isDestroyed() &&
+    !window.webContents.isDestroyed() &&
+    !window.webContents.isLoadingMainFrame(),
+  );
+}
+
+function sendAppSnapEvent(
+  window: BrowserWindow | null,
+  send: (webContents: BrowserWindow["webContents"]) => void,
+): boolean {
+  if (!canSendAppSnapEvent(window)) return false;
+  send(window.webContents);
+  return true;
+}
+
+function initializeDesktopAppSnap(): void {
+  if (appSnapManager) return;
+  appSnapManager = new DesktopAppSnapManager({
+    platform: process.platform,
+    helperPath: resolveAppSnapHelperPath(),
+    captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
+    excludedBundleId: APP_USER_MODEL_ID,
+    onState: (state) => {
+      sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
+    },
+    onCaptured: (capture) => {
+      const window = ensureMainWindowForAppSnap();
+      if (sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture))) {
+        return;
+      }
+      // The renderer is still loading: replay the event once the main frame is
+      // ready. The renderer dedupes by capture id, and the capture also stays
+      // in the pending queue as a fallback for the next mount.
+      if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.once("did-finish-load", () => {
+          sendAppSnapEvent(window, (webContents) => sendAppSnapCaptured(webContents, capture));
+        });
+      }
+    },
+    onError: (error, focusApp) => {
+      const window = focusApp ? ensureMainWindowForAppSnap() : mainWindow;
+      if (!sendAppSnapEvent(window, (webContents) => sendAppSnapError(webContents, error))) {
+        showDesktopNotification({
+          title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
+          body: error.message,
+        });
+      }
+    },
+  });
+}
+
 // Keep the app badge aligned with desktop notifications that arrive off-focus.
 function syncUnreadNotificationBadge(): void {
   app.setBadgeCount(unreadBackgroundNotificationCount);
@@ -1170,7 +1482,7 @@ function syncUnreadNotificationBadge(): void {
 
 // Count minimized, hidden, or unfocused windows as background notification targets.
 function isMainWindowForeground(window: BrowserWindow | null): boolean {
-  if (!window) {
+  if (!window || window.isDestroyed()) {
     return false;
   }
   return window.isVisible() && !window.isMinimized() && window.isFocused();
@@ -1191,8 +1503,9 @@ function clearUnreadNotificationBadge(): void {
 
 // Reuse the existing desktop window when the app is launched again so users
 // don't end up with multiple packaged instances racing the same local state.
-function focusMainWindow(): void {
-  if (!mainWindow) {
+function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = null;
     return;
   }
   if (mainWindow.isMinimized()) {
@@ -1200,6 +1513,13 @@ function focusMainWindow(): void {
   }
   if (!mainWindow.isVisible()) {
     mainWindow.show();
+  }
+  if (process.platform === "darwin" && options.stealAppFocus === true) {
+    // BrowserWindow.focus() alone does not activate an app while another macOS
+    // application owns focus. Only AppSnap is an explicit global user gesture;
+    // notification clicks and ordinary activation keep their existing focus policy.
+    app.show();
+    app.focus({ steal: true });
   }
   mainWindow.focus();
 }
@@ -1248,29 +1568,28 @@ function showDesktopNotification(input: {
  * Resolve the Electron userData directory path.
  *
  * Electron derives the default userData path from `productName` in
- * package.json. We override it to a clean lowercase Synara name while seeding
- * from legacy app profiles when needed.
+ * package.json. We override it to a clean lowercase Synara name.
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
-  const seedResult = seedDesktopUserDataProfileFromLegacy({
-    targetPath: userDataPath,
-    legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
-  });
-  if (seedResult.status === "seeded") {
-    console.info("[desktop] Seeded Synara Electron profile from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
+  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+}
+
+function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {
+  const browserProfileRepair = repairBrowserProfileFromBridgeManifest(userDataPath);
+  if (browserProfileRepair.status === "repaired") {
+    console.info("[desktop] Completed Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      copiedEntries: browserProfileRepair.copiedEntries,
     });
-  } else if (seedResult.status === "seed-failed") {
-    console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
-      error: seedResult.error,
+  } else if (browserProfileRepair.status === "repair-failed") {
+    console.warn("[desktop] Failed to complete Synara browser profile bridge repair", {
+      sourcePath: browserProfileRepair.sourcePath,
+      targetPath: browserProfileRepair.targetPath,
+      error: browserProfileRepair.error,
     });
   }
-  return userDataPath;
 }
 
 function configureAppIdentity(): void {
@@ -1383,6 +1702,122 @@ function refreshMacIconCacheOnVersionChange(): void {
   });
 }
 
+// How often the bundle-swap watcher stats app.asar. A stat is cheap; the cost of
+// missing a swap is every subsequent asar read returning bytes from the wrong
+// file (invisible icons, corrupted lazy-loaded route chunks), so poll briskly.
+const BUNDLE_SWAP_POLL_INTERVAL_MS = 15_000;
+
+let bundleSwapPollTimer: NodeJS.Timeout | null = null;
+let bundleSwapPromptOpen = false;
+
+function readBundleSignature(bundlePath: string): BundleSignature | null {
+  try {
+    return bundleSignatureFromStats(OriginalFS.statSync(bundlePath));
+  } catch {
+    return null;
+  }
+}
+
+function captureStartupBundleIdentity(): BundleIdentity | null {
+  if (!app.isPackaged) {
+    return null;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return null;
+  }
+  return { path: bundlePath, signature: readBundleSignature(bundlePath) };
+}
+
+function restartAfterStartupBundleSwap(error: BundleChangedDuringStartupError): void {
+  const baselineSize = error.baseline?.size ?? "unreadable";
+  const currentSize = error.current?.size ?? "unreadable";
+  writeDesktopLogHeader(
+    `bundle changed during startup path=${error.bundlePath} size=${baselineSize}->${currentSize}`,
+  );
+  console.warn("[desktop] Packaged application changed during startup; restarting", error);
+
+  void dialog
+    .showMessageBox({
+      type: "warning",
+      title: "Synara needs to restart",
+      message: "Synara changed while it was opening.",
+      detail:
+        "The current process cannot safely read the replaced application bundle. Restart Synara to finish opening with one consistent version.",
+      buttons: ["Restart Synara"],
+      defaultId: 0,
+    })
+    .catch(() => undefined)
+    .then(() => {
+      app.relaunch();
+      requestGracefulAppQuit("startup-bundle-swap");
+    });
+}
+
+// Electron caches the asar header per process, so once app.asar changes on disk
+// (updater retry racing a relaunch, a reinstall, a build copied over the bundle)
+// every archive read in this process — the synara:// protocol, the backend's static
+// files, lazily-loaded renderer chunks — resolves to stale offsets and silently
+// returns the wrong bytes. Detect the swap and offer a restart; continuing is
+// never safe.
+function startBundleSwapWatcher(): void {
+  if (!app.isPackaged || bundleSwapPollTimer) {
+    return;
+  }
+  const bundlePath = app.getAppPath();
+  if (!isWatchableBundlePath(bundlePath)) {
+    return;
+  }
+  let baseline =
+    startupBundleIdentity && Path.resolve(startupBundleIdentity.path) === Path.resolve(bundlePath)
+      ? (startupBundleIdentity.signature ?? readBundleSignature(bundlePath))
+      : readBundleSignature(bundlePath);
+  if (!baseline) {
+    return;
+  }
+
+  bundleSwapPollTimer = setInterval(() => {
+    // The updater owns the quit/relaunch during its own install handoff, and a
+    // quitting app is about to re-read the new archive anyway.
+    if (isQuitting || isUpdaterInstallPreparing || bundleSwapPromptOpen) {
+      return;
+    }
+    const current = readBundleSignature(bundlePath);
+    if (!baseline || !isBundleSwapped(baseline, current)) {
+      return;
+    }
+    writeDesktopLogHeader(
+      `bundle swap detected path=${bundlePath} size=${baseline.size}->${current?.size ?? "unknown"}`,
+    );
+    // Re-arm on the new identity so declining the restart still catches the
+    // next replacement instead of re-prompting for the same one.
+    baseline = current;
+    bundleSwapPromptOpen = true;
+    void dialog
+      .showMessageBox({
+        type: "warning",
+        title: "Synara was replaced on disk",
+        message: "The installed Synara app changed while it was running.",
+        detail:
+          "The interface keeps running from a safeguarded copy, but parts of the app loaded later can still read the replaced file. Restart now to pick up the new version safely.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        bundleSwapPromptOpen = false;
+        if (response === 0) {
+          app.relaunch();
+          requestGracefulAppQuit("bundle-swap-restart");
+        }
+      })
+      .catch(() => {
+        bundleSwapPromptOpen = false;
+      });
+  }, BUNDLE_SWAP_POLL_INTERVAL_MS);
+  bundleSwapPollTimer.unref();
+}
+
 function clearUpdatePollTimer(): void {
   if (updateStartupTimer) {
     clearTimeout(updateStartupTimer);
@@ -1398,13 +1833,17 @@ function clearUpdatePollTimer(): void {
 // by the install watchdog recovery so polling resumes after a silent install
 // failure instead of staying off until the next app restart.
 function scheduleUpdatePoll(): void {
-  if (updatePollTimer) {
+  if (updatePollTimer || automaticUpdateActivitySuppressed) {
     return;
   }
   updatePollTimer = setInterval(() => {
     void checkForUpdates("poll");
   }, AUTO_UPDATE_POLL_INTERVAL_MS);
   updatePollTimer.unref();
+}
+
+function isExplicitUpdateCheckReason(reason: string): boolean {
+  return reason === "menu" || reason === "renderer";
 }
 
 function emitUpdateState(): void {
@@ -1427,14 +1866,117 @@ function isKnownUpdateVersionNewer(version: string | null | undefined): boolean 
   return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
 }
 
-function getPendingUpdateCacheDir(): string | null {
-  return resolveElectronUpdaterPendingCacheDir({
+function getUpdaterCachePathArgs(): {
+  cacheDirName: string | null;
+  platform: NodeJS.Platform;
+  homeDir: string;
+  localAppData: string | null;
+  xdgCacheHome: string | null;
+} {
+  return {
     cacheDirName: configuredUpdaterCacheDirName,
     platform: process.platform,
     homeDir: OS.homedir(),
     localAppData: process.env.LOCALAPPDATA ?? null,
     xdgCacheHome: process.env.XDG_CACHE_HOME ?? null,
-  });
+  };
+}
+
+function getPendingUpdateCacheDir(): string | null {
+  return resolveElectronUpdaterPendingCacheDir(getUpdaterCachePathArgs());
+}
+
+function clearLegacyUpdaterZipAfterVerifiedInstall(): void {
+  const legacyZipPath = resolveElectronUpdaterLegacyZipPath(getUpdaterCachePathArgs());
+  if (!legacyZipPath) {
+    return;
+  }
+  try {
+    FS.rmSync(legacyZipPath, { force: true });
+    console.info("[desktop-updater] Cleared legacy top-level update.zip after verified install.");
+  } catch (error) {
+    console.warn(
+      `[desktop-updater] Failed to clear legacy top-level update.zip: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function quarantineInstallMarker(reason: string): void {
+  console.warn(`[desktop-updater] Discarding update install marker (${reason}).`);
+  try {
+    clearInstallMarker(getUpdateInstallMarkerPath());
+  } catch (error) {
+    console.warn(
+      `[desktop-updater] Failed to delete quarantined update install marker: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function processInstallMarkerOnStartup(): void {
+  const filePath = getUpdateInstallMarkerPath();
+  const readResult = readInstallMarker(filePath);
+  if (readResult.status === "missing") {
+    return;
+  }
+  if (readResult.status === "invalid") {
+    quarantineInstallMarker(`invalid or unreadable: ${readResult.error}`);
+    return;
+  }
+
+  const marker = readResult.marker;
+  const nowIso = new Date().toISOString();
+  const outcome = resolveInstallMarkerOutcome(marker, app.getVersion(), nowIso);
+  if (outcome === "success") {
+    console.info(
+      `[desktop-updater] Update to ${marker.toVersion} installed successfully (from ${marker.fromVersion})`,
+    );
+    try {
+      clearInstallMarker(filePath);
+    } catch (error) {
+      console.warn(
+        `[desktop-updater] Failed to clear successful update install marker: ${formatErrorMessage(error)}`,
+      );
+    }
+    clearLegacyUpdaterZipAfterVerifiedInstall();
+    return;
+  }
+  if (outcome === "stale" || outcome === "invalid") {
+    quarantineInstallMarker(outcome);
+    return;
+  }
+
+  let consecutiveFailures = marker.consecutiveFailures;
+  if (outcome === "failure") {
+    consecutiveFailures += 1;
+    const failedMarker: UpdateInstallMarker = {
+      ...marker,
+      phase: "failed",
+      consecutiveFailures,
+      lastFailureAt: nowIso,
+    };
+    try {
+      writeInstallMarker(filePath, failedMarker);
+    } catch (error) {
+      console.error(
+        `[desktop-updater] Failed to persist restart install failure: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  automaticUpdateActivitySuppressed = true;
+  const message = `Synara restarted, but update ${marker.toVersion} was not installed. Try again.`;
+  setUpdateState(
+    reduceDesktopUpdateStateOnInstallRestartFailure(
+      updateState,
+      marker.toVersion,
+      consecutiveFailures,
+      message,
+    ),
+  );
+  console.error(
+    `[desktop-updater] UPDATE INSTALL FAILED: still running ${app.getVersion()} after attempting ${marker.toVersion}; consecutive failures=${consecutiveFailures}. Automatic update checks are suppressed until the user retries.`,
+  );
+  void logMacUpdateDiagnostics("startup install verification failure");
 }
 
 // electron-updater can leave a same-version ZIP in `pending` after a restart or
@@ -1606,6 +2148,19 @@ function handleDesktopAppForegrounded(): void {
 
 async function checkForUpdates(reason: string): Promise<void> {
   if (isQuitting || !updaterConfigured || updateCheckInFlight) return;
+  if (automaticUpdateActivitySuppressed) {
+    if (!isExplicitUpdateCheckReason(reason)) {
+      console.info(
+        `[desktop-updater] Skipping automatic update check (${reason}) after an unverified install failure.`,
+      );
+      return;
+    }
+    automaticUpdateActivitySuppressed = false;
+    console.info(
+      `[desktop-updater] User requested update recovery (${reason}); automatic checks are enabled for this session.`,
+    );
+    scheduleUpdatePoll();
+  }
   if (
     updateState.status === "checking" ||
     updateState.status === "downloading" ||
@@ -1639,6 +2194,16 @@ async function downloadAvailableUpdate(): Promise<{
   accepted: boolean;
   completed: boolean;
 }> {
+  if (
+    updaterConfigured &&
+    updateState.status === "error" &&
+    updateState.errorContext === "install" &&
+    updateState.downloadedVersion === null &&
+    updateState.availableVersion !== null
+  ) {
+    await checkForUpdates("renderer");
+    return { accepted: true, completed: false };
+  }
   if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
     return { accepted: false, completed: false };
   }
@@ -1740,7 +2305,7 @@ async function installDownloadedUpdate(): Promise<{
     return { accepted: false, completed: false };
   }
   const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
-  if (!isKnownUpdateVersionNewer(versionToInstall)) {
+  if (!versionToInstall || !isKnownUpdateVersionNewer(versionToInstall)) {
     await clearPendingUpdateCache("downloaded version is not newer than current app");
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
     console.info(
@@ -1749,21 +2314,47 @@ async function installDownloadedUpdate(): Promise<{
     return { accepted: false, completed: false };
   }
 
-  isQuitting = true;
-  isUpdaterInstallPreparing = true;
-  clearUpdatePollTimer();
+  const markerPath = getUpdateInstallMarkerPath();
+  const existingMarkerResult = readInstallMarker(markerPath);
+  const existingMarker =
+    existingMarkerResult.status === "valid" &&
+    existingMarkerResult.marker.toVersion === versionToInstall
+      ? existingMarkerResult.marker
+      : null;
+  const marker = createUpdateInstallMarker({
+    fromVersion: app.getVersion(),
+    toVersion: versionToInstall,
+    requestedAt: new Date().toISOString(),
+    consecutiveFailures: existingMarker?.consecutiveFailures ?? 0,
+    lastFailureAt: existingMarker?.lastFailureAt ?? null,
+  });
+  let markerWritten = false;
   try {
+    writeInstallMarker(markerPath, marker);
+    markerWritten = true;
+    isQuitting = true;
+    isUpdaterInstallPreparing = true;
+    clearUpdatePollTimer();
     await stopBackendAndWaitForExit();
+    await logMacUpdateDiagnostics("before install handoff");
     isUpdaterQuitAndInstallInFlight = true;
     autoUpdater.quitAndInstall();
     armInstallWatchdog();
-    return { accepted: true, completed: true };
+    return { accepted: true, completed: false };
   } catch (error: unknown) {
     const message = formatErrorMessage(error);
     isUpdaterInstallPreparing = false;
     isUpdaterQuitAndInstallInFlight = false;
     isQuitting = false;
-    setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
+    const consecutiveFailures = markerWritten
+      ? recordInstallMarkerFailure(new Date().toISOString())
+      : updateState.installFailureCount;
+    startBackend();
+    scheduleUpdatePoll();
+    setUpdateState({
+      ...reduceDesktopUpdateStateOnInstallFailure(updateState, message),
+      installFailureCount: consecutiveFailures,
+    });
     console.error(`[desktop-updater] Failed to install update: ${message}`);
     return { accepted: true, completed: false };
   }
@@ -1778,6 +2369,7 @@ function configureAutoUpdater(): void {
     enabled,
     status: enabled ? "idle" : "disabled",
   });
+  processInstallMarkerOnStartup();
   if (!enabled) {
     configuredGitHubUpdateSource = null;
     configuredUpdaterCacheDirName = null;
@@ -1793,8 +2385,9 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
+  // The dedicated channel keeps the permanent compatibility release on the
+  // default feed while Synara versions advance independently.
+  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged
@@ -1871,6 +2464,14 @@ function configureAutoUpdater(): void {
       return;
     }
     clearUpdaterInstallInFlightAfterError();
+    const installFailureCount =
+      errorContext === "install"
+        ? recordInstallMarkerFailure(new Date().toISOString())
+        : updateState.installFailureCount;
+    if (errorContext === "install") {
+      startBackend();
+      scheduleUpdatePoll();
+    }
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",
@@ -1879,6 +2480,7 @@ function configureAutoUpdater(): void {
         downloadPercent: null,
         errorContext,
         canRetry: updateState.availableVersion !== null || updateState.downloadedVersion !== null,
+        installFailureCount,
       });
     }
     console.error(`[desktop-updater] Updater error: ${message}`);
@@ -1914,6 +2516,13 @@ function configureAutoUpdater(): void {
 
   clearUpdatePollTimer();
 
+  if (automaticUpdateActivitySuppressed) {
+    console.info(
+      "[desktop-updater] Startup and periodic update checks suppressed after failed install verification.",
+    );
+    return;
+  }
+
   updateStartupTimer = setTimeout(() => {
     updateStartupTimer = null;
     void checkForUpdates("startup");
@@ -1936,22 +2545,18 @@ function backendNodeArgs(): string[] {
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
+  const servedStaticRoot = resolveServedStaticRoot();
   return {
     ...process.env,
-    DPCODE_MODE: "desktop",
-    DPCODE_NO_BROWSER: "1",
-    DPCODE_PORT: String(backendPort),
-    DPCODE_HOME: BASE_DIR,
-    DPCODE_AUTH_TOKEN: backendAuthToken,
-    [DPCODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
-    [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
-    T3CODE_MODE: "desktop",
-    T3CODE_NO_BROWSER: "1",
-    T3CODE_PORT: String(backendPort),
-    T3CODE_HOME: BASE_DIR,
-    T3CODE_AUTH_TOKEN: backendAuthToken,
+    // Point the backend's HTTP static route at the same swap-immune snapshot the
+    // synara:// protocol serves, so both surfaces survive app.asar being replaced.
+    ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
+    SYNARA_MODE: "desktop",
+    SYNARA_NO_BROWSER: "1",
+    SYNARA_PORT: String(backendPort),
     SYNARA_HOME: BASE_DIR,
-    [T3CODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
+    SYNARA_AUTH_TOKEN: backendAuthToken,
+    [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
   };
 }
 
@@ -1960,7 +2565,7 @@ function scheduleBackendRestart(reason: string): void {
 
   const delayMs = Math.min(500 * 2 ** restartAttempt, 10_000);
   restartAttempt += 1;
-  console.error(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
+  safeConsoleError(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
 
   restartTimer = setTimeout(() => {
     restartTimer = null;
@@ -2163,6 +2768,8 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       clearUpdateCheckTimeoutTimer();
       clearUpdatePollTimer();
       cancelBackendReadinessWait();
+      appSnapManager?.dispose();
+      appSnapManager = null;
       await disposeBrowserUsePipeServerForShutdown(reason);
       await stopBackendAndWaitForExit();
       browserManager.dispose();
@@ -2194,6 +2801,18 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
+  const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
+  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+    event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+    await acknowledgeSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
   ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
   ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the
@@ -2489,6 +3108,9 @@ function registerIpcHandlers(): void {
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
+  if (appSnapManager) {
+    registerAppSnapIpcHandlers(ipcMain, appSnapManager);
+  }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   void ensureBrowserUsePipeServer().catch((error) => {
@@ -2538,7 +3160,7 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
   }
   return {
     titleBarStyle: "hiddenInset",
-    // Derived from the shared chat-surface header geometry (@t3tools/shared/desktopChrome)
+    // Derived from the shared chat-surface header geometry (@synara/shared/desktopChrome)
     // so the native lights and the renderer's leading toggle/arrow controls always share
     // the same vertical center. Tune the height/radius there, never the raw px here.
     trafficLightPosition: getMacTrafficLightPosition(),
@@ -2546,9 +3168,24 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
 }
 
 function createWindow(): BrowserWindow {
+  const savedWindowState = readDesktopWindowState(DESKTOP_WINDOW_STATE_PATH);
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const restoredBounds = savedWindowState
+    ? resolveVisibleWindowBounds({
+        savedBounds: savedWindowState.bounds,
+        displayWorkAreas: [
+          primaryDisplay.workArea,
+          ...screen
+            .getAllDisplays()
+            .filter((display) => display.id !== primaryDisplay.id)
+            .map((display) => display.workArea),
+        ],
+        minimumWidth: 840,
+        minimumHeight: 620,
+      })
+    : { width: 1100, height: 780 };
   const window = new BrowserWindow({
-    width: 1100,
-    height: 780,
+    ...restoredBounds,
     minWidth: 840,
     minHeight: 620,
     show: false,
@@ -2623,9 +3260,12 @@ function createWindow(): BrowserWindow {
     emitUpdateState();
   });
   window.once("ready-to-show", () => {
-    // Launch filling the screen work area; the 1100x780 size above stays as the
-    // restore bounds when the user toggles the window back out of maximized.
-    window.maximize();
+    // Preserve the original first-launch behavior, then respect the state saved
+    // by subsequent closes. Normal bounds are restored before maximizing so the
+    // native restore control returns to the user's last windowed size.
+    if (!savedWindowState || savedWindowState.isMaximized) {
+      window.maximize();
+    }
     window.show();
     emitDesktopWindowState(window);
   });
@@ -2634,12 +3274,23 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
+  window.on("close", () => {
+    try {
+      writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
+        version: 1,
+        bounds: window.getNormalBounds(),
+        isMaximized: window.isMaximized(),
+      });
+    } catch (error) {
+      console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+  });
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
-    void window.loadURL(`${DESKTOP_SCHEME}://app/index.html`);
+    void window.loadURL(SYNARA_DESKTOP_ENTRY_URL);
   }
 
   window.on("closed", () => {
@@ -2698,7 +3349,11 @@ function configureMediaPermissions(): void {
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
-app.setPath("userData", resolveUserDataPath());
+const userDataPath = resolveUserDataPath();
+if (hasSingleInstanceLock) {
+  repairBrowserProfileBeforeElectronReady(userDataPath);
+}
+app.setPath("userData", userDataPath);
 
 configureAppIdentity();
 
@@ -2756,6 +3411,13 @@ app.on("before-quit", (event) => {
 
   if (isUpdaterQuitAndInstallInFlight) {
     // Electron's updater owns this quit; canceling it would turn install into a plain app quit.
+    try {
+      markInstallHandoffSync(getUpdateInstallMarkerPath());
+    } catch (error) {
+      console.error(
+        `[desktop-updater] Failed to persist install handoff marker during quit: ${formatErrorMessage(error)}`,
+      );
+    }
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
   }
@@ -2780,8 +3442,18 @@ if (hasSingleInstanceLock) {
       applyLegacyMacDockIcon();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
+      initializeDesktopAppSnap();
       configureApplicationMenu();
-      registerDesktopProtocol();
+      try {
+        registerDesktopProtocol();
+      } catch (error) {
+        if (error instanceof BundleChangedDuringStartupError) {
+          restartAfterStartupBundleSwap(error);
+          return;
+        }
+        throw error;
+      }
+      startBundleSwapWatcher();
       configureAutoUpdater();
       void bootstrap().catch((error) => {
         handleFatalStartupError("bootstrap", error);
@@ -2834,6 +3506,15 @@ app.on("window-all-closed", () => {
 });
 
 if (process.platform !== "win32") {
+  process.on("uncaughtException", (error: unknown) => {
+    if (!isBrokenPipeError(error)) {
+      throw error;
+    }
+    if (desktopShutdownPromise) return;
+    writeDesktopLogHeader("EPIPE received");
+    requestGracefulAppQuit("EPIPE");
+  });
+
   process.on("SIGINT", () => {
     if (desktopShutdownPromise) return;
     writeDesktopLogHeader("SIGINT received");

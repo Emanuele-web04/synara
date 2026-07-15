@@ -5,7 +5,7 @@
 // the Settings → Profile panel and the exported share card so both stay in sync.
 // Layer: web profile feature (pure selection logic, no I/O).
 
-import type { ProfileHeatmapCell, ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
+import type { ProfileHeatmapCell, ProfileStats, ProfileTokenStats } from "@synara/contracts";
 
 export interface ProfileHeatmapSelection {
   readonly cells: ReadonlyArray<ProfileHeatmapCell>;

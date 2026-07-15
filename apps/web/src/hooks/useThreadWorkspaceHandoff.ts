@@ -1,13 +1,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { OrchestrationShellSnapshot, ThreadId } from "@t3tools/contracts";
-import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
+import type { OrchestrationShellSnapshot, ThreadId } from "@synara/contracts";
+import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
 import { gitHandoffThreadMutationOptions } from "~/lib/gitReactQuery";
 import { buildSuggestedWorktreeName } from "../components/ChatView.logic";
 import { toastManager } from "../components/ui/toast";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
-import { setupProjectScript } from "../projectScripts";
+import {
+  setupProjectScript,
+  type ProjectScriptRunOptions,
+  type ProjectScriptRunResult,
+} from "../projectScripts";
 import type { Project, ProjectScript, Thread, ThreadWorkspacePatch } from "../types";
 
 export function useThreadWorkspaceHandoff(input: {
@@ -23,13 +27,8 @@ export function useThreadWorkspaceHandoff(input: {
   stopActiveThreadSession: () => Promise<void>;
   runProjectScript: (
     script: ProjectScript,
-    options?: {
-      cwd?: string;
-      worktreePath?: string | null;
-      rememberAsLastInvoked?: boolean;
-      env?: Record<string, string>;
-    },
-  ) => Promise<void>;
+    options?: ProjectScriptRunOptions,
+  ) => Promise<ProjectScriptRunResult | null>;
   setStoreThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
 }) {

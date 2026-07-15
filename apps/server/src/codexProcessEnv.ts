@@ -5,36 +5,44 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 
-import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
+import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
   type ShellEnvironmentReader,
-} from "@t3tools/shared/shell";
+} from "@synara/shared/shell";
 
-import {
-  resolveBaseCodexHomePath,
-  resolveDpCodeCodexHomeOverlayPath,
-  setCodexConfigOverlayForced,
-  shouldDisableDpCodeBrowserPlugin,
-} from "./codexHomePaths.ts";
+import { resolveBaseCodexHomePath, resolveSynaraCodexHomeOverlayPath } from "./codexHomePaths.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
+const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
+const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
+// Retired local browser integrations used a stable six-character namespace.
+// Match the structural conflict without retaining any previous product name.
+const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
+  /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
+
+interface CodexOverlayEntryLinker {
+  readonly symlink: typeof symlinkSync;
+  readonly copyFile: typeof copyFileSync;
+}
 
 export function resolveCodexBrowserUsePipePath(
   input: {
@@ -43,10 +51,7 @@ export function resolveCodexBrowserUsePipePath(
   } = {},
 ): string {
   const env = input.env ?? process.env;
-  const configured =
-    env.SYNARA_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() ||
-    env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+  const configured = env.SYNARA_BROWSER_USE_PIPE_PATH?.trim();
   if (configured) {
     return configured;
   }
@@ -55,11 +60,48 @@ export function resolveCodexBrowserUsePipePath(
     : "/tmp/codex-browser-use.sock";
 }
 
-export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
+function isSafePluginSectionHeader(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_CONFIG_SUPPRESSION_HEADER_LENGTH &&
+    /^\[plugins\."[^"\r\n]+"\]$/.test(value)
+  );
+}
+
+export function readSynaraConfigSuppressions(markerPath: string): readonly string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const marker = parsed as { version?: unknown; sectionHeaders?: unknown };
+    if (marker.version !== 1 || !Array.isArray(marker.sectionHeaders)) return [];
+    if (marker.sectionHeaders.length > MAX_CONFIG_SUPPRESSION_SECTIONS) return [];
+    return [...new Set(marker.sectionHeaders.filter(isSafePluginSectionHeader))];
+  } catch {
+    return [];
+  }
+}
+
+function findConflictingLocalBrowserPluginSections(config: string): readonly string[] {
+  return [
+    ...new Set(
+      config
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN.test(line)),
+    ),
+  ];
+}
+
+export function disableCodexConfigSections(
+  config: string,
+  sectionHeaders: readonly string[],
+  appendMissing = false,
+): string {
+  const targets = new Set(sectionHeaders.filter(isSafePluginSectionHeader));
   const lines = config.split(/\r?\n/);
   const output: string[] = [];
   let inTargetSection = false;
-  let sawTargetSection = false;
+  const seenTargetSections = new Set<string>();
   let targetSectionHasEnabled = false;
 
   const closeTargetSection = () => {
@@ -72,8 +114,8 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
     const trimmed = line.trim();
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       closeTargetSection();
-      inTargetSection = trimmed === DPCODE_BROWSER_PLUGIN_CONFIG_HEADER;
-      sawTargetSection ||= inTargetSection;
+      inTargetSection = targets.has(trimmed);
+      if (inTargetSection) seenTargetSections.add(trimmed);
       targetSectionHasEnabled = false;
       output.push(line);
       continue;
@@ -90,14 +132,72 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
 
   closeTargetSection();
 
-  if (!sawTargetSection) {
-    if (output.length > 0 && output.at(-1)?.trim()) {
-      output.push("");
+  if (appendMissing) {
+    for (const header of targets) {
+      if (seenTargetSections.has(header)) continue;
+      if (output.length > 0 && output.at(-1)?.trim()) {
+        output.push("");
+      }
+      output.push(header, "enabled = false");
     }
-    output.push(DPCODE_BROWSER_PLUGIN_CONFIG_HEADER, "enabled = false");
   }
 
   return output.join("\n");
+}
+
+function writeSynaraConfigSuppressions(
+  markerPath: string,
+  sectionHeaders: readonly string[],
+): void {
+  const normalized = [...new Set(sectionHeaders.filter(isSafePluginSectionHeader))].slice(
+    0,
+    MAX_CONFIG_SUPPRESSION_SECTIONS,
+  );
+  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    `${JSON.stringify({ version: 1, sectionHeaders: normalized }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  renameSync(temporaryPath, markerPath);
+}
+
+export function linkOrCopyCodexOverlayEntry(
+  input: {
+    readonly entryName: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly type: "dir" | "file";
+  },
+  linker: CodexOverlayEntryLinker = {
+    symlink: symlinkSync,
+    copyFile: copyFileSync,
+  },
+): void {
+  try {
+    linker.symlink(input.sourcePath, input.targetPath, input.type);
+  } catch (error: unknown) {
+    if (input.type === "file" && CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
+      linker.copyFile(input.sourcePath, input.targetPath);
+      return;
+    }
+    throw error;
+  }
+}
+
+export function prioritizeCodexOverlayEntries(entries: readonly string[]): string[] {
+  const sharedStateEntries: string[] = [];
+  const otherEntries: string[] = [];
+
+  for (const entry of entries) {
+    if (CODEX_OVERLAY_SHARED_STATE_FILES.has(entry)) {
+      sharedStateEntries.push(entry);
+    } else {
+      otherEntries.push(entry);
+    }
+  }
+
+  return [...sharedStateEntries, ...otherEntries];
 }
 
 function ensureCodexOverlaySymlink(input: {
@@ -131,7 +231,7 @@ function ensureCodexOverlaySymlink(input: {
     }
   }
 
-  symlinkSync(input.sourcePath, input.targetPath, input.type);
+  linkOrCopyCodexOverlayEntry(input);
 }
 
 export function appendCodexConfigSection(config: string, section: string): string {
@@ -140,20 +240,12 @@ export function appendCodexConfigSection(config: string, section: string): strin
     return config;
   }
   if (config.includes(trimmedSection.split("\n")[0] ?? trimmedSection)) {
-    // Section header already present (e.g. user configured it manually):
-    // don't duplicate the table, which would make the TOML invalid.
     return config;
   }
   const base = config.trimEnd();
   return base.length > 0 ? `${base}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
 }
 
-// Markers delimiting Synara-managed config appended to the shared overlay
-// config.toml. The overlay is rebuilt from the source config on every
-// buildCodexProcessEnv call (version checks, discovery, text generation), and
-// most callers don't know about the agent-gateway MCP section — the markers
-// let those rewrites carry the previously appended block forward instead of
-// dropping it while a codex app-server session is about to read the file.
 export const SYNARA_MANAGED_CODEX_CONFIG_BEGIN = "# >>> synara managed config >>>";
 export const SYNARA_MANAGED_CODEX_CONFIG_END = "# <<< synara managed config <<<";
 
@@ -171,8 +263,6 @@ export function extractManagedCodexConfigSection(config: string): string | undef
   return content.length > 0 ? content : undefined;
 }
 
-// Normalize TOML table headers so legal bracket/dot whitespace does not produce
-// duplicate managed tables when comparing user config against Synara config.
 function normalizeTomlTableHeaderName(line: string): string | undefined {
   const match = /^\s*\[\s*(.*?)\s*\]\s*(?:#.*)?$/.exec(line);
   if (!match) {
@@ -217,14 +307,10 @@ function findNextTomlTableHeaderIndex(config: string, start: number): number {
   return config.length;
 }
 
-// True when the config declares the given table header as an actual TOML
-// header line (not inside a comment or string, which a raw substring search
-// would falsely match — e.g. `# [mcp_servers.synara]` in an example block).
 export function configHasTomlTableHeader(config: string, header: string): boolean {
   return findTomlTableHeader(config, header) !== undefined;
 }
 
-// Split a TOML snippet into its top-level tables (header line + body).
 function splitTomlTables(snippet: string): string[] {
   const tables: string[] = [];
   let current: string[] = [];
@@ -241,11 +327,6 @@ function splitTomlTables(snippet: string): string[] {
   return tables.filter((table) => table.length > 0);
 }
 
-// Insert an env-var name into the `exclude` array of an existing
-// `[shell_environment_policy]` table, or add the key if the table lacks one.
-// Only used when the user already defines the table (we cannot append a
-// duplicate table header), because the token exclusion is a security control
-// that must survive user-customized policies.
 export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
   if (!envVarName) {
     return config;
@@ -274,15 +355,7 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
 }
 
 function appendManagedCodexConfigSection(config: string, section: string): string {
-  const trimmedSection = section.trim();
-  if (!trimmedSection) {
-    return config;
-  }
-  // Respect user-managed copies table by table: appending a table whose
-  // header already exists in the config would produce invalid TOML, and the
-  // user's own definition should govern in that case. (The token exclusion is
-  // separately merged into user-owned policy tables by the overlay writer.)
-  const tables = splitTomlTables(trimmedSection).filter((table) => {
+  const tables = splitTomlTables(section.trim()).filter((table) => {
     const header = table.split("\n")[0]?.trim();
     return header === undefined || !configHasTomlTableHeader(config, header);
   });
@@ -295,14 +368,13 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
   );
 }
 
-function prepareDpCodeCodexHomeOverlay(input: {
+function prepareSynaraCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
-  readonly disableBrowserPlugin: boolean;
   readonly appendConfigToml?: string;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -310,7 +382,9 @@ function prepareDpCodeCodexHomeOverlay(input: {
   mkdirSync(overlayHomePath, { recursive: true });
 
   try {
-    for (const entry of readdirSync(sourceHomePath)) {
+    // Auth must get a best-effort link/copy before optional entries whose
+    // symlinks may fail on restricted Windows installs.
+    for (const entry of prioritizeCodexOverlayEntries(readdirSync(sourceHomePath))) {
       if (entry === "config.toml") {
         continue;
       }
@@ -331,13 +405,15 @@ function prepareDpCodeCodexHomeOverlay(input: {
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
-  let overlayConfig = input.disableBrowserPlugin
-    ? disableDpCodeBrowserPluginInCodexConfig(sourceConfig)
-    : sourceConfig;
-  // Callers that don't pass appendConfigToml (version checks, discovery, text
-  // generation) must not strip a managed section a concurrent provider
-  // session relies on; carry the previously written block forward.
+  const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
+  const suppressedSections = [
+    ...new Set([
+      ...findConflictingLocalBrowserPluginSections(sourceConfig),
+      ...readSynaraConfigSuppressions(suppressionMarkerPath),
+    ]),
+  ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
   const overlayConfigPath = path.join(overlayHomePath, "config.toml");
+  let overlayConfig = disableCodexConfigSections(sourceConfig, suppressedSections, true);
   const managedSection =
     input.appendConfigToml ??
     (existsSync(overlayConfigPath)
@@ -345,17 +421,13 @@ function prepareDpCodeCodexHomeOverlay(input: {
       : undefined);
   if (managedSection) {
     overlayConfig = appendManagedCodexConfigSection(overlayConfig, managedSection);
-    // Security control that must survive every rewrite: when the user defines
-    // their own [shell_environment_policy] (so the managed policy table was
-    // skipped), the token exclusion is merged into that table — including on
-    // rebuilds from the source config, which otherwise reset the user table
-    // to its unmerged form while keeping the MCP block alive.
     const tokenEnvVar = /bearer_token_env_var\s*=\s*"([^"]+)"/.exec(managedSection)?.[1];
     if (tokenEnvVar) {
       overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
     }
   }
   writeFileSync(overlayConfigPath, overlayConfig, "utf8");
+  writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   return overlayHomePath;
 }
@@ -366,32 +438,15 @@ export function buildCodexProcessEnv(
     readonly homePath?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
-    /**
-     * Extra config.toml content (e.g. the Synara agent-gateway MCP server)
-     * written into the overlay home. Never mutates the user's real config:
-     * providing it forces the overlay even when the browser-plugin disable is
-     * opted out.
-     */
     readonly appendConfigToml?: string;
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const disableBrowserPlugin = shouldDisableDpCodeBrowserPlugin(baseEnv);
-  if (input.appendConfigToml && !disableBrowserPlugin) {
-    // The overlay is being forced despite the browser-plugin opt-out; record
-    // it so codexHomePaths write-path predictions (generated images) keep
-    // pointing at the home the child process actually writes under.
-    setCodexConfigOverlayForced(true);
-  }
-  const overlayHomePath =
-    disableBrowserPlugin || input.appendConfigToml
-      ? prepareDpCodeCodexHomeOverlay({
-          env: baseEnv,
-          disableBrowserPlugin,
-          ...(input.homePath ? { homePath: input.homePath } : {}),
-          ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
-        })
-      : undefined;
+  const overlayHomePath = prepareSynaraCodexHomeOverlay({
+    env: baseEnv,
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
+  });
   const effectiveEnv =
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }

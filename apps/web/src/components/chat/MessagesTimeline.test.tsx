@@ -3,7 +3,7 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { MessageId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -655,7 +655,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("mb-3");
   });
 
-  it("renders plain user text without preformatted shrink-wrap markup", async () => {
+  it("renders user text as markdown with hard line breaks", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -693,13 +693,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
-      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
-    );
+    expect(markup).toContain("chat-markdown--user");
+    // remark-breaks keeps the user's single newline as a hard break.
+    expect(markup).toContain("tl<br/>\ndr");
     expect(markup).not.toContain("<pre");
   });
 
-  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
+  it("clamps long user messages visually and renders a separate Show more button", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
     const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
@@ -740,7 +740,14 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Show more");
-    expect(markup).not.toContain(hiddenTail);
+    // The full text stays rendered; collapsing is a visual max-height clamp with
+    // a fade mask, so markdown structures are never sliced mid-syntax.
+    expect(markup).toContain(hiddenTail);
+    expect(markup).toContain('data-user-message-clamp="true"');
+    expect(markup).toContain("max-height:");
+    expect(markup).toContain("mask-image:linear-gradient");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toMatch(/aria-controls="[^"]+"/);
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {
@@ -760,7 +767,7 @@ describe("MessagesTimeline", () => {
               id: MessageId.makeUnsafe("message-2"),
               role: "user",
               text: [
-                "yoo what's @terminal-1:1-5 mean",
+                "yoo what's **bold** @terminal-1:1-5 mean",
                 "",
                 "<terminal_context>",
                 "- Terminal 1 lines 1-5:",
@@ -792,6 +799,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
+    expect(markup).toContain("<strong>bold</strong>");
   });
 
   it("renders assistant selection chips from hidden prompt markup when attachments are missing", async () => {
@@ -1464,6 +1472,179 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tool 3");
     expect(markup).toContain("Tool 6");
     expect(markup).toContain("+2 more tool calls");
+  });
+
+  it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-live");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-reasoning-trace",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "reasoning-trace",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              turnId: activeTurnId,
+              label: "Reasoning trace",
+              toolTitle: "Reasoning trace",
+              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-mcp-tool",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.200Z",
+            entry: {
+              id: "mcp-tool",
+              createdAt: "2026-03-17T19:12:28.200Z",
+              turnId: activeTurnId,
+              label: "MCP tool call",
+              toolTitle: "MCP tool call",
+              toolName: "mcp__docs__search",
+              itemType: "mcp_tool_call",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-reasoning-summary",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.300Z",
+            entry: {
+              id: "reasoning-summary",
+              createdAt: "2026-03-17T19:12:28.300Z",
+              turnId: activeTurnId,
+              label: "Reasoning summary",
+              toolTitle: "Reasoning summary",
+              preview: "Updating the adapter",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-command-execution",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.400Z",
+            entry: {
+              id: "command-execution",
+              createdAt: "2026-03-17T19:12:28.400Z",
+              turnId: activeTurnId,
+              label: "Ran command",
+              toolTitle: "Ran command",
+              itemType: "command_execution",
+              preview: "Running the focused tests",
+              tone: "tool",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(3);
+    expect(markup.match(/data-work-entry-icon="true"/g) ?? []).toHaveLength(1);
+    expect(markup).toContain(">Thinking<");
+    expect(markup).toContain("Inspecting apps/web/src/store.ts");
+    expect(markup).not.toContain("Reasoning trace Inspecting");
+  });
+
+  it("keeps Thinking when a new local send has no server turn id yet", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const previousTurnId = TurnId.makeUnsafe("turn-previous");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={null}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-user-previous",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:20.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-previous"),
+              role: "user",
+              text: "Previous request",
+              createdAt: "2026-03-17T19:12:20.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-reasoning-previous",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:21.000Z",
+            entry: {
+              id: "reasoning-previous",
+              createdAt: "2026-03-17T19:12:21.000Z",
+              turnId: previousTurnId,
+              label: "Reasoning",
+              toolTitle: "Reasoning",
+              tone: "info",
+            },
+          },
+          {
+            id: "entry-assistant-previous",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:22.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-previous"),
+              role: "assistant",
+              turnId: previousTurnId,
+              text: "Previous answer",
+              createdAt: "2026-03-17T19:12:22.000Z",
+              completedAt: "2026-03-17T19:12:23.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-user-current",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-current"),
+              role: "user",
+              text: "Current request",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain(">Thinking<");
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {
@@ -2581,6 +2762,10 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [
@@ -2596,6 +2781,7 @@ describe("MessagesTimeline", () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2606,6 +2792,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");

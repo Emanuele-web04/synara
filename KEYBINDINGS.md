@@ -2,7 +2,7 @@
 
 Synara reads keybindings from:
 
-- `~/.dpcode/userdata/keybindings.json`
+- `~/.synara/userdata/keybindings.json`
 
 The file must be a JSON array of rules:
 

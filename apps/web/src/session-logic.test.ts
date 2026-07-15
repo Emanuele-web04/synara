@@ -4,7 +4,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -440,7 +440,7 @@ describe("deriveActiveTaskListState", () => {
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 
-  it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
+  it("keeps an unfinished task list visible after its turn completes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "unfinished-plan-from-turn-1",
@@ -469,7 +469,73 @@ describe("deriveActiveTaskListState", () => {
       }),
     ];
 
-    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
+      createdAt: "2026-02-23T00:00:01.000Z",
+      turnId: "turn-1",
+      tasks: [
+        { task: "Inspect theme implementation", status: "pending" },
+        { task: "Patch token plumbing", status: "pending" },
+      ],
+    });
+  });
+
+  it("uses sequence rather than a random activity id for same-millisecond snapshots", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "z-stale",
+        sequence: 10,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "a-final",
+        sequence: 11,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "completed" }] },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))?.tasks).toEqual([
+      { task: "Ship", status: "completed" },
+    ]);
+  });
+
+  it("treats an empty task update as an explicit clear", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-with-task",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [{ task: "Patch UI", status: "inProgress" }],
+        },
+      }),
+      makeActivity({
+        id: "plan-cleared",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          tasks: [],
+        },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
   });
 });
 
@@ -1704,7 +1770,7 @@ describe("deriveWorkLogEntries", () => {
                   type: "read",
                   command: "sed -n '1,220p' README.md",
                   name: "README.md",
-                  path: "/Users/emanueledipietro/Developer/Testing/t3code/README.md",
+                  path: "/Users/emanueledipietro/Developer/Testing/synara/README.md",
                 },
               ],
             },
@@ -1813,7 +1879,7 @@ describe("deriveWorkLogEntries", () => {
               type: "commandExecution",
               id: "call_6OII41pekq8cFCpOCF9pbeMu",
               command: "/bin/zsh -lc 'git status --short'",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               status: "completed",
               commandActions: [{ type: "unknown", command: "git status --short" }],
               aggregatedOutput: " M apps/desktop/src/main.ts\n...",
@@ -3057,6 +3123,82 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Compacting context");
   });
+
+  it("collapses a compaction progress row into its terminal row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compaction-progress-1",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "compaction-completed-1",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
+
+  it("collapses same-timestamp compaction rows regardless of event id order", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "a-compaction-completed",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "b-compaction-progress",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
+
+  it("does not merge a new compaction progress row into an earlier terminal row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compaction-completed-1",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "compaction-progress-2",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.label).toBe("Context compacted");
+    expect(entries[1]?.label).toBe("Compacting conversation...");
+  });
 });
 
 describe("isLatestTurnSettled", () => {
@@ -3384,6 +3526,7 @@ describe("PROVIDER_OPTIONS", () => {
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
+    const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
@@ -3393,6 +3536,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
       { value: "grok", label: "Grok", available: true },
+      { value: "droid", label: "Droid", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
@@ -3415,6 +3559,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(grok).toEqual({
       value: "grok",
       label: "Grok",
+      available: true,
+    });
+    expect(droid).toEqual({
+      value: "droid",
+      label: "Droid",
       available: true,
     });
     expect(kilo).toEqual({
@@ -3452,7 +3601,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "inProgress",
@@ -3490,7 +3639,7 @@ describe("PROVIDER_OPTIONS", () => {
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
                 "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
               processId: "38005",
               source: "unifiedExecStartup",
               status: "completed",

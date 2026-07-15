@@ -3,7 +3,7 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
-import type { ThreadId, TurnId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
@@ -17,9 +17,11 @@ export const RIGHT_DOCK_PANE_KINDS = [
   "terminal",
   "sidechat",
   "git",
+  "pullRequest",
 ] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
+export type PullRequestInitialTab = "summary" | "timeline" | "code";
 
 const RIGHT_DOCK_PANE_KIND_SET: ReadonlySet<string> = new Set(RIGHT_DOCK_PANE_KINDS);
 
@@ -33,6 +35,10 @@ export interface RightDockPane {
   diffFilePath: string | null;
   // file panes preview one workspace-relative file.
   filePath: string | null;
+  pullRequestProjectId: ProjectId | null;
+  pullRequestRepository: string | null;
+  pullRequestNumber: number | null;
+  pullRequestInitialTab: PullRequestInitialTab | null;
 }
 
 export interface RightDockThreadState {
@@ -86,6 +92,24 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
     diffTurnId: typeof candidate.diffTurnId === "string" ? (candidate.diffTurnId as TurnId) : null,
     diffFilePath: typeof candidate.diffFilePath === "string" ? candidate.diffFilePath : null,
     filePath: typeof candidate.filePath === "string" ? candidate.filePath : null,
+    pullRequestProjectId:
+      typeof candidate.pullRequestProjectId === "string"
+        ? (candidate.pullRequestProjectId as ProjectId)
+        : null,
+    pullRequestRepository:
+      typeof candidate.pullRequestRepository === "string" ? candidate.pullRequestRepository : null,
+    pullRequestNumber:
+      typeof candidate.pullRequestNumber === "number" &&
+      Number.isInteger(candidate.pullRequestNumber) &&
+      candidate.pullRequestNumber > 0
+        ? candidate.pullRequestNumber
+        : null,
+    pullRequestInitialTab:
+      candidate.pullRequestInitialTab === "summary" ||
+      candidate.pullRequestInitialTab === "timeline" ||
+      candidate.pullRequestInitialTab === "code"
+        ? candidate.pullRequestInitialTab
+        : null,
   };
 }
 
@@ -126,6 +150,10 @@ export interface OpenPaneInput {
   diffTurnId?: TurnId | null;
   diffFilePath?: string | null;
   filePath?: string | null;
+  pullRequestProjectId?: ProjectId | null;
+  pullRequestRepository?: string | null;
+  pullRequestNumber?: number | null;
+  pullRequestInitialTab?: PullRequestInitialTab | null;
 }
 
 function createPane(input: OpenPaneInput): RightDockPane {
@@ -136,6 +164,10 @@ function createPane(input: OpenPaneInput): RightDockPane {
     diffTurnId: input.diffTurnId ?? null,
     diffFilePath: input.diffFilePath ?? null,
     filePath: input.filePath ?? null,
+    pullRequestProjectId: input.pullRequestProjectId ?? null,
+    pullRequestRepository: input.pullRequestRepository ?? null,
+    pullRequestNumber: input.pullRequestNumber ?? null,
+    pullRequestInitialTab: input.pullRequestInitialTab ?? null,
   };
 }
 
@@ -148,6 +180,20 @@ function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> 
     (input.diffTurnId !== undefined || input.diffFilePath !== undefined)
   ) {
     return { diffTurnId: input.diffTurnId ?? null, diffFilePath: input.diffFilePath ?? null };
+  }
+  if (
+    input.kind === "pullRequest" &&
+    (input.pullRequestProjectId !== undefined ||
+      input.pullRequestRepository !== undefined ||
+      input.pullRequestNumber !== undefined ||
+      input.pullRequestInitialTab !== undefined)
+  ) {
+    return {
+      pullRequestProjectId: input.pullRequestProjectId ?? null,
+      pullRequestRepository: input.pullRequestRepository ?? null,
+      pullRequestNumber: input.pullRequestNumber ?? null,
+      pullRequestInitialTab: input.pullRequestInitialTab ?? null,
+    };
   }
   return null;
 }
@@ -275,7 +321,19 @@ export function setDockOpenInState(
 export function updatePaneInState(
   state: RightDockThreadState,
   paneId: string,
-  patch: Partial<Pick<RightDockPane, "diffTurnId" | "diffFilePath" | "filePath" | "threadId">>,
+  patch: Partial<
+    Pick<
+      RightDockPane,
+      | "diffTurnId"
+      | "diffFilePath"
+      | "filePath"
+      | "threadId"
+      | "pullRequestProjectId"
+      | "pullRequestRepository"
+      | "pullRequestNumber"
+      | "pullRequestInitialTab"
+    >
+  >,
 ): RightDockThreadState {
   let changed = false;
   const nextPanes = state.panes.map((pane) => {
@@ -287,7 +345,11 @@ export function updatePaneInState(
       nextPane.diffTurnId !== pane.diffTurnId ||
       nextPane.diffFilePath !== pane.diffFilePath ||
       nextPane.filePath !== pane.filePath ||
-      nextPane.threadId !== pane.threadId
+      nextPane.threadId !== pane.threadId ||
+      nextPane.pullRequestProjectId !== pane.pullRequestProjectId ||
+      nextPane.pullRequestRepository !== pane.pullRequestRepository ||
+      nextPane.pullRequestNumber !== pane.pullRequestNumber ||
+      nextPane.pullRequestInitialTab !== pane.pullRequestInitialTab
     ) {
       changed = true;
       return nextPane;

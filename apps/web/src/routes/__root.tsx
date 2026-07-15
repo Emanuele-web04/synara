@@ -7,8 +7,8 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
-import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
+} from "@synara/contracts";
+import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -23,6 +23,9 @@ import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
+import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
@@ -35,6 +38,8 @@ import { useGitProgressToastPreview } from "../components/useGitProgressToastPre
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   serverConfigQueryOptions,
@@ -93,6 +98,7 @@ import {
 import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
+  getStudioOutputInvalidationThreadIdForEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
@@ -190,9 +196,13 @@ function RootRouteView() {
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
           <EventRouter />
+          <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
+          <AppSnapWelcomeDialog />
+          <AppSnapCoordinator />
           <ProviderUpdateNotifications />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -207,6 +217,24 @@ function GitProgressToastPreviewDev() {
   const featureFlags = useFeatureFlags();
   const enabled = import.meta.env.DEV && featureFlags["pin-git-progress-toast-preview"];
   useGitProgressToastPreview(enabled);
+  return null;
+}
+
+function ProviderStatusRefreshCoordinator() {
+  const { settings } = useAppSettings();
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const providerUpdateChecksEnabled =
+    serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
+
+  useProviderAuthRefreshOnFocus();
+  // Provider latest-version checks are slow/network-backed, so keep this cadence
+  // coarse while still honoring the automatic update-check setting.
+  useProviderStatusRefresh({
+    enabled: providerUpdateChecksEnabled,
+    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  });
+
   return null;
 }
 
@@ -226,19 +254,10 @@ function ProviderUpdateNotifications() {
         : null,
     [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
   );
-  const providerUpdateChecksEnabled =
-    serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
   const progressToastDismissedRef = useRef(false);
-  // Provider latest-version checks are slow/network-backed, so keep this much
-  // coarser than auth focus refreshes while still avoiding manual-only refreshes.
-  useProviderStatusRefresh({
-    enabled: providerUpdateChecksEnabled,
-    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
-    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
-  });
   const outdatedProviders = useMemo(
     () =>
       getVisibleProviderUpdateStatuses({
@@ -528,6 +547,34 @@ function GlobalShortcutsDialog() {
       }}
     />
   );
+}
+
+function GlobalFeedbackDialog() {
+  const { activeProject, activeThread } = useFocusedChatContext();
+  const isOpen = useFeedbackDialogStore((state) => state.isOpen);
+  const requestedContext = useFeedbackDialogStore((state) => state.context);
+  const setOpen = useFeedbackDialogStore((state) => state.setOpen);
+  const context = useMemo<FeedbackThreadContext>(
+    () =>
+      requestedContext ?? {
+        provider: activeThread?.modelSelection.provider ?? null,
+        model: activeThread?.modelSelection.model ?? null,
+        projectKind: activeProject?.kind ?? null,
+        environmentMode: activeThread?.envMode ?? null,
+        runtimeMode: activeThread?.runtimeMode ?? null,
+        interactionMode: activeThread?.interactionMode ?? null,
+        sessionStatus: activeThread?.session?.status ?? null,
+        latestTurnState: activeThread?.latestTurn?.state ?? null,
+        messageCount: activeThread?.messages.length ?? 0,
+        activityCount: activeThread?.activities.length ?? 0,
+        hasPendingApproval: activeThread?.hasPendingApprovals === true,
+        hasPendingUserInput: activeThread?.hasPendingUserInput === true,
+        hasThreadError: Boolean(activeThread?.error),
+      },
+    [activeProject?.kind, activeThread, requestedContext],
+  );
+
+  return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
 }
 
 function GlobalWhatsNewSurface() {
@@ -832,6 +879,7 @@ function EventRouter() {
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
+    let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let providerDiscoveryInvalidationFingerprint: string | null = null;
@@ -1032,6 +1080,15 @@ function EventRouter() {
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
       }
+      if (pendingStudioOutputInvalidationThreadIds.size > 0) {
+        // File-change activities cover non-Git Studio chats; finalized checkpoints cover Git.
+        for (const threadId of pendingStudioOutputInvalidationThreadIds) {
+          void queryClient.invalidateQueries({
+            queryKey: serverQueryKeys.studioThreadOutputs(threadId),
+          });
+        }
+        pendingStudioOutputInvalidationThreadIds = new Set();
+      }
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
@@ -1065,6 +1122,10 @@ function EventRouter() {
       const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
       if (projectFileThreadId) {
         pendingProjectFileInvalidationThreadIds.add(projectFileThreadId);
+      }
+      const studioOutputThreadId = getStudioOutputInvalidationThreadIdForEvent(event);
+      if (studioOutputThreadId) {
+        pendingStudioOutputInvalidationThreadIds.add(studioOutputThreadId);
       }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
@@ -1249,6 +1310,7 @@ function EventRouter() {
         setServerWorkspacePaths({
           homeDir: payload.homeDir,
           chatWorkspaceRoot: payload.chatWorkspaceRoot,
+          studioWorkspaceRoot: payload.studioWorkspaceRoot,
         });
         await ensureScopedSubscriptions();
         if (disposed) {
@@ -1391,6 +1453,7 @@ function EventRouter() {
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
+      pendingStudioOutputInvalidationThreadIds = new Set();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
@@ -1428,10 +1491,6 @@ function EventRouter() {
     }
     void reconcile(subscribedThreadIds);
   }, [subscribedThreadIds]);
-
-  // Account changes made outside the app reflect without a restart by
-  // re-probing provider auth when the window regains focus (see hook).
-  useProviderAuthRefreshOnFocus();
 
   return null;
 }

@@ -1,5 +1,5 @@
-import { DEFAULT_MODEL_BY_PROVIDER, type ModelSelection } from "@t3tools/contracts";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { DEFAULT_MODEL_BY_PROVIDER, type ModelSelection } from "@synara/contracts";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 import type { Project } from "../types";
 import { buildChatWorkspaceFolderPath } from "./chatWorkspaceFolders";
@@ -45,6 +45,7 @@ export function resolveFirstSendTarget(input: {
   createdAt: Date;
   isFirstMessage: boolean;
   isHomeChatContainer: boolean;
+  isStudioContainer: boolean;
   projects: readonly Project[];
   selectedWorkspaceRoot: string | null;
   title: string;
@@ -56,13 +57,14 @@ export function resolveFirstSendTarget(input: {
     createdAt,
     isFirstMessage,
     isHomeChatContainer,
+    isStudioContainer,
     projects,
     selectedWorkspaceRoot,
     title,
     titleSeed,
   } = input;
 
-  if (!isFirstMessage || !isHomeChatContainer) {
+  if (!isFirstMessage || (!isHomeChatContainer && !isStudioContainer)) {
     return {
       kind: "current",
       target: buildProjectTarget(activeProject),
@@ -71,6 +73,13 @@ export function resolveFirstSendTarget(input: {
 
   // Folder mentions intentionally escape the generic-chat workspace and become normal projects.
   if (!selectedWorkspaceRoot) {
+    if (isStudioContainer) {
+      return {
+        kind: "current",
+        target: buildProjectTarget(activeProject),
+      };
+    }
+
     if (!chatWorkspaceRoot) {
       return {
         kind: "current",

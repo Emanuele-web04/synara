@@ -1,4 +1,4 @@
-import { CommandId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { CommandId, MessageId, ProjectId, ThreadId } from "@synara/contracts";
 import { type CxOptions, cx } from "class-variance-authority";
 import { twMerge } from "tailwind-merge";
 import * as Random from "effect/Random";
@@ -9,7 +9,7 @@ export function cn(...inputs: CxOptions) {
 }
 
 export function isMacPlatform(platform: string): boolean {
-  return /mac|iphone|ipad|ipod/i.test(platform);
+  return /mac|darwin|iphone|ipad|ipod/i.test(platform);
 }
 
 export function isWindowsPlatform(platform: string): boolean {

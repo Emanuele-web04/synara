@@ -1,5 +1,5 @@
-import type { OrchestrationEvent, ThreadId } from "@t3tools/contracts";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";

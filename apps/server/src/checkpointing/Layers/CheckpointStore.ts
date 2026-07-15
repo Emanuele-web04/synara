@@ -17,7 +17,7 @@ import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.t
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@synara/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 
@@ -117,7 +117,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       }
 
       yield* Effect.acquireUseRelease(
-        fs.makeTempDirectory({ prefix: "t3-fs-checkpoint-" }),
+        fs.makeTempDirectory({ prefix: "synara-fs-checkpoint-" }),
         (tempDir) =>
           Effect.gen(function* () {
             const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
@@ -125,9 +125,9 @@ const makeCheckpointStore = Effect.gen(function* () {
               ...process.env,
               GIT_INDEX_FILE: tempIndexPath,
               GIT_AUTHOR_NAME: "Synara",
-              GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+              GIT_AUTHOR_EMAIL: "synara@users.noreply.github.com",
               GIT_COMMITTER_NAME: "Synara",
-              GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+              GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
             };
 
             const headExists = yield* hasHeadCommit(input.cwd);
@@ -163,7 +163,7 @@ const makeCheckpointStore = Effect.gen(function* () {
               });
             }
 
-            const message = `t3 checkpoint ref=${input.checkpointRef}`;
+            const message = `Synara checkpoint ref=${input.checkpointRef}`;
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,
@@ -363,6 +363,88 @@ const makeCheckpointStore = Effect.gen(function* () {
       return result.stdout;
     });
 
+  const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.reverseCheckpointDiff";
+      const fromCommitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
+      const toCommitOid = yield* resolveCheckpointCommit(input.cwd, input.toCheckpointRef);
+
+      if (!fromCommitOid || !toCommitOid) {
+        return false;
+      }
+
+      const diff = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: [
+          "diff",
+          "--patch",
+          "--binary",
+          "--full-index",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+          fromCommitOid,
+          toCommitOid,
+        ],
+        maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      if (diff.stdout.length === 0) {
+        return true;
+      }
+
+      const changedPaths = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["diff", "--name-only", "--no-renames", "-z", fromCommitOid, toCommitOid],
+        maxOutputBytes: input.maxOutputBytes ?? CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      const affectedPaths = changedPaths.stdout.split("\0").filter((entry) => entry.length > 0);
+
+      return yield* Effect.acquireUseRelease(
+        fs.makeTempDirectory({ prefix: "synara-checkpoint-undo-" }),
+        (tempDir) =>
+          Effect.gen(function* () {
+            const patchPath = path.join(tempDir, "turn.patch");
+            yield* fs.writeFileString(patchPath, diff.stdout);
+            yield* git.execute({
+              operation,
+              cwd: input.cwd,
+              args: ["apply", "--reverse", "--whitespace=nowarn", "--", patchPath],
+            });
+            if (affectedPaths.length > 0) {
+              const resetExit = yield* Effect.exit(
+                git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["reset", "--quiet", fromCommitOid, "--", ...affectedPaths],
+                }),
+              );
+              if (Exit.isFailure(resetExit)) {
+                yield* git.execute({
+                  operation,
+                  cwd: input.cwd,
+                  args: ["apply", "--whitespace=nowarn", "--", patchPath],
+                });
+                return yield* Effect.failCause(resetExit.cause);
+              }
+            }
+            return true;
+          }),
+        (tempDir) => fs.remove(tempDir, { recursive: true }),
+      ).pipe(
+        Effect.catchTag("PlatformError", (error) =>
+          Effect.fail(
+            new CheckpointInvariantError({
+              operation,
+              detail: "Failed to prepare the checkpoint patch for undo.",
+              cause: error,
+            }),
+          ),
+        ),
+      );
+    });
+
   const deleteCheckpointRefs: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.deleteCheckpointRefs";
@@ -387,6 +469,7 @@ const makeCheckpointStore = Effect.gen(function* () {
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    reverseCheckpointDiff,
     deleteCheckpointRefs,
   } satisfies CheckpointStoreShape;
 });

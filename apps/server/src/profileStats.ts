@@ -1,6 +1,9 @@
 // FILE: profileStats.ts
 // Purpose: Compute Profile-page stats from Synara's local projection DB only.
 // The share card never reads provider archives or cloud services for metrics.
+// Stats are lifetime numbers: deleting a thread purges its rows but snapshots
+// the aggregates into profile_stats_deleted_* first (profileStatsArchive.ts),
+// and every query here merges live projections with those archived aggregates.
 // Layer: server stats query service (SqlClient + ServerConfig).
 
 import nodePath from "node:path";
@@ -12,8 +15,8 @@ import type {
   ProviderKind,
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
-} from "@t3tools/contracts";
-import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
+} from "@synara/contracts";
+import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -21,13 +24,13 @@ import { ServerConfig } from "./config";
 
 const HEATMAP_WINDOW_DAYS = 274; // ~9 months, GitHub-style contribution grid.
 const SKILL_RESULT_LIMIT = 12;
-const THREAD_RETENTION_COMMAND_ID_PATTERN = "thread-retention:%";
 const PROVIDER_KINDS = new Set<ProviderKind>([
   "codex",
   "claudeAgent",
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -60,6 +63,13 @@ interface SkillUsageMessageRow {
   readonly mentionsJson: string | null;
 }
 
+// Pre-aggregated usage snapshotted from purged threads (profile_stats_deleted_skills).
+interface ArchivedSkillUsageRow {
+  readonly name: string | null;
+  readonly kind: string | null;
+  readonly runCount: number;
+}
+
 interface MostWorkedProjectRow {
   readonly projectId: string | null;
   readonly title: string | null;
@@ -73,6 +83,7 @@ interface MostWorkedProjectRow {
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
+  readonly model: string | null;
   readonly tokens: number;
 }
 
@@ -232,10 +243,12 @@ function extractTextSkillNames(text: string | null): string[] {
   return names;
 }
 
-// Builds profile skill rows from every stored Synara user message. Structured
-// references stay authoritative, while text tokens backfill older or partial rows.
+// Builds profile skill rows from every stored Synara user message, plus the
+// pre-aggregated counts snapshotted from purged threads. Structured references
+// stay authoritative, while text tokens backfill older or partial rows.
 export function aggregateProfileSkillUsageRows(
   rows: ReadonlyArray<SkillUsageMessageRow>,
+  archivedRows: ReadonlyArray<ArchivedSkillUsageRow> = [],
 ): SkillUsage[] {
   const counts = new Map<string, UsageCount>();
 
@@ -308,6 +321,22 @@ export function aggregateProfileSkillUsageRows(
       } else {
         counts.set(key, { ...usage, runCount: 1 });
       }
+    }
+  }
+
+  for (const row of archivedRows) {
+    const name = normalizeUsageName(row.name);
+    const kind: UsageKind | null = row.kind === "skill" || row.kind === "agent" ? row.kind : null;
+    const runCount = Math.trunc(num(row.runCount));
+    if (!name || !kind || runCount <= 0) {
+      continue;
+    }
+    const key = usageKey(kind, name);
+    const existing = counts.get(key);
+    if (existing) {
+      existing.runCount += runCount;
+    } else {
+      counts.set(key, { name, kind, runCount });
     }
   }
 
@@ -395,15 +424,23 @@ function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
     : "unknown";
 }
 
+interface TokenModelUsageCount {
+  readonly provider: ProviderKind | "unknown";
+  readonly model: string;
+  tokens: number;
+}
+
 interface TokenActivityAggregate {
   readonly tokensByDay: Map<string, number>;
   readonly tokensByProvider: Map<ProviderKind, number>;
+  readonly tokensByProviderModel: Map<string, TokenModelUsageCount>;
   readonly lifetime: number;
 }
 
 function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivityAggregate {
   const tokensByDay = new Map<string, number>();
   const tokensByProvider = new Map<ProviderKind, number>();
+  const tokensByProviderModel = new Map<string, TokenModelUsageCount>();
   let lifetime = 0;
   for (const row of rows) {
     const day = nonEmptyString(row.day);
@@ -417,8 +454,16 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     if (provider !== "unknown") {
       tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
     }
+    const model = nonEmptyString(row.model) ?? "unknown";
+    const providerModelKey = `${provider}\u0000${model}`;
+    const existing = tokensByProviderModel.get(providerModelKey);
+    if (existing) {
+      existing.tokens += tokens;
+    } else {
+      tokensByProviderModel.set(providerModelKey, { provider, model, tokens });
+    }
   }
-  return { tokensByDay, tokensByProvider, lifetime };
+  return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
 }
 
 function computeStreaks(
@@ -517,6 +562,41 @@ function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWork
   };
 }
 
+// ── Shared SQL ─────────────────────────────────────────────────────────
+
+// Maps every turn to the provider/model selected when it was started: turn-start
+// events carry the pending messageId, which projection_turns links back to the
+// turn_id that token activities reference. Shared by the live token stats query
+// and the delete-time archive snapshot so both attribute token deltas the same
+// way. Pass `scope` to restrict the CTE to a single thread (archive path).
+export function turnModelSelectionCte(
+  sql: SqlClient.SqlClient,
+  scope?: { readonly threadId: string },
+) {
+  const turnThreadMatch = scope
+    ? sql`${scope.threadId}`
+    : sql.literal("json_extract(e.payload_json, '$.threadId')");
+  const eventThreadScope = scope
+    ? sql`AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${scope.threadId}`
+    : sql.literal("");
+  return sql`
+    SELECT
+      pt.thread_id AS thread_id,
+      pt.turn_id AS turn_id,
+      MAX(json_extract(e.payload_json, '$.modelSelection.provider')) AS provider,
+      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
+    FROM orchestration_events e
+    JOIN projection_turns pt
+      ON pt.thread_id = ${turnThreadMatch}
+     AND pt.pending_message_id = json_extract(e.payload_json, '$.messageId')
+    WHERE e.event_type = 'thread.turn-start-requested'
+      ${eventThreadScope}
+      AND pt.turn_id IS NOT NULL
+      AND json_type(e.payload_json, '$.modelSelection') = 'object'
+    GROUP BY pt.thread_id, pt.turn_id
+  `;
+}
+
 // ── Service ────────────────────────────────────────────────────────────
 
 export interface ProfileStatsQueryShape {
@@ -561,8 +641,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       ),
     );
 
-  // Retention hides old threads with `thread.delete` but intentionally keeps
-  // their rows for profile history. Manual deletes and deleted projects stay out.
+  // Profile history counts all work ever done. Retention hides are soft
+  // deletes whose rows keep feeding these queries directly; explicit deletes
+  // purge the thread's rows AFTER snapshotting the aggregates that matter into
+  // the profile_stats_deleted_* tables (see profileStatsArchive.ts), so every
+  // query below merges live projections with those archived aggregates.
   // ── SQL helpers ──────────────────────────────────────────────────────
 
   // Activity = days/hours the user actually sent a Synara prompt. One day-hour
@@ -571,27 +654,25 @@ const makeProfileStatsQuery = Effect.gen(function* () {
     legacyCompatibleQuery(
       "profileStats.promptActivity",
       sql<PromptActivityRow>`
+        WITH prompt_events AS (
+          -- The thread join (no deleted_at filter) keeps retention-hidden rows
+          -- counting while excluding orphan message rows of purged threads,
+          -- which are already counted from the archive tables.
+          SELECT m.created_at AS created_at
+          FROM projection_thread_messages m
+          JOIN projection_threads t ON t.thread_id = m.thread_id
+          WHERE m.role = 'user'
+            AND m.source = 'native'
+            AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+          UNION ALL
+          SELECT d.created_at AS created_at
+          FROM profile_stats_deleted_prompts d
+        )
         SELECT
-          STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz})) AS day,
-          CAST(STRFTIME('%H', DATETIME(m.created_at, ${tz})) AS INTEGER) AS hour,
+          STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})) AS day,
+          CAST(STRFTIME('%H', DATETIME(created_at, ${tz})) AS INTEGER) AS hour,
           COUNT(*) AS count
-        FROM projection_thread_messages m
-        JOIN projection_threads t ON t.thread_id = m.thread_id
-        LEFT JOIN projection_projects p ON p.project_id = t.project_id
-        WHERE m.role = 'user'
-          AND m.source = 'native'
-          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
-          AND (
-            t.deleted_at IS NULL
-            OR EXISTS (
-              SELECT 1
-              FROM orchestration_events td
-              WHERE td.event_type = 'thread.deleted'
-                AND td.stream_id = t.thread_id
-                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-            )
-          )
-          AND p.deleted_at IS NULL
+        FROM prompt_events
         GROUP BY day, hour
         ORDER BY day ASC, hour ASC
       `,
@@ -599,63 +680,181 @@ const makeProfileStatsQuery = Effect.gen(function* () {
 
   // Token usage for EVERY provider, straight from Synara's own DB (no external
   // ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
-  // `context-window.updated` activity carries the running `totalProcessedTokens`; the
-  // positive per-thread delta is the tokens processed in that step, bucketed by the
-  // caller's local day and attributed to the thread's provider.
+  // `context-window.updated` activity carries a running per-thread token counter;
+  // the positive delta is the tokens processed in that step, bucketed by the
+  // caller's local day. Deltas are attributed to the provider/model selected for
+  // the turn that processed them (activity turn_id → turn's pending message →
+  // turn-start modelSelection); the thread's current selection is only a fallback
+  // for legacy rows, so switching models mid-thread keeps history accurate.
+  // Counter scale: totalProcessedTokens is the preferred cumulative counter.
+  // Some provider/model groups only emit usedTokens; keep those as separate
+  // fallback series so a mixed-provider thread does not drop their tokens.
   const queryTokenActivity = (tz: string) =>
     legacyCompatibleQuery(
       "profileStats.tokenActivity",
       sql<TokenDayRow>`
-        WITH ev AS (
+        WITH turn_model AS (
+          ${turnModelSelectionCte(sql)}
+        ),
+        ev AS (
           SELECT
             a.thread_id AS thread_id,
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             COALESCE(
-              json_extract(a.payload_json, '$.provider'),
+              tm.provider,
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
                 THEN json_extract(th.model_selection_json, '$.provider')
               END,
               'unknown'
             ) AS provider,
-            CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
+            COALESCE(
+              tm.model,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.model')
+              END,
+              'unknown'
+            ) AS model,
+            CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
+            CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
             a.sequence AS sequence,
             a.created_at AS created_at,
             a.activity_id AS activity_id
           FROM projection_thread_activities a
           JOIN projection_threads th ON th.thread_id = a.thread_id
-          LEFT JOIN projection_projects p ON p.project_id = th.project_id
+          LEFT JOIN turn_model tm
+            ON tm.thread_id = a.thread_id
+           AND tm.turn_id = a.turn_id
           WHERE a.kind = 'context-window.updated'
-            AND json_extract(a.payload_json, '$.totalProcessedTokens') IS NOT NULL
-            AND (
-              th.deleted_at IS NULL
-              OR EXISTS (
-                SELECT 1
-                FROM orchestration_events td
-                WHERE td.event_type = 'thread.deleted'
-                  AND td.stream_id = th.thread_id
-                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-              )
-            )
-            AND p.deleted_at IS NULL
+            AND COALESCE(
+              json_extract(a.payload_json, '$.totalProcessedTokens'),
+              json_extract(a.payload_json, '$.usedTokens')
+            ) IS NOT NULL
         ),
-        delta AS (
+        provider_model_scale AS (
+          SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
+          FROM ev
+          GROUP BY thread_id, provider, model
+        ),
+        cumulative_kept AS (
           SELECT
             day,
             provider,
-            MAX(0, tot - LAG(tot, 1, 0) OVER (
-              PARTITION BY thread_id
-              ORDER BY
-                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
-                sequence ASC,
-                created_at ASC,
-                activity_id ASC
-            )) AS d
+            model,
+            thread_id,
+            tp AS tot,
+            sequence,
+            created_at,
+            activity_id
           FROM ev
+          WHERE tp IS NOT NULL
+        ),
+        cumulative_delta AS (
+          SELECT
+            day,
+            provider,
+            model,
+            CASE
+              WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
+              ELSE MAX(0, tot - previous_tot)
+            END AS d
+          FROM (
+            SELECT
+              day,
+              provider,
+              model,
+              tot,
+              LAG(tot) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_tot
+            FROM cumulative_kept
+          )
+        ),
+        used_only_kept AS (
+          SELECT
+            ev.day AS day,
+            ev.provider AS provider,
+            ev.model AS model,
+            ev.thread_id AS thread_id,
+            ev.ut AS tot,
+            ev.sequence AS sequence,
+            ev.created_at AS created_at,
+            ev.activity_id AS activity_id
+          FROM ev
+          JOIN provider_model_scale pms
+            ON pms.thread_id = ev.thread_id
+           AND pms.provider = ev.provider
+           AND pms.model = ev.model
+          WHERE ev.tp IS NULL
+            AND ev.ut IS NOT NULL
+            AND NOT pms.has_cumulative
+        ),
+        used_only_delta AS (
+          SELECT
+            day,
+            provider,
+            model,
+            CASE
+              WHEN previous_tot IS NULL THEN tot
+              WHEN tot < previous_tot
+                AND (provider != previous_provider OR model != previous_model)
+              THEN tot
+              ELSE MAX(0, tot - previous_tot)
+            END AS d
+          FROM (
+            SELECT
+              day,
+              provider,
+              model,
+              tot,
+              LAG(tot) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_tot,
+              LAG(provider) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_provider,
+              LAG(model) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_model
+            FROM used_only_kept
+          )
+        ),
+        all_tokens AS (
+          SELECT day, provider, model, d FROM cumulative_delta
+          UNION ALL
+          SELECT day, provider, model, d FROM used_only_delta
+          UNION ALL
+          SELECT
+            STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
+            COALESCE(a.provider, 'unknown') AS provider,
+            COALESCE(a.model, 'unknown') AS model,
+            a.tokens AS d
+          FROM profile_stats_deleted_tokens a
         )
-        SELECT day, provider, SUM(d) AS tokens
-        FROM delta
-        GROUP BY day, provider
+        SELECT day, provider, model, SUM(d) AS tokens
+        FROM all_tokens
+        GROUP BY day, provider, model
       `,
     );
 
@@ -663,20 +862,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
     legacyCompatibleQuery(
       "profileStats.totalThreads",
       sql<CountRow>`
-        SELECT COUNT(*) AS count
-        FROM projection_threads t
-        LEFT JOIN projection_projects p ON p.project_id = t.project_id
-        WHERE (
-            t.deleted_at IS NULL
-            OR EXISTS (
-              SELECT 1
-              FROM orchestration_events td
-              WHERE td.event_type = 'thread.deleted'
-                AND td.stream_id = t.thread_id
-                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-            )
-          )
-          AND p.deleted_at IS NULL
+        SELECT
+          (SELECT COUNT(*) FROM projection_threads)
+          + (SELECT COUNT(*) FROM profile_stats_deleted_threads) AS count
       `,
     );
 
@@ -719,25 +907,21 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           FROM orchestration_events e
           JOIN projection_threads t
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
-          LEFT JOIN projection_projects p ON p.project_id = t.project_id
           LEFT JOIN projection_thread_messages um
             ON um.message_id = json_extract(e.payload_json, '$.messageId')
           WHERE e.event_type = 'thread.turn-start-requested'
             AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
-            AND (
-              t.deleted_at IS NULL
-              OR EXISTS (
-                SELECT 1
-                FROM orchestration_events td
-                WHERE td.event_type = 'thread.deleted'
-                  AND td.stream_id = t.thread_id
-                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-              )
-            )
-            AND p.deleted_at IS NULL
+        ),
+        turn_counts AS (
+          SELECT provider, model, reasoning, COUNT(*) AS count
+          FROM per_turn
+          GROUP BY provider, model, reasoning
+          UNION ALL
+          SELECT provider, model, reasoning, turn_count AS count
+          FROM profile_stats_deleted_turns
         )
-        SELECT provider, model, reasoning, COUNT(*) AS count
-        FROM per_turn
+        SELECT provider, model, reasoning, SUM(count) AS count
+        FROM turn_counts
         GROUP BY provider, model, reasoning
         ORDER BY count DESC, provider ASC, model ASC, reasoning ASC
       `,
@@ -757,21 +941,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         m.mentions_json AS mentionsJson
       FROM projection_thread_messages m
       JOIN projection_threads t ON t.thread_id = m.thread_id
-      LEFT JOIN projection_projects p ON p.project_id = t.project_id
       WHERE m.role = 'user'
         AND m.source = 'native'
         AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
-        AND (
-          t.deleted_at IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM orchestration_events td
-            WHERE td.event_type = 'thread.deleted'
-              AND td.stream_id = t.thread_id
-              AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-          )
-        )
-        AND p.deleted_at IS NULL
         AND (
           (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
           OR (m.mentions_json IS NOT NULL AND TRIM(m.mentions_json) NOT IN ('', '[]'))
@@ -794,19 +966,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
                 NULL AS mentionsJson
               FROM projection_thread_messages m
               JOIN projection_threads t ON t.thread_id = m.thread_id
-              LEFT JOIN projection_projects p ON p.project_id = t.project_id
               WHERE m.role = 'user'
-                AND (
-                  t.deleted_at IS NULL
-                  OR EXISTS (
-                    SELECT 1
-                    FROM orchestration_events td
-                    WHERE td.event_type = 'thread.deleted'
-                      AND td.stream_id = t.thread_id
-                      AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-                  )
-                )
-                AND p.deleted_at IS NULL
                 AND (
                   m.text GLOB '*$[A-Za-z0-9]*'
                   OR m.text GLOB '*/[A-Za-z0-9]*'
@@ -818,35 +978,46 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       ),
     );
 
+  const queryArchivedSkillUsage = () =>
+    legacyCompatibleQuery(
+      "profileStats.archivedSkillUsage",
+      sql<ArchivedSkillUsageRow>`
+        SELECT name, kind, run_count AS runCount
+        FROM profile_stats_deleted_skills
+      `,
+    );
+
   const queryMostWorkedProject = (tz: string) =>
     legacyCompatibleQuery(
       "profileStats.mostWorkedProject",
       sql<MostWorkedProjectRow>`
+        WITH project_prompts AS (
+          SELECT
+            t.project_id AS project_id,
+            m.thread_id AS thread_id,
+            m.created_at AS created_at
+          FROM projection_thread_messages m
+          JOIN projection_threads t ON t.thread_id = m.thread_id
+          WHERE m.role = 'user'
+            AND m.source = 'native'
+            AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
+          UNION ALL
+          SELECT
+            d.project_id AS project_id,
+            d.thread_id AS thread_id,
+            d.created_at AS created_at
+          FROM profile_stats_deleted_prompts d
+        )
         SELECT
           p.project_id AS projectId,
           p.title AS title,
           p.workspace_root AS workspaceRoot,
           COUNT(*) AS promptCount,
-          COUNT(DISTINCT t.thread_id) AS threadCount,
-          COUNT(DISTINCT STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz}))) AS activeDays,
-          MAX(m.created_at) AS lastWorkedAt
-        FROM projection_thread_messages m
-        JOIN projection_threads t ON t.thread_id = m.thread_id
-        JOIN projection_projects p ON p.project_id = t.project_id
-        WHERE m.role = 'user'
-          AND m.source = 'native'
-          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
-          AND (
-            t.deleted_at IS NULL
-            OR EXISTS (
-              SELECT 1
-              FROM orchestration_events td
-              WHERE td.event_type = 'thread.deleted'
-                AND td.stream_id = t.thread_id
-                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
-            )
-          )
-          AND p.deleted_at IS NULL
+          COUNT(DISTINCT e.thread_id) AS threadCount,
+          COUNT(DISTINCT STRFTIME('%Y-%m-%d', DATETIME(e.created_at, ${tz}))) AS activeDays,
+          MAX(e.created_at) AS lastWorkedAt
+        FROM project_prompts e
+        JOIN projection_projects p ON p.project_id = e.project_id
         GROUP BY p.project_id, p.title, p.workspace_root
         ORDER BY
           promptCount DESC,
@@ -870,6 +1041,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const totalThreadRows = yield* queryTotalThreads();
       const turnInsightRows = yield* queryTurnInsights();
       const skillMessageRows = yield* querySkillUsageMessages();
+      const archivedSkillRows = yield* queryArchivedSkillUsage();
       const mostWorkedProjectRows = yield* queryMostWorkedProject(tz);
 
       // ── Activity / heatmap / streaks ──
@@ -1009,7 +1181,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           : null;
 
       // ── Skills and agent mentions ──
-      const allSkillUsages = aggregateProfileSkillUsageRows(skillMessageRows);
+      const allSkillUsages = aggregateProfileSkillUsageRows(skillMessageRows, archivedSkillRows);
       const skills = allSkillUsages.slice(0, SKILL_RESULT_LIMIT);
       const totalSkillsUsed = allSkillUsages.reduce((sum, row) => sum + row.runCount, 0);
 
@@ -1058,7 +1230,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const todayKey = localToday(input.utcOffsetMinutes);
       const rows = yield* queryTokenActivity(tz);
       const turnInsightRows = yield* queryTurnInsights();
-      const { tokensByDay, tokensByProvider, lifetime } = aggregateTokenActivity(rows);
+      const { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime } =
+        aggregateTokenActivity(rows);
 
       let peakDay: string | null = null;
       let peakDayTokens: number | null = null;
@@ -1101,6 +1274,25 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           ? percent1(tokensByProvider.get(topProvider) ?? 0, totalProviderTokens)
           : null;
 
+      // Token-based model mix, same shape/cap as the turn-based providerModels.
+      // Percent is the share of ALL counted tokens (lifetime), unknowns included,
+      // so the list always sums to ~100%.
+      const models = [...tokensByProviderModel.values()]
+        .filter((row) => row.tokens > 0)
+        .toSorted(
+          (left, right) =>
+            right.tokens - left.tokens ||
+            compareNullableText(left.provider, right.provider) ||
+            compareNullableText(left.model, right.model),
+        )
+        .slice(0, 8)
+        .map((row) => ({
+          provider: row.provider,
+          model: row.model,
+          tokens: row.tokens,
+          percent: percent1(row.tokens, lifetime),
+        }));
+
       return {
         available,
         lifetimeTotalTokens: available ? lifetime : null,
@@ -1110,6 +1302,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         unavailableProviders,
         topProvider,
         topProviderPercent,
+        models,
         heatmapMetric: "tokens",
         heatmap: buildHeatmap(tokensByDay, todayKey),
       } satisfies ProfileTokenStats;

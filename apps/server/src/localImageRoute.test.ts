@@ -13,7 +13,12 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
-import { resolveDefaultChatWorkspaceRoot, ServerConfig, type ServerConfigShape } from "./config";
+import {
+  resolveDefaultChatWorkspaceRoot,
+  resolveDefaultStudioWorkspaceRoot,
+  ServerConfig,
+  type ServerConfigShape,
+} from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
 import { createLocalPreviewGrant } from "./localImageFiles";
 
@@ -32,7 +37,7 @@ function makeTempDir(prefix: string): string {
 }
 
 function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerConfigShape {
-  const baseDir = makeTempDir("dpcode-effect-route-");
+  const baseDir = makeTempDir("synara-effect-route-");
   return {
     mode: "web",
     port: 0,
@@ -40,6 +45,7 @@ function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerCon
     cwd: baseDir,
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
+    studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     keybindingsConfigPath: path.join(baseDir, "keybindings.json"),
     serverRuntimeStatePath: path.join(baseDir, "runtime.json"),
@@ -63,7 +69,7 @@ function makeFakeServerAuth(): ServerAuthShape {
     policy: "loopback-browser" as const,
     bootstrapMethods: ["one-time-token" as const],
     sessionMethods: ["browser-session-cookie" as const, "bearer-session-token" as const],
-    sessionCookieName: "t3_session",
+    sessionCookieName: "synara_session",
   };
   const session = {
     sessionId: "session-id" as never,
@@ -152,7 +158,7 @@ async function withEffectServer(
 
 describe("localImageEffectRouteLayer", () => {
   it("serves an allowlisted workspace image and signals downloads via Content-Disposition", async () => {
-    const workspace = makeTempDir("dpcode-effect-image-workspace-");
+    const workspace = makeTempDir("synara-effect-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const imagePath = path.join(workspace, "hero.png");
     writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -173,7 +179,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("serves an absolute local image outside the workspace for file-panel previews", async () => {
-    const workspace = makeTempDir("dpcode-effect-image-workspace-");
+    const workspace = makeTempDir("synara-effect-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const externalRoot = path.join(
       process.cwd(),
@@ -200,7 +206,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("serves an allowlisted workspace PDF and only allows the desktop app origin to read it", async () => {
-    const workspace = makeTempDir("dpcode-effect-pdf-workspace-");
+    const workspace = makeTempDir("synara-effect-pdf-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const pdfPath = path.join(workspace, "spec.pdf");
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
@@ -209,14 +215,14 @@ describe("localImageEffectRouteLayer", () => {
     await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
       const params = new URLSearchParams({ path: pdfPath, cwd: workspace });
       const response = await fetch(`${origin}/api/local-image?${params}`, {
-        headers: { Origin: "t3://app" },
+        headers: { Origin: "synara://app" },
       });
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("application/pdf");
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       // The in-app viewer fetches bytes cross-origin, but only trusted app
       // origins should get a CORS-readable response.
-      expect(response.headers.get("access-control-allow-origin")).toBe("t3://app");
+      expect(response.headers.get("access-control-allow-origin")).toBe("synara://app");
       expect(response.headers.get("vary")).toBe("Origin");
       // Streamed responses must still advertise their size so the browser's
       // PDF viewer can show load progress.
@@ -229,7 +235,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("allows the configured Vite dev origin to read PDF bytes", async () => {
-    const workspace = makeTempDir("dpcode-effect-pdf-dev-origin-");
+    const workspace = makeTempDir("synara-effect-pdf-dev-origin-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const pdfPath = path.join(workspace, "spec.pdf");
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
@@ -250,7 +256,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("does not expose local preview bytes to untrusted web origins through CORS", async () => {
-    const workspace = makeTempDir("dpcode-effect-pdf-untrusted-origin-");
+    const workspace = makeTempDir("synara-effect-pdf-untrusted-origin-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const pdfPath = path.join(workspace, "spec.pdf");
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));
@@ -269,7 +275,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("returns 404 when the requested path has an unsupported extension", async () => {
-    const workspace = makeTempDir("dpcode-effect-image-bad-ext-");
+    const workspace = makeTempDir("synara-effect-image-bad-ext-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const docPath = path.join(workspace, "notes.txt");
     writeFileSync(docPath, "hello");
@@ -283,7 +289,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("returns 404 for missing files", async () => {
-    const workspace = makeTempDir("dpcode-effect-image-missing-");
+    const workspace = makeTempDir("synara-effect-image-missing-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const ghostPath = path.join(workspace, "does-not-exist.png");
     const config = makeServerConfig({ cwd: workspace });

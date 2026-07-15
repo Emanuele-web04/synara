@@ -30,7 +30,7 @@ import {
   type ThreadTokenUsageSnapshot,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -187,6 +187,12 @@ export function getPiSupportedThinkingOptions(
   }
   const supportedLevels = getLocalSupportedThinkingLevels(model);
   return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
+}
+
+export function getPiDiscoverableModels(
+  registry: Pick<ModelRegistry, "getAvailable">,
+): ReadonlyArray<Model<Api>> {
+  return registry.getAvailable();
 }
 
 function parseModelReference(
@@ -2121,7 +2127,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             modelRegistry: registry,
           });
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = services.modelRegistry.getAvailable().map((model) => {
+          const models = getPiDiscoverableModels(services.modelRegistry).map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,

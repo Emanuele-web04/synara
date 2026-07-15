@@ -3,11 +3,7 @@
  *
  * @module AcpAdapterSupport
  */
-import {
-  type ProviderApprovalDecision,
-  type ProviderKind,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { type ProviderApprovalDecision, type ProviderKind, type ThreadId } from "@synara/contracts";
 import { Schema } from "effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
@@ -16,6 +12,25 @@ import {
   ProviderAdapterSessionClosedError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+
+function acpRequestErrorDetail(error: EffectAcpErrors.AcpRequestError): string {
+  const message = error.message.trim();
+  const dataDetail =
+    typeof error.data === "string"
+      ? error.data.trim()
+      : typeof error.data === "object" && error.data !== null
+        ? (() => {
+            const data = error.data as Record<string, unknown>;
+            const detail = data.detail ?? data.details;
+            return typeof detail === "string" ? detail.trim() : "";
+          })()
+        : "";
+
+  if (dataDetail && /^(?:internal error(?:: agent error)?|agent error)$/iu.test(message)) {
+    return dataDetail;
+  }
+  return message || dataDetail || "ACP request failed.";
+}
 
 export function mapAcpToAdapterError(
   provider: ProviderKind,
@@ -34,7 +49,7 @@ export function mapAcpToAdapterError(
     return new ProviderAdapterRequestError({
       provider,
       method,
-      detail: error.message,
+      detail: acpRequestErrorDetail(error),
       cause: error,
     });
   }

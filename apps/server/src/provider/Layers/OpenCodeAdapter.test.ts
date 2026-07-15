@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { Agent, Model, OpencodeClient, Part, Provider } from "@opencode-ai/sdk/v2";
 import { Effect, Fiber, Layer, Stream } from "effect";

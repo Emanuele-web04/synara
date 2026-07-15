@@ -20,6 +20,7 @@ import {
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
   GitActionProgressEvent,
@@ -39,6 +40,8 @@ import {
   GitPreparePullRequestThreadResult,
   GitPullInput,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
+  GitPullRequestSnapshotResult,
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
@@ -59,6 +62,21 @@ import {
   GitUnstageFilesInput,
   GitUnstageFilesResult,
 } from "./git";
+import {
+  PullRequestActionInput,
+  PullRequestCommentInput,
+  PullRequestActionResult,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
+  PullRequestsListInput,
+  PullRequestsListResult,
+  PullRequestsUnavailableError,
+} from "./pullRequests";
 import { KeybindingRule } from "./keybindings";
 import {
   ClientOrchestrationCommand,
@@ -339,6 +357,12 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
   },
 );
 
+export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThreadOutputs, {
+  payload: StudioListThreadOutputsInput,
+  success: StudioListThreadOutputsResult,
+  error: WsRpcError,
+});
+
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
@@ -394,9 +418,64 @@ export const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequ
   error: WsRpcError,
 });
 
+export const WsGitPullRequestSnapshotRpc = Rpc.make(WS_METHODS.gitPullRequestSnapshot, {
+  payload: GitPullRequestSnapshotInput,
+  success: GitPullRequestSnapshotResult,
+  error: WsRpcError,
+});
+
 export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullRequestThread, {
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
+  error: WsRpcError,
+});
+
+const PullRequestsRpcError = Schema.Union([PullRequestsUnavailableError, WsRpcError]);
+
+export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
+  payload: PullRequestsListInput,
+  success: PullRequestsListResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsReviewRequestCountRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewRequestCount,
+  {
+    payload: PullRequestReviewRequestCountInput,
+    success: PullRequestReviewRequestCountResult,
+    error: PullRequestsRpcError,
+  },
+);
+
+export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDetail,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDiffResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsActionRpc = Rpc.make(WS_METHODS.pullRequestsAction, {
+  payload: PullRequestActionInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+// Comments reuse the action acknowledgment shape: the mutation is confirmed independently of
+// the follow-up detail refetch that surfaces the new comment.
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPinned, {
+  payload: PullRequestSetPinnedInput,
+  success: PullRequestSetPinnedResult,
   error: WsRpcError,
 });
 
@@ -815,6 +894,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
+  WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,
@@ -824,7 +904,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitPullRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
+  WsGitPullRequestSnapshotRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsPullRequestsListRpc,
+  WsPullRequestsReviewRequestCountRpc,
+  WsPullRequestsDetailRpc,
+  WsPullRequestsDiffRpc,
+  WsPullRequestsActionRpc,
+  WsPullRequestsCommentRpc,
+  WsPullRequestsSetPinnedRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,

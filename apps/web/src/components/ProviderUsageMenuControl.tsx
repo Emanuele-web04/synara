@@ -1,7 +1,7 @@
 // FILE: ProviderUsageMenuControl.tsx
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { useMemo, type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -28,6 +28,7 @@ export interface ProviderUsageMenuModel {
   primaryRow: ProviderUsageDisplayRow;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines: ReadonlyArray<OpenUsageUsageLine>;
+  notice: string | undefined;
   isLoading: boolean;
 }
 
@@ -39,6 +40,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
     provider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    fetchProviderData: false,
   });
   const usageRows = useMemo(
     () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
@@ -55,6 +57,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
     primaryRow,
     rateLimits: usageSummary.rateLimits,
     usageLines: usageSummary.usageLines,
+    notice: usageSummary.usageNotice,
     isLoading: usageSummary.isLoading,
   };
 }
@@ -78,6 +81,7 @@ export function ProviderUsageMenuPopup({
           provider={provider}
           rateLimits={model.rateLimits}
           usageLines={model.usageLines}
+          notice={model.notice}
           isLoading={model.isLoading}
           showUsageLines={false}
           showTitle={false}

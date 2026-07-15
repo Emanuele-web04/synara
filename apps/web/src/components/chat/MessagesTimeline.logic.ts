@@ -3,10 +3,16 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
-import { type MessageId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type ChatMessage,
+  type ProposedPlan,
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
@@ -65,7 +71,24 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | { kind: "working"; id: string; createdAt: string | null }
+  | {
+      // Live-turn header that mirrors the settled "Worked for Xs" disclosure
+      // (label + full-width divider), but is non-collapsible and counts up while
+      // the turn is still running. Sits at the top of the active turn.
+      kind: "working-header";
+      id: string;
+      createdAt: string;
+    }
+  | {
+      // Transient "Preparing worktree..." step card shown during the New
+      // worktree first-send setup. `open` drives the shared disclosure close
+      // animation while the presentation hook keeps the row mounted.
+      kind: "worktree-setup";
+      id: string;
+      steps: ReadonlyArray<WorktreeSetupStep>;
+      open: boolean;
+    };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -109,6 +132,48 @@ export function resolveAssistantMessageCopyState({
     text: normalizedText,
     visible: showCopyButton && normalizedText !== null && !streaming,
   };
+}
+
+type AssistantMessageDisplayInput = {
+  readonly message: Pick<ChatMessage, "text" | "streaming">;
+  readonly leadingWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly inlineWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly collapsedTurnItems?: ReadonlyArray<CollapsedTurnItem>;
+};
+
+function isVisibleGeneratedImageEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.itemType === "image_generation" &&
+    entry.activityKind === "tool.completed" &&
+    entry.tone !== "error"
+  );
+}
+
+/**
+ * Resolves the markdown body for an assistant row. A completed image-generation
+ * work item is already visible non-text output, so an adjacent empty provider
+ * message must not add the misleading "(empty response)" placeholder. Truly
+ * empty settled turns retain the placeholder, and live empty text stays blank.
+ */
+export function resolveAssistantMessageDisplayText(
+  input: AssistantMessageDisplayInput,
+): string | null {
+  if (input.message.text) {
+    return input.message.text;
+  }
+  if (input.message.streaming) {
+    return "";
+  }
+
+  const hasVisibleGeneratedImage = [
+    ...(input.leadingWorkEntries ?? []),
+    ...(input.inlineWorkEntries ?? []),
+    ...(input.collapsedTurnItems ?? []).flatMap((item) =>
+      item.kind === "work" ? [item.entry] : [],
+    ),
+  ].some(isVisibleGeneratedImageEntry);
+
+  return hasVisibleGeneratedImage ? null : "(empty response)";
 }
 
 // Builds the "Files changed" lookup keyed by the last assistant row in the
@@ -160,16 +225,53 @@ function mergeTurnDiffSummaries(
   existing: TurnDiffSummary | undefined,
   next: TurnDiffSummary,
 ): TurnDiffSummary {
-  if (!existing) return next;
+  const checkpointTurnCountsFor = (summary: TurnDiffSummary): number[] => {
+    if (
+      summary.files.length === 0 ||
+      summary.status === "missing" ||
+      summary.status === "error" ||
+      summary.checkpointRef === undefined ||
+      summary.checkpointRef.startsWith("provider-diff:")
+    ) {
+      return [];
+    }
+    return (
+      summary.checkpointTurnCounts ??
+      (summary.checkpointTurnCount === undefined ? [] : [summary.checkpointTurnCount])
+    );
+  };
+  if (!existing) {
+    const checkpointTurnCounts = checkpointTurnCountsFor(next);
+    return { ...next, checkpointTurnCounts };
+  }
 
   const filesByPath = new Map(existing.files.map((file) => [file.path, file]));
   for (const file of next.files) {
     filesByPath.set(file.path, file);
   }
+  const checkpointTurnCounts = new Set([
+    ...checkpointTurnCountsFor(existing),
+    ...checkpointTurnCountsFor(next),
+  ]);
+  const undoMetadata =
+    checkpointTurnCountsFor(next).length > 0
+      ? next
+      : checkpointTurnCountsFor(existing).length > 0
+        ? existing
+        : next;
+  const allDisplayedFilesUndoable = [existing, next].every(
+    (summary) => summary.files.length === 0 || checkpointTurnCountsFor(summary).length > 0,
+  );
 
   return {
     ...next,
     files: [...filesByPath.values()],
+    checkpointRef: undoMetadata.checkpointRef,
+    status: undoMetadata.status,
+    checkpointTurnCount: undoMetadata.checkpointTurnCount,
+    checkpointTurnCounts: allDisplayedFilesUndoable
+      ? [...checkpointTurnCounts].toSorted((left, right) => left - right)
+      : [],
   };
 }
 
@@ -203,6 +305,8 @@ export function deriveTerminalAssistantMessageIds(
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
+  worktreeSetup: WorktreeSetupSnapshot | null;
+  worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
@@ -344,7 +448,18 @@ export function deriveMessagesTimelineRows(input: {
   // completed chat does not end with a detached tool-log footer.
   flushPendingWorkGroup();
 
-  if (input.isWorking) {
+  if (input.worktreeSetup) {
+    nextRows.push({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      steps: input.worktreeSetup.steps,
+      open: input.worktreeSetupOpen,
+    });
+  }
+
+  // The generic Thinking shimmer remains the single live status. Provider work
+  // rows are transcript history and must never replace it.
+  if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -358,7 +473,37 @@ export function deriveMessagesTimelineRows(input: {
     activeTurnId: input.activeTurnId ?? null,
   });
 
+  // The live turn wears a "Working for Xs" header + divider — the counting-up
+  // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
+  // of the active turn (right after the user message that opened it) and needs a
+  // real start time to count from; the trailing "Thinking" shimmer covers the
+  // gap before one exists. Inserted after collapse so folding is untouched.
+  if (
+    input.isWorking &&
+    input.activeTurnStartedAt &&
+    !(input.worktreeSetup && input.worktreeSetupOpen)
+  ) {
+    nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows), 0, {
+      kind: "working-header",
+      id: "working-header-row",
+      createdAt: input.activeTurnStartedAt,
+    });
+  }
+
   return nextRows;
+}
+
+// The live turn starts at the most recent user message, so its header slots in
+// right after it. Absent any user message (degenerate transcripts) the header
+// leads the transcript so the "Working for" copy is never lost.
+function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>): number {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]!;
+    if (row.kind === "message" && row.message.role === "user") {
+      return index + 1;
+    }
+  }
+  return 0;
 }
 
 // Returns the terminal assistant only when it is still the transcript tail.
@@ -404,6 +549,14 @@ function collapseSettledTurns(
     }
   };
 
+  const earliestTimestamp = (a: string, b: string): string => {
+    const aMs = Date.parse(a);
+    const bMs = Date.parse(b);
+    if (Number.isNaN(aMs)) return b;
+    if (Number.isNaN(bMs)) return a;
+    return bMs < aMs ? b : a;
+  };
+
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
@@ -445,11 +598,19 @@ function collapseSettledTurns(
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
+    // The disclosure folds everything back to the user boundary, so "Worked
+    // for" must start where the folded segment starts. The terminal row's own
+    // durationStart advances past intermediate *completed* assistant messages
+    // (e.g. a failed attempt before a retry), which would report only the tail
+    // of the turn instead of the full run.
+    let collapsedStart = row.durationStart;
     for (const index of foldIndices) {
       const folded = rows[index]!;
       if (folded.kind === "work") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         collectWorkItems(folded.groupedEntries, collapsedItems);
       } else if (folded.kind === "message" && folded.message.role === "assistant") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.durationStart);
         if (folded.assistantTurnDiffSummary) {
           row.assistantTurnDiffSummary = mergeTurnDiffSummaries(
             folded.assistantTurnDiffSummary,
@@ -468,7 +629,7 @@ function collapseSettledTurns(
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
-      const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
+      const elapsed = formatElapsed(collapsedStart, row.message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
       delete row.leadingWorkEntries;
@@ -683,6 +844,21 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   switch (a.kind) {
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
+
+    case "working-header":
+      return a.createdAt === (b as typeof a).createdAt;
+
+    case "worktree-setup": {
+      const bw = b as typeof a;
+      return (
+        a.open === bw.open &&
+        a.steps.length === bw.steps.length &&
+        a.steps.every((step, index) => {
+          const other = bw.steps[index]!;
+          return step.id === other.id && step.status === other.status && step.label === other.label;
+        })
+      );
+    }
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;

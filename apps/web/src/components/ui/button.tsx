@@ -79,7 +79,7 @@ const buttonVariants = cva(
         destructive:
           "border-destructive bg-destructive text-white [:hover,[data-pressed]]:bg-destructive/90",
         "destructive-outline":
-          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-destructive-foreground [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4",
+          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-destructive [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4 [:hover,[data-pressed]]:text-destructive",
         ghost:
           "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-button-secondary-hover)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-button-secondary)] data-pressed:text-[var(--color-text-foreground)]",
         link: "border-transparent underline-offset-4 [:hover,[data-pressed]]:underline",

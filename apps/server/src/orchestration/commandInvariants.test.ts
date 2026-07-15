@@ -7,7 +7,7 @@ import {
   ThreadId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import {
@@ -125,6 +125,29 @@ const readModel: OrchestrationReadModel = {
       checkpoints: [],
       deletedAt: null,
     },
+    {
+      id: ThreadId.makeUnsafe("thread-deleted"),
+      projectId: ProjectId.makeUnsafe("project-a"),
+      title: "Deleted Thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+      latestTurn: null,
+      handoff: null,
+      messages: [],
+      session: null,
+      activities: [],
+      proposedPlans: [],
+      checkpoints: [],
+      deletedAt: now,
+    },
   ],
 };
 
@@ -173,6 +196,16 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("does not exist");
+
+    await expect(
+      Effect.runPromise(
+        requireThread({
+          readModel,
+          command: messageSendCommand,
+          threadId: ThreadId.makeUnsafe("thread-deleted"),
+        }),
+      ),
+    ).rejects.toThrow("was deleted");
   });
 
   it("requires missing thread for create flows", async () => {

@@ -3,7 +3,7 @@
 //          directories, center mode) so re-entering the editor view restores it.
 // Layer: Web UI state persistence
 
-import type { ProjectId, ProviderKind, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 import { isProviderKind } from "./providerOrdering";
 
 const EDITOR_VIEW_STATE_STORAGE_KEY = "synara.editor.viewStateByThreadId";

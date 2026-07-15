@@ -3,10 +3,11 @@
 // Layer: Provider adapter tests
 // Depends on: GrokAdapter helper exports and shared contract ids.
 
-import { TurnId } from "@t3tools/contracts";
+import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  isGrokContextCompactionToolCall,
   isRenderableGrokAssistantDelta,
   mergeGrokModelDescriptors,
   parseXaiLanguageModelDescriptors,
@@ -42,6 +43,27 @@ describe("GrokAdapter runtime event scoping", () => {
       toolCallId: "call-1",
       providerToolCallId: "call-1",
     });
+  });
+
+  it("detects Grok compaction tool calls for context compaction UI rows", () => {
+    expect(
+      isGrokContextCompactionToolCall({
+        toolCallId: "tool-1",
+        kind: "other",
+        status: "inProgress",
+        title: "Compacting conversation context",
+        data: {},
+      }),
+    ).toBe(true);
+    expect(
+      isGrokContextCompactionToolCall({
+        toolCallId: "tool-2",
+        kind: "execute",
+        status: "completed",
+        title: "Run tests",
+        data: {},
+      }),
+    ).toBe(false);
   });
 
   it("only treats visible assistant text as renderable Grok content", () => {
@@ -89,21 +111,30 @@ describe("GrokAdapter runtime event scoping", () => {
   });
 
   it("merges Grok CLI and xAI API model lists without duplicates", () => {
-    expect(
-      mergeGrokModelDescriptors([
-        [
-          { slug: "grok-build", name: "Grok 4.3" },
-          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-        ],
-        [
-          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-          { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
-        ],
-      ]),
-    ).toEqual([
+    const models = mergeGrokModelDescriptors([
+      [
+        { slug: "grok-build", name: "Grok 4.3" },
+        { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+      ],
+      [
+        { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+        { slug: "grok-4.5", name: "Grok 4.5" },
+      ],
+    ]);
+
+    expect(models.map(({ slug, name }) => ({ slug, name }))).toEqual([
       { slug: "grok-build", name: "Grok 4.3" },
       { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-      { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
+      { slug: "grok-4.5", name: "Grok 4.5" },
     ]);
+    for (const model of models) {
+      expect(model.defaultReasoningEffort).toBe("low");
+      expect(model.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+        "none",
+        "low",
+        "medium",
+        "high",
+      ]);
+    }
   });
 });

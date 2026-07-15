@@ -37,9 +37,10 @@ import {
   ProviderInteractionMode,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
-import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+} from "@synara/contracts";
+import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@synara/shared/model";
+import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -269,6 +270,26 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
     return true;
   }
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
+}
+
+function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
+  if (typeof value.method === "string") {
+    return true;
+  }
+  const hasId = Object.prototype.hasOwnProperty.call(value, "id");
+  return (
+    hasId &&
+    (Object.prototype.hasOwnProperty.call(value, "result") ||
+      Object.prototype.hasOwnProperty.call(value, "error"))
+  );
+}
+
+function logIgnoredCodexStdout(rawLine: string, reason: string): void {
+  log.warn("ignoring non-protocol codex app-server stdout", {
+    reason,
+    preview: normalizeCodexProcessLine(rawLine).slice(0, 160),
+    length: rawLine.length,
+  });
 }
 
 function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
@@ -563,6 +584,7 @@ function spawnCodexAppServer(input: {
     stdio: ["pipe", "pipe", "pipe"],
     shell: prepared.shell,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 }
 
@@ -1068,6 +1090,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       model?: string;
       serviceTier?: string | null;
       effort?: string;
+      summary: "auto" | "none";
       approvalPolicy?: CodexApprovalPolicy;
       sandboxPolicy?: CodexTurnSandboxPolicy;
       collaborationMode?: {
@@ -1081,6 +1104,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
+      summary: "auto",
       ...resolveCodexTurnOverrides(context),
     };
     const normalizedModel = resolveCodexModelForAccount(
@@ -1089,6 +1113,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     if (normalizedModel) {
       turnStartParams.model = normalizedModel;
+      if (normalizedModel === CODEX_SPARK_MODEL) {
+        turnStartParams.summary = "none";
+      }
     }
     if (input.serviceTier !== undefined) {
       turnStartParams.serviceTier = input.serviceTier;
@@ -1134,7 +1161,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
-    context.collabReceiverTurns.clear();
 
     const activeTurnId = context.session.activeTurnId;
     if (context.session.status !== "running" || activeTurnId === undefined) {
@@ -2197,20 +2223,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       parsed = JSON.parse(line);
     } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
+      // App-server stdout is JSONL, but Codex subprocesses and hooks can leak
+      // arbitrary output onto the same pipe, including fragments that begin
+      // like JSON-RPC. An unparseable line cannot be a usable protocol frame;
+      // ignore it and let any affected request fail through its normal timeout.
+      logIgnoredCodexStdout(line, "invalid JSON fragment");
       return;
     }
 
-    if (!parsed || typeof parsed !== "object") {
-      this.emitErrorEvent(
-        context,
-        "protocol/invalidMessage",
-        "Received non-object protocol message.",
-      );
+    const protocolEnvelope = asObject(parsed);
+    if (!protocolEnvelope || !isCodexProtocolEnvelope(protocolEnvelope)) {
+      // Command output can also be valid standalone JSON (`{}`, `[]`, strings,
+      // numbers). Only JSON-RPC-shaped envelopes belong to app-server itself.
+      logIgnoredCodexStdout(line, "valid JSON without a JSON-RPC envelope");
       return;
     }
 
@@ -2250,7 +2275,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context,
       notification.params,
     );
-    const isChildConversation = childParentTurnId !== undefined;
+    const activeProviderThreadId = normalizeProviderThreadId(
+      readResumeThreadId({
+        threadId: context.session.threadId,
+        runtimeMode: context.session.runtimeMode,
+        resumeCursor: context.session.resumeCursor,
+      }),
+    );
+    // A child can emit turn/started before its collab tool-call payload has
+    // populated the receiver maps. While a parent turn is live, a notification
+    // from another provider thread must not replace the parent's active turn.
+    const isUnmappedChildConversation =
+      context.session.status === "running" &&
+      context.session.activeTurnId !== undefined &&
+      providerThreadId !== undefined &&
+      activeProviderThreadId !== undefined &&
+      providerThreadId !== activeProviderThreadId;
+    const isChildConversation =
+      childParentTurnId !== undefined ||
+      providerParentThreadId !== undefined ||
+      isUnmappedChildConversation;
     if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
@@ -2828,17 +2872,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall") {
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
       return;
     }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
 
-    const receiverThreadIds =
-      this.readArray(item, "receiverThreadIds")
-        ?.map((value) => (typeof value === "string" ? value : null))
-        .filter((value): value is string => value !== null) ?? [];
+    const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {
       context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
       if (parentProviderThreadId) {
@@ -3402,6 +3443,7 @@ function assertSupportedCodexCliVersion(input: {
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: prepared.windowsHide,
+    windowsVerbatimArguments: prepared.windowsVerbatimArguments,
   });
 
   if (result.error) {

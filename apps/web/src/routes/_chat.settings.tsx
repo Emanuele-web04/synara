@@ -5,15 +5,17 @@
 
 import {
   PROVIDER_DISPLAY_NAMES,
+  type DesktopAppSnapPermission,
+  type DesktopAppSnapState,
   type ProviderKind,
   type ServerProviderStatus,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
+import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
+import { pluralize } from "@synara/shared/text";
 import {
   type ReactNode,
   type RefObject,
@@ -41,6 +43,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
+  CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_UI_DENSITY,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
@@ -50,7 +53,6 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
-  MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -58,8 +60,10 @@ import {
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
+import { createLatestAppSnapRequestGuard } from "../appSnap.logic";
 import { APP_VERSION } from "../branding";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import {
   Autocomplete,
@@ -72,6 +76,7 @@ import {
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
+import { Kbd, KbdGroup } from "../components/ui/kbd";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -107,6 +112,7 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
+import { playAppSnapCaptureSound } from "../lib/appSnapSound";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -134,6 +140,7 @@ import {
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
 import { unarchiveThreadFromClient } from "../lib/threadArchive";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   buildNotificationSettingsSupportText,
@@ -146,6 +153,7 @@ import {
   SETTINGS_TARGETS,
 } from "../settingsNavigation";
 import {
+  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
@@ -219,6 +227,7 @@ const PROVIDER_SELECT_OPTIONS = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "opencode",
   "kilo",
   "pi",
@@ -241,12 +250,49 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
+function appSnapStatusText(state: DesktopAppSnapState | null): string {
+  if (!state) return "Available in the Synara desktop app";
+  if (!state.supported) return state.message ?? "Available on macOS only";
+  if (state.status === "ready") return "Listening — press both Option keys to snap";
+  if (state.status === "disabled") return "Off";
+  if (state.status === "starting") return "Starting the capture listener…";
+  return state.message ?? "Permission setup required";
+}
+
+const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
+  granted: "Granted",
+  denied: "Denied",
+  "not-determined": "Not requested yet",
+  restricted: "Restricted",
+  unknown: "Unknown",
+};
+
+function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          permission === "granted"
+            ? "bg-emerald-500"
+            : permission === "denied" || permission === "restricted"
+              ? "bg-red-500"
+              : "bg-[color:var(--color-border)]",
+        )}
+      />
+      {APPSNAP_PERMISSION_LABELS[permission]}
+    </span>
+  );
+}
+
 type InstallBinarySettingsKey =
   | "claudeBinaryPath"
   | "codexBinaryPath"
   | "cursorBinaryPath"
   | "geminiBinaryPath"
   | "grokBinaryPath"
+  | "droidBinaryPath"
   | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath";
@@ -285,6 +331,7 @@ const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
   { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
   { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
+  { provider: "droid", title: PROVIDER_DISPLAY_NAMES.droid },
   { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
   { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
   { provider: "pi", title: PROVIDER_DISPLAY_NAMES.pi },
@@ -441,6 +488,23 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to use <code>grok</code> from your PATH.
+      </>
+    ),
+  },
+  {
+    provider: "droid",
+    title: "Droid",
+    docs: [
+      {
+        label: "Quickstart",
+        href: "https://docs.factory.ai/cli/getting-started/quickstart.md",
+      },
+    ],
+    binaryPathKey: "droidBinaryPath",
+    binaryPlaceholder: "droid",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>droid</code> from your PATH.
       </>
     ),
   },
@@ -629,7 +693,15 @@ function SettingsRouteView() {
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
+  const {
+    isDefaultActiveTheme,
+    resetAllThemes,
+    resolvedTheme,
+    theme,
+    setTheme,
+    systemUiFont,
+    setSystemUiFont,
+  } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
@@ -674,6 +746,7 @@ function SettingsRouteView() {
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
+    droid: Boolean(settings.droidBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
@@ -696,6 +769,7 @@ function SettingsRouteView() {
     cursor: "",
     gemini: "",
     grok: "",
+    droid: "",
     kilo: "",
     opencode: "",
     pi: "",
@@ -707,6 +781,8 @@ function SettingsRouteView() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+  const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
@@ -717,6 +793,28 @@ function SettingsRouteView() {
       suggestion.toLowerCase().includes(query),
     );
   }, [settings.terminalFontFamily]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      setAppSnapState(null);
+      return;
+    }
+    let disposed = false;
+    const unsubscribe = bridge.onState((state) => {
+      if (!disposed) setAppSnapState(state);
+    });
+    void bridge
+      .getState()
+      .then((state) => {
+        if (!disposed) setAppSnapState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
 
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
@@ -750,6 +848,7 @@ function SettingsRouteView() {
   const cursorApiEndpoint = settings.cursorApiEndpoint;
   const geminiBinaryPath = settings.geminiBinaryPath;
   const grokBinaryPath = settings.grokBinaryPath;
+  const droidBinaryPath = settings.droidBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
   const kiloServerUrl = settings.kiloServerUrl;
   const kiloServerPassword = settings.kiloServerPassword;
@@ -859,26 +958,50 @@ function SettingsRouteView() {
     textGenerationModel,
     textGenerationProvider,
   } = settings;
+  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
+  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
+    () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
+    [currentGitTextGenerationModel, currentGitTextGenerationProvider],
+  );
+  const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
+    activeThreadWorktreePath: null,
+    activeProjectCwd: null,
+    serverCwd: serverConfigQuery.data?.cwd ?? null,
+  });
+  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
+    selectedProvider: currentGitTextGenerationProvider,
+    discoveryEnabled: activeSection === "models",
+    cwd: providerModelDiscoveryCwd,
+    modelHintByProvider: gitWritingModelHintByProvider,
+  });
   const gitTextGenerationModelOptions = useMemo(
     () =>
-      getGitTextGenerationModelOptions({
-        customCodexModels,
-        customKiloModels,
-        customOpenCodeModels,
-        textGenerationModel,
-        textGenerationProvider,
-      }),
+      getGitTextGenerationModelOptions(
+        {
+          customCodexModels,
+          customKiloModels,
+          customOpenCodeModels,
+          textGenerationModel,
+          textGenerationProvider,
+        },
+        {
+          codex: gitWritingCatalogOptionsByProvider.codex,
+          kilo: gitWritingCatalogOptionsByProvider.kilo,
+          opencode: gitWritingCatalogOptionsByProvider.opencode,
+        },
+      ),
     [
       customCodexModels,
       customKiloModels,
       customOpenCodeModels,
+      gitWritingCatalogOptionsByProvider.codex,
+      gitWritingCatalogOptionsByProvider.kilo,
+      gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
     ],
   );
-  const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel =
-    settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";
   const defaultGitTextGenerationModel =
@@ -892,23 +1015,14 @@ function SettingsRouteView() {
         option.provider === currentGitTextGenerationProvider &&
         option.slug === currentGitTextGenerationModel,
     )?.name ?? currentGitTextGenerationModel;
-  const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
+  const selectedCustomModelProviderSettings = CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.find(
     (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
   )!;
   const selectedCustomModelInput = customModelInputByProvider[selectedCustomModelProvider];
   const selectedCustomModelError = customModelErrorByProvider[selectedCustomModelProvider] ?? null;
-  const totalCustomModels =
-    settings.customCodexModels.length +
-    settings.customClaudeModels.length +
-    settings.customCursorModels.length +
-    settings.customGeminiModels.length +
-    settings.customGrokModels.length +
-    settings.customKiloModels.length +
-    settings.customOpenCodeModels.length +
-    settings.customPiModels.length;
   const savedCustomModelRows = useMemo(
     () =>
-      MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
+      CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.flatMap((providerSettings) =>
         getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
           key: `${providerSettings.provider}:${slug}`,
           provider: providerSettings.provider,
@@ -927,6 +1041,7 @@ function SettingsRouteView() {
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
     settings.grokBinaryPath !== defaults.grokBinaryPath ||
+    settings.droidBinaryPath !== defaults.droidBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
     settings.kiloServerUrl !== defaults.kiloServerUrl ||
     settings.kiloServerPassword !== defaults.kiloServerPassword ||
@@ -950,6 +1065,7 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
+    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
@@ -972,6 +1088,8 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
+    ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
@@ -991,6 +1109,7 @@ function SettingsRouteView() {
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
+    settings.customDroidModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
@@ -1177,6 +1296,7 @@ function SettingsRouteView() {
       cursor: false,
       gemini: false,
       grok: false,
+      droid: false,
       kilo: false,
       opencode: false,
       pi: false,
@@ -1188,6 +1308,7 @@ function SettingsRouteView() {
       cursor: "",
       gemini: "",
       grok: "",
+      droid: "",
       kilo: "",
       opencode: "",
       pi: "",
@@ -1261,6 +1382,70 @@ function SettingsRouteView() {
       title: "Test notification sent",
       description: "Your browser should show the notification.",
     });
+  }
+
+  async function setAppSnapEnabled(nextEnabled: boolean) {
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      toastManager.add({
+        type: "warning",
+        title: "AppSnap unavailable",
+        description: "AppSnap requires the Synara desktop app on macOS.",
+      });
+      return;
+    }
+
+    try {
+      if (nextEnabled) {
+        const permissionState = await bridge.requestPermissions();
+        if (!requestGuard.isCurrent(requestId)) return;
+        setAppSnapState(permissionState);
+      }
+      if (!requestGuard.isCurrent(requestId)) return;
+      updateSettings({ enableAppSnap: nextEnabled });
+      const state = await bridge.setEnabled(nextEnabled);
+      if (!requestGuard.isCurrent(requestId)) return;
+      setAppSnapState(state);
+      if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
+        toastManager.add({
+          type: "warning",
+          title: "Finish AppSnap setup",
+          description: state.message ?? "Allow the required macOS permissions, then try again.",
+        });
+      }
+    } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
+      updateSettings({ enableAppSnap: false });
+      toastManager.add({
+        type: "error",
+        title: "AppSnap setup failed",
+        description: error instanceof Error ? error.message : "Could not configure AppSnap.",
+      });
+    }
+  }
+
+  async function recheckAppSnapPermissions() {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    // Same guard as setAppSnapEnabled: a slow recheck must not clobber the
+    // panel state written by a newer toggle or recheck.
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
+    try {
+      await bridge.requestPermissions();
+      const state = await bridge.setEnabled(settings.enableAppSnap);
+      if (!requestGuard.isCurrent(requestId)) return;
+      setAppSnapState(state);
+    } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
+      toastManager.add({
+        type: "error",
+        title: "Could not check AppSnap permissions",
+        description: error instanceof Error ? error.message : "Permission check failed.",
+      });
+    }
   }
 
   // Rebuild the local project indexes after an older install leaves them out of sync.
@@ -1668,6 +1853,14 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "showStudioSection",
+          title: "Studio",
+          description: "Show the Studio tab in the sidebar switcher.",
+          resetLabel: "studio section",
+          ariaLabel: "Show the Studio section in the sidebar",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "showWorkspaceSection",
           title: "Workspace",
           description:
@@ -1679,6 +1872,15 @@ function SettingsRouteView() {
 
       <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
         <SettingsSection title="Environment panel">
+          {renderBooleanSettingRow({
+            settingKey: "environmentPanelDefaultOpen",
+            title: "Open by default",
+            description:
+              "Open the chat Environment panel automatically on normal threads. When off, the panel stays closed until you open it. Your last open/close also updates this preference.",
+            resetLabel: "environment panel default open",
+            ariaLabel: "Open the Environment panel by default on normal threads",
+          })}
+
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
@@ -1694,6 +1896,15 @@ function SettingsRouteView() {
               "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
             resetLabel: "repository section",
             ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPullRequest",
+            title: "Pull request",
+            description:
+              "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
+            resetLabel: "pull request section",
+            ariaLabel: "Show the Pull request section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({
@@ -1772,6 +1983,22 @@ function SettingsRouteView() {
                 }}
                 ariaLabel="Theme preference"
                 options={THEME_OPTIONS}
+              />
+            }
+          />
+          <SettingsRow
+            title="Use system UI font"
+            description="Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS)."
+            resetAction={
+              !systemUiFont ? (
+                <SettingResetButton label="system UI font" onClick={() => setSystemUiFont(true)} />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={systemUiFont}
+                onCheckedChange={(checked) => setSystemUiFont(Boolean(checked))}
+                aria-label="Use system UI font"
               />
             }
           />
@@ -2075,6 +2302,140 @@ function SettingsRouteView() {
       </SettingsSection>
     </div>
   );
+
+  const renderAppSnapPanel = () => {
+    const supported = appSnapState?.supported === true;
+    const enabled = supported && settings.enableAppSnap;
+    return (
+      <div className="space-y-6">
+        <div className={cn(SETTINGS_CARD_CLASS_NAME, "flex items-start gap-3 px-4 py-3.5")}>
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] text-muted-foreground">
+            <CentralIcon name="screen-capture" className="size-4" />
+          </span>
+          <div className="min-w-0 space-y-1">
+            <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+              Take an AppSnap to show your agent another app's window
+            </p>
+            <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+              Press both <Kbd className="mx-px">⌥ Option</Kbd> keys at once while any app is
+              frontmost. Synara captures that window as an image, brings itself forward, and
+              attaches the snap to a task composer — the capture stays on this device until you send
+              the message.
+            </p>
+            {!supported ? (
+              <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
+                {appSnapState
+                  ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
+                  : "AppSnap requires the Synara desktop app on macOS."}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <SettingsSection title="Capture">
+          <SettingsRow
+            title="Enable AppSnap"
+            description="Run the capture listener in the background while Synara is open."
+            status={appSnapStatusText(appSnapState)}
+            resetAction={
+              settings.enableAppSnap !== defaults.enableAppSnap ? (
+                <SettingResetButton
+                  label="AppSnap"
+                  onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={enabled}
+                disabled={!supported}
+                onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
+                aria-label="Enable AppSnap"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Shortcut"
+            description="Press the left and right Option keys at the same time. The chord works while any app is focused, and can't be remapped yet."
+            control={
+              <KbdGroup>
+                <Kbd>⌥ left</Kbd>
+                <span className="text-xs text-muted-foreground">+</span>
+                <Kbd>⌥ right</Kbd>
+              </KbdGroup>
+            }
+          />
+
+          <SettingsRow
+            title="Destination"
+            description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
+            control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          />
+
+          <SettingsRow
+            title="Capture sound"
+            description="Play a short shutter cue when a window is captured."
+            resetAction={
+              settings.appSnapPlaySound !== defaults.appSnapPlaySound ? (
+                <SettingResetButton
+                  label="capture sound"
+                  onClick={() => updateSettings({ appSnapPlaySound: defaults.appSnapPlaySound })}
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                <Button size="xs" variant="outline" onClick={() => void playAppSnapCaptureSound()}>
+                  Preview
+                </Button>
+                <Switch
+                  checked={settings.appSnapPlaySound}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ appSnapPlaySound: Boolean(checked) })
+                  }
+                  aria-label="Play a sound when an AppSnap is captured"
+                />
+              </div>
+            }
+          />
+        </SettingsSection>
+
+        {supported ? (
+          <SettingsSection title="macOS permissions">
+            <SettingsRow
+              title="Input Monitoring"
+              description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
+              }
+            />
+            <SettingsRow
+              title="Screen Recording"
+              description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
+              }
+            />
+            <SettingsRow
+              title="Permission status"
+              description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+              control={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void recheckAppSnapPermissions()}
+                >
+                  Recheck permissions
+                </Button>
+              }
+            />
+          </SettingsSection>
+        ) : null}
+      </div>
+    );
+  };
 
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
@@ -2399,7 +2760,7 @@ function SettingsRouteView() {
           title="Saved model slugs"
           description="Add custom model slugs for supported providers."
           resetAction={
-            totalCustomModels > 0 ? (
+            savedCustomModelRows.length > 0 ? (
               <SettingResetButton
                 label="custom models"
                 onClick={() => {
@@ -2431,6 +2792,7 @@ function SettingsRouteView() {
                     value !== "cursor" &&
                     value !== "gemini" &&
                     value !== "grok" &&
+                    value !== "droid" &&
                     value !== "kilo" &&
                     value !== "opencode" &&
                     value !== "pi"
@@ -2448,7 +2810,7 @@ function SettingsRouteView() {
                   <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                 </SelectTrigger>
                 <SettingsSelectPopup align="start">
-                  {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
+                  {CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((providerSettings) => (
                     <SelectItem
                       hideIndicator
                       key={providerSettings.provider}
@@ -2499,7 +2861,7 @@ function SettingsRouteView() {
               <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
             ) : null}
 
-            {totalCustomModels > 0 ? (
+            {savedCustomModelRows.length > 0 ? (
               <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
                 {visibleCustomModelRows.map((row) => (
                   <div
@@ -2712,6 +3074,7 @@ function SettingsRouteView() {
                     cursorApiEndpoint: defaults.cursorApiEndpoint,
                     geminiBinaryPath: defaults.geminiBinaryPath,
                     grokBinaryPath: defaults.grokBinaryPath,
+                    droidBinaryPath: defaults.droidBinaryPath,
                     kiloBinaryPath: defaults.kiloBinaryPath,
                     kiloServerUrl: defaults.kiloServerUrl,
                     kiloServerPassword: defaults.kiloServerPassword,
@@ -2728,6 +3091,7 @@ function SettingsRouteView() {
                     cursor: false,
                     gemini: false,
                     grok: false,
+                    droid: false,
                     kilo: false,
                     opencode: false,
                     pi: false,
@@ -2754,19 +3118,21 @@ function SettingsRouteView() {
                           ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
                           : providerSettings.provider === "grok"
                             ? settings.grokBinaryPath !== defaults.grokBinaryPath
-                            : providerSettings.provider === "kilo"
-                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                settings.kiloServerPassword !== defaults.kiloServerPassword
-                              : providerSettings.provider === "pi"
-                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                  settings.piAgentDir !== defaults.piAgentDir
-                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                  settings.openCodeExperimentalWebSockets !==
-                                    defaults.openCodeExperimentalWebSockets ||
-                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                  settings.openCodeServerPassword !==
-                                    defaults.openCodeServerPassword;
+                            : providerSettings.provider === "droid"
+                              ? settings.droidBinaryPath !== defaults.droidBinaryPath
+                              : providerSettings.provider === "kilo"
+                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                  settings.kiloServerPassword !== defaults.kiloServerPassword
+                                : providerSettings.provider === "pi"
+                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                    settings.piAgentDir !== defaults.piAgentDir
+                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                    settings.openCodeExperimentalWebSockets !==
+                                      defaults.openCodeExperimentalWebSockets ||
+                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                    settings.openCodeServerPassword !==
+                                      defaults.openCodeServerPassword;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
@@ -2776,13 +3142,15 @@ function SettingsRouteView() {
                         ? geminiBinaryPath
                         : providerSettings.binaryPathKey === "grokBinaryPath"
                           ? grokBinaryPath
-                          : providerSettings.binaryPathKey === "kiloBinaryPath"
-                            ? kiloBinaryPath
-                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                              ? openCodeBinaryPath
-                              : providerSettings.binaryPathKey === "piBinaryPath"
-                                ? piBinaryPath
-                                : codexBinaryPath;
+                          : providerSettings.binaryPathKey === "droidBinaryPath"
+                            ? droidBinaryPath
+                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                              ? kiloBinaryPath
+                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                ? openCodeBinaryPath
+                                : providerSettings.binaryPathKey === "piBinaryPath"
+                                  ? piBinaryPath
+                                  : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
                 const showProviderUpdateStatus = providerStatus
                   ? shouldShowProviderUpdateStatus({
@@ -2939,14 +3307,17 @@ function SettingsRouteView() {
                                           ? { geminiBinaryPath: nextValue }
                                           : providerSettings.binaryPathKey === "grokBinaryPath"
                                             ? { grokBinaryPath: nextValue }
-                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: nextValue }
-                                              : providerSettings.binaryPathKey ===
-                                                  "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: nextValue }
-                                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: nextValue }
-                                                  : { codexBinaryPath: nextValue },
+                                            : providerSettings.binaryPathKey === "droidBinaryPath"
+                                              ? { droidBinaryPath: nextValue }
+                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                                ? { kiloBinaryPath: nextValue }
+                                                : providerSettings.binaryPathKey ===
+                                                    "openCodeBinaryPath"
+                                                  ? { openCodeBinaryPath: nextValue }
+                                                  : providerSettings.binaryPathKey ===
+                                                      "piBinaryPath"
+                                                    ? { piBinaryPath: nextValue }
+                                                    : { codexBinaryPath: nextValue },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}
@@ -3268,6 +3639,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "appsnap":
+        return renderAppSnapPanel();
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":

@@ -28,7 +28,7 @@ import type {
   ProjectKind,
   RuntimeMode,
   ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -139,6 +139,27 @@ export interface TurnDiffSummary {
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
+  checkpointTurnCounts?: number[] | undefined;
+}
+
+// Ephemeral client-side progress of the "New worktree" first-send setup
+// sequence (create worktree → link thread → start session). Rendered as a
+// transient transcript row; never persisted.
+export type WorktreeSetupStepId =
+  | "create-worktree"
+  | "prepare-thread"
+  | "run-setup-action"
+  | "start-session";
+export type WorktreeSetupStepStatus = "pending" | "active" | "done" | "error";
+
+export interface WorktreeSetupStep {
+  id: WorktreeSetupStepId;
+  label: string;
+  status: WorktreeSetupStepStatus;
+}
+
+export interface WorktreeSetupSnapshot {
+  steps: WorktreeSetupStep[];
 }
 
 export interface Project {

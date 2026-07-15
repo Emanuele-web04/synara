@@ -27,8 +27,8 @@ import {
   type ModelSelection,
   type ProviderKind,
   type TurnDispatchMode,
-} from "@t3tools/contracts";
-import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
+} from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";

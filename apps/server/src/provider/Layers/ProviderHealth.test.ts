@@ -1,12 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ServerProviderStatus } from "@t3tools/contracts";
-import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vitest";
 
-import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
+import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { ProviderHealth } from "../Services/ProviderHealth";
@@ -63,6 +64,12 @@ function mockSpawnerLayer(
     args: ReadonlyArray<string>,
     command: string,
     env: NodeJS.ProcessEnv | undefined,
+    options:
+      | {
+          readonly env?: NodeJS.ProcessEnv;
+          readonly windowsVerbatimArguments?: boolean;
+        }
+      | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -75,9 +82,14 @@ function mockSpawnerLayer(
       const cmd = command as unknown as {
         command: string;
         args: ReadonlyArray<string>;
-        options?: { env?: NodeJS.ProcessEnv };
+        options?: {
+          env?: NodeJS.ProcessEnv;
+          windowsVerbatimArguments?: boolean;
+        };
       };
-      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
+      return Effect.succeed(
+        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options)),
+      );
     }),
   );
 }
@@ -105,6 +117,7 @@ const allProvidersDisabledSettings = {
     cursor: { enabled: false },
     gemini: { enabled: false },
     grok: { enabled: false },
+    droid: { enabled: false },
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
@@ -119,6 +132,7 @@ const allProvidersDisabledServerSettings = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
@@ -149,19 +163,18 @@ function withTempCodexHome(configContent?: string) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-codex-" });
-    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-runtime-" });
+    const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-test-codex-" });
+    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "synara-test-runtime-",
+    });
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        // Override every runtime-home var the overlay resolver consults (SYNARA_HOME wins over
-        // DPCODE_HOME/T3CODE_HOME) plus CODEX_HOME, so an ambient SYNARA_HOME can't shadow the
-        // temp dir and skew the resolved CODEX_HOME during this test.
+        // Override the runtime and source homes so ambient state cannot skew
+        // the resolved CODEX_HOME during this test.
         const overrides: Record<string, string> = {
           CODEX_HOME: tmpDir,
           SYNARA_HOME: runtimeDir,
-          DPCODE_HOME: runtimeDir,
-          T3CODE_HOME: runtimeDir,
         };
         const restore: Record<string, string | undefined> = {};
         for (const [key, value] of Object.entries(overrides)) {
@@ -218,7 +231,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(statuses.length, 9);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -286,7 +299,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
 
-    it.effect("publishes ready status when a disabled provider is re-enabled", () =>
+    it.effect("projects cached ready status when a disabled provider is re-enabled", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -302,11 +315,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           provider: cachedReadyCodexStatus,
         });
 
+        let spawnCount = 0;
         const layer = ProviderHealthLive.pipe(
           Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
             mockSpawnerLayer((args) => {
+              spawnCount += 1;
               const joined = args.join(" ");
               if (joined === "--version") {
                 return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
@@ -328,17 +343,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(disabledCodex?.available, false);
           assert.strictEqual(disabledCodex?.message, "Provider is disabled in Synara settings.");
 
-          const enabledCodexFiber = yield* providerHealth.streamChanges.pipe(
-            Stream.map((statuses) => statuses.find((status) => status.provider === "codex")),
-            Stream.filter(
-              (status): status is ServerProviderStatus =>
-                status !== undefined &&
-                status.available === true &&
-                status.authStatus === "authenticated",
-            ),
-            Stream.runHead,
-            Effect.forkChild,
-          );
           yield* serverSettings.updateSettings({
             providers: {
               codex: {
@@ -347,27 +351,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             },
           });
 
-          const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
-            Effect.timeoutOption(2_000),
-          );
-          assert.strictEqual(streamedCodex._tag, "Some");
-          if (streamedCodex._tag !== "Some") {
-            return;
-          }
-          assert.strictEqual(streamedCodex.value._tag, "Some");
-          if (streamedCodex.value._tag !== "Some") {
-            return;
-          }
-          assert.notStrictEqual(
-            streamedCodex.value.value.message,
-            "Provider is disabled in Synara settings.",
-          );
-
           const currentStatuses = yield* providerHealth.getStatuses;
           const currentCodex = currentStatuses.find((status) => status.provider === "codex");
           assert.strictEqual(currentCodex?.available, true);
           assert.strictEqual(currentCodex?.authStatus, "authenticated");
           assert.notStrictEqual(currentCodex?.message, "Provider is disabled in Synara settings.");
+          assert.strictEqual(spawnCount, 0);
         }).pipe(Effect.provide(layer));
       }),
     );
@@ -377,7 +366,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 8);
+        assert.strictEqual(statuses.length, 9);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -397,6 +386,36 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(error.provider, "kilo");
         assert.strictEqual(error.reason, "Provider is disabled in Synara settings.");
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+  });
+
+  describe("startup refresh behavior", () => {
+    it.effect("serves cached statuses without spawning provider CLIs on layer startup", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-no-boot-refresh-",
+        });
+        let spawnCount = 0;
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(DEFAULT_SERVER_SETTINGS)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer(() => {
+              spawnCount += 1;
+              return { stdout: "", stderr: "", code: 0 };
+            }),
+          ),
+        );
+
+        const statuses = yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          return yield* providerHealth.getStatuses;
+        }).pipe(Effect.provide(layer));
+
+        assert.deepStrictEqual(statuses, []);
+        assert.strictEqual(spawnCount, 0);
+      }),
     );
   });
 
@@ -626,6 +645,31 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("propagates verbatim Windows arguments through the Effect command", () => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      return Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("C:\\tools(x86)\\codex.cmd");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, _env, options) => {
+            assert.strictEqual(command, "C:\\Windows\\System32\\cmd.exe");
+            assert.strictEqual(options?.windowsVerbatimArguments, true);
+            const commandLine = args.at(-1) ?? "";
+            if (commandLine.includes('"--version"')) {
+              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            }
+            if (commandLine.includes('"login" "status"')) {
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => platform.mockRestore())),
+      );
+    });
+
     it.effect("uses configured codex home for version, config, and auth probes", () => {
       let sawLoginStatusProbe = false;
       let expectedCodexHome: string | undefined;
@@ -638,13 +682,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           'model_provider = "portkey"\n',
         );
         const configuredHome = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-configured-codex-",
+          prefix: "synara-configured-codex-",
         });
         yield* fileSystem.writeFileString(
           path.join(configuredHome, "config.toml"),
           'model_provider = "openai"\n',
         );
-        expectedCodexHome = path.join(runtimeDir, DPCODE_CODEX_HOME_OVERLAY_DIR);
+        expectedCodexHome = path.join(runtimeDir, SYNARA_CODEX_HOME_OVERLAY_DIR);
 
         const status = yield* makeCheckCodexProviderStatus("codex", configuredHome);
         assert.strictEqual(status.status, "ready");

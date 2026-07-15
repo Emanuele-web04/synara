@@ -8,6 +8,8 @@ import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
+  serverProviderUsageSnapshotQueryOptions,
+  serverQueryKeys,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
 
@@ -61,6 +63,25 @@ describe("serverLocalServersQueryOptions", () => {
 describe("serverAllProviderUsageQueryOptions", () => {
   it("can be disabled by provider-scoped usage surfaces", () => {
     const options = serverAllProviderUsageQueryOptions(false);
+
+    expect(options.enabled).toBe(false);
+  });
+
+  it("keys provider-scoped usage separately from the all-provider batch", () => {
+    const scoped = serverAllProviderUsageQueryOptions({ provider: "claudeAgent" });
+    const all = serverAllProviderUsageQueryOptions();
+
+    expect(scoped.queryKey).toEqual(serverQueryKeys.allProviderUsage("claudeAgent"));
+    expect(all.queryKey).toEqual(serverQueryKeys.allProviderUsage(null));
+  });
+});
+
+describe("serverProviderUsageSnapshotQueryOptions", () => {
+  it("can be disabled by privacy-safe active surfaces", () => {
+    const options = serverProviderUsageSnapshotQueryOptions({
+      provider: "cursor",
+      enabled: false,
+    });
 
     expect(options.enabled).toBe(false);
   });

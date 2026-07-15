@@ -3,7 +3,7 @@
 // with slower token telemetry once it arrives.
 // Layer: web profile feature (pure selection logic, no I/O).
 
-import type { ProfileStats, ProfileTokenStats, ProviderKind } from "@t3tools/contracts";
+import type { ProfileStats, ProfileTokenStats, ProviderKind } from "@synara/contracts";
 
 export interface ProfileTopProviderSelection {
   readonly provider: ProviderKind | null;

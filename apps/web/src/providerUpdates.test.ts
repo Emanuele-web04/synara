@@ -3,7 +3,7 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -56,6 +56,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       gemini: { ...provider, binaryPath: "gemini" },
       grok: { ...provider, binaryPath: "grok" },
+      droid: { ...provider, binaryPath: "droid" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPassword: "" },
       opencode: {
         ...provider,

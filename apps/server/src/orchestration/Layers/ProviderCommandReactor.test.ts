@@ -1,18 +1,29 @@
+// FILE: ProviderCommandReactor.test.ts
+// Purpose: Verifies provider intent orchestration, queueing, rollback, and transcript bootstrap flows.
+// Layer: Orchestration integration tests
+// Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@t3tools/contracts";
+import type {
+  ModelSelection,
+  ProviderForkThreadResult,
+  ProviderRuntimeEvent,
+  ProviderSession,
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +45,10 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+import {
+  StudioOutputReactor,
+  type StudioOutputReactorShape,
+} from "../Services/StudioOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
@@ -104,10 +119,13 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
+    readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
+    readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
+    readonly forkThreadResult?: ProviderForkThreadResult | null;
   }) {
     const now = new Date().toISOString();
-    const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
+    const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
     createdBaseDirs.add(baseDir);
     const { stateDir } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
@@ -200,8 +218,30 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-steer-1"),
       }),
     );
-    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
-      Effect.succeed(null),
+    const startReview = vi.fn<ProviderServiceShape["startReview"]>((input) =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: asTurnId("turn-review-1"),
+      }),
+    );
+    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>((forkInput) =>
+      Effect.sync(() => {
+        const result = input?.forkThreadResult ?? null;
+        const forkModelSelection = forkInput.modelSelection ?? modelSelection;
+        if (result && !runtimeSessions.some((session) => session.threadId === forkInput.threadId)) {
+          runtimeSessions.push({
+            provider: forkModelSelection.provider,
+            status: "ready",
+            runtimeMode: forkInput.runtimeMode,
+            ...(forkModelSelection.model !== undefined ? { model: forkModelSelection.model } : {}),
+            threadId: forkInput.threadId,
+            ...(result.resumeCursor !== undefined ? { resumeCursor: result.resumeCursor } : {}),
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        return result;
+      }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
@@ -222,6 +262,7 @@ describe("ProviderCommandReactor", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(false),
       restoreCheckpoint,
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
       ...input?.checkpointStore,
@@ -299,13 +340,25 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
+    const captureStudioOutputBaseline = vi.fn<
+      StudioOutputReactorShape["captureBaselineBeforeTurn"]
+    >(input?.studioOutputReactor?.captureBaselineBeforeTurn ?? (() => Effect.void));
+    const cancelPendingStudioOutputBaseline = vi.fn<
+      StudioOutputReactorShape["cancelPendingTurnBaseline"]
+    >(input?.studioOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
+    const studioOutputReactor: StudioOutputReactorShape = {
+      captureBaselineBeforeTurn: captureStudioOutputBaseline,
+      cancelPendingTurnBaseline: cancelPendingStudioOutputBaseline,
+      start: input?.studioOutputReactor?.start ?? Effect.void,
+      drain: input?.studioOutputReactor?.drain ?? Effect.void,
+    };
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
-      startReview: unsupported as ProviderServiceShape["startReview"],
+      startReview,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
@@ -321,6 +374,9 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          ...(input?.conversationRollback
+            ? { conversationRollback: input.conversationRollback }
+            : {}),
         }),
       rollbackConversation,
       compactThread: () => unsupported(),
@@ -337,6 +393,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(GitCore, { renameBranch, publishBranch } as unknown as GitCoreShape),
@@ -394,6 +451,7 @@ describe("ProviderCommandReactor", () => {
       startSession,
       sendTurn,
       steerTurn,
+      startReview,
       forkThread,
       interruptTurn,
       respondToRequest,
@@ -409,6 +467,8 @@ describe("ProviderCommandReactor", () => {
       publishBranch,
       generateBranchName,
       generateThreadTitle,
+      captureStudioOutputBaseline,
+      cancelPendingStudioOutputBaseline,
       stateDir,
       drain,
       emitRuntimeEvent,
@@ -519,6 +579,744 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Earlier answer");
     expect(input?.input).toContain("<sidechat_boundary>");
     expect(input?.input).toContain("Fresh side question");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-second-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-sidechat"),
+        message: {
+          messageId: asMessageId("sidechat-second-user"),
+          role: "user",
+          text: "Second side question",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const secondInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(secondInput?.input).not.toContain("<sidechat_context>");
+    expect(secondInput?.input).not.toContain("<thread_context>");
+    expect(secondInput?.input).not.toContain("Earlier question");
+    expect(secondInput?.input).not.toContain("Earlier answer");
+    expect(secondInput?.input).toContain("Second side question");
+  });
+
+  it("bootstraps Droid sidechat context after a native provider fork", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-native-droid-sidechat");
+    const harness = await createHarness({
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "native-droid-fork" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-fork-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Native Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("native-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Imported Droid sidechat question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("native-droid-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Imported Droid sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-overlong-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("native-droid-sidechat-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "error"
+      );
+    });
+    expect(harness.forkThread).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const failedReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      failedReadModel.threads.find((thread) => thread.id === threadId)?.session?.lastError,
+    ).toContain("too long to include the sidechat context");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-native-droid-sidechat-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("native-droid-sidechat-user"),
+          role: "user",
+          text: "Continue the native Droid sidechat",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.forkThread).toHaveBeenCalledTimes(1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<sidechat_context>");
+    expect(input?.input).toContain("Imported Droid sidechat question");
+    expect(input?.input).toContain("Imported Droid sidechat answer");
+    expect(input?.input).toContain("Continue the native Droid sidechat");
+    expect(input?.input?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+    );
+  });
+
+  it("preserves pending sidechat context when the first turn is an overlong provider review", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Review sidechat",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("review-sidechat-imported-user"),
+            role: "user",
+            text: "Context that must survive the review",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("review-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Prior sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-review-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        message: {
+          messageId: asMessageId("review-sidechat-review-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startReview.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-review-sidechat-follow-up-start"),
+        threadId: ThreadId.makeUnsafe("thread-review-sidechat"),
+        message: {
+          messageId: asMessageId("review-sidechat-follow-up-user"),
+          role: "user",
+          text: "Continue with the side question",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<sidechat_context>");
+    expect(input?.input).toContain("Context that must survive the review");
+    expect(input?.input).toContain("Prior sidechat answer");
+    expect(input?.input).toContain("Continue with the side question");
+  });
+
+  it("preserves full transcript bootstrap when an overlong review restarts a sidechat", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-restarted-droid-sidechat");
+    const harness = await createHarness({
+      sessionModelSwitch: "restart-session",
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "restarted-droid-sidechat" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Restarted Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("restarted-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Retained sidechat question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("restarted-droid-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Retained sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-review"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-review-user"),
+          role: "user",
+          text: "Review before restarting",
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startReview.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-overlong-review"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-overlong-review-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        modelSelection: {
+          provider: "droid",
+          model: "claude-opus-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startReview.mock.calls.length === 2);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-latest-user"),
+          role: "user",
+          text: "Continue after restarting",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<thread_context>");
+    expect(input?.input).not.toContain("<sidechat_context>");
+    expect(input?.input).toContain("Retained sidechat question");
+    expect(input?.input).toContain("Retained sidechat answer");
+    expect(input?.input).toContain("Continue after restarting");
+  });
+
+  it("blocks an overlong Droid fork turn and bootstraps its shorter retry", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const importedAt = new Date(Date.parse(now) - 1_000).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("droid-fork-user"),
+            role: "user",
+            text: "Retained question",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+          {
+            messageId: asMessageId("droid-fork-assistant"),
+            role: "assistant",
+            text: "Retained answer",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-overlong-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        message: {
+          messageId: asMessageId("droid-fork-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === "thread-droid-fork")?.session?.status ===
+        "error"
+      );
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const failedReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      failedReadModel.threads.find((thread) => thread.id === "thread-droid-fork")?.session
+        ?.lastError,
+    ).toContain("too long to include the transcript context");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        message: {
+          messageId: asMessageId("droid-fork-latest-user"),
+          role: "user",
+          text: "Continue here",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.forkThread.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<thread_context>");
+    expect(input?.input).toContain("Retained question");
+    expect(input?.input).toContain("Retained answer");
+    expect(input?.input).toContain("Continue here");
+  });
+
+  it("does not rebootstrap an empty Droid fork after its first native turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Empty Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-first-turn"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        message: {
+          messageId: asMessageId("empty-droid-fork-first-user"),
+          role: "user",
+          text: "First message without prior context",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const firstInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(firstInput?.input).not.toContain("<thread_context>");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-second-turn"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        message: {
+          messageId: asMessageId("empty-droid-fork-second-user"),
+          role: "user",
+          text: "Second message continues the native session",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const secondInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(secondInput?.input).not.toContain("<thread_context>");
+    expect(secondInput?.input).not.toContain("First message without prior context");
+    expect(secondInput?.input).toContain("Second message continues the native session");
+  });
+
+  it("retries a pending Droid fork bootstrap on an existing session", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "droid",
+          method: "session/prompt",
+          detail: "simulated Droid prompt failure",
+        }),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Retry Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("retry-droid-fork-imported-user"),
+            role: "user",
+            text: "Retained context for retry",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-failed-turn"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        message: {
+          messageId: asMessageId("retry-droid-fork-failed-user"),
+          role: "user",
+          text: "Failed attempt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === "thread-retry-droid-fork")?.session
+          ?.status === "error"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-success-turn"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        message: {
+          messageId: asMessageId("retry-droid-fork-success-user"),
+          role: "user",
+          text: "Retry now",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(retryInput?.input).toContain("<thread_context>");
+    expect(retryInput?.input).toContain("Retained context for retry");
+    expect(retryInput?.input).toContain("Retry now");
+  });
+
+  it("retains a Droid transcript bootstrap when the forked prompt later fails", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-droid-async-bootstrap-failure");
+    const firstTurnId = asTurnId("turn-droid-bootstrap-failed");
+    const retryTurnId = asTurnId("turn-droid-bootstrap-retry");
+    const followUpTurnId = asTurnId("turn-droid-bootstrap-follow-up");
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+      },
+    });
+    const now = new Date().toISOString();
+    const importedAt = new Date(Date.parse(now) - 1_000).toISOString();
+    harness.sendTurn
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: firstTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: retryTurnId }))
+      .mockImplementationOnce(() => Effect.succeed({ threadId, turnId: followUpTurnId }));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-fork"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Droid async bootstrap failure",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("droid-async-bootstrap-imported-user"),
+            role: "user",
+            text: "Context retained across the failed prompt",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-first-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-first-user"),
+          role: "user",
+          text: "First attempt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const firstInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(firstInput?.input).toContain("<thread_context>");
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-droid-async-bootstrap-failed"),
+      provider: "droid",
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: firstTurnId,
+      payload: {
+        state: "failed",
+        errorMessage: "ACP prompt failed after dispatch",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-retry-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-retry-user"),
+          role: "user",
+          text: "Retry after async failure",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(retryInput?.input).toContain("<thread_context>");
+    expect(retryInput?.input).toContain("Context retained across the failed prompt");
+    expect(retryInput?.input).toContain("Retry after async failure");
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-droid-async-bootstrap-retry-completed"),
+      provider: "droid",
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: retryTurnId,
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-async-bootstrap-follow-up-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("droid-async-bootstrap-follow-up-user"),
+          role: "user",
+          text: "Continue after successful retry",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    const followUpInput = harness.sendTurn.mock.calls[2]?.[0] as { input?: string } | undefined;
+    expect(followUpInput?.input).not.toContain("<thread_context>");
+    expect(followUpInput?.input).toBe("Continue after successful retry");
   });
 
   it("rolls back provider conversation state for message edits", async () => {
@@ -690,6 +1488,99 @@ describe("ProviderCommandReactor", () => {
       skills: [skill],
       mentions: [mention],
     });
+  });
+
+  it("restarts Droid edits and bootstraps only the retained transcript", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "droid", model: "claude-opus-4-8" },
+      conversationRollback: "restart-session",
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-droid-retained-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("droid-earlier-user"),
+            role: "user",
+            text: "Earlier question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("droid-earlier-assistant"),
+            role: "assistant",
+            text: "Earlier answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-original-edit-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("droid-edit-target"),
+          role: "user",
+          text: "old prompt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.sendTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-droid-active-edit-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "droid",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-droid-active-edit"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-droid-edit-and-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("droid-edit-target"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    const resent = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(resent?.input).toContain("<thread_context>");
+    expect(resent?.input).toContain("Earlier question");
+    expect(resent?.input).toContain("Earlier answer");
+    expect(resent?.input).toContain("edited prompt");
+    expect(resent?.input).not.toContain("old prompt");
   });
 
   it("keeps queued-message edits queued while an active provider turn continues", async () => {
@@ -1150,6 +2041,45 @@ describe("ProviderCommandReactor", () => {
     expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
+  it("waits for the Studio output baseline before sending the provider turn", async () => {
+    let releaseCapture: (() => void) | undefined;
+    const captureGate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
+      () => Effect.promise(() => captureGate),
+    );
+    const harness = await createHarness({
+      studioOutputReactor: { captureBaselineBeforeTurn },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-slow-studio-baseline"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-studio-baseline"),
+          role: "user",
+          text: "create an output immediately",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => captureBaselineBeforeTurn.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    releaseCapture?.();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(captureBaselineBeforeTurn).toHaveBeenCalledWith(ThreadId.makeUnsafe("thread-1"));
+  });
+
   it("publishes a starting session status before the provider session is ready", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1318,6 +2248,9 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
     ).toBe(true);
+    expect(harness.cancelPendingStudioOutputBaseline).toHaveBeenCalledWith(
+      ThreadId.makeUnsafe("thread-1"),
+    );
   });
 
   it("uses the runtime mode requested by thread.turn.start when starting the provider session", async () => {
@@ -1584,11 +2517,11 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         envMode: "worktree",
-        branch: "dpcode/cb661f0d",
+        branch: "synara/cb661f0d",
         worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
         associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "dpcode/cb661f0d",
-        associatedWorktreeRef: "dpcode/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
       }),
     );
 
@@ -1646,11 +2579,11 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap-gemini"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         envMode: "worktree",
-        branch: "dpcode/cb661f0d",
+        branch: "synara/cb661f0d",
         worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
         associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
-        associatedWorktreeBranch: "dpcode/cb661f0d",
-        associatedWorktreeRef: "dpcode/cb661f0d",
+        associatedWorktreeBranch: "synara/cb661f0d",
+        associatedWorktreeRef: "synara/cb661f0d",
       }),
     );
 
@@ -1678,7 +2611,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
     expect(harness.generateBranchName).not.toHaveBeenCalled();
     expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
-      oldBranch: "dpcode/cb661f0d",
+      oldBranch: "synara/cb661f0d",
       newBranch: "synara/fix-provider-startup-timeouts",
     });
 
@@ -2579,7 +3512,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts an idle Claude session immediately when thread model selection changes", async () => {
+  it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
     });
@@ -2604,8 +3537,17 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+      },
+    });
     harness.startSession.mockClear();
 
+    // Context-window changes switch in-session via setModel on the next turn.
+    // Restarting would resume via --resume and replay the whole conversation
+    // as uncached input tokens.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -2621,14 +3563,266 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    // Effort is fixed at subprocess spawn, so an effort change still restarts.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: {
+            effort: "max",
+          },
+        },
+      }),
+    );
+
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-7",
         options: {
-          contextWindow: "1m",
+          effort: "max",
         },
+      },
+    });
+  });
+
+  it("restarts a directly started Claude session when spawn-fixed options change", async () => {
+    const initialSelection: ModelSelection = {
+      provider: "claudeAgent",
+      model: "claude-opus-4-7",
+    };
+    const harness = await createHarness({ threadModelSelection: initialSelection });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    // Mirrors native import: ProviderService owns the runtime start directly,
+    // while the reactor learns the original selection from thread.created.
+    await harness.drain();
+    const importedSession = await Effect.runPromise(
+      harness.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        modelSelection: initialSelection,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-direct-claude-session-set"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: importedSession.updatedAt,
+        },
+        createdAt: importedSession.updatedAt,
+      }),
+    );
+    harness.startSession.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-direct-claude-effort-update"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max" },
+      },
+    });
+  });
+
+  it("keeps the applied Claude spawn profile while metadata changes mid-turn", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-active-selection-change");
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-bootstrap"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-active-selection-bootstrap"),
+          role: "user",
+          text: "bootstrap",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    harness.startSession.mockClear();
+
+    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-session-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-effort"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max" },
+        },
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+
+    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-session-ready"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // The context-only edit is compared with the profile that is actually live,
+    // so the pending effort change still forces exactly one replacement.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-active-selection-context"),
+        threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+          options: { effort: "max", contextWindow: "1m" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-7",
+        options: { effort: "max", contextWindow: "1m" },
+      },
+    });
+  });
+
+  it("seeds imported Droid selection before handling idle metadata updates", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "medium" },
+      },
+    });
+    const now = new Date().toISOString();
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-imported-droid"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "droid",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-same-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+          options: { reasoningEffort: "medium" },
+        },
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+          options: { reasoningEffort: "high" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-synthetic" },
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "high" },
       },
     });
   });
@@ -4048,6 +5242,110 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("does not restore pending sidechat context after an explicit session stop", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-stopped-droid-sidechat");
+    const harness = await createHarness({
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "stopped-droid-sidechat" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Stopped Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("stopped-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Context cleared by stop",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-overlong"),
+        threadId,
+        message: {
+          messageId: asMessageId("stopped-droid-sidechat-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "error"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-stop"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        harness.stopSession.mock.calls.length === 1 &&
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "stopped"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-fresh-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("stopped-droid-sidechat-fresh-user"),
+          role: "user",
+          text: "Start fresh after stop",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).not.toContain("<sidechat_context>");
+    expect(input?.input).not.toContain("<thread_context>");
+    expect(input?.input).not.toContain("Context cleared by stop");
+    expect(input?.input).toContain("Start fresh after stop");
   });
 
   it("interrupts active subagent sessions without stopping the parent provider session", async () => {

@@ -1,4 +1,4 @@
-import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -660,7 +660,109 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect("normalizes imported T3 Code model-selection shapes from projection reads", () =>
+  it.effect("keeps UI thread detail capped while export detail includes all messages", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-export-message-cap");
+      const messageCount = 2_005;
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-export-message-cap',
+          'Project Export Message Cap',
+          '/tmp/project-export-message-cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-export-message-cap',
+          'project-export-message-cap',
+          'Thread Export Message Cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          NULL,
+          NULL,
+          NULL,
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+
+      for (let index = 0; index < messageCount; index += 1) {
+        const createdAt = new Date(Date.UTC(2026, 1, 24, 0, 0, index)).toISOString();
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            is_streaming,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${`message-${index}`},
+            'thread-export-message-cap',
+            NULL,
+            'assistant',
+            ${`message ${index}`},
+            0,
+            ${createdAt},
+            ${createdAt}
+          )
+        `;
+      }
+
+      const cappedDetail = yield* snapshotQuery.getThreadDetailById(threadId);
+      const exportDetail = yield* snapshotQuery.getThreadDetailForExportById(threadId);
+
+      assert.isTrue(Option.isSome(cappedDetail));
+      assert.isTrue(Option.isSome(exportDetail));
+      const cappedMessages = Option.isSome(cappedDetail) ? cappedDetail.value.messages : [];
+      const exportMessages = Option.isSome(exportDetail) ? exportDetail.value.messages : [];
+      assert.equal(cappedMessages.length, 2_000);
+      assert.equal(cappedMessages[0]?.text, "message 5");
+      assert.equal(cappedMessages.at(-1)?.text, "message 2004");
+      assert.equal(exportMessages.length, messageCount);
+      assert.equal(exportMessages[0]?.text, "message 0");
+      assert.equal(exportMessages.at(-1)?.text, "message 2004");
+    }),
+  );
+
+  it.effect("normalizes imported Synara model-selection shapes from projection reads", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
@@ -927,7 +1029,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'project-pr',
           'Thread with PR',
           '{"provider":"codex","model":"gpt-5-codex"}',
-          '{"number":1,"title":"Add placeholder temp files","url":"https://github.com/Emanuele-web04/openclap/pull/1","baseBranch":"main","headBranch":"dpcode/greeting-1","state":"open"}',
+          '{"number":1,"title":"Add placeholder temp files","url":"https://github.com/Emanuele-web04/openclap/pull/1","baseBranch":"main","headBranch":"synara/greeting-1","state":"open"}',
           '2026-02-25T00:00:02.000Z',
           '2026-02-25T00:00:03.000Z',
           NULL
@@ -940,7 +1042,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.number, 1);
-      assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.headBranch, "dpcode/greeting-1");
+      assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.headBranch, "synara/greeting-1");
     }),
   );
 
@@ -1315,6 +1417,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_threads`;
       yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_activities`;
 
       yield* sql`
         INSERT INTO projection_projects (
@@ -1444,6 +1547,76 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
 
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          created_at,
+          sequence
+        )
+        VALUES
+          (
+            'activity-file-change',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'File change',
+            '{"itemType":"file_change","status":"completed","data":{"path":"Outbox/Content/post.md"}}',
+            '2026-03-02T00:00:05.100Z',
+            1
+          ),
+          (
+            'activity-command',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'Command',
+            '{"itemType":"command_execution","status":"completed","data":{"path":"Outbox/ignored.md"}}',
+            '2026-03-02T00:00:05.200Z',
+            2
+          ),
+          (
+            'activity-studio-outputs',
+            'thread-context',
+            'turn-2',
+            'info',
+            'studio.outputs.captured',
+            'Studio outputs captured',
+            '{"itemType":"studio_outputs","data":{"files":[{"path":"output/pdf/report.pdf"}]}}',
+            '2026-03-02T00:00:05.300Z',
+            3
+          ),
+          (
+            'activity-generated-image-copy',
+            'thread-context',
+            'turn-2',
+            'info',
+            'studio.outputs.captured',
+            'Studio outputs captured',
+            '{"itemType":"studio_outputs","data":{"files":[{"path":"Outbox/Images/generated.png"}],"generatedImage":{"sourcePath":"/codex/generated.png","fullPath":"/tmp/context-workspace/Outbox/Images/generated.png"}}}',
+            '2026-03-02T00:00:05.400Z',
+            4
+          ),
+          (
+            'activity-generated-image-tool',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'Generated image',
+            '{"itemType":"image_generation","status":"completed","data":{"kind":"codex.generated_image","path":"/codex/generated.png"}}',
+            '2026-03-02T00:00:05.500Z',
+            5
+          )
+      `;
+
       const context = yield* snapshotQuery.getThreadCheckpointContext(
         ThreadId.makeUnsafe("thread-context"),
       );
@@ -1452,6 +1625,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(context.value, {
           threadId: ThreadId.makeUnsafe("thread-context"),
           projectId: asProjectId("project-context"),
+          projectKind: "project",
           workspaceRoot: "/tmp/context-workspace",
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
@@ -1478,6 +1652,63 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         });
       }
 
+      const outputContext = yield* snapshotQuery.getThreadCheckpointContext(
+        ThreadId.makeUnsafe("thread-context"),
+        { includeFileChangeActivityPayloads: true },
+      );
+      assert.equal(outputContext._tag, "Some");
+      if (outputContext._tag === "Some") {
+        assert.deepEqual(outputContext.value.fileChangeActivityPayloads, [
+          {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/generated.png" }],
+              generatedImage: {
+                sourcePath: "/codex/generated.png",
+                fullPath: "/tmp/context-workspace/Outbox/Images/generated.png",
+              },
+            },
+          },
+          {
+            itemType: "studio_outputs",
+            data: { files: [{ path: "output/pdf/report.pdf" }] },
+          },
+          {
+            itemType: "file_change",
+            status: "completed",
+            data: { path: "Outbox/Content/post.md" },
+          },
+        ]);
+      }
+
+      const generatedImageActivities = yield* snapshotQuery.listGeneratedImageActivitiesByTurn(
+        ThreadId.makeUnsafe("thread-context"),
+        TurnId.makeUnsafe("turn-2"),
+      );
+      assert.deepEqual(generatedImageActivities, [
+        {
+          kind: "studio.outputs.captured",
+          payload: {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/generated.png" }],
+              generatedImage: {
+                sourcePath: "/codex/generated.png",
+                fullPath: "/tmp/context-workspace/Outbox/Images/generated.png",
+              },
+            },
+          },
+        },
+        {
+          kind: "tool.completed",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: { kind: "codex.generated_image", path: "/codex/generated.png" },
+          },
+        },
+      ]);
+
       const fullThreadDiffContext = yield* snapshotQuery.getFullThreadDiffContext(
         ThreadId.makeUnsafe("thread-context"),
         2,
@@ -1487,10 +1718,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(fullThreadDiffContext.value, {
           threadId: ThreadId.makeUnsafe("thread-context"),
           projectId: asProjectId("project-context"),
+          projectKind: "project",
           workspaceRoot: "/tmp/context-workspace",
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
           latestCheckpointTurnCount: 2,
+          baselineCheckpointRef: asCheckpointRef("checkpoint-a"),
           toCheckpointRef: asCheckpointRef("checkpoint-b"),
         });
       }

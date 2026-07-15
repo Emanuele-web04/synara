@@ -1,4 +1,4 @@
-import { AuthSessionId } from "@t3tools/contracts";
+import { AuthSessionId } from "@synara/contracts";
 import { DateTime, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";

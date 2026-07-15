@@ -7,6 +7,7 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS,
   CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS,
+  isClaudeCredentialKeepaliveEnabled,
   resolveClaudeCredentialKeepaliveBinaryPath,
   resolveClaudeCredentialKeepaliveIntervalMs,
 } from "./claudeCredentialKeepalive.ts";
@@ -14,6 +15,24 @@ import {
 describe("claudeCredentialKeepalive", () => {
   it("uses the documented Claude auth status command", () => {
     assert.deepEqual([...CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS], ["auth", "status"]);
+  });
+
+  it("requires explicit opt-in on macOS", () => {
+    assert.equal(isClaudeCredentialKeepaliveEnabled({ platform: "darwin", env: {} }), false);
+    assert.equal(
+      isClaudeCredentialKeepaliveEnabled({
+        platform: "darwin",
+        env: { SYNARA_CLAUDE_KEEPALIVE: "1" },
+      }),
+      true,
+    );
+    assert.equal(
+      isClaudeCredentialKeepaliveEnabled({
+        platform: "linux",
+        env: { SYNARA_CLAUDE_KEEPALIVE: "1" },
+      }),
+      false,
+    );
   });
 
   it("resolves configured Claude binary paths with a safe default", () => {
@@ -32,13 +51,13 @@ describe("claudeCredentialKeepalive", () => {
   it("clamps keepalive intervals to Node's maximum timer delay", () => {
     assert.equal(
       resolveClaudeCredentialKeepaliveIntervalMs({
-        T3CODE_CLAUDE_KEEPALIVE_MINUTES: "60",
+        SYNARA_CLAUDE_KEEPALIVE_MINUTES: "60",
       }),
       60 * 60 * 1000,
     );
     assert.equal(
       resolveClaudeCredentialKeepaliveIntervalMs({
-        T3CODE_CLAUDE_KEEPALIVE_MINUTES: "999999999",
+        SYNARA_CLAUDE_KEEPALIVE_MINUTES: "999999999",
       }),
       CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS,
     );
@@ -47,7 +66,7 @@ describe("claudeCredentialKeepalive", () => {
   it("falls back to the default interval for invalid tuning values", () => {
     assert.equal(
       resolveClaudeCredentialKeepaliveIntervalMs({
-        T3CODE_CLAUDE_KEEPALIVE_MINUTES: "0",
+        SYNARA_CLAUDE_KEEPALIVE_MINUTES: "0",
       }),
       30 * 60 * 1000,
     );

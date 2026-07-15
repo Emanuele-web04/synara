@@ -2,7 +2,7 @@
 // Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
 // local, OpenUsage, and thread-derived fallback usage signals.
 
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -85,7 +85,7 @@ function createQueryClient() {
 describe("useProviderUsageSummary", () => {
   it("does not show local fallback rows when the live batch reports a non-ok status", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
       snapshot({ status: "needs-auth", detail: "Sign in with claude to see usage." }),
     ]);
     queryClient.setQueryData(
@@ -101,7 +101,7 @@ describe("useProviderUsageSummary", () => {
 
   it("still uses local fallback rows when no live snapshot exists", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), []);
     queryClient.setQueryData(
       serverQueryKeys.providerUsage("claudeAgent", null),
       fallbackSnapshot(),
@@ -118,7 +118,7 @@ describe("useProviderUsageSummary", () => {
 
   it("accepts precomputed thread fallback rows from aggregate provider surfaces", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), []);
 
     const summary = readProviderUsageSummary({
       queryClient,
@@ -143,9 +143,43 @@ describe("useProviderUsageSummary", () => {
     expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(12);
   });
 
+  it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({
+        status: "ok",
+        detail: "Anthropic is rate-limiting usage checks — showing your last values.",
+        limits: [
+          {
+            window: "Weekly",
+            usedPercent: 64,
+            resetsAt: "2026-06-15T12:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.usageNotice).toContain("rate-limiting");
+  });
+
+  it("has no notice when the live snapshot is non-ok", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({ status: "error", detail: "Usage is currently unavailable." }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.usageNotice).toBeUndefined();
+  });
+
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), []);
     queryClient.setQueryData(
       serverQueryKeys.providerUsage("claudeAgent", null),
       fallbackSnapshot(),

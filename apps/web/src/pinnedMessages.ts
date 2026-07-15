@@ -7,7 +7,7 @@ import {
   type MessageId,
   type PinnedMessage,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   addPinnedMessage,
   clampThreadNotes,
@@ -18,7 +18,7 @@ import {
   setPinnedMessageLabel,
   togglePinnedMessage,
   togglePinnedMessageDone,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 
 import { newCommandId } from "./lib/utils";
 import { readNativeApi } from "./nativeApi";

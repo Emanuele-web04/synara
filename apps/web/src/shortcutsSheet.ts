@@ -3,7 +3,7 @@
 // Layer: UI helper
 // Depends on: keybinding label resolution, project script command mapping, and platform helpers.
 
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@synara/contracts";
 import { isMacPlatform } from "./lib/utils";
 import { shortcutLabelForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";
@@ -119,6 +119,18 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "modelPicker.toggle",
     label: "Model picker",
     description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "model.next",
+    label: "Next model",
+    description:
+      "Cycle to the next model for the active provider (favorites first, then remaining models).",
+  },
+  {
+    command: "model.previous",
+    label: "Previous model",
+    description:
+      "Cycle to the previous model for the active provider (favorites first, then remaining models).",
   },
   {
     command: "traitsPicker.toggle",

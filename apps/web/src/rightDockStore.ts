@@ -3,7 +3,7 @@
 // Layer: UI state store
 // Exports: dock store hook, per-thread selector, and stable default snapshot.
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -40,7 +40,19 @@ interface RightDockStore {
   updatePane: (
     threadId: ThreadId,
     paneId: string,
-    patch: Partial<Pick<RightDockPane, "diffTurnId" | "diffFilePath" | "filePath" | "threadId">>,
+    patch: Partial<
+      Pick<
+        RightDockPane,
+        | "diffTurnId"
+        | "diffFilePath"
+        | "filePath"
+        | "threadId"
+        | "pullRequestProjectId"
+        | "pullRequestRepository"
+        | "pullRequestNumber"
+        | "pullRequestInitialTab"
+      >
+    >,
   ) => void;
   clearThreadDockState: (threadId: ThreadId) => void;
 }

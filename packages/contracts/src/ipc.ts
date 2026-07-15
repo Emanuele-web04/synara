@@ -40,6 +40,8 @@ import type {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
+  GitPullRequestSnapshotResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -68,6 +70,20 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  PullRequestActionInput,
+  PullRequestActionResult,
+  PullRequestCommentInput,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
+  PullRequestsListInput,
+  PullRequestsListResult,
+} from "./pullRequests";
+import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -90,6 +106,7 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
@@ -212,6 +229,7 @@ export interface DesktopUpdateState {
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
+  installFailureCount: number;
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub
@@ -301,6 +319,51 @@ export interface BrowserCaptureScreenshotResult {
   bytes: Uint8Array;
 }
 
+export type DesktopAppSnapPlatform = "macos" | "windows" | "linux" | "other";
+export type DesktopAppSnapPermission =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
+export type DesktopAppSnapStatus =
+  | "unsupported"
+  | "disabled"
+  | "permission-required"
+  | "starting"
+  | "ready"
+  | "error";
+
+export interface DesktopAppSnapState {
+  platform: DesktopAppSnapPlatform;
+  supported: boolean;
+  enabled: boolean;
+  status: DesktopAppSnapStatus;
+  shortcut: "both-option-keys" | null;
+  inputMonitoringPermission: DesktopAppSnapPermission;
+  screenRecordingPermission: DesktopAppSnapPermission;
+  message: string | null;
+}
+
+export interface DesktopAppSnapCapture {
+  id: string;
+  capturedAt: string;
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  bytes: Uint8Array;
+  sourceAppName: string | null;
+  sourceBundleIdentifier: string | null;
+  sourceAppIconDataUrl: string | null;
+  sourceWindowTitle: string | null;
+}
+
+export interface DesktopAppSnapErrorEvent {
+  code: string;
+  message: string;
+  capturedAt: string;
+}
+
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
   method: string;
   params?: Record<string, unknown>;
@@ -323,6 +386,12 @@ export interface DesktopNotificationInput {
 export interface DesktopWindowState {
   isMaximized: boolean;
   isFullscreen: boolean;
+}
+
+export interface SynaraStorageSnapshot {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly entries: Readonly<Record<string, string>>;
 }
 
 export interface DesktopBridge {
@@ -366,6 +435,20 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  appSnap: {
+    getState: () => Promise<DesktopAppSnapState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
+    requestPermissions: () => Promise<DesktopAppSnapState>;
+    listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
+    acknowledgeCapture: (captureId: string) => Promise<void>;
+    onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
+    onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
+    onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
+  };
+  storageMigration: {
+    readSnapshot: () => SynaraStorageSnapshot | null;
+    acknowledgeSnapshot: () => Promise<void>;
   };
   server?: {
     transcribeVoice: (
@@ -438,6 +521,11 @@ export interface NativeApi {
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
   };
+  studio: {
+    listThreadOutputs: (
+      input: StudioListThreadOutputsInput,
+    ) => Promise<StudioListThreadOutputsResult>;
+  };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
@@ -463,6 +551,9 @@ export interface NativeApi {
     unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
+    pullRequestSnapshot: (
+      input: GitPullRequestSnapshotInput,
+    ) => Promise<GitPullRequestSnapshotResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
@@ -475,6 +566,17 @@ export interface NativeApi {
     summarizeDiff: (input: GitSummarizeDiffInput) => Promise<GitSummarizeDiffResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
+  };
+  pullRequests: {
+    list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
+    reviewRequestCount: (
+      input: PullRequestReviewRequestCountInput,
+    ) => Promise<PullRequestReviewRequestCountResult>;
+    detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
+    diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
+    action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
+    comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
+    setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
   };
   contextMenu: {
     show: <T extends string>(

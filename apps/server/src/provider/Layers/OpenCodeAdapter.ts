@@ -17,7 +17,7 @@ import {
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
   Agent,
@@ -63,6 +63,7 @@ import {
 } from "../opencodeRuntime.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
+import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
 
@@ -443,43 +444,18 @@ function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserI
   }));
 }
 
-function normalizeOpenCodeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
-  if (value === "completed") {
-    return "completed";
-  }
-  if (value === "in_progress") {
-    return "inProgress";
-  }
-  return "pending";
-}
-
 function normalizeOpenCodeTodoTasks(todos: ReadonlyArray<Todo>): {
   readonly tasks: ReadonlyArray<{
     readonly task: string;
     readonly status: "pending" | "inProgress" | "completed";
   }>;
 } | null {
-  const tasks = todos
-    .map((todo) => {
-      const task = todo.content.trim();
-      if (task.length === 0) {
-        return null;
-      }
-      return {
-        task,
-        status: normalizeOpenCodeTodoStatus(todo.status),
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        readonly task: string;
-        readonly status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
+  const tasks = todos.flatMap((todo) => {
+    const task = makeRuntimeTaskListItem(todo.content, todo.status);
+    return task ? [task] : [];
+  });
 
-  return tasks.length > 0 ? { tasks } : null;
+  return nonEmptyRuntimeTaskListPayload(tasks);
 }
 
 function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reasoning_text" {
@@ -2137,7 +2113,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             yield* completeOpenCodeTurn(context, {
               turnId,
               raw: {
-                source: "dpcode.opencode.idle-after-tool-calls",
+                source: "synara.opencode.idle-after-tool-calls",
                 event: raw,
               },
               errorMessage: message,
@@ -2155,7 +2131,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 threadId: context.session.threadId,
                 turnId,
                 raw: {
-                  source: "dpcode.opencode.idle-after-tool-calls",
+                  source: "synara.opencode.idle-after-tool-calls",
                   event: raw,
                 },
               }),
@@ -2269,7 +2245,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             turnId: input.turnId,
             assistantEntry,
             raw: {
-              source: "dpcode.opencode.prompt.recovery",
+              source: "synara.opencode.prompt.recovery",
               message: assistantEntry,
             },
           });
@@ -2342,7 +2318,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 "OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.";
               yield* completeOpenCodeTurn(context, {
                 turnId: input.turnId,
-                raw: { source: "dpcode.opencode.prompt.watchdog" },
+                raw: { source: "synara.opencode.prompt.watchdog" },
                 errorMessage: message,
               });
               updateProviderSession(
@@ -2357,7 +2333,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...buildEventBase({
                   threadId: context.session.threadId,
                   turnId: input.turnId,
-                  raw: { source: "dpcode.opencode.prompt.watchdog" },
+                  raw: { source: "synara.opencode.prompt.watchdog" },
                 }),
                 type: "runtime.error",
                 payload: {
@@ -2409,7 +2385,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   turnId: input.turnId,
                   assistantEntry,
                   raw: {
-                    source: "dpcode.opencode.prompt.response",
+                    source: "synara.opencode.prompt.response",
                     message: assistantEntry,
                   },
                 });

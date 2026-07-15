@@ -1,4 +1,4 @@
-import type { AuthPairingLink, ServerAuthBootstrapMethod } from "@t3tools/contracts";
+import type { AuthPairingLink, ServerAuthBootstrapMethod } from "@synara/contracts";
 import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -54,4 +54,4 @@ export interface BootstrapCredentialServiceShape {
 export class BootstrapCredentialService extends ServiceMap.Service<
   BootstrapCredentialService,
   BootstrapCredentialServiceShape
->()("t3/auth/Services/BootstrapCredentialService") {}
+>()("synara/auth/Services/BootstrapCredentialService") {}

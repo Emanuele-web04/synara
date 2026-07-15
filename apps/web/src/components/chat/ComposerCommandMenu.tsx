@@ -6,7 +6,7 @@ import {
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
@@ -83,6 +83,8 @@ function commandMenuTitle(
       return "Status";
     case "subagents":
       return "Subagents";
+    case "feedback":
+      return "Feedback Synara";
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -423,6 +425,7 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   side: TemporaryThreadIcon,
   status: InfoIcon,
   subagents: BotIcon,
+  feedback: BugIcon,
   automation: ClockIcon,
 };
 

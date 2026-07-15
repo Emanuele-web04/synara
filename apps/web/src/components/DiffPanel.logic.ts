@@ -8,7 +8,7 @@ import {
   type ModelSelection,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 import type { DraftThreadState } from "../composerDraftStore";

@@ -13,7 +13,7 @@
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
-import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { type LucideIcon } from "~/lib/icons";
@@ -30,7 +30,7 @@ import { Button } from "../ui/button";
  * breathing room below them rather than hugging the very top of the window.
  *
  * The pixel height is owned by `CHAT_SURFACE_HEADER_HEIGHT_PX` in
- * `@t3tools/shared/desktopChrome` (the single source of truth the Electron main
+ * `@synara/shared/desktopChrome` (the single source of truth the Electron main
  * process also reads to center the native traffic lights). Tailwind only emits CSS
  * for class names it can scan literally, so the class stays a literal here — but its
  * TYPE is derived from the shared number, so the build fails if the two ever drift.
@@ -113,12 +113,23 @@ export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
 );
 
 /**
- * Icon treatment shared by every chip glyph (the header diff toggle + the dock
- * tabs) so size and muted strength stay identical. Color rides `currentColor`,
+ * Geometry shared by every chip glyph, muting excluded. Status glyphs (a pull
+ * request's state, say) carry meaning in their color and want this one: fading
+ * them washes the signal out, which is exactly what a chrome icon wants and a
+ * status icon never does.
+ */
+export const CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME = "size-3.5 shrink-0";
+
+/**
+ * Icon treatment shared by every chrome chip glyph (the header diff toggle + the
+ * dock tabs) so size and muted strength stay identical. Color rides `currentColor`,
  * which both chips drive to `--color-text-foreground-secondary` at rest, so the
  * tint is inherited from the chip instead of redeclared per call site.
  */
-export const CHAT_SURFACE_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0 opacity-70";
+export const CHAT_SURFACE_CHIP_ICON_CLASS_NAME = cn(
+  CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME,
+  "opacity-70",
+);
 
 /** Renders any chip glyph with the shared {@link CHAT_SURFACE_CHIP_ICON_CLASS_NAME} treatment. */
 export function SurfaceChipIcon({
@@ -232,20 +243,34 @@ export function SurfaceTabChip({
       ) : (
         <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
       )}
-      <button
-        type="button"
-        className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-        title={title}
-        aria-pressed={active}
-        onClick={(event) => {
-          event.stopPropagation();
-          onSelect?.();
-        }}
-      >
-        {leading}
-        <span className="truncate">{label}</span>
-        {trailing}
-      </button>
+      {onSelect ? (
+        <button
+          type="button"
+          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+          title={title}
+          aria-pressed={active}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect();
+          }}
+        >
+          {leading}
+          <span className="truncate">{label}</span>
+          {trailing}
+        </button>
+      ) : (
+        // Non-selectable chips (a lone tab that cannot switch to anything) render the
+        // label as static text so keyboard/AT users don't land on a button that does
+        // nothing.
+        <span
+          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+          title={title}
+        >
+          {leading}
+          <span className="truncate">{label}</span>
+          {trailing}
+        </span>
+      )}
     </div>
   );
 }

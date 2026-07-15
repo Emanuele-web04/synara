@@ -3,7 +3,7 @@
 // Layer: Provider adapter utilities
 // Depends on: shared chat attachment contracts.
 
-import type { ChatAttachment, ChatImageAttachment } from "@t3tools/contracts";
+import type { ChatAttachment, ChatImageAttachment } from "@synara/contracts";
 
 // Assistant selections stay in history as attachments, but the composer serializes them into text.
 export function filterProviderPromptImageAttachments(

@@ -1,4 +1,4 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
@@ -11,6 +11,7 @@ export type ProjectMetadataOrchestrationEvent = Extract<
 >;
 
 export const PROJECT_METADATA_SNAPSHOT_PROJECTORS = [
+  "projection.hot",
   "projection.projects",
   "projection.threads",
   "projection.thread-messages",

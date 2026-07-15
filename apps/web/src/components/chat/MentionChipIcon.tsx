@@ -12,7 +12,7 @@ import { CentralIcon, createCentralIconElement } from "~/lib/central-icons";
 import { PluginIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 
 export type { MentionChipKind };
 

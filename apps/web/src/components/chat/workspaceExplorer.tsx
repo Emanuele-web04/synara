@@ -5,7 +5,7 @@
 // Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, WorkspaceExplorerSidebar,
 //          ExplorerActivityBarButton, useExplorerEntryPrefetch, setFileReferenceDragData.
 
-import type { ProjectEntry, ProjectFileSystemEntry } from "@t3tools/contracts";
+import type { ProjectEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {

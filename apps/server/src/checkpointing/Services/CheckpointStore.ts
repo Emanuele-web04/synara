@@ -14,7 +14,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@synara/contracts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -47,6 +47,13 @@ export interface DiffCheckpointsInput {
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
+  readonly maxOutputBytes?: number;
+}
+
+export interface ReverseCheckpointDiffInput {
+  readonly cwd: string;
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly toCheckpointRef: CheckpointRef;
   readonly maxOutputBytes?: number;
 }
 
@@ -108,6 +115,13 @@ export interface CheckpointStoreShape {
   ) => Effect.Effect<string, CheckpointStoreError>;
 
   /**
+   * Reverse only the changes between two checkpoints onto the current workspace.
+   */
+  readonly reverseCheckpointDiff: (
+    input: ReverseCheckpointDiffInput,
+  ) => Effect.Effect<boolean, CheckpointStoreError>;
+
+  /**
    * Delete the provided checkpoint refs.
    *
    * Best-effort delete: missing refs are tolerated.
@@ -121,5 +135,5 @@ export interface CheckpointStoreShape {
  * CheckpointStore - Service tag for checkpoint persistence and restore operations.
  */
 export class CheckpointStore extends ServiceMap.Service<CheckpointStore, CheckpointStoreShape>()(
-  "t3/checkpointing/Services/CheckpointStore",
+  "synara/checkpointing/Services/CheckpointStore",
 ) {}

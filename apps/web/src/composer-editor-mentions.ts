@@ -14,8 +14,8 @@ import {
   normalizeComposerLinkUrl,
   trimTrailingLinkPunctuation,
 } from "./lib/linkChips";
-import { resolveAgentAlias } from "@t3tools/contracts";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import { resolveAgentAlias } from "@synara/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 
 export type ComposerPromptSegment =
   | {

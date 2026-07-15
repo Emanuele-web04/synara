@@ -7,7 +7,7 @@ import {
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -22,6 +22,7 @@ import {
   TerminalManagerRuntime,
   type TerminalSubprocessActivity,
 } from "./Manager";
+import type { ProcessTreeKiller } from "../processTreeKiller";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -226,13 +227,14 @@ describe("TerminalManager", () => {
     options: {
       shellResolver?: () => string;
       subprocessChecker?: (terminalPid: number) => Promise<boolean | TerminalSubprocessActivity>;
+      processTreeKiller?: ProcessTreeKiller;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
       maxRetainedInactiveSessions?: number;
       ptyAdapter?: FakePtyAdapter;
     } = {},
   ) {
-    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-terminal-"));
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-terminal-"));
     tempDirs.push(logsDir);
     const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
     const manager = new TerminalManagerRuntime({
@@ -241,6 +243,7 @@ describe("TerminalManager", () => {
       historyLineLimit,
       shellResolver: options.shellResolver ?? (() => "/bin/bash"),
       ...(options.subprocessChecker ? { subprocessChecker: options.subprocessChecker } : {}),
+      ...(options.processTreeKiller ? { processTreeKiller: options.processTreeKiller } : {}),
       ...(options.subprocessPollIntervalMs
         ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
         : {}),
@@ -959,6 +962,63 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("keeps captured-child SIGKILL escalation after root exit without re-signaling the root", async () => {
+    const treeSignals: Array<{
+      rootPid: number;
+      signal: string;
+      descendantPids: number[];
+      includeRootTree: boolean | undefined;
+    }> = [];
+    const processTreeKiller: ProcessTreeKiller = {
+      capture: () => ({
+        descendants: [{ pid: 4242, command: "tsdown --watch --clean" }],
+      }),
+      signal: ({ rootPid, signal, tree, includeRootTree }) => {
+        treeSignals.push({
+          rootPid,
+          signal,
+          descendantPids: tree.descendants.map((descendant) => descendant.pid),
+          includeRootTree,
+        });
+      },
+    };
+    const { manager, ptyAdapter } = makeManager(5, {
+      processKillGraceMs: 10,
+      processTreeKiller,
+    });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.close({ threadId: "thread-1" });
+    process.emitExit({ exitCode: 0, signal: 15 });
+    await waitFor(() => treeSignals.some((entry) => entry.signal === "SIGKILL"));
+
+    expect(treeSignals).toContainEqual({
+      rootPid: process.pid,
+      signal: "SIGKILL",
+      descendantPids: [4242],
+      includeRootTree: false,
+    });
+    expect(process.killSignals).toEqual(["SIGTERM"]);
+
+    manager.dispose();
+  });
+
+  it("shutdown disposal waits for kill escalation before returning", async () => {
+    const { manager, ptyAdapter } = makeManager(5, { processKillGraceMs: 10 });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.disposeForShutdown();
+
+    expect(process.killSignals[0]).toBe("SIGTERM");
+    expect(process.killSignals).toContain("SIGKILL");
+  });
+
   it("evicts oldest inactive terminal sessions when retention limit is exceeded", async () => {
     const { manager, ptyAdapter } = makeManager(5, { maxRetainedInactiveSessions: 1 });
 
@@ -1077,7 +1137,7 @@ describe("TerminalManager", () => {
     };
 
     setEnv("PORT", "5173");
-    setEnv("T3CODE_PORT", "3773");
+    setEnv("SYNARA_PORT", "3773");
     setEnv("VITE_DEV_SERVER_URL", "http://localhost:5173");
     setEnv("TEST_TERMINAL_KEEP", "keep-me");
 
@@ -1089,7 +1149,7 @@ describe("TerminalManager", () => {
       if (!spawnInput) return;
 
       expect(spawnInput.env.PORT).toBeUndefined();
-      expect(spawnInput.env.T3CODE_PORT).toBeUndefined();
+      expect(spawnInput.env.SYNARA_PORT).toBeUndefined();
       expect(spawnInput.env.VITE_DEV_SERVER_URL).toBeUndefined();
       expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
 
@@ -1147,8 +1207,8 @@ describe("TerminalManager", () => {
     await manager.open(
       openInput({
         env: {
-          T3CODE_PROJECT_ROOT: "/repo",
-          T3CODE_WORKTREE_PATH: "/repo/worktree-a",
+          SYNARA_PROJECT_ROOT: "/repo",
+          SYNARA_WORKTREE_PATH: "/repo/worktree-a",
           CUSTOM_FLAG: "1",
         },
       }),
@@ -1157,8 +1217,8 @@ describe("TerminalManager", () => {
     expect(spawnInput).toBeDefined();
     if (!spawnInput) return;
 
-    expect(spawnInput.env.T3CODE_PROJECT_ROOT).toBe("/repo");
-    expect(spawnInput.env.T3CODE_WORKTREE_PATH).toBe("/repo/worktree-a");
+    expect(spawnInput.env.SYNARA_PROJECT_ROOT).toBe("/repo");
+    expect(spawnInput.env.SYNARA_WORKTREE_PATH).toBe("/repo/worktree-a");
     expect(spawnInput.env.CUSTOM_FLAG).toBe("1");
 
     manager.dispose();

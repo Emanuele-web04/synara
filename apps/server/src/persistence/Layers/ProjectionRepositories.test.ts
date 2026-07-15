@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -6,13 +6,16 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
+import { ProjectionStateRepositoryLive } from "./ProjectionState.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
+import { ProjectionStateRepository } from "../Services/ProjectionState.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionStateRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -132,6 +135,30 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
+      });
+    }),
+  );
+
+  it.effect("keeps projection cursors monotonic during concurrent catch-up", () =>
+    Effect.gen(function* () {
+      const states = yield* ProjectionStateRepository;
+
+      yield* states.upsert({
+        projector: "projection.hot",
+        lastAppliedSequence: 20,
+        updatedAt: "2026-07-09T00:00:20.000Z",
+      });
+      yield* states.upsert({
+        projector: "projection.hot",
+        lastAppliedSequence: 10,
+        updatedAt: "2026-07-09T00:00:10.000Z",
+      });
+
+      const persisted = yield* states.getByProjector({ projector: "projection.hot" });
+      assert.deepStrictEqual(Option.getOrNull(persisted), {
+        projector: "projection.hot",
+        lastAppliedSequence: 20,
+        updatedAt: "2026-07-09T00:00:20.000Z",
       });
     }),
   );

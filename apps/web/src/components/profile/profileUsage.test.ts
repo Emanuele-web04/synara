@@ -3,7 +3,7 @@
 // slower token telemetry.
 // Layer: web profile feature tests.
 
-import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
+import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { selectProfileTopProvider } from "./profileUsage";

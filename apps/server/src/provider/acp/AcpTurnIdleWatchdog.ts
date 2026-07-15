@@ -21,6 +21,8 @@ import { Effect, Fiber, Scope } from "effect";
 export interface AcpTurnIdleWatchdogParams {
   /** How long the turn may go without any inbound ACP activity before it is force-failed. */
   readonly idleTimeoutMs: number;
+  /** Optional live override for work whose liveness is known outside the parent ACP stream. */
+  readonly currentIdleTimeoutMs?: () => number;
   /** Cadence at which the watchdog re-evaluates idle progress. */
   readonly checkIntervalMs: number;
   /** Scope the watchdog fiber is forked into (the session scope). */
@@ -103,11 +105,12 @@ export const forkAcpTurnIdleWatchdog = (
       while (true) {
         yield* Effect.sleep(params.checkIntervalMs);
         const idleMs = Date.now() - params.lastActivityAt();
+        const currentIdleTimeoutMs = params.currentIdleTimeoutMs?.() ?? params.idleTimeoutMs;
         const decision = evaluateAcpTurnIdleTick({
           isTurnActive: params.isTurnActive(),
           isAwaitingHuman: params.isAwaitingHuman(),
           idleMs,
-          idleTimeoutMs: params.idleTimeoutMs,
+          idleTimeoutMs: currentIdleTimeoutMs,
         });
         if (decision === "stop") {
           return;

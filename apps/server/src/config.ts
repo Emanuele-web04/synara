@@ -11,6 +11,8 @@ import OS from "node:os";
 import pathPosix from "node:path/posix";
 import pathWin32 from "node:path/win32";
 
+import { realpathNearestExisting } from "./realpathNearestExisting";
+
 export const DEFAULT_PORT = 3773;
 
 export type RuntimeMode = "web" | "desktop";
@@ -46,6 +48,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly cwd: string;
   readonly homeDir: string;
   readonly chatWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
   readonly baseDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
@@ -96,11 +99,53 @@ export function resolveDefaultChatWorkspaceRoot(input: {
   return pathApi.join(homeDir, "Documents", "Synara");
 }
 
+export function resolveDefaultStudioWorkspaceRoot(input: {
+  readonly homeDir: string;
+  readonly platform?: NodeJS.Platform;
+}): string {
+  const pathApi = (input.platform ?? process.platform) === "win32" ? pathWin32 : pathPosix;
+  return pathApi.join(resolveDefaultChatWorkspaceRoot(input), "Studio");
+}
+
+export interface ResolvedWorkspaceRoots {
+  readonly homeDir: string;
+  readonly chatWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
+}
+
+/**
+ * resolveCanonicalWorkspaceRoots - Derives homeDir/chatWorkspaceRoot/studioWorkspaceRoot
+ * and canonicalizes each via {@link realpathNearestExisting}.
+ *
+ * Project rows store REALPATH-canonicalized workspace roots (see
+ * `canonicalizeProjectWorkspaceRoot` in wsRpc.ts), so the roots the server
+ * reports in config/welcome payloads must be canonicalized the same way.
+ * Otherwise a symlinked chat/Studio ancestor (e.g. a symlinked `~/Documents`)
+ * makes client-side classifiers mis-detect which container a thread belongs
+ * to. The Studio root in particular may not exist yet (it's created lazily),
+ * so canonicalization walks up to the nearest existing ancestor and
+ * re-appends the not-yet-created remainder.
+ */
+export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
+  readonly homeDir: string;
+  readonly platform?: NodeJS.Platform;
+}): Effect.fn.Return<ResolvedWorkspaceRoots, never, FileSystem.FileSystem | Path.Path> {
+  const platform = input.platform ?? process.platform;
+  const homeDir = yield* realpathNearestExisting(input.homeDir);
+  const chatWorkspaceRoot = yield* realpathNearestExisting(
+    resolveDefaultChatWorkspaceRoot({ homeDir, platform }),
+  );
+  const studioWorkspaceRoot = yield* realpathNearestExisting(
+    resolveDefaultStudioWorkspaceRoot({ homeDir, platform }),
+  );
+  return { homeDir, chatWorkspaceRoot, studioWorkspaceRoot };
+});
+
 /**
  * ServerConfig - Service tag for server runtime configuration.
  */
 export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigShape>()(
-  "t3/config/ServerConfig",
+  "synara/config/ServerConfig",
 ) {
   static readonly layerTest = (cwd: string, baseDirOrPrefix: string | { prefix: string }) =>
     Layer.effect(
@@ -119,10 +164,14 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
         yield* fs.makeDirectory(derivedPaths.logsDir, { recursive: true });
         yield* fs.makeDirectory(derivedPaths.attachmentsDir, { recursive: true });
 
+        const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+          yield* resolveCanonicalWorkspaceRoots({ homeDir: OS.homedir() });
+
         return {
           cwd,
-          homeDir: OS.homedir(),
-          chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: OS.homedir() }),
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
           baseDir,
           ...derivedPaths,
           mode: "web",
@@ -143,6 +192,23 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
 export const resolveStaticDir = Effect.fn(function* () {
   const { join, resolve } = yield* Path.Path;
   const { exists } = yield* FileSystem.FileSystem;
+
+  // The desktop shell passes a real-disk snapshot of the bundled client so static
+  // serving survives app.asar being replaced beneath the running app (a stale
+  // in-process asar header otherwise serves bytes from the wrong offsets).
+  // Honored only when it actually contains the client, so a stale or bogus env
+  // value degrades to the normal lookup instead of breaking serving.
+  const snapshotDir = process.env.SYNARA_STATIC_DIR?.trim();
+  if (snapshotDir) {
+    const snapshotClient = resolve(snapshotDir);
+    const snapshotStat = yield* exists(join(snapshotClient, "index.html")).pipe(
+      Effect.orElseSucceed(() => false),
+    );
+    if (snapshotStat) {
+      return snapshotClient;
+    }
+  }
+
   const bundledClient = resolve(join(import.meta.dirname, "client"));
   const bundledStat = yield* exists(join(bundledClient, "index.html")).pipe(
     Effect.orElseSucceed(() => false),

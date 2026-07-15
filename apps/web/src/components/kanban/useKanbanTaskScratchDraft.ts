@@ -3,8 +3,8 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderKind } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -104,8 +104,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
       const store = useComposerDraftStore.getState();
       const nextSelection = buildModelSelection(provider, model);
       // Mirrors the composer: update the scratch draft and persist the sticky selection.
-      store.setModelSelection(scratchThreadId, nextSelection);
-      store.setStickyModelSelection(nextSelection);
+      store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
     },
     [scratchThreadId],
   );

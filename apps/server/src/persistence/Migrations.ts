@@ -47,7 +47,7 @@ import Migration0028 from "./Migrations/028_ProjectionProjectsKind.ts";
 import Migration0029 from "./Migrations/029_ProjectionThreadsLastKnownPr.ts";
 import Migration0030 from "./Migrations/030_ProjectionThreadMessagesDispatchMode.ts";
 import Migration0031 from "./Migrations/031_ProjectionThreadsCreateBranchFlowCompleted.ts";
-import Migration0032 from "./Migrations/032_ReconcileLegacyT3SchemaImport.ts";
+import Migration0032 from "./Migrations/032_ReconcileImportedSchemaLineage.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsSidechatSource.ts";
 import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
@@ -65,6 +65,11 @@ import Migration0046 from "./Migrations/046_AutomationCompletionPolicy.ts";
 import Migration0047 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
 import Migration0048 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
 import Migration0049 from "./Migrations/049_ProjectionThreadMessagesDispatchOrigin.ts";
+import Migration0050 from "./Migrations/050_ProfileStatsArchive.ts";
+import Migration0051 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
+import Migration0053 from "./Migrations/053_BackfillThreadActivitySequence.ts";
+import Migration0054 from "./Migrations/054_ProjectPullRequestPins.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -108,7 +113,7 @@ export const migrationEntries = [
   [29, "ProjectionThreadsLastKnownPr", Migration0029],
   [30, "ProjectionThreadMessagesDispatchMode", Migration0030],
   [31, "ProjectionThreadsCreateBranchFlowCompleted", Migration0031],
-  [32, "ReconcileLegacyT3SchemaImport", Migration0032],
+  [32, "ReconcileImportedSchemaLineage", Migration0032],
   [33, "ProjectionThreadsSidechatSource", Migration0033],
   [34, "AuthAccessManagement", Migration0034],
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
@@ -126,6 +131,11 @@ export const migrationEntries = [
   [47, "AutomationCompletionPolicyVersion", Migration0047],
   [48, "AutomationCompletionEvaluationBacklog", Migration0048],
   [49, "ProjectionThreadMessagesDispatchOrigin", Migration0049],
+  [50, "ProfileStatsArchive", Migration0050],
+  [51, "ProfileStatsDeletedTokensModel", Migration0051],
+  [52, "ProjectionThreadUserMessageSummaryIndex", Migration0052],
+  [53, "BackfillThreadActivitySequence", Migration0053],
+  [54, "ProjectPullRequestPins", Migration0054],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -138,8 +148,8 @@ export const makeMigrationLoader = (throughId?: number) =>
   );
 
 /**
- * Highest migration ID whose content is identical across every lineage Synara
- * can import (T3 Code, DP Code, Synara). A name mismatch at or below this ID
+ * Highest migration ID whose content is identical across every supported
+ * imported lineage. A name mismatch at or below this ID
  * means the database does not come from any known lineage, so re-running
  * migrations could destroy data — refuse to start instead.
  */
@@ -149,8 +159,8 @@ const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
  * Repairs the migration tracker of an imported legacy database before the
  * migrator runs.
  *
- * Legacy ~/.t3 / ~/.dpcode imports (homeMigration.ts) carry their own
- * `effect_sql_migrations` rows, recorded under that lineage's migration names
+ * Imported databases can carry their own `effect_sql_migrations` rows,
+ * recorded under that lineage's migration names
  * at the same numeric IDs. The migrator gates purely on max(migration_id), so
  * once the imported tracker's high-water mark reaches Synara's latest ID,
  * every Synara migration is skipped silently and startup crashes on missing
@@ -177,9 +187,30 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
     return;
   }
 
-  const recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+  let recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+  const recordedNamesBeforeCanonicalization = new Map(
+    recorded.map((row) => [row.migration_id, row.name]),
+  );
+  const hasCanonicalPrefixThrough31 = migrationEntries
+    .filter(([id]) => id < 32)
+    .every(([id, name]) => recordedNamesBeforeCanonicalization.get(id) === name);
+  const migration32Name = recordedNamesBeforeCanonicalization.get(32);
+  if (
+    hasCanonicalPrefixThrough31 &&
+    migration32Name !== undefined &&
+    migration32Name !== "ReconcileImportedSchemaLineage"
+  ) {
+    yield* sql`
+      UPDATE effect_sql_migrations
+      SET name = 'ReconcileImportedSchemaLineage'
+      WHERE migration_id = 32
+    `;
+    recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
+    `;
+  }
   const highWaterMark = recorded[recorded.length - 1]?.migration_id;
   if (highWaterMark === undefined) {
     return;

@@ -1,6 +1,6 @@
 {
-  "name": "t3",
-  "version": "0.3.7",
+  "name": "@synara/cli",
+  "version": "0.5.3",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
     "directory": "apps/server"
   },
   "bin": {
-    "t3": "./dist/index.mjs"
+    "synara": "./dist/index.mjs"
   },
   "files": [
     "dist"
@@ -23,11 +23,11 @@
     "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.154",
+    "@anthropic-ai/claude-agent-sdk": "0.3.207",
     "@anthropic-ai/sdk": "^0.100.0",
-    "@earendil-works/pi-agent-core": "^0.74.0",
-    "@earendil-works/pi-ai": "^0.74.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-agent-core": "^0.80.6",
+    "@earendil-works/pi-ai": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "^0.80.6",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@opencode-ai/sdk": "^1.15.13",
@@ -42,9 +42,9 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/web": "workspace:*",
+    "@synara/contracts": "workspace:*",
+    "@synara/shared": "workspace:*",
+    "@synara/web": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
@@ -54,6 +54,6 @@
     "vitest": "catalog:"
   },
   "engines": {
-    "node": "^22.16 || ^23.11 || >=24.10"
+    "node": "^22.19 || ^23.11 || >=24.10"
   }
 }

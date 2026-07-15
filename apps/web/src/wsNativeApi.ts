@@ -35,10 +35,11 @@ import {
   WS_METHODS,
   type WsWelcomePayload,
   type AutomationStreamEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
+import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport } from "./wsTransport";
 import { emitWsTransportState } from "./wsTransportEvents";
 
@@ -507,12 +508,16 @@ export function createWsNativeApi(): NativeApi {
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
     },
+    studio: {
+      listThreadOutputs: (input) => transport.request(WS_METHODS.studioListThreadOutputs, input),
+    },
     shell: {
       openInEditor: (cwd, editor) =>
         transport.request(WS_METHODS.shellOpenInEditor, { cwd, editor }),
       openExternal: async (url) => {
+        const externalUrl = requireHttpExternalUrl(url);
         if (window.desktopBridge) {
-          const opened = await window.desktopBridge.openExternal(url);
+          const opened = await window.desktopBridge.openExternal(externalUrl);
           if (!opened) {
             throw new Error("Unable to open link.");
           }
@@ -521,7 +526,7 @@ export function createWsNativeApi(): NativeApi {
 
         // Some mobile browsers can return null here even when the tab opens.
         // Avoid false negatives and let the browser handle popup policy.
-        window.open(url, "_blank", "noopener,noreferrer");
+        window.open(externalUrl, "_blank", "noopener,noreferrer");
       },
       showInFolder: async (path) => {
         if (window.desktopBridge) {
@@ -559,6 +564,7 @@ export function createWsNativeApi(): NativeApi {
       unstageFiles: (input) => transport.request(WS_METHODS.gitUnstageFiles, input),
       handoffThread: (input) => transport.request(WS_METHODS.gitHandoffThread, input),
       resolvePullRequest: (input) => transport.request(WS_METHODS.gitResolvePullRequest, input),
+      pullRequestSnapshot: (input) => transport.request(WS_METHODS.gitPullRequestSnapshot, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
       onActionProgress: (callback) => {
@@ -567,6 +573,17 @@ export function createWsNativeApi(): NativeApi {
           gitActionProgressListeners.delete(callback);
         };
       },
+    },
+    pullRequests: {
+      list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
+      reviewRequestCount: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewRequestCount, input),
+      detail: (input) => transport.request(WS_METHODS.pullRequestsDetail, input),
+      diff: (input) => transport.request(WS_METHODS.pullRequestsDiff, input),
+      action: (input) =>
+        transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
+      comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
+      setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
     },
     contextMenu: {
       show: async <T extends string>(

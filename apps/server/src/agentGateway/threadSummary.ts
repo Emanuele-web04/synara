@@ -12,7 +12,7 @@ import type {
   OrchestrationMessage,
   OrchestrationThread,
   OrchestrationThreadShell,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type AgentThreadStatus =
   | "working"

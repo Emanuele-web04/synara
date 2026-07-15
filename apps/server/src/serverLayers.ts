@@ -10,6 +10,7 @@ import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQu
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
+import { StudioOutputReactorLive } from "./orchestration/Layers/StudioOutputReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
@@ -28,6 +29,7 @@ import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
@@ -35,7 +37,9 @@ import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
+import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -56,8 +60,12 @@ export function makeServerRuntimeServicesLayer() {
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
@@ -65,12 +73,17 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
+    Layer.provideMerge(checkpointStoreLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
+    Layer.provideMerge(studioOutputReactorLayer),
   );
   const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
+    Layer.provideMerge(profileStatsArchiveLayer),
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
@@ -118,12 +131,20 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
   );
+  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ProjectPullRequestPinsLive),
+    Layer.provideMerge(OrchestrationLayerLive),
+  );
 
   return Layer.mergeAll(
     agentGatewayLayer,
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    AutomationRepositoryLive,
+    ProjectPullRequestPinsLive,
+    pullRequestServiceLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

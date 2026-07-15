@@ -12,14 +12,17 @@ import {
   type ClaudeCodeEffort,
   type ProviderKind,
   type UploadChatAttachment,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 
 import type {
   ComposerAssistantSelectionAttachment,
   ComposerFileAttachment,
   ComposerImageAttachment,
+  PersistedComposerImageAttachment,
 } from "../composerDraftStore";
+import { readComposerImageBlob } from "./composerImageBlobStore";
+import { normalizeComposerImageSource } from "./composerImageSource";
 import { randomUUID } from "./utils";
 
 export const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(
@@ -192,6 +195,7 @@ export function resolvePromptEffortFromModelSelection(
           : null)
       );
     case "grok":
+    case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;
@@ -229,4 +233,91 @@ export async function buildUploadComposerAttachments(input: {
       dataUrl: await readFileAsDataUrl(file.file),
     })),
   ]);
+}
+
+interface AttachmentIdCarrier {
+  id: string;
+}
+
+interface EffectiveComposerAttachmentCountDraft {
+  images?: ReadonlyArray<AttachmentIdCarrier> | undefined;
+  files?: ReadonlyArray<unknown> | undefined;
+  assistantSelections?: ReadonlyArray<unknown> | undefined;
+  persistedAttachments?: ReadonlyArray<AttachmentIdCarrier> | undefined;
+}
+
+/**
+ * Attachment count a draft must be checked against for the per-turn attachment
+ * limit (AppSnap capture, manual image attach, manual file attach). Counts live
+ * images/files/assistantSelections plus any `persistedAttachments` rows not yet
+ * represented in `images` — persisted rows are common right after a restart,
+ * while blob hydration is still pending, and omitting them would let the limit
+ * check be bypassed.
+ */
+export function effectiveComposerAttachmentCount(
+  draft: EffectiveComposerAttachmentCountDraft | undefined,
+): number {
+  if (!draft) return 0;
+  const hydratedImageIds = new Set((draft.images ?? []).map((image) => image.id));
+  const pendingPersistedCount = (draft.persistedAttachments ?? []).filter(
+    (attachment) => !hydratedImageIds.has(attachment.id),
+  ).length;
+  return (
+    (draft.images?.length ?? 0) +
+    (draft.files?.length ?? 0) +
+    (draft.assistantSelections?.length ?? 0) +
+    pendingPersistedCount
+  );
+}
+
+/**
+ * Persisted image attachments that still back a blob (AppSnap captures) but
+ * have not yet hydrated into the live `images` array. Right after a reload,
+ * `AppSnapCoordinator` hydrates these asynchronously from IndexedDB; sending
+ * before that finishes must not silently drop them.
+ */
+export function findPendingBlobComposerAttachments(input: {
+  persistedAttachments: ReadonlyArray<PersistedComposerImageAttachment>;
+  images: ReadonlyArray<ComposerImageAttachment>;
+}): PersistedComposerImageAttachment[] {
+  const hydratedImageIds = new Set(input.images.map((image) => image.id));
+  return input.persistedAttachments.filter(
+    (attachment) => Boolean(attachment.blobKey) && !hydratedImageIds.has(attachment.id),
+  );
+}
+
+/**
+ * Reads pending blob-backed persisted attachments (see
+ * `findPendingBlobComposerAttachments`) from IndexedDB and reconstructs them
+ * as live `ComposerImageAttachment`s so a send in flight can include them.
+ * An attachment whose blob is missing or fails to read is skipped rather than
+ * failing the whole send — the caller keeps sending whatever did hydrate.
+ */
+export async function hydratePendingBlobComposerAttachments(
+  pending: ReadonlyArray<PersistedComposerImageAttachment>,
+): Promise<ComposerImageAttachment[]> {
+  const hydrated = await Promise.all(
+    pending.map(async (attachment): Promise<ComposerImageAttachment | null> => {
+      if (!attachment.blobKey) return null;
+      try {
+        const file = await readComposerImageBlob(attachment.blobKey);
+        if (!file) return null;
+        const source = normalizeComposerImageSource(attachment.source);
+        return {
+          type: "image",
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          previewUrl: URL.createObjectURL(file),
+          file,
+          ...(source ? { source } : {}),
+        };
+      } catch (error) {
+        console.warn("[composer-send] Could not hydrate a pending attachment before send", error);
+        return null;
+      }
+    }),
+  );
+  return hydrated.filter((image): image is ComposerImageAttachment => image !== null);
 }

@@ -66,7 +66,21 @@ describe("workspaceStore", () => {
     expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
   });
 
-  it("updates home and chat workspace roots together from server paths", async () => {
+  it("keeps studio workspace root while server config is still loading", async () => {
+    installMemoryLocalStorage();
+    vi.resetModules();
+
+    const { useWorkspaceStore } = await import("./workspaceStore");
+
+    useWorkspaceStore.getState().setStudioWorkspaceRoot("/Users/tester/Documents/Synara/Studio");
+    useWorkspaceStore.getState().setStudioWorkspaceRoot(undefined);
+
+    expect(useWorkspaceStore.getState().studioWorkspaceRoot).toBe(
+      "/Users/tester/Documents/Synara/Studio",
+    );
+  });
+
+  it("updates home, chat, and studio workspace roots together from server paths", async () => {
     installMemoryLocalStorage();
     vi.resetModules();
 
@@ -75,13 +89,17 @@ describe("workspaceStore", () => {
     useWorkspaceStore.getState().setServerWorkspacePaths({
       homeDir: "/Users/tester",
       chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
     });
 
     expect(useWorkspaceStore.getState().homeDir).toBe("/Users/tester");
     expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
+    expect(useWorkspaceStore.getState().studioWorkspaceRoot).toBe(
+      "/Users/tester/Documents/Synara/Studio",
+    );
   });
 
-  it("persists the chat workspace root with the home directory", async () => {
+  it("persists the chat workspace root with the home directory but not the studio root", async () => {
     installMemoryLocalStorage();
     vi.resetModules();
 
@@ -89,6 +107,7 @@ describe("workspaceStore", () => {
     workspaceModule.useWorkspaceStore.getState().setServerWorkspacePaths({
       homeDir: "/Users/tester",
       chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
     });
 
     vi.resetModules();
@@ -98,5 +117,6 @@ describe("workspaceStore", () => {
     expect(workspaceModule.useWorkspaceStore.getState().chatWorkspaceRoot).toBe(
       "/Users/tester/Documents/Synara",
     );
+    expect(workspaceModule.useWorkspaceStore.getState().studioWorkspaceRoot).toBeNull();
   });
 });

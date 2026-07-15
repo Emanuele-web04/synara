@@ -67,11 +67,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show the standalone Chats list in the sidebar footer chats not tied to a project. sidebar section",
   },
   {
+    id: "general:studio-section",
+    section: "general",
+    title: "Studio",
+    keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
+  },
+  {
     id: "general:workspace-section",
     section: "general",
     title: "Workspace",
     keywords:
       "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible. sidebar section",
+  },
+  {
+    id: "general:environment-default-open",
+    section: "general",
+    title: "Open by default",
+    keywords:
+      "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
   },
   {
     id: "general:environment-usage",
@@ -84,6 +97,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "Repository",
     keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
+  },
+  {
+    id: "general:environment-pull-request",
+    section: "general",
+    title: "Pull request",
+    keywords:
+      "Show the open pull request CI checks and review comments in the chat Environment panel. pr fix github",
   },
   {
     id: "general:environment-editor",
@@ -180,6 +200,43 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Desktop notifications",
     keywords:
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
+  },
+
+  // ── AppSnap ───────────────────────────────────────────────────────────────────
+  {
+    id: "appsnap:enable",
+    section: "appsnap",
+    title: "Enable AppSnap",
+    keywords:
+      "Capture the frontmost macOS app window with both Option keys and add it to a recent task. appshot screenshot snap window capture alt",
+  },
+  {
+    id: "appsnap:shortcut",
+    section: "appsnap",
+    title: "Shortcut",
+    keywords: "Press the left and right Option keys at the same time. hotkey chord alt keys",
+  },
+  {
+    id: "appsnap:destination",
+    section: "appsnap",
+    title: "Destination",
+    keywords:
+      "Snaps join the task you interacted with in the last minute, otherwise a fresh task opens. automatic target composer",
+  },
+  {
+    id: "appsnap:capture-sound",
+    section: "appsnap",
+    title: "Capture sound",
+    keywords: "Play a short shutter cue when a window is captured. sound effect audio mute",
+  },
+  {
+    id: "appsnap:permissions",
+    section: "appsnap",
+    title: "Permission status",
+    keywords:
+      "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
+    // Renders only in the macOS desktop app, so no stable anchor on other platforms.
+    target: null,
   },
 
   // ── Behavior ──────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 // Layer: Web UI state helper
 // Depends on: Desktop update IPC contracts.
 
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@synara/contracts";
 
 export type DesktopUpdateButtonAction = "check" | "download" | "install" | "none";
 
@@ -25,6 +25,9 @@ export function resolveDesktopUpdateButtonAction(
     return "install";
   }
   if (state.status === "error") {
+    if (state.errorContext === "install" && !state.downloadedVersion && state.availableVersion) {
+      return "download";
+    }
     if (
       state.downloadedVersion &&
       (state.errorContext === "install" || state.errorContext === null)
@@ -106,7 +109,7 @@ export function getDesktopUpdateButtonPresentation(
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    if (state.errorContext === "download") {
+    if (state.errorContext === "download" || state.errorContext === "install") {
       return {
         label: "Retry",
         secondaryLabel: null,
@@ -188,6 +191,9 @@ export function getDesktopUpdateButtonTooltip(
   if (state.status === "up-to-date") {
     return `You're up to date on ${state.currentVersion}. Click to check again.`;
   }
+  if (state.errorContext === "install" && !state.downloadedVersion && state.availableVersion) {
+    return `Synara restarted, but update ${state.availableVersion} was not installed. Click to try again.`;
+  }
   if (state.errorContext === "download" && state.availableVersion) {
     return `Could not prepare update ${state.availableVersion}. Click to retry.`;
   }
@@ -250,6 +256,10 @@ export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | nu
   return state.errorContext === "download" || state.errorContext === "install";
 }
 
+export function shouldRecommendManualDesktopDownload(state: DesktopUpdateState | null): boolean {
+  return Boolean(state && state.installFailureCount >= 2 && state.releaseUrl);
+}
+
 // Stable identity for an in-app update failure, used to avoid toasting the same
 // download/install error twice (e.g. once from the click handler and again when
 // the install watchdog pushes the recovered state). Returns null for states that
@@ -259,7 +269,7 @@ export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null)
     return null;
   }
   const version = state.downloadedVersion ?? state.availableVersion ?? "";
-  return `${state.errorContext}:${version}:${state.message ?? ""}`;
+  return `${state.errorContext}:${version}:${state.installFailureCount}:${state.message ?? ""}`;
 }
 
 export type DesktopUpdateButtonVariant = "installing" | "ready" | "progress" | "error" | "info";

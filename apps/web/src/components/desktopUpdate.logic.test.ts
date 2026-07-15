@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@synara/contracts";
 
 import {
   getArm64IntelBuildWarningDescription,
@@ -10,9 +10,11 @@ import {
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadPercent,
+  getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldHighlightDesktopUpdateError,
+  shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
   shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
@@ -32,6 +34,7 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
+  installFailureCount: 0,
   releaseUrl: null,
 };
 
@@ -81,6 +84,26 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
+  });
+
+  it("rebuilds updater state after a failed install restart", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "error",
+      availableVersion: "1.1.0",
+      downloadedVersion: null,
+      message: "Synara restarted before the update was installed.",
+      errorContext: "install",
+      canRetry: true,
+      installFailureCount: 1,
+    };
+
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
+    expect(isDesktopUpdateButtonDisabled(state)).toBe(false);
+    expect(getDesktopUpdateButtonLabel(state)).toBe("Retry");
+    expect(getDesktopUpdateButtonTooltip(state)).toBe(
+      "Synara restarted, but update 1.1.0 was not installed. Click to try again.",
+    );
   });
 
   it("keeps update errors with known versions actionable even when context is missing", () => {
@@ -452,6 +475,44 @@ describe("desktop update UI helpers", () => {
         canRetry: true,
       }),
     ).toBe(false);
+  });
+
+  it("recommends a manual download after repeated install failures", () => {
+    expect(
+      shouldRecommendManualDesktopDownload({
+        ...baseState,
+        installFailureCount: 2,
+        releaseUrl: "https://example.com/releases",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRecommendManualDesktopDownload({
+        ...baseState,
+        installFailureCount: 1,
+        releaseUrl: "https://example.com/releases",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecommendManualDesktopDownload({
+        ...baseState,
+        installFailureCount: 3,
+        releaseUrl: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("includes the install failure count in error signatures", () => {
+    const failedState = {
+      ...baseState,
+      status: "error" as const,
+      availableVersion: "1.1.0",
+      errorContext: "install" as const,
+      message: "Install failed",
+    };
+
+    expect(getDesktopUpdateErrorSignature({ ...failedState, installFailureCount: 1 })).not.toBe(
+      getDesktopUpdateErrorSignature({ ...failedState, installFailureCount: 2 }),
+    );
   });
 
   it("shows an Apple Silicon warning for Intel builds under Rosetta", () => {

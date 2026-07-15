@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { assert, describe, it } from "@effect/vitest";
@@ -12,13 +13,35 @@ import {
 } from "./dev-runner.ts";
 
 it.layer(NodeServices.layer)("dev-runner", (it) => {
+  it("allows every generated runtime setting through Turbo", () => {
+    const turboConfig = JSON.parse(
+      readFileSync(new URL("../turbo.json", import.meta.url), "utf8"),
+    ) as { globalEnv?: ReadonlyArray<string> };
+    const globalEnv = new Set(turboConfig.globalEnv ?? []);
+
+    for (const name of [
+      "SYNARA_MODE",
+      "SYNARA_PORT",
+      "SYNARA_HOME",
+      "SYNARA_NO_BROWSER",
+      "SYNARA_AUTH_TOKEN",
+      "SYNARA_HOST",
+      "SYNARA_LOG_WS_EVENTS",
+      "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+      "VITE_WS_URL",
+      "VITE_DEV_SERVER_URL",
+    ]) {
+      assert.ok(globalEnv.has(name), `${name} must be declared in turbo.json globalEnv`);
+    }
+  });
+
   describe("resolveOffset", () => {
-    it.effect("uses explicit T3CODE_PORT_OFFSET when provided", () =>
+    it.effect("uses explicit SYNARA_PORT_OFFSET when provided", () =>
       Effect.sync(() => {
         const result = resolveOffset({ portOffset: 12, devInstance: undefined });
         assert.deepStrictEqual(result, {
           offset: 12,
-          source: "T3CODE_PORT_OFFSET=12",
+          source: "SYNARA_PORT_OFFSET=12",
         });
       }),
     );
@@ -40,7 +63,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           }),
         );
 
-        assert.ok(error.includes("Invalid T3CODE_PORT_OFFSET"));
+        assert.ok(error.includes("Invalid SYNARA_PORT_OFFSET"));
       }),
     );
   });
@@ -53,7 +76,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          synaraHome: undefined,
           authToken: undefined,
           noBrowser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -64,7 +87,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara"));
-        assert.equal(env.T3CODE_HOME, resolve(homedir(), ".synara"));
       }),
     );
 
@@ -75,7 +97,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: "/tmp/custom-t3",
+          synaraHome: "/tmp/custom-synara",
           authToken: "secret",
           noBrowser: true,
           autoBootstrapProjectFromCwd: false,
@@ -85,14 +107,13 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: new URL("http://localhost:7331"),
         });
 
-        assert.equal(env.T3CODE_HOME, resolve("/tmp/custom-t3"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-t3"));
-        assert.equal(env.T3CODE_PORT, "4222");
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-synara"));
+        assert.equal(env.SYNARA_PORT, "4222");
         assert.equal(env.VITE_WS_URL, "ws://[::1]:4222");
-        assert.equal(env.T3CODE_NO_BROWSER, "1");
-        assert.equal(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, "1");
-        assert.equal(env.T3CODE_HOST, "0.0.0.0");
+        assert.equal(env.SYNARA_NO_BROWSER, "1");
+        assert.equal(env.SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
+        assert.equal(env.SYNARA_LOG_WS_EVENTS, "1");
+        assert.equal(env.SYNARA_HOST, "0.0.0.0");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
       }),
     );
@@ -102,11 +123,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {
-            T3CODE_LOG_WS_EVENTS: "keep-me-out",
+            SYNARA_LOG_WS_EVENTS: "keep-me-out",
           },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          synaraHome: undefined,
           authToken: undefined,
           noBrowser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -116,8 +137,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_MODE, "web");
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, undefined);
+        assert.equal(env.SYNARA_MODE, "web");
+        assert.equal(env.SYNARA_LOG_WS_EVENTS, undefined);
       }),
     );
 
@@ -128,7 +149,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          synaraHome: undefined,
           authToken: undefined,
           noBrowser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -138,18 +159,18 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, "0");
+        assert.equal(env.SYNARA_LOG_WS_EVENTS, "0");
       }),
     );
 
-    it.effect("uses custom t3Home when provided", () =>
+    it.effect("uses custom synaraHome when provided", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: "/tmp/my-t3",
+          synaraHome: "/tmp/my-synara",
           authToken: undefined,
           noBrowser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -159,9 +180,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_HOME, resolve("/tmp/my-t3"));
-        assert.equal(env.DPCODE_HOME, resolve("/tmp/my-t3"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-t3"));
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
       }),
     );
   });

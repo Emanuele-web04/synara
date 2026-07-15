@@ -3,7 +3,7 @@
 // Layer: Web settings utility
 // Exports: default order, normalization, and order comparison helpers.
 
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 
 export const DEFAULT_PROVIDER_ORDER: readonly ProviderKind[] = [
   "codex",
@@ -11,6 +11,7 @@ export const DEFAULT_PROVIDER_ORDER: readonly ProviderKind[] = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",

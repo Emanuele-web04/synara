@@ -3,7 +3,7 @@
 // Layer: UI state hook (projection only — board math lives in kanban.logic.ts)
 // Exports: useKanbanBoard
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useEffect, useMemo, useRef } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -11,6 +11,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
+import { isStudioContainerProject } from "../../lib/studioProjects";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
@@ -40,6 +41,7 @@ export function useKanbanBoard(): KanbanBoard {
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
   const { settings } = useAppSettings();
   const projectSortOrder = settings.sidebarProjectSortOrder;
 
@@ -52,7 +54,9 @@ export function useKanbanBoard(): KanbanBoard {
       isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
     );
     const otherProjects = allProjects.filter(
-      (project) => !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
+      (project) =>
+        !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
+        !isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     );
     const canonicalContainer =
       chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
@@ -71,7 +75,7 @@ export function useKanbanBoard(): KanbanBoard {
       ],
       projectIdAliases: aliases,
     };
-  }, [allProjects, chatWorkspaceRoot, homeDir, projectSortOrder, threads]);
+  }, [allProjects, chatWorkspaceRoot, homeDir, projectSortOrder, studioWorkspaceRoot, threads]);
   const draftsByThreadId = useComposerDraftStore((state) => state.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const draftOrderByProjectId = useKanbanUiStore((state) => state.draftOrderByProjectId);

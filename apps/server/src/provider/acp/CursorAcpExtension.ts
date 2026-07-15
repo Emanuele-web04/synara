@@ -2,8 +2,10 @@
  * Public Docs: https://cursor.com/docs/cli/acp#cursor-extension-methods
  * Additional reference provided by the Cursor team: https://anysphere.enterprise.slack.com/files/U068SSJE141/F0APT1HSZRP/cursor-acp-extension-method-schemas.md
  */
-import type { UserInputQuestion } from "@t3tools/contracts";
+import type { UserInputQuestion } from "@synara/contracts";
 import { Schema } from "effect";
+
+import { normalizeRuntimeTaskStatus } from "../runtimeTaskList.ts";
 
 const CursorAskQuestionOption = Schema.Struct({
   id: Schema.String,
@@ -87,12 +89,7 @@ export function extractTodosAsPlan(params: typeof CursorUpdateTodosRequest.Type)
     if (step === "") {
       return [];
     }
-    const status: "pending" | "inProgress" | "completed" =
-      todo.status === "completed"
-        ? "completed"
-        : todo.status === "in_progress" || todo.status === "inProgress"
-          ? "inProgress"
-          : "pending";
+    const status = normalizeRuntimeTaskStatus(todo.status);
     return [{ step, status }];
   });
   return { plan };

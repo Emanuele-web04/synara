@@ -27,7 +27,7 @@ import {
   ProviderItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 
 import {
@@ -54,6 +54,7 @@ import {
 } from "../../codexGeneratedImages.ts";
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
+import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
@@ -290,6 +291,24 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
   }
 }
 
+function joinedTextParts(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const parts = value
+    .map((entry) => {
+      if (typeof entry === "string") return entry;
+      const object = asObject(entry);
+      return asString(object?.text) ?? asString(object?.summary);
+    })
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function reasoningSummaryDetail(item: Record<string, unknown>): string | undefined {
+  return asString(item.summary)?.trim() || joinedTextParts(item.summary);
+}
+
 function itemDetail(
   item: Record<string, unknown>,
   payload: Record<string, unknown>,
@@ -299,6 +318,8 @@ function itemDetail(
     asString(item.command),
     asString(item.title),
     asString(item.summary),
+    joinedTextParts(item.summary),
+    joinedTextParts(item.content),
     asString(item.review),
     asString(item.text),
     asString(item.saved_path),
@@ -318,6 +339,19 @@ function itemDetail(
     return trimmed;
   }
   return undefined;
+}
+
+function itemStatus(
+  lifecycle: "item.started" | "item.updated" | "item.completed",
+  rawStatus: unknown,
+): "inProgress" | "completed" | "failed" | "declined" | undefined {
+  if (lifecycle === "item.started") {
+    return "inProgress";
+  }
+  if (lifecycle === "item.updated") {
+    return undefined;
+  }
+  return rawStatus === "failed" || rawStatus === "declined" ? rawStatus : "completed";
 }
 
 function toRequestTypeFromMethod(method: string): CanonicalRequestType {
@@ -752,13 +786,11 @@ function mapItemLifecycle(
   const canonicalItemType =
     lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
 
-  const detail = itemDetail(source, payload ?? {});
-  const status =
-    lifecycle === "item.started"
-      ? "inProgress"
-      : lifecycle === "item.completed"
-        ? "completed"
-        : undefined;
+  // Only the provider-authored summary is user-visible reasoning. Raw content
+  // may contain model trace data and must not leak into transcript activities.
+  const detail =
+    itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
+  const status = itemStatus(lifecycle, source.status);
 
   return {
     ...(generatedImageReference
@@ -1068,16 +1100,17 @@ function mapToRuntimeEvents(
           ...(asString(payload?.explanation)
             ? { explanation: asString(payload?.explanation) }
             : {}),
-          tasks: steps
-            .map((entry) => asObject(entry))
-            .filter((entry): entry is Record<string, unknown> => entry !== undefined)
-            .map((entry) => ({
-              task: asString(entry.step) ?? "task",
-              status:
-                entry.status === "completed" || entry.status === "inProgress"
-                  ? entry.status
-                  : "pending",
-            })),
+          tasks: steps.flatMap((entry) => {
+            const taskEntry = asObject(entry);
+            if (!taskEntry) {
+              return [];
+            }
+            const item = makeRuntimeTaskListItem(
+              asString(taskEntry.step) ?? "task",
+              taskEntry.status,
+            );
+            return item ? [item] : [];
+          }),
         },
       },
     ];

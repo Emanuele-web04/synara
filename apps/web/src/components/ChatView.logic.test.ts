@@ -1,11 +1,21 @@
-import { ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
+import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
+  createLocalDispatchSnapshot,
+  createWorktreeSetupSnapshot,
+  derivePromptHistoryFromMessages,
+  failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  hasFileUndoSettled,
+  isComposerCursorOnFirstLine,
+  isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
+  promptStillMatchesActiveHistoryBrowse,
+  resolvePromptHistoryNavigation,
+  resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -14,8 +24,11 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
@@ -26,11 +39,95 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
+  shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
+  worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("file undo completion", () => {
+  const pending = {
+    threadId: ThreadId.makeUnsafe("thread-file-undo"),
+    turnCount: 2,
+    existingFailureActivityIds: [],
+  };
+  const summary = {
+    turnId: TurnId.makeUnsafe("turn-2"),
+    checkpointTurnCount: 2,
+    checkpointTurnCounts: [2],
+    checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread-file-undo/turn/2"),
+    status: "ready" as const,
+    completedAt: "2026-07-12T17:59:00.000Z",
+    files: [{ path: "src/file.ts", additions: 1, deletions: 0 }],
+  };
+
+  it("stays pending after command acceptance until the projected file diff settles", () => {
+    const baseThread = {
+      id: pending.threadId,
+      turnDiffSummaries: [summary],
+      activities: [],
+    };
+
+    expect(hasFileUndoSettled({ pending, thread: baseThread })).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          ...baseThread,
+          turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("settles when the matching revert failure is projected", () => {
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "reset failed" },
+              turnId: null,
+              createdAt: "2026-07-12T18:00:01.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores a matching failure activity that predates this undo request", () => {
+    expect(
+      hasFileUndoSettled({
+        pending: { ...pending, existingFailureActivityIds: ["activity-file-undo-failed"] },
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "old failure" },
+              turnId: null,
+              createdAt: "2026-07-12T17:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("composer menu selection", () => {
   const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
@@ -83,6 +180,343 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("prompt history navigation", () => {
+  it("derives newest-first native user prompts and skips imported or internal-only entries", () => {
+    const messages = [
+      {
+        role: "user",
+        text: "Imported prompt",
+        source: "fork-import",
+      },
+      {
+        role: "assistant",
+        text: "Assistant response",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "First prompt\n\n<terminal_context>\n# Terminal\noutput\n</terminal_context>",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "Second prompt",
+        source: "native",
+      },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages)).toEqual(["Second prompt", "First prompt"]);
+  });
+
+  it("limits prompt history without deduping repeated prompts", () => {
+    const messages = [
+      { role: "user", text: "one", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages, 2)).toEqual(["repeat", "repeat"]);
+  });
+
+  it("keeps history browse state for cursor-only movement inside the recalled prompt", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 3, draft: "draft in progress" },
+        history: ["different prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+  });
+
+  it("ends history browse state when the recalled prompt text is edited", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt edited",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start prompt history navigation while a composer menu trigger is active", () => {
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: true,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: false,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("detects first and last line cursor positions", () => {
+    const prompt = "first\nmiddle\nlast";
+
+    expect(isComposerCursorOnFirstLine(prompt, 0)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 5)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 6)).toBe(false);
+
+    expect(isComposerCursorOnLastLine(prompt, 13)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, prompt.length)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, 12)).toBe(false);
+  });
+
+  it("navigates older prompts from a non-empty draft and restores the draft at the end", () => {
+    const history = ["third prompt", "second prompt", "first prompt"];
+    const first = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "draft in progress",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(first).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      expandedCursor: "third prompt".length,
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const second = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: first.prompt,
+      currentExpandedCursor: first.expandedCursor,
+      selectionCollapsed: true,
+      state: first.state,
+    });
+
+    expect(second).toMatchObject({
+      handled: true,
+      prompt: "second prompt",
+      expandedCursor: "second prompt".length,
+      state: { index: 1, draft: "draft in progress" },
+    });
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: second.prompt,
+      currentExpandedCursor: second.prompt.length,
+      selectionCollapsed: true,
+      state: second.state,
+    });
+
+    expect(newer).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const restored = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: newer.prompt,
+      currentExpandedCursor: newer.prompt.length,
+      selectionCollapsed: true,
+      state: newer.state,
+    });
+
+    expect(restored).toEqual({
+      handled: true,
+      prompt: "draft in progress",
+      expandedCursor: "draft in progress".length,
+      state: null,
+    });
+  });
+
+  it("places recalled multiline prompts on the eligible line for repeated navigation", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["first line\nsecond line"],
+      currentPrompt: "",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(older.expandedCursor).toBe("first line".length);
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["first line\nsecond line", "older"],
+      currentPrompt: "older",
+      currentExpandedCursor: "older".length,
+      selectionCollapsed: true,
+      state: { index: 1, draft: "" },
+    });
+
+    expect(newer.prompt).toBe("first line\nsecond line");
+    expect(newer.expandedCursor).toBe("first line\nsecond line".length);
+  });
+
+  it("can navigate newer immediately after recalling a multiline prompt with ArrowUp", () => {
+    const history = ["newer line one\nnewer line two", "older prompt"];
+    const recalled = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(recalled.prompt).toBe("newer line one\nnewer line two");
+    expect(recalled.expandedCursor).toBe("newer line one".length);
+
+    const restoredDraft = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: recalled.prompt,
+      currentExpandedCursor: recalled.expandedCursor,
+      selectionCollapsed: true,
+      state: recalled.state,
+    });
+
+    expect(restoredDraft).toEqual({
+      handled: true,
+      prompt: "",
+      expandedCursor: 0,
+      state: null,
+    });
+  });
+
+  it("does not navigate when cursor position or selection should belong to text editing", () => {
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "first\nsecond",
+        currentExpandedCursor: "first\ns".length,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "draft",
+        currentExpandedCursor: 0,
+        selectionCollapsed: false,
+        state: null,
+      }).handled,
+    ).toBe(false);
+  });
+
+  it("does not navigate from lower lines even when the first line is long", () => {
+    // Cursor offsets are expanded (raw string indices). A collapsed cursor —
+    // where an inline chip like "@apps/web/src/components/ChatView.tsx" counts
+    // as one unit — would sit below the first line's raw end and wrongly hijack
+    // ArrowUp from the second line; expanded offsets must be used instead.
+    const prompt = "@apps/web/src/components/ChatView.tsx fix this\nplease keep the draft";
+    const secondLineCursor = prompt.indexOf("please") + "plea".length;
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: prompt,
+        currentExpandedCursor: secondLineCursor,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+  });
+
+  it("restarts from the newest entry when older navigation loses its place", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(older).toEqual({
+      handled: true,
+      prompt: "new prompt",
+      expandedCursor: "new prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restarts from the newest entry when the stored index falls outside history", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["only prompt"],
+      currentPrompt: "recalled from longer history",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 5, draft: "draft" },
+    });
+
+    expect(older).toEqual({
+      handled: true,
+      prompt: "only prompt",
+      expandedCursor: "only prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restores the draft when newer navigation loses its place", () => {
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentExpandedCursor: "old prompt".length,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(newer).toEqual({
+      handled: true,
+      prompt: "draft",
+      expandedCursor: "draft".length,
+      state: null,
+    });
   });
 });
 
@@ -254,7 +688,7 @@ describe("voice helpers", () => {
 });
 
 describe("environment panel visibility", () => {
-  it("opens normal chat threads by default", () => {
+  it("keeps normal chat threads closed by default unless the setting opts in", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
@@ -262,16 +696,35 @@ describe("environment panel visibility", () => {
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
       }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
+      }),
     ).toBe(true);
   });
 
-  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed even when setting is open", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -280,6 +733,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -288,6 +742,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: true,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
   });
@@ -296,48 +751,78 @@ describe("environment panel visibility", () => {
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: null,
       }),
     ).toBe(true);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: false,
       }),
     ).toBe(false);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: false,
-        actionDismissed: false,
         userPreferenceOpen: true,
       }),
     ).toBe(true);
   });
 
-  it("treats action dismissals as transient closes instead of stored preferences", () => {
+  it("persists explicit toggles but keeps action-driven closes session-only", () => {
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: true, persist: true })).toEqual({
+      userPreferenceOpen: true,
+      settingsDefaultOpen: true,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: true })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: false,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: null,
+    });
+  });
+
+  it("resolves landing preferences on first send without changing non-landing state", () => {
     expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: true,
-        userPreferenceOpen: null,
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
       }),
     ).toBe(false);
     expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: false,
-        userPreferenceOpen: null,
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: true,
+        currentPreferenceOpen: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: false,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
       }),
     ).toBe(true);
+  });
+
+  it("clears an action-close override so default-open applies after first send", () => {
+    const actionClose = resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false });
+    const afterFirstSend = resolveEnvironmentPanelPreferenceAfterFirstSend({
+      isCenteredEmptyLanding: true,
+      settingsDefaultOpen: true,
+      currentPreferenceOpen: actionClose.userPreferenceOpen,
+    });
+
+    expect(actionClose.settingsDefaultOpen).toBeNull();
+    expect(afterFirstSend).toBeNull();
     expect(
       resolveEnvironmentPanelOpen({
-        defaultOpen: false,
-        actionDismissed: true,
-        userPreferenceOpen: true,
+        defaultOpen: true,
+        userPreferenceOpen: afterFirstSend,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {
@@ -362,6 +847,87 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveCycledModelSlug", () => {
+  const options = [{ slug: "a" }, { slug: "b" }, { slug: "c" }, { slug: "d" }];
+
+  it("returns null when fewer than two models are available", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options: [{ slug: "a" }],
+        direction: "next",
+      }),
+    ).toBeNull();
+  });
+
+  it("cycles next/previous through the full list", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "next",
+      }),
+    ).toBe("b");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "previous",
+      }),
+    ).toBe("d");
+  });
+
+  it("puts favorites first and cycles within that ordered list", () => {
+    // Ordered: d, b, a, c — from c next wraps to d; from d next is b
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "c",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "d",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("b");
+  });
+
+  it("starts at the ordered boundary when the current model is unavailable", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "previous",
+      }),
+    ).toBe("c");
+  });
+
+  it("normalizes whitespace and ignores duplicate or unavailable favorites", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: " d ",
+        options: [{ slug: " a " }, { slug: "b" }, { slug: "b" }, { slug: "d" }],
+        favoriteSlugs: [" missing ", " d ", "d"],
+        direction: "next",
+      }),
+    ).toBe("a");
   });
 });
 
@@ -902,10 +1468,136 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
   });
 });
 
+describe("worktree setup snapshots", () => {
+  it("marks earlier steps done, the active step active, and later steps pending", () => {
+    expect(createWorktreeSetupSnapshot("prepare-thread").steps).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("starts with every step pending except the first when setup begins", () => {
+    expect(createWorktreeSetupSnapshot("create-worktree").steps.map((step) => step.status)).toEqual(
+      ["active", "pending", "pending"],
+    );
+  });
+
+  it("ends with every step done except the last when the session starts", () => {
+    expect(createWorktreeSetupSnapshot("start-session").steps.map((step) => step.status)).toEqual([
+      "done",
+      "done",
+      "active",
+    ]);
+  });
+
+  it("inserts the setup action step when a worktree setup script is present", () => {
+    expect(
+      createWorktreeSetupSnapshot("run-setup-action", { setupScriptName: "Setup" }).steps,
+    ).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("keeps the setup action step done when the session starts afterward", () => {
+    expect(
+      createWorktreeSetupSnapshot("start-session", { setupScriptName: "Setup" }).steps.map(
+        (step) => step.status,
+      ),
+    ).toEqual(["done", "done", "done", "active"]);
+  });
+
+  it("preserves setup action metadata while advancing local worktree setup", () => {
+    const current = createLocalDispatchSnapshot(undefined, {
+      worktreeSetupStepId: "create-worktree",
+      setupScriptName: "Setup",
+    });
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "run-setup-action", setupScriptName: "Setup" },
+    });
+
+    expect(next.worktreeSetup?.steps).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("fails only the active step and leaves the rest untouched", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failed.steps.map((step) => step.status)).toEqual(["done", "error", "pending"]);
+    expect(worktreeSetupHasError(failed)).toBe(true);
+  });
+
+  it("returns the same snapshot when no step is active", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failWorktreeSetupSnapshot(failed)).toBe(failed);
+  });
+
+  it("reports no error for null or healthy snapshots", () => {
+    expect(worktreeSetupHasError(null)).toBe(false);
+    expect(worktreeSetupHasError(createWorktreeSetupSnapshot("create-worktree"))).toBe(false);
+  });
+
+  it("replaces a held failed setup when a fresh local dispatch starts", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup).toBeNull();
+  });
+
+  it("replaces a held failed setup when retrying worktree setup", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "create-worktree" },
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup?.steps.map((step) => step.status)).toEqual([
+      "active",
+      "pending",
+      "pending",
+    ]);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -915,7 +1607,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   };
   const firstTurnLocalDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,

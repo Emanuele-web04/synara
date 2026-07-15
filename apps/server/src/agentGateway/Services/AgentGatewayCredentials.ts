@@ -8,7 +8,7 @@
  *
  * @module agentGateway/Services/AgentGatewayCredentials
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 
 export interface AgentGatewayMcpConnection {

@@ -5,6 +5,7 @@
  * keyboard navigation and shortcut labels behave like the rest of the app.
  */
 import {
+  BugIcon,
   CheckIcon,
   DeviceLaptopIcon,
   MoonIcon,
@@ -13,8 +14,8 @@ import {
   SettingsIcon,
   SunIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
+import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "react-icons/lu";
@@ -86,6 +87,7 @@ interface SidebarSearchPaletteProps {
   homeDir: string | null;
   initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
+  onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
@@ -102,7 +104,7 @@ function actionHandler(
   actionId: string,
   props: Pick<
     SidebarSearchPaletteProps,
-    "onCreateChat" | "onCreateThread" | "onOpenSettings" | "onOpenUsageSettings"
+    "onCreateChat" | "onCreateThread" | "onOpenFeedback" | "onOpenSettings" | "onOpenUsageSettings"
   >,
 ): (() => void) | null {
   switch (actionId) {
@@ -112,6 +114,8 @@ function actionHandler(
       return props.onCreateThread;
     case "settings":
       return props.onOpenSettings;
+    case "feedback":
+      return props.onOpenFeedback;
     case "usage-settings":
       return props.onOpenUsageSettings;
     default:
@@ -126,6 +130,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "new-thread": NewThreadIcon,
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
+  feedback: BugIcon,
   settings: SettingsIcon,
   "usage-settings": SettingsIcon,
 };

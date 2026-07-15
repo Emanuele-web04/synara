@@ -9,9 +9,9 @@ import {
   ThreadId,
   type ThreadId as ThreadIdType,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { isWorkspaceRelativePathSafe } from "@t3tools/shared/path";
+import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -30,8 +30,6 @@ import {
 import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
-import BrowserPanel from "../components/BrowserPanel";
-import { EditorWorkspaceView } from "../components/EditorWorkspaceView";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
@@ -84,16 +82,12 @@ import {
   resolveActivePane,
 } from "../rightDockStore.logic";
 import { RightDock } from "../components/chat/RightDock";
-import { DockTerminalPane } from "../components/chat/DockTerminalPane";
 import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "../components/chat/chatHeaderControls";
-import { GitPanel } from "../components/chat/GitPanel";
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
   RIGHT_DOCK_ADD_MENU_KINDS,
   getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
-import { DockExplorerPane } from "../components/chat/DockExplorerPane";
-import { DockFilePane } from "../components/chat/DockFilePane";
 import { readEditorViewState, storeEditorViewState } from "../editorViewState";
 import { basenameOfPath } from "../file-icons";
 import {
@@ -118,6 +112,12 @@ import {
   createPanelResizeOverlay,
   removePanelResizeOverlay,
 } from "../lib/panelResize";
+import {
+  EDITOR_CHAT_PANE_SCOPE_ID,
+  SINGLE_CHAT_PANE_SCOPE_ID,
+  dockSidechatPaneScopeId,
+  splitViewPaneScopeId,
+} from "../lib/chatPaneScope";
 import { getSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { toastManager } from "../components/ui/toast";
 import { useAppSettings } from "../appSettings";
@@ -157,10 +157,34 @@ import {
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
+import {
+  pullRequestDetailInputFromPane,
+  pullRequestPaneTabLabel,
+} from "~/components/pullRequest/pullRequestDetail.logic";
+import { usePullRequestPaneStateIcon } from "~/components/pullRequest/usePullRequestPaneStateIcon";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
+const BrowserPanel = lazy(() => import("../components/BrowserPanel"));
+const PullRequestDockPane = lazy(() => import("../components/pullRequest/PullRequestDockPane"));
+const EditorWorkspaceView = lazy(() =>
+  import("../components/EditorWorkspaceView").then((module) => ({
+    default: module.EditorWorkspaceView,
+  })),
+);
+const DockTerminalPane = lazy(() => import("../components/chat/DockTerminalPane"));
+const GitPanel = lazy(() => import("../components/chat/GitPanel"));
+const DockExplorerPane = lazy(() =>
+  import("../components/chat/DockExplorerPane").then((module) => ({
+    default: module.DockExplorerPane,
+  })),
+);
+const DockFilePane = lazy(() =>
+  import("../components/chat/DockFilePane").then((module) => ({
+    default: module.DockFilePane,
+  })),
+);
 // Pre-measure approximation of the dock's 50/50 split (half the viewport minus
 // half a 16rem left sidebar). RightDock measures the actual shell on open and
 // pins the width to exactly half; this only covers the first paint before that
@@ -356,7 +380,13 @@ function SplitPaneEmbeddedPanel(props: {
         onPointerDown={startResize}
       />
       {props.panel === "browser" ? (
-        <BrowserPanel mode="sidebar" threadId={props.threadId} onClosePanel={props.onClosePanel} />
+        <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+          <BrowserPanel
+            mode="sidebar"
+            threadId={props.threadId}
+            onClosePanel={props.onClosePanel}
+          />
+        </Suspense>
       ) : (
         <LazyDiffPanel
           mode="sidebar"
@@ -775,7 +805,7 @@ function SplitPaneSurface(props: {
     side: SplitDropSide;
   }) => void;
 }) {
-  const paneScopeId = `${props.splitView.id}:${props.paneId}`;
+  const paneScopeId = splitViewPaneScopeId(props.splitView.id, props.paneId);
   const panelOpen = props.panelState.panel !== null;
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
@@ -1890,7 +1920,10 @@ function SingleChatSurface(props: {
     const hasNamedFilePane = dockState.panes.some(
       (pane) => pane.kind === "file" && pane.filePath !== null,
     );
-    if (!hasSidechatPane && !hasNamedFilePane) {
+    const hasNumberedPullRequestPane = dockState.panes.some(
+      (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
+    );
+    if (!hasSidechatPane && !hasNamedFilePane && !hasNumberedPullRequestPane) {
       return undefined;
     }
     const titleByThreadId = hasSidechatPane
@@ -1902,16 +1935,34 @@ function SingleChatSurface(props: {
         overrides[pane.id] = titleByThreadId?.get(pane.threadId) || "Side";
       } else if (pane.kind === "file" && pane.filePath) {
         overrides[pane.id] = basenameOfPath(pane.filePath);
+      } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
+        overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
       }
     }
     return overrides;
   }, [threadSummaries, dockState.panes]);
+
+  // The pull request pane is a singleton, so at most one tab needs the live state glyph.
+  const pullRequestPane = dockState.panes.find(
+    (pane) => pane.kind === "pullRequest" && pullRequestDetailInputFromPane(pane) !== null,
+  );
+  const pullRequestPaneStateIcon = usePullRequestPaneStateIcon(
+    pullRequestPane ? pullRequestDetailInputFromPane(pullRequestPane) : null,
+  );
+  const paneIconOverrides =
+    pullRequestPane && pullRequestPaneStateIcon
+      ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
+      : undefined;
 
   const shouldAcceptDockWidth = useCallback(
     ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
       const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
       return canComposerHandlePanelWidth({
         nextWidth,
+        // The dock coexists only with the single-pane chat, but dock sidechat
+        // panes mount their own composer forms — scope the probe so it always
+        // measures the main composer instead of "first form in the document".
+        paneScopeId: SINGLE_CHAT_PANE_SCOPE_ID,
         applyWidth: (width) => {
           wrapper.style.setProperty("--sidebar-width", `${width}px`);
         },
@@ -1960,18 +2011,30 @@ function SingleChatSurface(props: {
   const renderDockPane = useCallback(
     (
       pane: RightDockPane,
-      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
+      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
     ): ReactNode => {
       switch (pane.kind) {
         case "browser":
           return (
-            <BrowserPanel
-              mode="sidebar"
-              threadId={props.threadId}
-              onClosePanel={() => closePane(props.threadId, pane.id)}
-              runtimeMode={context.runtimeMode}
-              onRequestLive={requestActiveDockPaneLive}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+              <BrowserPanel
+                mode="sidebar"
+                threadId={props.threadId}
+                onClosePanel={() => closePane(props.threadId, pane.id)}
+                runtimeMode={context.runtimeMode}
+                onRequestLive={requestActiveDockPaneLive}
+              />
+            </Suspense>
+          );
+        case "pullRequest":
+          return (
+            <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+              <PullRequestDockPane
+                pane={pane}
+                pollingEnabled={context.isVisible}
+                onClose={() => closePane(props.threadId, pane.id)}
+              />
+            </Suspense>
           );
         case "diff":
           return (
@@ -2004,38 +2067,46 @@ function SingleChatSurface(props: {
           // mounted (offcanvas is CSS-only), so without this the off-screen terminal
           // would keep WebGL + resize observers alive for nothing.
           return (
-            <DockTerminalPane
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              isActive={context.isActive && dockState.open}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+              <DockTerminalPane
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                isActive={context.isActive && dockState.open}
+              />
+            </Suspense>
           );
         case "git":
           return (
-            <GitPanel
-              hostThreadId={props.threadId}
-              projectId={props.projectId}
-              onClose={() => closePane(props.threadId, pane.id)}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
+              <GitPanel
+                hostThreadId={props.threadId}
+                projectId={props.projectId}
+                onClose={() => closePane(props.threadId, pane.id)}
+              />
+            </Suspense>
           );
         case "explorer":
           return (
-            <DockExplorerPane
-              workspaceRoot={workspaceRoot}
-              onReferenceInChat={handleReferenceInChat}
-              onAskWhyInChat={handleAskWhyInChat}
-              onCommentInChat={handleCommentInChat}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
+              <DockExplorerPane
+                workspaceRoot={workspaceRoot}
+                onReferenceInChat={handleReferenceInChat}
+                onAskWhyInChat={handleAskWhyInChat}
+                onCommentInChat={handleCommentInChat}
+              />
+            </Suspense>
           );
         case "file":
           return (
-            <DockFilePane
-              workspaceRoot={workspaceRoot}
-              filePath={pane.filePath}
-              onReferenceInChat={handleReferenceInChat}
-              onAskWhyInChat={handleAskWhyInChat}
-              onCommentInChat={handleCommentInChat}
-            />
+            <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
+              <DockFilePane
+                workspaceRoot={workspaceRoot}
+                filePath={pane.filePath}
+                onReferenceInChat={handleReferenceInChat}
+                onAskWhyInChat={handleAskWhyInChat}
+                onCommentInChat={handleCommentInChat}
+              />
+            </Suspense>
           );
         case "sidechat":
           if (!pane.threadId) {
@@ -2047,7 +2118,7 @@ function SingleChatSurface(props: {
           return (
             <DeferredChatView
               threadId={pane.threadId}
-              paneScopeId={`dock-sidechat:${pane.id}`}
+              paneScopeId={dockSidechatPaneScopeId(pane.id)}
               deferMount={false}
               surfaceMode="split"
               isFocusedPane={false}
@@ -2148,63 +2219,65 @@ function SingleChatSurface(props: {
         <div
           className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
         >
-          <EditorWorkspaceView
-            workspaceRoot={workspaceRoot}
-            projectName={activeProject?.name ?? null}
-            currentProjectId={activeProject?.id ?? null}
-            projectOptions={editorProjectOptions}
-            selectedFilePath={selectedEditorFilePath}
-            expandedDirectories={editorExpandedDirectories}
-            centerMode={editorCenterMode}
-            diffFiles={editorDiffFiles}
-            diffFilesLoading={editorDiffFilesLoading}
-            selectedDiffFilePath={editorDiffPanelState.diffFilePath ?? null}
-            diffOptionsControl={editorDiffOptionsControl}
-            onSelectDiffFile={handleSelectEditorDiffFile}
-            onSelectFile={handleSelectEditorFile}
-            onToggleDirectory={handleToggleEditorDirectory}
-            onCenterModeChange={setEditorCenterMode}
-            onExitEditorView={handleCloseEditorView}
-            onReferenceInChat={handleReferenceInChat}
-            onAskWhyInChat={handleAskWhyInChat}
-            onCommentInChat={handleCommentInChat}
-            onSelectProject={handleSelectEditorProject}
-            diffPanel={
-              <LazyDiffPanel
-                mode="sidebar"
-                threadId={props.threadId}
-                panelState={editorDiffPanelState}
-                onUpdatePanelState={handleUpdateEditorDiffPanelState}
-                liveRefreshEnabled={editorCenterMode === "diff"}
-                // Keep diff data warm while browsing files so switching to the
-                // diff tab renders instantly instead of cold-fetching.
-                queriesEnabled
-                hideHeader
-                onRenderableFilesChange={handleEditorDiffFilesChange}
-                onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
-              />
-            }
-            chatPanel={
-              <SidebarInset
-                className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
-                surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-              >
-                <DeferredChatView
+          <Suspense fallback={<ChatMountSkeleton />}>
+            <EditorWorkspaceView
+              workspaceRoot={workspaceRoot}
+              projectName={activeProject?.name ?? null}
+              currentProjectId={activeProject?.id ?? null}
+              projectOptions={editorProjectOptions}
+              selectedFilePath={selectedEditorFilePath}
+              expandedDirectories={editorExpandedDirectories}
+              centerMode={editorCenterMode}
+              diffFiles={editorDiffFiles}
+              diffFilesLoading={editorDiffFilesLoading}
+              selectedDiffFilePath={editorDiffPanelState.diffFilePath ?? null}
+              diffOptionsControl={editorDiffOptionsControl}
+              onSelectDiffFile={handleSelectEditorDiffFile}
+              onSelectFile={handleSelectEditorFile}
+              onToggleDirectory={handleToggleEditorDirectory}
+              onCenterModeChange={setEditorCenterMode}
+              onExitEditorView={handleCloseEditorView}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+              onSelectProject={handleSelectEditorProject}
+              diffPanel={
+                <LazyDiffPanel
+                  mode="sidebar"
                   threadId={props.threadId}
-                  paneScopeId="editor-chat"
-                  deferMount={false}
-                  surfaceMode="split"
-                  presentationMode="editor"
-                  isFocusedPane
-                  panelState={editorChatPanelState}
-                  onToggleDiff={handleEditorToggleDiff}
-                  onToggleBrowser={noop}
-                  onOpenBrowserUrl={noop}
-                  onOpenTurnDiff={handleEditorOpenTurnDiff}
+                  panelState={editorDiffPanelState}
+                  onUpdatePanelState={handleUpdateEditorDiffPanelState}
+                  liveRefreshEnabled={editorCenterMode === "diff"}
+                  // Keep diff data warm while browsing files so switching to the
+                  // diff tab renders instantly instead of cold-fetching.
+                  queriesEnabled
+                  hideHeader
+                  onRenderableFilesChange={handleEditorDiffFilesChange}
+                  onEditorDiffOptionsChange={handleEditorDiffOptionsChange}
                 />
-              </SidebarInset>
-            }
-          />
+              }
+              chatPanel={
+                <SidebarInset
+                  className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
+                  surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+                >
+                  <DeferredChatView
+                    threadId={props.threadId}
+                    paneScopeId={EDITOR_CHAT_PANE_SCOPE_ID}
+                    deferMount={false}
+                    surfaceMode="split"
+                    presentationMode="editor"
+                    isFocusedPane
+                    panelState={editorChatPanelState}
+                    onToggleDiff={handleEditorToggleDiff}
+                    onToggleBrowser={noop}
+                    onOpenBrowserUrl={noop}
+                    onOpenTurnDiff={handleEditorOpenTurnDiff}
+                  />
+                </SidebarInset>
+              }
+            />
+          </Suspense>
         </div>
       </WorkspaceFileOpenerContext.Provider>
     );
@@ -2224,7 +2297,7 @@ function SingleChatSurface(props: {
           <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
             <DeferredChatView
               threadId={props.threadId}
-              paneScopeId="single"
+              paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
               deferMount={false}
               surfaceMode="single"
               isFocusedPane
@@ -2251,6 +2324,7 @@ function SingleChatSurface(props: {
           motionKey={props.threadId}
           activePaneRuntimeMode={activePaneRuntimeMode}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
+          {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => closePane(props.threadId, paneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}

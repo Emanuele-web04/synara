@@ -3,7 +3,7 @@
 // Layer: Web composer helper
 // Exports: mention token formatters plus regex helpers used by composer parsing and prompt sync.
 
-import type { ProviderMentionReference, ProviderSkillReference } from "@t3tools/contracts";
+import type { ProviderMentionReference, ProviderSkillReference } from "@synara/contracts";
 
 export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";

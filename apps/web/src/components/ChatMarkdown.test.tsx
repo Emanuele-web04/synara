@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@t3tools/contracts";
+import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,13 +19,21 @@ vi.mock("../hooks/useTheme", () => ({
 
 async function renderMarkdown(
   text: string,
-  cwd = "C:\\Users\\LENOVO\\dpcode",
+  cwd = "C:\\Users\\LENOVO\\synara",
   markers?: readonly ThreadMarker[],
 ) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
   return renderToStaticMarkup(
     <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
+  );
+}
+
+async function renderUserMarkdown(text: string) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderToStaticMarkup(
+    <ChatMarkdown text={text} cwd={undefined} isStreaming={false} variant="user" />,
   );
 }
 
@@ -245,5 +253,66 @@ describe("ChatMarkdown", () => {
     expect(proposedPlanCardSource).toContain("<ChatMarkdown");
     expect(messagesTimelineSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
     expect(messagesTimelineSource).toContain("<ChatMarkdown");
+  });
+});
+
+describe("ChatMarkdown user variant", () => {
+  it("renders inline markdown formatting", async () => {
+    const markup = await renderUserMarkdown("use `bun run test` and **bold** text");
+
+    expect(markup).toContain("chat-markdown--user");
+    expect(markup).toContain("<code>bun run test</code>");
+    expect(markup).toContain("<strong>bold</strong>");
+  });
+
+  it("keeps single newlines as hard breaks", async () => {
+    const markup = await renderUserMarkdown("first line\nsecond line");
+
+    expect(markup).toContain("first line<br/>\nsecond line");
+  });
+
+  it("keeps dollars literal instead of parsing math", async () => {
+    const markup = await renderUserMarkdown("It costs $5 and $x^2$ stays literal.");
+
+    expect(markup).toContain("$5");
+    expect(markup).toContain("$x^2$");
+    expect(markup).not.toContain('class="katex"');
+  });
+
+  it("renders composer skill tokens as chips", async () => {
+    const markup = await renderUserMarkdown("run $deep-research on this");
+
+    expect(markup).toContain("Deep Research");
+    expect(markup).not.toContain("$deep-research");
+  });
+
+  it("keeps composer tokens literal inside inline code", async () => {
+    const markup = await renderUserMarkdown("literal `$deep-research` here");
+
+    expect(markup).toContain("<code>$deep-research</code>");
+    expect(markup).not.toContain("Deep Research");
+  });
+
+  it("renders @-mention tokens as mention chips", async () => {
+    const markup = await renderUserMarkdown("check @src/utils/model.ts please");
+
+    expect(markup).toContain('title="src/utils/model.ts"');
+    expect(markup).not.toContain("@src/utils/model.ts");
+  });
+
+  it("renders pasted URLs as interactive link chips", async () => {
+    const markup = await renderUserMarkdown("see https://example.com/docs now");
+
+    expect(markup).toContain('title="https://example.com/docs"');
+    expect(markup).toContain("<button");
+  });
+
+  it("renders fenced code with the shared code block chrome", async () => {
+    const markup = await renderUserMarkdown(
+      ["look at this:", "", "```ts", "const value = 1;", "```"].join("\n"),
+    );
+
+    expect(markup).toContain("chat-markdown-codeblock");
+    expect(markup).toContain("const value = 1;");
   });
 });

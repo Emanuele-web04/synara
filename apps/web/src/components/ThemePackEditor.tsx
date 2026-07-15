@@ -603,7 +603,7 @@ function ImportThemeDialog({
             className="font-chat-code text-[11px]"
             aria-label="Theme share string"
           />
-          {error ? <p className="mt-2 text-xs text-destructive-foreground">{error}</p> : null}
+          {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
         </DialogPanel>
         <DialogFooter>
           <DialogClose

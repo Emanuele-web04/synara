@@ -1,4 +1,4 @@
-import { type ProviderModelDescriptor, ThreadId } from "@t3tools/contracts";
+import { type ProviderModelDescriptor, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   getComposerProviderState,
@@ -62,6 +62,32 @@ const PI_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "medium",
 };
 
+const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  supportedReasoningEfforts: [
+    { value: "none", label: "None" },
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "grok-4.5",
+  name: "Grok 4.5",
+  supportedReasoningEfforts: [
+    { value: "none" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+  defaultReasoningEffort: "low",
+};
+
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
@@ -98,6 +124,143 @@ describe("getComposerProviderState", () => {
         reasoningEffort: "low",
         fastMode: true,
       },
+    });
+  });
+
+  it("reads only Codex options when other provider effort state is present", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      prompt: "",
+      modelOptions: {
+        codex: { reasoningEffort: "xhigh" },
+        cursor: { reasoningEffort: "low" },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort: "xhigh" });
+    expect(state.promptEffort).toBe("xhigh");
+  });
+
+  it("reads only Cursor options when Codex runtime effort state is present", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "claude-opus-4-7",
+      runtimeModel: CURSOR_RUNTIME_MODEL_300K,
+      prompt: "",
+      modelOptions: {
+        codex: { reasoningEffort: "ultra" },
+        cursor: { reasoningEffort: "xhigh" },
+      },
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort: "xhigh" });
+    expect(state.promptEffort).toBe("xhigh");
+  });
+
+  it("preserves a stored runtime Codex effort for dispatch before discovery resolves", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "ultra",
+      modelOptionsForDispatch: {
+        reasoningEffort: "ultra",
+      },
+    });
+  });
+
+  it("rejects an unsupported effort for a known static Codex model before discovery", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "high",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it.each([
+    {
+      shape: "omits the effort list",
+      runtimeModel: { slug: "gpt-5.4", name: "GPT-5.4" },
+    },
+    {
+      shape: "reports an empty effort list",
+      runtimeModel: {
+        slug: "gpt-5.4",
+        name: "GPT-5.4",
+        supportedReasoningEfforts: [],
+      },
+    },
+  ])("falls back to static Codex efforts when runtime metadata $shape", ({ runtimeModel }) => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4",
+      runtimeModel,
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "xhigh",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        reasoningEffort: "xhigh",
+      },
+    });
+  });
+
+  it("drops a stored runtime Codex effort after discovery proves it unsupported", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      runtimeModel: {
+        slug: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        supportedReasoningEfforts: [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "ultra",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "low",
+      modelOptionsForDispatch: undefined,
     });
   });
 
@@ -440,6 +603,109 @@ describe("getComposerProviderState", () => {
       provider: "grok",
       promptEffort: "low",
       modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("exposes and dispatches efforts for dynamically discovered Grok models", () => {
+    const selection = getComposerTraitSelection(
+      "grok",
+      "grok-4.5",
+      "",
+      { reasoningEffort: "high" },
+      GROK_RUNTIME_4_5_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-4.5",
+      runtimeModel: GROK_RUNTIME_4_5_WITH_REASONING,
+      prompt: "",
+      modelOptions: { grok: { reasoningEffort: "high" } },
+    });
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("high");
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "high",
+      modelOptionsForDispatch: { reasoningEffort: "high" },
+    });
+  });
+
+  it("exposes Grok efforts before runtime model discovery resolves", () => {
+    const selection = getComposerTraitSelection("grok", "grok-4.5", "", undefined);
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("low");
+  });
+
+  it("exposes and dispatches runtime-discovered Droid efforts for GPT-5.6", () => {
+    const threadId = ThreadId.makeUnsafe("thread-droid-gpt-5-6-effort");
+    const selection = getComposerTraitSelection(
+      "droid",
+      "gpt-5.6-sol",
+      "",
+      { reasoningEffort: "xhigh" },
+      DROID_RUNTIME_GPT_5_6_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "droid",
+      model: "gpt-5.6-sol",
+      runtimeModel: DROID_RUNTIME_GPT_5_6_WITH_REASONING,
+      prompt: "",
+      modelOptions: { droid: { reasoningEffort: "xhigh" } },
+    });
+    const picker = renderProviderTraitsPicker({
+      provider: "droid",
+      threadId,
+      model: "gpt-5.6-sol",
+      runtimeModel: DROID_RUNTIME_GPT_5_6_WITH_REASONING,
+      modelOptions: { reasoningEffort: "xhigh" },
+      prompt: "",
+      includeFastMode: false,
+      onPromptChange: vi.fn(),
+    });
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(selection.effort).toBe("xhigh");
+    expect(state).toEqual({
+      provider: "droid",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: { reasoningEffort: "xhigh" },
+    });
+    expect(picker).not.toBeNull();
+  });
+
+  it("dispatches an explicitly selected Droid effort even when ACP reports it as current", () => {
+    expect(
+      getComposerProviderState({
+        provider: "droid",
+        model: "gpt-5.6-sol",
+        runtimeModel: DROID_RUNTIME_GPT_5_6_WITH_REASONING,
+        prompt: "",
+        modelOptions: { droid: { reasoningEffort: "medium" } },
+      }),
+    ).toMatchObject({
+      promptEffort: "medium",
+      modelOptionsForDispatch: { reasoningEffort: "medium" },
     });
   });
 

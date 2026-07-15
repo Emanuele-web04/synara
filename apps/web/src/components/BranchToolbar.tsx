@@ -1,7 +1,7 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
-import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
+import type { ThreadId, RuntimeMode } from "@synara/contracts";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -361,6 +361,7 @@ export default function BranchToolbar({
     provider: activeProvider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    fetchProviderData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
@@ -483,6 +484,7 @@ export default function BranchToolbar({
                     provider={activeProvider}
                     rateLimits={usageSummary.rateLimits}
                     usageLines={usageSummary.usageLines}
+                    notice={usageSummary.usageNotice}
                     isLoading={usageSummary.isLoading}
                     learnMoreHref={usageSummary.learnMoreHref}
                     showTitle={false}

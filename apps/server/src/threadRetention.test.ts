@@ -3,7 +3,7 @@
 // Layer: Server maintenance tests
 // Exports: Vitest coverage for threadRetention helpers.
 
-import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type OrchestrationReadModel } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { getInactiveThreadIdsForRetention, THREAD_RETENTION_UNUSED_MS } from "./threadRetention";
@@ -105,5 +105,26 @@ describe("thread retention", () => {
     expect(
       getInactiveThreadIdsForRetention(makeReadModel([pinnedThread, unpinnedThread]), nowMs),
     ).toEqual([unpinnedThread.id]);
+  });
+
+  it("does not select enabled heartbeat automation target threads", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const heartbeatTarget = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-heartbeat-target"),
+      latestUserMessageAt: oldActivityAt,
+    });
+    const ordinaryThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-ordinary"),
+      latestUserMessageAt: oldActivityAt,
+    });
+
+    expect(
+      getInactiveThreadIdsForRetention(
+        makeReadModel([heartbeatTarget, ordinaryThread]),
+        nowMs,
+        new Set([heartbeatTarget.id]),
+      ),
+    ).toEqual([ordinaryThread.id]);
   });
 });

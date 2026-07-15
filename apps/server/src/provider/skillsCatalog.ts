@@ -11,7 +11,7 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
-import type { ProviderKind, ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
 
 type FrontmatterValue = string | boolean;
 
@@ -326,6 +326,7 @@ const HOME_ORIGIN_ORDER = [
   "cursor",
   "gemini",
   "grok",
+  "factory",
   "kilo",
   "opencode",
   "pi",
@@ -409,6 +410,10 @@ const SKILL_ORIGIN_ROOTS = {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".grok", "skills")],
     projectRootNames: [".grok"],
   },
+  factory: {
+    homeRoots: (input) => [nodePath.join(input.homeDir, ".factory", "skills")],
+    projectRootNames: [".factory"],
+  },
   kilo: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".kilo", "skills")],
     projectRootNames: [".kilo"],
@@ -433,6 +438,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   cursor: ["cursor", "agents", "claude", "codex"],
   gemini: ["agents", "gemini"],
   grok: ["grok", "claude", "agents"],
+  droid: ["factory", "agents", "claude", "codex"],
   kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],

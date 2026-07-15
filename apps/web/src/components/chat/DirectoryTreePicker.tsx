@@ -3,7 +3,7 @@
 // Layer: Chat/home input helper
 // Depends on: DirectoryTreeBrowser and shared popover/button primitives.
 
-import type { ProjectDirectoryEntry, ProjectFileSystemEntry } from "@t3tools/contracts";
+import type { ProjectDirectoryEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { memo, useState } from "react";
 import { FolderIcon } from "~/lib/icons";
 import { Button } from "../ui/button";

@@ -2,7 +2,7 @@
 // Purpose: Verifies provider-discovery invalidation ignores provider-status metadata noise.
 // Layer: Web UI provider discovery tests
 
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { providerModelDiscoveryInvalidationFingerprint } from "./providerDiscoveryInvalidation";

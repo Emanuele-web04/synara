@@ -5,7 +5,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import type { TerminalLinkMatch } from "../../terminal-links";
 

@@ -4,7 +4,7 @@
  * Centralizes provider-to-icon mapping so new providers do not need repeated
  * branching across every UI surface.
  */
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
@@ -13,6 +13,7 @@ import {
   ClaudeAI,
   CursorIcon,
   Gemini,
+  DroidIcon,
   GrokIcon,
   type Icon,
   KiloIcon,
@@ -68,6 +69,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   cursor: CursorIcon,
   gemini: Gemini,
   grok: GrokIcon,
+  droid: DroidIcon,
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,

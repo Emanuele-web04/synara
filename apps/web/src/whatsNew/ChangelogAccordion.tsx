@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";

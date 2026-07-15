@@ -18,4 +18,4 @@ export interface ServerSecretStoreShape {
 export class ServerSecretStore extends ServiceMap.Service<
   ServerSecretStore,
   ServerSecretStoreShape
->()("t3/auth/Services/ServerSecretStore") {}
+>()("synara/auth/Services/ServerSecretStore") {}

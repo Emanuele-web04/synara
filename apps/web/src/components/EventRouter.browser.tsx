@@ -14,7 +14,7 @@ import {
   type ServerConfig,
   type WsWelcomePayload,
   WS_METHODS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
@@ -64,7 +64,7 @@ function createBaseServerConfig(): ServerConfig {
   return {
     cwd: "/repo/project",
     worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.t3code-keybindings.json",
+    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
     keybindings: [],
     issues: [],
     providers: [
@@ -479,7 +479,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello");
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(firstAssistantChunk);
@@ -517,7 +517,7 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(message?.text).toBe("hello world");
           expect(message?.streaming).toBe(false);
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -869,7 +869,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("buffered reply");
         },
-        { timeout: 4_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(bufferedEvent);

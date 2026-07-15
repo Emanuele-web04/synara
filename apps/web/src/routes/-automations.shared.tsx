@@ -13,7 +13,7 @@ import {
   type ProviderKind,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
@@ -1049,7 +1049,7 @@ export function AutomationDialog({
                           value={form.cronExpression}
                           onChange={(event) => setField("cronExpression", event.target.value)}
                           placeholder="0 9 * * *"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 font-mono text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>

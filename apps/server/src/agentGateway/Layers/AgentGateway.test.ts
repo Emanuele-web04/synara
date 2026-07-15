@@ -7,8 +7,8 @@ import type {
   OrchestrationThread,
   OrchestrationThreadShell,
   ThreadId as ThreadIdType,
-} from "@t3tools/contracts";
-import { AutomationId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { AutomationId, ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";

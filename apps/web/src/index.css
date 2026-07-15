@@ -10,6 +10,11 @@
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
+  --color-status-success: var(--status-success);
+  --color-status-failure: var(--status-failure);
+  --color-status-open: var(--status-open);
+  --color-status-merged: var(--status-merged);
+  --color-status-neutral: var(--status-neutral);
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-destructive-foreground: var(--destructive-foreground);
@@ -353,6 +358,33 @@
   }
 }
 
+/* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects <->
+   Workspace). Keyed remounts play this on the incoming surface so the switch reads
+   as a movement instead of a hard cut. Enter-only by design: no exit or height
+   animation, so it cannot feed back into list animation or scroll behavior. */
+@keyframes sidebar-surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sidebar-surface-enter {
+  animation: sidebar-surface-enter 160ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-surface-enter {
+    animation: none;
+  }
+}
+
 /* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
    so the transcript can stay lightweight while the row appears less abruptly. */
 @keyframes chat-message-send-enter {
@@ -495,6 +527,12 @@
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
   --accent: --alpha(var(--color-black) / 4%);
   --accent-foreground: var(--color-neutral-800);
+  /* `--destructive/success/warning-foreground` are ON-FILL contrast ink: they only ever go on
+     top of a solid `bg-<role>` fill. The runtime theme resolves all three to the surface color
+     (near-white in light), so painting copy with them over a tint or a plain surface renders it
+     invisible — the values below are just the unthemed fallback and must not be read as
+     "the readable role text color". For text on a tint, use the role token (`text-destructive`,
+     `text-warning`) and let the tint/border carry the signal, as `ui/alert.tsx` does. */
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 5%);
   --input: --alpha(var(--color-black) / 6%);
@@ -509,6 +547,17 @@
   --info-foreground: var(--color-text-accent, #526fff);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
+  /* Status tints — the one source of color for status indicators (PR state glyphs, check
+     glyphs, the checks ring). Each is the plain role color in light and a step toward white
+     in dark, where the near-black surface makes the role weight read as a heavy block. Mix
+     from the role tokens only, never from `--success-foreground`/`--destructive-foreground`:
+     those are the on-fill contrast ink (white under the runtime theme), not a lighter shade.
+     `--color-decoration-added` is injected by the runtime theme, hence the fallback. */
+  --status-success: var(--success);
+  --status-failure: var(--destructive);
+  --status-open: var(--color-decoration-added, var(--success));
+  --status-merged: var(--color-indigo-500);
+  --status-neutral: var(--color-zinc-500);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -554,6 +603,15 @@
     --info-foreground: var(--color-text-accent, #6073cc);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
+    --status-success: color-mix(in srgb, var(--success) 72%, var(--color-white));
+    --status-failure: color-mix(in srgb, var(--destructive) 72%, var(--color-white));
+    --status-open: color-mix(
+      in srgb,
+      var(--color-decoration-added, var(--success)) 72%,
+      var(--color-white)
+    );
+    --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
+    --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -883,6 +941,31 @@ label:has(> select#reasoning-effort) select {
   color: var(--foreground);
   font-size: var(--app-font-size-chat-code);
   font-family: var(--font-chat-code-family);
+}
+
+/* User-bubble markdown (sent messages). The bubble tint IS the code surface
+   color, so code needs its own contrast step against the bubble, and block
+   margins tighten to read well inside the compact bubble padding. */
+.chat-markdown--user p,
+.chat-markdown--user ul,
+.chat-markdown--user ol,
+.chat-markdown--user blockquote,
+.chat-markdown--user pre,
+.chat-markdown--user table {
+  margin: 0.45rem 0;
+}
+
+.chat-markdown--user :not(pre) > code {
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+
+.chat-markdown--user pre,
+.chat-markdown--user .chat-markdown-codeblock {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.chat-markdown--user .chat-markdown-codeblock pre {
+  background: transparent;
 }
 
 .chat-markdown .katex,
@@ -2391,6 +2474,41 @@ diffs-container {
   }
 }
 
+/* Pull request description/comment prose: long-form reading, roomier than chat bubbles.
+   Composes with .chat-markdown (which zeroes first/last child margins). */
+.pull-request-prose {
+  line-height: 1.7;
+}
+.pull-request-prose p,
+.pull-request-prose ul,
+.pull-request-prose ol,
+.pull-request-prose blockquote,
+.pull-request-prose pre,
+.pull-request-prose table {
+  margin: 0.8rem 0;
+}
+.pull-request-prose li + li {
+  margin-top: 0.4rem;
+}
+.pull-request-prose h1,
+.pull-request-prose h2,
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  margin: 1.4rem 0 0.5rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.pull-request-prose h1 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.3);
+}
+.pull-request-prose h2 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.16);
+}
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  font-size: var(--app-font-size-ui-lg, 13px);
+}
+
 .chat-composer-surface-banner,
 .chat-composer-stacked-top {
   border-bottom-left-radius: 0;
@@ -2415,35 +2533,58 @@ diffs-container {
   -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
 }
 
+/* Recessed track: a hairline border + faint inner shadow read the base as a sunken
+   well, so the raised selected thumb appears to protrude out of it (macOS style). */
 .sidebar-segmented-picker {
   background: var(--color-background-elevated-secondary) !important;
-  box-shadow: none !important;
+  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-/* Light mode: the active segment matches the composer input fill so the two
-   selected surfaces read identically. Dark keeps the secondary-hover token. */
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
-  background: var(--composer-surface) !important;
-  background-color: var(--composer-surface) !important;
-  background-image: none !important;
-  box-shadow: none !important;
-  opacity: 1 !important;
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+.dark .sidebar-segmented-picker {
+  /* Base track uses the chat view's dark background so the opaque selected chip lifts off it
+     the same way an elevated control does in the chat view — the earlier lightened elevated
+     surface sat too close to the chip and read as a hollow outline. */
+  background: var(--background) !important;
+  border-color: color-mix(in oklab, var(--color-text-foreground) 8%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25) !important;
 }
 
-.dark .sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
-  background: var(--color-background-button-secondary-hover) !important;
-  background-color: var(--color-background-button-secondary-hover) !important;
+/* macOS-style raised chip, kept slim and understated. The thumb overhangs the track
+   (negative inset in the markup); a single soft directional drop shadow grounds it while the
+   hairline border + inset edge highlight define the raised rim.
+
+   Fill: the same translucent composer surface the chip has always used, but stacked over its
+   own opaque backdrop (the track fill over the app background) so it renders pixel-identical
+   to the translucent version yet nothing shows through the selected segment. */
+.sidebar-segmented-thumb {
+  background:
+    linear-gradient(var(--composer-surface), var(--composer-surface)),
+    linear-gradient(
+      var(--color-background-elevated-secondary),
+      var(--color-background-elevated-secondary)
+    ),
+    var(--background);
+  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 5%, transparent);
+  box-shadow:
+    0 1px 1.5px rgba(0, 0, 0, 0.04),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"]::before,
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"]::after {
-  display: none !important;
+.dark .sidebar-segmented-thumb {
+  /* In dark mode --composer-surface is already opaque (the chat view's control fill), so the
+     base rule's top layer covers on its own. The selected chip therefore reads as the same
+     solid elevated surface used across the chat view — clearly lifted off the recessed track
+     instead of the near-invisible tint it had before. Rim + shadow are kept very light so the
+     lift comes mostly from the fill contrast, not a heavy outline. */
+  border-color: color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
+  box-shadow:
+    0 1px 1.5px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 /* Frosted translucent shell shared by floating menus & pickers (dropdown menus,

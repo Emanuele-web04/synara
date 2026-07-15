@@ -3,14 +3,16 @@
 // Layer: Header action control
 // Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
 
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
 import type {
   GitActionProgressEvent,
   GitStackedAction,
   GitStatusResult,
+  ModelSelection,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   CloudSyncIcon,
@@ -315,6 +317,13 @@ export default function GitActionsControl({
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const gitTextGenerationModelSelection = useMemo(
+    (): ModelSelection => ({
+      provider: settings.textGenerationProvider ?? "codex",
+      model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    }),
+    [settings.textGenerationModel, settings.textGenerationProvider],
+  );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
@@ -385,6 +394,7 @@ export default function GitActionsControl({
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
+      modelSelection: gitTextGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
@@ -397,6 +407,11 @@ export default function GitActionsControl({
       baseBranch: string;
       headBranch: string;
       state: "open" | "closed" | "merged";
+      isDraft?: boolean;
+      mergeability?: "mergeable" | "conflicting" | "unknown";
+      additions?: number | null;
+      deletions?: number | null;
+      changedFiles?: number | null;
     }) => {
       if (!activeThreadId) {
         return;
@@ -631,8 +646,8 @@ export default function GitActionsControl({
     void promise.catch(() => undefined);
   }, [pullMutation, threadToastData]);
 
-  const runGitActionWithToast = useEffectEvent(
-    async ({
+  const runGitActionWithToast = useCallback(
+    async function runGitActionWithToast({
       action,
       commitMessage,
       forcePushOnlyProgress = false,
@@ -643,7 +658,7 @@ export default function GitActionsControl({
       isDefaultBranchOverride,
       progressToastId,
       filePaths,
-    }: RunGitActionWithToastInput) => {
+    }: RunGitActionWithToastInput) {
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.branch ?? null;
       const actionIsDefaultBranch =
@@ -865,6 +880,15 @@ export default function GitActionsControl({
         });
       }
     },
+    [
+      defaultBranchName,
+      gitStatusForActions,
+      hasOriginRemote,
+      isDefaultBranch,
+      persistThreadPr,
+      runImmediateGitActionMutation,
+      threadToastData,
+    ],
   );
 
   const continuePendingDefaultBranchAction = useCallback(() => {
@@ -881,7 +905,7 @@ export default function GitActionsControl({
       ...(requiresFeatureBranchForDefaultBranchAction(action) ? { featureBranch: true } : {}),
       skipDefaultBranchPrompt: true,
     });
-  }, [pendingDefaultBranchAction]);
+  }, [pendingDefaultBranchAction, runGitActionWithToast]);
 
   const checkoutFeatureBranchAndContinuePendingAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
@@ -897,7 +921,7 @@ export default function GitActionsControl({
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
-  }, [pendingDefaultBranchAction]);
+  }, [pendingDefaultBranchAction, runGitActionWithToast]);
 
   const runDialogActionOnNewBranch = useCallback(() => {
     if (!isCommitDialogOpen) return;
@@ -915,7 +939,7 @@ export default function GitActionsControl({
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
-  }, [allSelected, isCommitDialogOpen, dialogCommitMessage, selectedFiles]);
+  }, [allSelected, isCommitDialogOpen, dialogCommitMessage, runGitActionWithToast, selectedFiles]);
 
   const openCreateBranchDialog = useCallback(() => {
     setCreateBranchName(suggestedCreateBranchName);
@@ -947,7 +971,14 @@ export default function GitActionsControl({
     if (quickAction.action) {
       void runGitActionWithToast({ action: quickAction.action });
     }
-  }, [openCreateBranchDialog, openExistingPr, quickAction, runSyncWithRemote, threadToastData]);
+  }, [
+    openCreateBranchDialog,
+    openExistingPr,
+    quickAction,
+    runGitActionWithToast,
+    runSyncWithRemote,
+    threadToastData,
+  ]);
 
   const openCommitDialog = useCallback(() => {
     setExcludedFiles(new Set());
@@ -1084,7 +1115,7 @@ export default function GitActionsControl({
       }
       openCommitDialog();
     },
-    [openCommitDialog, openExistingPr],
+    [openCommitDialog, openExistingPr, runGitActionWithToast],
   );
 
   const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
@@ -1212,6 +1243,7 @@ export default function GitActionsControl({
     allSelected,
     dialogCommitMessage,
     isCommitDialogOpen,
+    runGitActionWithToast,
     selectedFiles,
     setDialogCommitMessage,
     setIsCommitDialogOpen,
