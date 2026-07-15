@@ -3,9 +3,9 @@
 // "Reset now" button that consumes one credit via the server RPC.
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { CodexResetCredit, ServerProviderUsageSnapshot } from "@synara/contracts";
 
 import { Button } from "~/components/ui/button";
 import {
@@ -16,8 +16,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { ChevronDownIcon } from "~/lib/icons";
 import { formatRateLimitResetTime } from "~/lib/rateLimits";
 import { consumeCodexResetCreditMutationOptions } from "~/lib/serverReactQuery";
+import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 
 export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
   const credits = snapshot.rateLimitResetCredits;
@@ -36,11 +38,20 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
     <div className="border-t border-[color:var(--color-border)] pt-3">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <div className="text-xs font-medium text-foreground">
-            {credits.availableCount === 1
-              ? "1 reset credit available"
-              : `${credits.availableCount} reset credits available`}
-          </div>
+          <Popover>
+            <PopoverTrigger className="inline-flex items-center gap-1 rounded text-xs font-medium text-foreground outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background">
+              {credits.availableCount === 1
+                ? "1 reset credit available"
+                : `${credits.availableCount} reset credits available`}
+              <ChevronDownIcon className="size-3 text-muted-foreground" aria-hidden="true" />
+            </PopoverTrigger>
+            <PopoverPopup className="w-72 p-3" align="start">
+              <ResetCreditList
+                credits={credits.credits ?? []}
+                nextExpiresAt={credits.nextExpiresAt}
+              />
+            </PopoverPopup>
+          </Popover>
           {credits.nextExpiresAt && (
             <div className="text-[11px] text-muted-foreground">
               Expires {formatRateLimitResetTime(credits.nextExpiresAt)}
@@ -75,6 +86,73 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function ResetCreditList({
+  credits,
+  nextExpiresAt,
+}: {
+  credits: ReadonlyArray<CodexResetCredit>;
+  nextExpiresAt?: string | undefined;
+}) {
+  const sorted = useMemo(
+    () =>
+      [...credits].sort((a, b) => {
+        const aMs = a.expiresAt ? Date.parse(a.expiresAt) : Number.POSITIVE_INFINITY;
+        const bMs = b.expiresAt ? Date.parse(b.expiresAt) : Number.POSITIVE_INFINITY;
+        return aMs - bMs;
+      }),
+    [credits],
+  );
+
+  if (sorted.length === 0) {
+    return (
+      <div className="text-xs text-muted-foreground">
+        {nextExpiresAt ? (
+          <>
+            The next available credit will be consumed
+            <span className="ml-1 text-foreground">
+              (expires {formatRateLimitResetTime(nextExpiresAt)})
+            </span>
+            .
+          </>
+        ) : (
+          <>The next available credit will be consumed.</>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Using earliest first
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {sorted.map((credit, index) => {
+          const isNext = index === 0;
+          const label = credit.expiresAt
+            ? `Expires ${formatRateLimitResetTime(credit.expiresAt)}`
+            : "Expires later";
+          return (
+            <li
+              key={`${credit.expiresAt ?? "no-expiry"}-${index}`}
+              className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-border)] bg-background/40 px-2.5 py-1.5 text-xs"
+            >
+              <span className="text-muted-foreground">
+                {credit.grantedAt
+                  ? `Granted ${formatRateLimitResetTime(credit.grantedAt)}`
+                  : "Available"}
+              </span>
+              <span className={isNext ? "font-medium text-foreground" : "text-foreground"}>
+                {label}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
