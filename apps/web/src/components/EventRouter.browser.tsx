@@ -296,8 +296,15 @@ async function mountApp(options?: {
         }
         const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
         expect(useStore.getState().threadIds?.includes(expectedThreadId)).toBe(true);
+        expect(threadStreamRequestIdByThreadId.has(expectedThreadId)).toBe(true);
+        const expectedThread = findThreadDetailFromFixtureSnapshot(expectedThreadId);
+        if (!expectedThread) return;
+        const hydratedMessageIds = useStore.getState().messageIdsByThreadId[expectedThreadId] ?? [];
+        expect(
+          expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        ).toBe(true);
       },
-      { timeout: 8_000, interval: 16 },
+      { timeout: 20_000, interval: 16 },
     );
   } catch (cause) {
     await screen.unmount();

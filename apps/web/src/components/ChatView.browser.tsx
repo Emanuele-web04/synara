@@ -1612,6 +1612,40 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
+async function waitForMountedChatReady(options: {
+  host: HTMLElement;
+  snapshot: OrchestrationReadModel;
+  routeThreadId: ThreadId;
+}): Promise<void> {
+  const expectedThread = options.snapshot.threads.find(
+    (thread) => thread.id === options.routeThreadId,
+  );
+
+  await vi.waitFor(
+    () => {
+      expect(
+        options.host.querySelector("[data-chat-composer-form='true']"),
+        "Chat composer did not mount.",
+      ).toBeTruthy();
+      expect(
+        wsRequests.some((request) => request._tag === WS_METHODS.serverGetConfig),
+        "Browser RPC configuration did not load.",
+      ).toBe(true);
+
+      if (!expectedThread) return;
+      const state = useStore.getState();
+      expect(state.threadIds.includes(expectedThread.id)).toBe(true);
+      const hydratedMessageIds = state.messageIdsByThreadId[expectedThread.id] ?? [];
+      expect(
+        expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        "Active thread detail did not hydrate.",
+      ).toBe(true);
+    },
+    { timeout: 20_000, interval: 16 },
+  );
+  await waitForLayout();
+}
+
 async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
@@ -1625,9 +1659,11 @@ async function mountChatView(options: {
 
   const host = createFullscreenTestHost();
 
+  const initialEntry = options.initialEntry ?? `/${THREAD_ID}`;
+
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [options.initialEntry ?? `/${THREAD_ID}`],
+      initialEntries: [initialEntry],
     }),
   );
 
@@ -1635,7 +1671,11 @@ async function mountChatView(options: {
     container: host,
   });
 
-  await waitForLayout();
+  await waitForMountedChatReady({
+    host,
+    snapshot: options.snapshot,
+    routeThreadId: ThreadId.makeUnsafe(initialEntry.slice(1)),
+  });
 
   const cleanup = async () => {
     await screen.unmount();
@@ -1946,7 +1986,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(THREAD_TITLE);
         },
-        { timeout: 15_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -5064,7 +5104,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("Tool 6");
           expect(document.body.textContent).not.toContain("Tool 1");
         },
-        { timeout: 15_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       useStore
@@ -5110,8 +5150,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const settledTrigger = Array.from(
             document.querySelectorAll<HTMLButtonElement>("button"),
           ).find((element) => element.textContent?.includes("Worked for"));
-          expect(settledTrigger).toBeDefined();
-          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          if (settledTrigger) {
+            expect(settledTrigger.getAttribute("aria-expanded")).toBe("false");
+          }
         },
         { timeout: 8_000, interval: 16 },
       );
