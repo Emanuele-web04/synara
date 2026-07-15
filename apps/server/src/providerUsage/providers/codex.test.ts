@@ -87,7 +87,7 @@ describe("parseCodexUsage — reset credits", () => {
       nowMs: 1780000000000,
     });
 
-    expect(result.rateLimitResetCredits?.credits?.[0].expiresAt).toBe(
+    expect(result.rateLimitResetCredits?.credits?.[0]?.expiresAt).toBe(
       new Date(1719326400 * 1000).toISOString(),
     );
   });
@@ -104,7 +104,7 @@ describe("parseCodexUsage — reset credits", () => {
       nowMs: 1780000000000,
     });
 
-    expect(result.rateLimitResetCredits?.credits?.[0].expiresAt).toBe(
+    expect(result.rateLimitResetCredits?.credits?.[0]?.expiresAt).toBe(
       new Date(1718721600000).toISOString(),
     );
   });
@@ -141,7 +141,7 @@ describe("consumeCodexRateLimitResetCredit", () => {
       status: 200,
       json: async () => ({ code: "reset" }),
       headers: new Headers(),
-    });
+    }) as unknown as typeof fetch;
   });
 
   it("returns error when auth is api-key", async () => {
@@ -159,7 +159,7 @@ describe("consumeCodexRateLimitResetCredit", () => {
       status: 400,
       json: async () => ({}),
       headers: new Headers(),
-    });
+    }) as unknown as typeof fetch;
 
     const result = await consumeCodexRateLimitResetCredit({
       auth: { kind: "oauth", accessToken: "token" },
@@ -175,7 +175,8 @@ describe("consumeCodexRateLimitResetCredit", () => {
       idempotencyKey: "unique-key-123",
     });
 
-    const fetchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const mockFetch = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    const fetchCall = mockFetch.mock.calls[0]!;
     const body = JSON.parse(fetchCall[1].body);
     expect(body.redeem_request_id).toBe("unique-key-123");
   });
@@ -186,7 +187,7 @@ describe("consumeCodexRateLimitResetCredit", () => {
       status: 200,
       json: async () => ({ code: "no_credit" }),
       headers: new Headers(),
-    });
+    }) as unknown as typeof fetch;
 
     const result = await consumeCodexRateLimitResetCredit({
       auth: { kind: "oauth", accessToken: "token" },
@@ -197,7 +198,7 @@ describe("consumeCodexRateLimitResetCredit", () => {
   });
 
   it("returns error on network failure", async () => {
-    global.fetch = vi.fn().mockRejectedValue(new Error("network error"));
+    global.fetch = vi.fn().mockRejectedValue(new Error("network error")) as unknown as typeof fetch;
 
     const result = await consumeCodexRateLimitResetCredit({
       auth: { kind: "oauth", accessToken: "token" },
