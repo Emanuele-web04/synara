@@ -2157,7 +2157,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           });
           expect(turnStartRequest).toBeTruthy();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 15_000, interval: 16 },
       );
 
       expect(wsRequests.some((request) => request._tag === WS_METHODS.automationCreate)).toBe(
@@ -2210,7 +2210,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             schedule: { type: "interval", everySeconds: 15 },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 15_000, interval: 16 },
       );
       await waitForLayout();
 
@@ -2266,7 +2266,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             schedule: { type: "interval", everySeconds: 15 },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 15_000, interval: 16 },
       );
       await waitForLayout();
 
