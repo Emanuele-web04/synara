@@ -109,7 +109,7 @@ function normalizeTerminalCliKinds(
     .filter(
       ([terminalId, cliKind]) =>
         terminalId.length > 0 &&
-          (cliKind === "codex" || cliKind === "claude" || cliKind === "antigravity"),
+        (cliKind === "codex" || cliKind === "claude" || cliKind === "antigravity"),
     )
     .filter(([terminalId]) => validTerminalIdSet.has(terminalId))
     .toSorted(([leftId], [rightId]) => leftId.localeCompare(rightId));

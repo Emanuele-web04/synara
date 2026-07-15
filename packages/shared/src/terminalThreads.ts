@@ -157,11 +157,7 @@ function deriveCliKindFromOutputText(text: string | null | undefined): TerminalC
   return (
     textMatchesCliPatterns(normalizedText, OUTPUT_CODEX_TEXT_PATTERNS, "codex") ??
     textMatchesCliPatterns(normalizedText, OUTPUT_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(
-      normalizedText,
-      OUTPUT_ANTIGRAVITY_TEXT_PATTERNS,
-      "antigravity",
-    )
+    textMatchesCliPatterns(normalizedText, OUTPUT_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
   );
 }
 
@@ -173,11 +169,7 @@ function deriveCliKindFromProcessText(text: string | null | undefined): Terminal
   return (
     textMatchesCliPatterns(normalizedText, PROCESS_CODEX_TEXT_PATTERNS, "codex") ??
     textMatchesCliPatterns(normalizedText, PROCESS_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(
-      normalizedText,
-      PROCESS_ANTIGRAVITY_TEXT_PATTERNS,
-      "antigravity",
-    )
+    textMatchesCliPatterns(normalizedText, PROCESS_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
   );
 }
 
@@ -362,11 +354,7 @@ function inferCliKindFromTitle(title: string | null | undefined): TerminalCliKin
   return (
     textMatchesCliPatterns(normalizedTitle, TITLE_CODEX_TEXT_PATTERNS, "codex") ??
     textMatchesCliPatterns(normalizedTitle, TITLE_CLAUDE_TEXT_PATTERNS, "claude") ??
-    textMatchesCliPatterns(
-      normalizedTitle,
-      TITLE_ANTIGRAVITY_TEXT_PATTERNS,
-      "antigravity",
-    )
+    textMatchesCliPatterns(normalizedTitle, TITLE_ANTIGRAVITY_TEXT_PATTERNS, "antigravity")
   );
 }
 

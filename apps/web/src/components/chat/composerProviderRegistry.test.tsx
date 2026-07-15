@@ -113,9 +113,9 @@ describe("getComposerProviderState", () => {
       getComposerTraitSelection(
         "antigravity",
         "Gemini 3.5 Flash",
-      "",
-      { reasoningEffort: "high" },
-      ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
+        "",
+        { reasoningEffort: "high" },
+        ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
       ).effortLevels.map((effort) => effort.value),
     ).toEqual(["low", "medium", "high"]);
     expect(

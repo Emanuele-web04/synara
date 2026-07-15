@@ -150,7 +150,11 @@ function hookConfig(command: (event: string) => string): Record<string, unknown>
   };
 }
 
-async function runProcess(command: string, args: string[], cwd?: string): Promise<{
+async function runProcess(
+  command: string,
+  args: string[],
+  cwd?: string,
+): Promise<{
   stdout: string;
   stderr: string;
   code: number;
@@ -238,9 +242,7 @@ export function parseAntigravityCliModelLabel(
   };
 }
 
-export function parseAntigravityModelLines(
-  output: string,
-): ProviderListModelsResult["models"] {
+export function parseAntigravityModelLines(output: string): ProviderListModelsResult["models"] {
   const groups = new Map<string, string[]>();
   for (const line of output.split(/\r?\n/g)) {
     const parsed = parseAntigravityCliModelLabel(line);
@@ -253,8 +255,10 @@ export function parseAntigravityModelLines(
     const efforts = discoveredEfforts.toSorted((left, right) => {
       const leftIndex = EFFORT_ORDER.indexOf(left as (typeof EFFORT_ORDER)[number]);
       const rightIndex = EFFORT_ORDER.indexOf(right as (typeof EFFORT_ORDER)[number]);
-      return (leftIndex < 0 ? EFFORT_ORDER.length : leftIndex) -
-        (rightIndex < 0 ? EFFORT_ORDER.length : rightIndex);
+      return (
+        (leftIndex < 0 ? EFFORT_ORDER.length : leftIndex) -
+        (rightIndex < 0 ? EFFORT_ORDER.length : rightIndex)
+      );
     });
     const defaultEffort = DEFAULT_EFFORT_BY_MODEL[model] ?? efforts[0];
     return {
@@ -375,7 +379,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     offer({
       ...base(context, { itemId }),
       type: "item.started",
-      payload: { itemType, status: "inProgress", title: itemType === "reasoning" ? "Reasoning" : "Assistant" },
+      payload: {
+        itemType,
+        status: "inProgress",
+        title: itemType === "reasoning" ? "Reasoning" : "Assistant",
+      },
       raw: raw(step.type ?? "transcript", step),
     } satisfies ProviderRuntimeEvent);
     offer({
@@ -480,7 +488,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         }
       });
     const latestUserIndex = steps.reduce(
-      (latest, step) => (step.type === "USER_INPUT" && typeof step.step_index === "number" ? Math.max(latest, step.step_index) : latest),
+      (latest, step) =>
+        step.type === "USER_INPUT" && typeof step.step_index === "number"
+          ? Math.max(latest, step.step_index)
+          : latest,
       -1,
     );
     for (const step of steps) {
@@ -528,8 +539,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       } catch {
         continue;
       }
-      const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : undefined;
-      const transcriptPath = typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
+      const conversationId =
+        typeof payload.conversationId === "string" ? payload.conversationId : undefined;
+      const transcriptPath =
+        typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
       const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
       const learnedConversation = conversationId && conversationId !== context.conversationId;
       if (conversationId) context.conversationId = conversationId;
@@ -611,7 +624,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       offer({
         ...base(context, { includeTurn: false }),
         type: "session.started",
-        payload: { message: "Antigravity CLI session started", ...(conversationId ? { resume: conversationId } : {}) },
+        payload: {
+          message: "Antigravity CLI session started",
+          ...(conversationId ? { resume: conversationId } : {}),
+        },
       } satisfies ProviderRuntimeEvent);
       offer({
         ...base(context, { includeTurn: false }),
@@ -736,7 +752,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         offer({
           ...base(context, { includeTurn: false }),
           type: "runtime.error",
-          payload: { message: messageFromCause(cause, "Failed to launch Antigravity CLI."), class: "transport_error" },
+          payload: {
+            message: messageFromCause(cause, "Failed to launch Antigravity CLI."),
+            class: "transport_error",
+          },
           raw: raw("process-error", cause),
         } satisfies ProviderRuntimeEvent);
       });
@@ -771,7 +790,9 @@ const makeAntigravityAdapter = Effect.gen(function* () {
             ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
             activeTurnId: undefined,
             updatedAt: new Date().toISOString(),
-            ...(failed ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` } : {}),
+            ...(failed
+              ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
+              : {}),
           };
           offer({
             ...completionBase,
@@ -779,7 +800,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
             payload: interrupted
               ? { state: "interrupted", stopReason: "interrupted" }
               : failed
-                ? { state: "failed", stopReason: "error", errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
+                ? {
+                    state: "failed",
+                    stopReason: "error",
+                    errorMessage: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.`,
+                  }
                 : { state: "completed", stopReason: "model_stop" },
             raw: raw("process-exit", { code, signal, stdout, stderr }),
           } satisfies ProviderRuntimeEvent);

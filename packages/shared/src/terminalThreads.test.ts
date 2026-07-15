@@ -14,16 +14,13 @@ import {
 } from "./terminalThreads";
 
 describe("Antigravity CLI identity", () => {
-  it.each(["agy", "antigravity", "antigravity-cli"])(
-    "detects the %s command",
-    (command) => {
-      expect(deriveTerminalCommandIdentity(command)).toEqual({
-        cliKind: "antigravity",
-        iconKey: "antigravity",
-        title: "Antigravity CLI",
-      });
-    },
-  );
+  it.each(["agy", "antigravity", "antigravity-cli"])("detects the %s command", (command) => {
+    expect(deriveTerminalCommandIdentity(command)).toEqual({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+      title: "Antigravity CLI",
+    });
+  });
 
   it("detects the Antigravity CLI process, banner, and terminal title", () => {
     expect(deriveTerminalProcessIdentity("/Users/dev/.local/bin/agy --model fast")).toMatchObject({

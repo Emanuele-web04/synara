@@ -3197,8 +3197,7 @@ function SettingsRouteView() {
                   ? shouldOfferProviderUpdateAction(providerStatus) &&
                     (showProviderUpdateStatus || updateAdvisory?.status === "unknown")
                   : false;
-                const canUpdateProvider =
-                  shouldShowProviderUpdateButton && !isProviderUpdateActive;
+                const canUpdateProvider = shouldShowProviderUpdateButton && !isProviderUpdateActive;
 
                 return (
                   <Collapsible

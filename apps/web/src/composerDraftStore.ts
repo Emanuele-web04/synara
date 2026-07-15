@@ -1297,10 +1297,7 @@ function makeModelSelection(
         model,
         ...(options
           ? {
-              options: options as Extract<
-                ModelSelection,
-                { provider: "antigravity" }
-              >["options"],
+              options: options as Extract<ModelSelection, { provider: "antigravity" }>["options"],
             }
           : {}),
       };
@@ -1540,9 +1537,7 @@ function normalizeProviderModelOptions(
           ...(geminiThinkingBudget !== undefined ? { thinkingBudget: geminiThinkingBudget } : {}),
         }
       : undefined;
-  const antigravityReasoningEffort = trimStringOrUndefined(
-    antigravityCandidate?.reasoningEffort,
-  );
+  const antigravityReasoningEffort = trimStringOrUndefined(antigravityCandidate?.reasoningEffort);
   const antigravity =
     antigravityReasoningEffort !== undefined
       ? { reasoningEffort: antigravityReasoningEffort }

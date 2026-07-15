@@ -167,7 +167,9 @@ export function normalizeLegacyModelSelection(input: {
   readonly options: unknown;
 }): Record<string, unknown> {
   const provider = inferLegacyModelProvider(input.provider, input.model);
-  const normalizedOptions = normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+  const normalizedOptions = normalizeModelOptions(
+    readLegacyProviderOptions(input.options, provider),
+  );
   const antigravityModel =
     provider === "antigravity" ? splitLegacyAntigravityModelLabel(input.model) : null;
   const options =

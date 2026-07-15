@@ -1348,8 +1348,7 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const stableActivityId =
-      "provider-reasoning:thread-1:antigravity-reasoning-1";
+    const stableActivityId = "provider-reasoning:thread-1:antigravity-reasoning-1";
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
         (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,

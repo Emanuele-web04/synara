@@ -625,10 +625,7 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
-  if (
-    hasOwn(patch, "antigravityBinaryPath") ||
-    hasOwn(patch, "customAntigravityModels")
-  ) {
+  if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
         ? { binaryPath: patch.antigravityBinaryPath ?? "" }

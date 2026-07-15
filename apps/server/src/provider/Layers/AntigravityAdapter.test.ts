@@ -65,12 +65,10 @@ GPT-OSS 120B (Medium)
       model: "Gemini 3.5 Flash",
       effort: "high",
     });
-    expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash")).toBe(
-      "Gemini 3.5 Flash (Medium)",
+    expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash")).toBe("Gemini 3.5 Flash (Medium)");
+    expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash", { reasoningEffort: "high" })).toBe(
+      "Gemini 3.5 Flash (High)",
     );
-    expect(
-      resolveAntigravityCliModelLabel("Gemini 3.5 Flash", { reasoningEffort: "high" }),
-    ).toBe("Gemini 3.5 Flash (High)");
     expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash (Low)")).toBe(
       "Gemini 3.5 Flash (Low)",
     );

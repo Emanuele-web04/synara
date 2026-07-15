@@ -2095,9 +2095,7 @@ export default function ChatView({
       binaryPath: settings.antigravityBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
       enabled:
-        selectedProvider === "antigravity" ||
-        lockedProvider === "antigravity" ||
-        isModelPickerOpen,
+        selectedProvider === "antigravity" || lockedProvider === "antigravity" || isModelPickerOpen,
     }),
   );
   const grokDynamicModelsQuery = useQuery(
@@ -2429,19 +2427,19 @@ export default function ChatView({
     selectedProvider === "antigravity"
       ? antigravityModelDiscoveryPending
       : selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "droid"
-        ? droidModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : selectedProviderModelsQuery !== undefined &&
-                (selectedProviderModelsQuery.isLoading ||
-                  (selectedProviderModelsQuery.isFetching &&
-                    selectedProviderModelsQuery.data === undefined));
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : selectedProviderModelsQuery !== undefined &&
+                  (selectedProviderModelsQuery.isLoading ||
+                    (selectedProviderModelsQuery.isFetching &&
+                      selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
     selectedProvider === "antigravity" ||
@@ -2453,16 +2451,16 @@ export default function ChatView({
     selectedProvider === "antigravity"
       ? antigravityModelDiscoveryPending
       : selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "droid"
-        ? droidModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : false;
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
