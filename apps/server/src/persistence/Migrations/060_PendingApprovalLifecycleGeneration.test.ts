@@ -30,7 +30,7 @@ layer("060_PendingApprovalLifecycleGeneration", (it) => {
         )
       `;
 
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 60 });
       const legacy = yield* sql<{ readonly lifecycleGeneration: string | null }>`
         SELECT lifecycle_generation AS "lifecycleGeneration"
         FROM projection_pending_approvals

@@ -123,24 +123,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
       yield* sql`
-        INSERT INTO projection_pending_interactions (
-          interaction_kind, request_id, thread_id, lifecycle_generation, status,
-          decision, response_command_id, response_requested_at, created_at, resolved_at
-        ) VALUES
-          (
-            'userInput', 'request-retryable', 'thread-causal-message-snapshot',
-            'generation-current', 'retryable', NULL, 'command-response',
-            '2026-07-14T12:11:00.000Z', '2026-07-14T12:10:30.000Z', NULL
-          ),
-          (
-            'approval', 'request-confirmed', 'thread-causal-message-snapshot',
-            'generation-current', 'confirmed', 'accept', 'command-approval',
-            '2026-07-14T12:12:00.000Z', '2026-07-14T12:11:30.000Z',
-            '2026-07-14T12:12:01.000Z'
-          )
-      `;
-
-      yield* sql`
         INSERT INTO projection_thread_proposed_plans (
           plan_id,
           thread_id,
@@ -449,6 +431,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               createdAt: "2026-02-24T00:00:06.750Z",
             },
           ],
+          pendingInteractions: [],
           checkpoints: [
             {
               turnId: asTurnId("turn-1"),

@@ -212,7 +212,7 @@ layer("ManagedAttachmentRepository", (it) => {
       }),
   );
 
-  it.effect("makes same-command claims idempotent and rejects mismatched reuse", () =>
+  it.effect("makes same-message claims idempotent and rejects mismatched reuse", () =>
     Effect.gen(function* () {
       yield* resetSchema;
       const repository = yield* ManagedAttachmentRepository;
@@ -232,8 +232,15 @@ layer("ManagedAttachmentRepository", (it) => {
 
       assert.strictEqual((yield* repository.claimForAcceptedTurn(claim)).status, "claimed");
       assert.strictEqual((yield* repository.claimForAcceptedTurn(claim)).status, "claimed");
+      assert.strictEqual(
+        (yield* repository.claimForAcceptedTurn({
+          ...claim,
+          commandId: "different-command",
+        })).status,
+        "claimed",
+      );
       assert.deepStrictEqual(
-        yield* repository.claimForAcceptedTurn({ ...claim, commandId: "different-command" }),
+        yield* repository.claimForAcceptedTurn({ ...claim, messageId: "different-message" }),
         { status: "rejected", reason: "already-claimed" },
       );
     }),

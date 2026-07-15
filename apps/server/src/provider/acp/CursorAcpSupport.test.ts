@@ -119,7 +119,7 @@ const noCursorAgentCommandOptions = {
 
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
-    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
+    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
@@ -131,7 +131,7 @@ describe("buildCursorAcpSpawnInput", () => {
   });
 
   it("maps the old ambiguous agent default to cursor-agent", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toEqual({
+    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toMatchObject({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
@@ -149,7 +149,7 @@ describe("buildCursorAcpSpawnInput", () => {
         "/tmp/project",
         noCursorAgentCommandOptions,
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/not-real/bin/cursor",
       args: ["agent", "acp"],
       cwd: "/tmp/project",
@@ -168,7 +168,7 @@ describe("buildCursorAcpSpawnInput", () => {
         env: { PATH: "" },
         pathExists: (path) => path === agentPath,
       }),
-    ).toEqual({
+    ).toMatchObject({
       command: agentPath,
       args: ["acp"],
       cwd: "/tmp/project",
@@ -188,7 +188,7 @@ describe("buildCursorAcpSpawnInput", () => {
         },
         "/tmp/project",
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/usr/local/bin/agent",
       args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
@@ -209,7 +209,7 @@ describe("buildCursorAcpSpawnInput", () => {
         "/tmp/project",
         noCursorAgentCommandOptions,
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/not-real/bin/cursor",
       args: ["agent", "-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",

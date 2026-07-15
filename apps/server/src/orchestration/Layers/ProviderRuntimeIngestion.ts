@@ -3468,15 +3468,22 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(providerService.streamEvents, (event) =>
-          runtimeEvents
-            .append(event)
-            .pipe(
-              Effect.flatMap((persisted) =>
-                Deferred.await(startupRuntimeReplayComplete).pipe(
-                  Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
-                ),
+          runtimeEvents.append(event).pipe(
+            Effect.flatMap((persisted) =>
+              Deferred.await(startupRuntimeReplayComplete).pipe(
+                Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
               ),
             ),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning("provider runtime event rejected before journal append", {
+                    eventId: event.eventId,
+                    eventType: event.type,
+                    cause: Cause.pretty(cause),
+                  }),
+            ),
+          ),
         ),
       );
       yield* Effect.forkScoped(

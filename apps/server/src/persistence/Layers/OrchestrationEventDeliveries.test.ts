@@ -351,6 +351,7 @@ layer("OrchestrationEventDeliveryRepository", (it) => {
       assert.strictEqual(
         (yield* repository.listBlockingDeliveries({
           consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+          threadId: "thread-reconcile",
           limit: 10,
         })).length,
         0,

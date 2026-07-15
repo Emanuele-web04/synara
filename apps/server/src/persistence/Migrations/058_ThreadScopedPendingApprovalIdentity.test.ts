@@ -30,7 +30,7 @@ layer("058_ThreadScopedPendingApprovalIdentity", (it) => {
         )
       `;
 
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 58 });
       yield* sql`
         INSERT INTO projection_pending_approvals (
           request_id,

@@ -1083,6 +1083,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
 
+      routing.codex.sendTurn.mockClear();
+
       const session = yield* provider.startSession(asThreadId("thread-1"), {
         provider: "codex",
         threadId: asThreadId("thread-1"),

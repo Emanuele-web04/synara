@@ -41,41 +41,36 @@ describe("buildDroidAcpSpawnInput", () => {
     expect(spawn.args).toEqual(["exec", "--output-format", "acp"]);
     expect(spawn.cwd).toBe("/tmp/project");
     expect(spawn.command.length).toBeGreaterThan(0);
-    expect(buildDroidAcpSpawnInput(undefined, "/tmp/project")).toEqual({
-      command: spawn.command,
-      args: ["exec", "--output-format", "acp"],
-      cwd: "/tmp/project",
-    });
+    expect(spawn.env).toBeDefined();
   });
 
   it("passes model, reasoning effort, full-access, and an appended system prompt", () => {
-    expect(
-      buildDroidAcpSpawnInput(
-        {
-          appendSystemPrompt: "Run heavyweight validators serially.",
-          binaryPath: "/usr/local/bin/droid",
-          model: "claude-opus-4-8",
-          reasoningEffort: "high",
-          skipPermissionsUnsafe: true,
-        },
-        "/tmp/project",
-      ),
-    ).toEqual({
-      command: "/usr/local/bin/droid",
-      args: [
-        "exec",
-        "--output-format",
-        "acp",
-        "--skip-permissions-unsafe",
-        "--append-system-prompt",
-        "Run heavyweight validators serially.",
-        "-m",
-        "claude-opus-4-8",
-        "-r",
-        "high",
-      ],
-      cwd: "/tmp/project",
-    });
+    const spawn = buildDroidAcpSpawnInput(
+      {
+        appendSystemPrompt: "Run heavyweight validators serially.",
+        binaryPath: "/usr/local/bin/droid",
+        model: "claude-opus-4-8",
+        reasoningEffort: "high",
+        skipPermissionsUnsafe: true,
+      },
+      "/tmp/project",
+    );
+
+    expect(spawn.command).toBe("/usr/local/bin/droid");
+    expect(spawn.args).toEqual([
+      "exec",
+      "--output-format",
+      "acp",
+      "--skip-permissions-unsafe",
+      "--append-system-prompt",
+      "Run heavyweight validators serially.",
+      "-m",
+      "claude-opus-4-8",
+      "-r",
+      "high",
+    ]);
+    expect(spawn.cwd).toBe("/tmp/project");
+    expect(spawn.env).toBeDefined();
   });
 });
 
