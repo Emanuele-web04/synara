@@ -32,6 +32,7 @@ import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
 const SOURCE = "codex-wham-usage";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
 type CodexAuth = { kind: "oauth"; accessToken: string; accountId?: string } | { kind: "api-key" };
@@ -326,11 +327,46 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           `Codex usage request failed (${result.status}).`,
         );
       }
-      return parseCodexUsage({
+      const snapshot = parseCodexUsage({
         json: result.json,
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       });
+
+      // If /wham/usage returned reset credit count but no per-credit details (no expiry),
+      // fetch from the dedicated /wham/rate-limit-reset-credits endpoint which returns the
+      // full credits array with expires_at / granted_at per credit.
+      if (
+        snapshot.rateLimitResetCredits &&
+        snapshot.rateLimitResetCredits.availableCount > 0 &&
+        !snapshot.rateLimitResetCredits.nextExpiresAt
+      ) {
+        try {
+          const creditsResult = await fetchJson({
+            url: RESET_CREDITS_URL,
+            headers: codexApiHeaders(auth),
+          });
+          if (creditsResult.ok) {
+            const supplemental = parseResetCredits(
+              (asRecord(creditsResult.json) ?? {})?.rate_limit_reset_credits,
+            );
+            if (supplemental && supplemental.nextExpiresAt) {
+              return {
+                ...snapshot,
+                rateLimitResetCredits: {
+                  ...snapshot.rateLimitResetCredits,
+                  ...supplemental,
+                  availableCount: snapshot.rateLimitResetCredits.availableCount,
+                },
+              };
+            }
+          }
+        } catch {
+          // Fall through — use the usage-endpoint snapshot as-is
+        }
+      }
+
+      return snapshot;
     } catch {
       return errorSnapshot("codex", ctx.nowMs, SOURCE, "Could not reach the Codex usage endpoint.");
     }
