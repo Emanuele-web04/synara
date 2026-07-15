@@ -48,7 +48,11 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  BROWSER_INTEGRATION_WAIT_MS,
+  createBrowserTestServerConfig,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
@@ -1289,7 +1293,7 @@ async function waitForElement<T extends Element>(
       expect(element, errorMessage).toBeTruthy();
     },
     {
-      timeout: 8_000,
+      timeout: BROWSER_INTEGRATION_WAIT_MS,
       interval: 16,
     },
   );
@@ -1310,7 +1314,7 @@ async function waitForURL(
       pathname = router.state.location.pathname;
       expect(predicate(pathname), errorMessage).toBe(true);
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
   );
   return pathname;
 }
@@ -1359,7 +1363,7 @@ async function waitForServerConfigToApply(): Promise<void> {
     () => {
       expect(wsRequests.some((request) => request._tag === WS_METHODS.serverGetConfig)).toBe(true);
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
   );
   await waitForLayout();
 }
@@ -1398,7 +1402,7 @@ async function dispatchModelCycleShortcutWhenReady(
     () => {
       expect(dispatchModelCycleShortcut(target, key).defaultPrevented).toBe(true);
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
   );
 }
 
@@ -1554,7 +1558,7 @@ async function measureUserRow(options: {
       expect(row, "Unable to locate targeted user message row.").toBeTruthy();
     },
     {
-      timeout: 8_000,
+      timeout: BROWSER_INTEGRATION_WAIT_MS,
       interval: 16,
     },
   );
@@ -1925,7 +1929,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const actionsLeft = overflowButton!.getBoundingClientRect().left;
           expect(titleRight).toBeLessThanOrEqual(actionsLeft + 1);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -1946,7 +1950,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(THREAD_TITLE);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -1994,7 +1998,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.querySelectorAll("img").length).toBeGreaterThanOrEqual(3);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await waitForImagesToLoad(document.body);
       await vi.waitFor(
@@ -2072,7 +2076,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       scrollContainer.scrollTo = originalScrollTo;
     } finally {
@@ -2101,7 +2105,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(composerEditor.textContent ?? "").toContain(prompt);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       wsRequests.length = 0;
@@ -2117,7 +2121,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           });
           expect(turnStartRequest).toBeTruthy();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       expect(wsRequests.some((request) => request._tag === WS_METHODS.automationCreate)).toBe(
@@ -2146,7 +2150,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       wsRequests.length = 0;
@@ -2170,7 +2174,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             schedule: { type: "interval", everySeconds: 15 },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await waitForLayout();
 
@@ -2202,7 +2206,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(composerEditor.textContent ?? "").toContain("could you say hi");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       wsRequests.length = 0;
@@ -2226,7 +2230,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             schedule: { type: "interval", everySeconds: 15 },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await waitForLayout();
 
@@ -2280,7 +2284,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       wsRequests.length = 0;
@@ -2332,7 +2336,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             schedule: { type: "interval", everySeconds: 15 },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await waitForLayout();
 
@@ -2376,7 +2380,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(composerEditor.textContent ?? "").toContain("say hi every 15 seconds");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       wsRequests.length = 0;
@@ -2492,7 +2496,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             editor: "vscode",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -2571,7 +2575,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await vi.waitFor(
@@ -2585,7 +2589,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             data: "bun run lint\r",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -2651,7 +2655,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -2703,7 +2707,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           ).find((button) => button.textContent?.trim() === "Plan");
           expect(planButton?.title).toContain("return to normal build mode");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       composerEditor.dispatchEvent(
@@ -2719,7 +2723,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(readInteractionMode()).toBe("default");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -2905,7 +2909,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(removedLabel);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const store = useComposerDraftStore.getState();
@@ -2919,7 +2923,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]).toBeUndefined();
           expect(document.body.textContent).not.toContain(removedLabel);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       useComposerDraftStore.getState().addTerminalContext(
@@ -2940,7 +2944,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain(addedLabel);
           expect(document.body.textContent).not.toContain(removedLabel);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -2973,7 +2977,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(expiredLabel);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const sendButton = await waitForSendButton();
@@ -3012,7 +3016,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(expiredLabel);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const sendButton = await waitForSendButton();
@@ -3027,7 +3031,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).not.toContain(expiredLabel);
           expect(document.body.textContent).toContain("yoowaddup");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3080,7 +3084,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("queue this follow-up");
           expect(document.body.textContent).toContain("Steer");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const queuedRow = await waitForElement(
@@ -3125,7 +3129,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
           expect(document.body.textContent).toContain("queue survives thread switch");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await mounted.router.navigate({
@@ -3139,7 +3143,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await mounted.router.navigate({
@@ -3154,7 +3158,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
           expect(document.body.textContent).toContain("queue survives thread switch");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3235,7 +3239,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(2);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const actionButtons = document.querySelectorAll<HTMLButtonElement>(
@@ -3271,7 +3275,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           // its accessible label/title, not in text content.
           expect(document.querySelector('[aria-label="Preview queued-image.png"]')).not.toBeNull();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3349,7 +3353,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             draftBeingTyped,
           );
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3441,7 +3445,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           // Queue drained.
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3556,7 +3560,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: "/repo/project/.worktrees/feature-keep-out",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await projectPickerTrigger.click();
@@ -3575,7 +3579,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID],
           ).toBeUndefined();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       expect(mounted.router.state.location.pathname).toBe(newThreadPath);
     } finally {
@@ -3652,7 +3656,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           ).toBeUndefined();
           expect(mounted.router.state.location.pathname).toBe(newThreadPath);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       // A superseded navigation resolves the older navigate() promise before the newer route has
@@ -3672,7 +3676,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(state.projectDraftThreadIdByProjectId[STUDIO_PROJECT_ID]).toBe(newThreadId);
           expect(state.projectDraftThreadIdByProjectId[HOME_PROJECT_ID]).toBeUndefined();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3723,7 +3727,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: null,
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {
@@ -3799,7 +3803,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: null,
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       await expect.element(page.getByTestId("project-picker-trigger")).toBeInTheDocument();
       await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
@@ -3909,7 +3913,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(projectCreateRequest).toBeDefined();
           expect(createdProjectId).not.toBeNull();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await vi.waitFor(
@@ -3921,7 +3925,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: null,
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       expect(mounted.router.state.location.pathname).toBe(newThreadPath);
     } finally {
@@ -4019,7 +4023,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(mounted.router.state.location.pathname).toBe(newThreadPath);
           expect(mounted.router.state.status).toBe("idle");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
@@ -4034,7 +4038,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             "worktree",
           );
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4071,7 +4075,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(mounted.router.state.location.pathname).toBe(newThreadPath);
           expect(mounted.router.state.status).toBe("idle");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
@@ -4088,14 +4092,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
             branch: "main",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       const composerEditor = await waitForComposerEditor();
       await vi.waitFor(
         () => {
           expect(composerEditor.textContent ?? "").toContain("Ship it");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const sendButton = await waitForSendButton();
@@ -4136,7 +4140,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             worktreePath: `/repo/.codex/worktrees/project/${String(createWorktreeRequest?.newBranch).replaceAll("/", "-")}`,
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4189,7 +4193,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(mounted.router.state.location.pathname).toBe(newThreadPath);
           expect(mounted.router.state.status).toBe("idle");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       const envPickerTrigger = await waitForEnvironmentModeButton("Local");
       envPickerTrigger.click();
@@ -4206,14 +4210,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
             branch: "main",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
       const composerEditor = await waitForComposerEditor();
       await vi.waitFor(
         () => {
           expect(composerEditor.textContent ?? "").toContain("Ship it with setup");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const sendButton = await waitForSendButton();
@@ -4480,7 +4484,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             activeProvider: "codex",
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await newThreadButton.click();
@@ -4603,7 +4607,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             ),
           ).toBe(true);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       useStore.getState().syncServerReadModel(addThreadToSnapshot(fixture.snapshot, newThreadId));
@@ -4617,7 +4621,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(terminalThreadRow).not.toBeNull();
           expect(terminalThreadRow?.textContent).toContain("New thread");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4746,7 +4750,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             },
           });
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4897,7 +4901,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain("deep hidden detail only after expand");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4932,7 +4936,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("Patch the shared checklist receiver");
           expect(document.body.textContent).toContain("1 background agent");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       const transcriptPane = document.querySelector<HTMLElement>("[data-chat-transcript-pane]");
@@ -4985,7 +4989,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("Patch the shared checklist receiver");
           expect(document.body.textContent).not.toContain("1 background agent");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -5005,7 +5009,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).not.toContain("3 out of 3 tasks completed");
           expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -5043,7 +5047,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
           ).toBeNull();
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -5062,7 +5066,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("Tool 6");
           expect(document.body.textContent).not.toContain("Tool 1");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       useStore
@@ -5090,7 +5094,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(transitionClone?.querySelector("[aria-hidden='true'][inert]")).not.toBeNull();
           expect(document.body.textContent).toContain("Tool 6");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       await new Promise<void>((resolve) => {
@@ -5107,7 +5111,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).not.toContain("Tool 1");
           expect(document.body.textContent).not.toContain("Tool 6");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();

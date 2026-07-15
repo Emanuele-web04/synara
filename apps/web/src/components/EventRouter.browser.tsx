@@ -32,7 +32,11 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
-import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
+import {
+  BROWSER_INTEGRATION_WAIT_MS,
+  createBrowserTestServerConfig,
+  createFullscreenTestHost,
+} from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspaceStore } from "../workspaceStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
@@ -297,7 +301,7 @@ async function mountApp(options?: {
         const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
         expect(useStore.getState().threadIds?.includes(expectedThreadId)).toBe(true);
       },
-      { timeout: 8_000, interval: 16 },
+      { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
     );
   } catch (cause) {
     await screen.unmount();
@@ -463,7 +467,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       sendThreadEventPush(firstAssistantChunk);
@@ -497,7 +501,7 @@ describe("EventRouter scoped orchestration sync", () => {
             ),
           ).toHaveLength(1);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -907,7 +911,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("buffered reply");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: BROWSER_INTEGRATION_WAIT_MS, interval: 16 },
       );
 
       sendThreadEventPush(bufferedEvent);
