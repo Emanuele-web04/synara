@@ -467,7 +467,7 @@ export default function ProjectScriptsControl({
                   onKeyDown={captureKeybinding}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Press a shortcut. Use <code>Backspace</code> to clear.
+                  按下快捷键。使用 <code>退格键</code> 清除。
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -497,7 +497,7 @@ export default function ProjectScriptsControl({
                 className="mr-auto"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
-                Delete
+                删除
               </Button>
             )}
             <Button
@@ -508,10 +508,10 @@ export default function ProjectScriptsControl({
                 setDialogOpen(false);
               }}
             >
-              Cancel
+              取消
             </Button>
             <Button form={addScriptFormId} type="submit" size="sm">
-              {isEditing ? "Save changes" : "Save action"}
+              {isEditing ? "保存更改" : "保存操作"}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -520,15 +520,15 @@ export default function ProjectScriptsControl({
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete action "{name}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogTitle>删除操作“{name}”？</AlertDialogTitle>
+            <AlertDialogDescription>此操作无法撤销。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
+              取消
             </AlertDialogClose>
             <Button variant="destructive" size="sm" onClick={confirmDeleteScript}>
-              Delete action
+              删除操作
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

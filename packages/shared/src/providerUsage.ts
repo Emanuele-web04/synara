@@ -65,11 +65,11 @@ export function isProviderUsageSupported(provider: string | null | undefined): b
 /** Panel title like "Codex usage"; falls back to a generic label for unknown providers. */
 export function providerUsageLabel(provider: string | null | undefined): string {
   const meta = lookupMeta(provider);
-  return meta ? `${meta.displayName} usage` : "Usage";
+  return meta ? `${meta.displayName} 用量` : "用量";
 }
 
 export function providerUsageDisplayName(provider: string | null | undefined): string {
-  return lookupMeta(provider)?.displayName ?? "Provider";
+  return lookupMeta(provider)?.displayName ?? "提供商";
 }
 
 export function providerUsageLearnMoreHref(provider: string | null | undefined): string | null {
@@ -80,7 +80,7 @@ export function providerUsageLearnMoreHref(provider: string | null | undefined):
 export function providerUsageNeedsAuthDetail(provider: string | null | undefined): string {
   const meta = lookupMeta(provider);
   if (!meta) {
-    return "Sign in with the provider CLI to see usage.";
+    return "请使用提供商 CLI 登录后查看用量。";
   }
-  return `Sign in with \`${meta.signInCommand}\` to see usage.`;
+  return `请使用 \`${meta.signInCommand}\` 登录后查看用量。`;
 }

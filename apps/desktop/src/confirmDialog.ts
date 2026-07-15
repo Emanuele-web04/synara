@@ -13,7 +13,7 @@ export async function showDesktopConfirmDialog(
 
   const options = {
     type: "question" as const,
-    buttons: ["No", "Yes"],
+    buttons: ["否", "是"],
     defaultId: CONFIRM_BUTTON_INDEX,
     cancelId: 0,
     noLink: true,

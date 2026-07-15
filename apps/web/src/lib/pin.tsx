@@ -12,7 +12,15 @@ import { PinFilledIcon, PinIcon } from "./icons";
 
 /** Accessible verb for a pin toggle: "Pin <target>" when unpinned, "Unpin <target>" when pinned. */
 export function pinActionLabel(target: string, pinned: boolean): string {
-  return `${pinned ? "Unpin" : "Pin"} ${target}`;
+  const localizedTarget =
+    target === "thread"
+      ? "对话"
+      : target === "message"
+        ? "消息"
+        : target === "project"
+          ? "项目"
+          : target;
+  return `${pinned ? "取消固定" : "固定"}${localizedTarget}`;
 }
 
 // State-reflecting pin glyph: the solid fill-set pin once pinned, the outline pin

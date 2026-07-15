@@ -104,10 +104,10 @@ function formatRunTimestamp(value: string | null): string {
     minute: "2-digit",
   }).format(date);
   const dayDelta = Math.round((startOfDay(date) - startOfDay(new Date())) / 86_400_000);
-  if (dayDelta === 0) return `Today at ${time}`;
-  if (dayDelta === 1) return `Tomorrow at ${time}`;
-  if (dayDelta === -1) return `Yesterday at ${time}`;
-  return new Intl.DateTimeFormat(undefined, {
+  if (dayDelta === 0) return `今天 ${time}`;
+  if (dayDelta === 1) return `明天 ${time}`;
+  if (dayDelta === -1) return `昨天 ${time}`;
+  return new Intl.DateTimeFormat("zh-CN", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -124,32 +124,32 @@ function automationStatusDisplay(definition: AutomationDefinition): {
 } {
   switch (automationLifecycleState(definition)) {
     case "active":
-      return { label: "Active", dotClassName: "bg-emerald-500" };
+      return { label: "运行中", dotClassName: "bg-emerald-500" };
     case "paused":
-      return { label: "Paused", dotClassName: "bg-amber-500" };
+      return { label: "已暂停", dotClassName: "bg-amber-500" };
     case "scheduled":
-      return { label: "Scheduled", dotClassName: "bg-sky-500" };
+      return { label: "已计划", dotClassName: "bg-sky-500" };
     case "done":
-      return { label: "Done", dotClassName: "bg-muted-foreground" };
+      return { label: "已完成", dotClassName: "bg-muted-foreground" };
   }
 }
 
 type SelectOption = { readonly value: string; readonly label: string };
 
 const WORKTREE_OPTIONS: readonly SelectOption[] = [
-  { value: "auto", label: "Auto" },
-  { value: "local", label: "Local" },
-  { value: "worktree", label: "Worktree" },
+  { value: "auto", label: "自动" },
+  { value: "local", label: "本地" },
+  { value: "worktree", label: "工作树" },
 ];
 
 const INTERVAL_PRESETS: readonly SelectOption[] = [
-  { value: "900", label: "Every 15 min" },
-  { value: "1800", label: "Every 30 min" },
-  { value: "3600", label: "Every hour" },
-  { value: "7200", label: "Every 2 hours" },
-  { value: "21600", label: "Every 6 hours" },
-  { value: "43200", label: "Every 12 hours" },
-  { value: "86400", label: "Every 24 hours" },
+  { value: "900", label: "每 15 分钟" },
+  { value: "1800", label: "每 30 分钟" },
+  { value: "3600", label: "每小时" },
+  { value: "7200", label: "每 2 小时" },
+  { value: "21600", label: "每 6 小时" },
+  { value: "43200", label: "每 12 小时" },
+  { value: "86400", label: "每 24 小时" },
 ];
 
 function intervalOptions(current: number): readonly SelectOption[] {
@@ -157,7 +157,7 @@ function intervalOptions(current: number): readonly SelectOption[] {
     return INTERVAL_PRESETS;
   }
   const label =
-    current >= 60 && current % 60 === 0 ? `Every ${current / 60} min` : `Every ${current} sec`;
+    current >= 60 && current % 60 === 0 ? `每 ${current / 60} 分钟` : `每 ${current} 秒`;
   return [{ value: String(current), label }, ...INTERVAL_PRESETS];
 }
 
@@ -219,7 +219,7 @@ function AutomationDetailView() {
               className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
             >
               <SidebarHeaderNavigationControls />
-              <h1 className="truncate font-heading text-sm font-medium">Automations</h1>
+              <h1 className="truncate font-heading text-sm font-medium">自动化工作流</h1>
             </div>
           </header>
           <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -350,7 +350,7 @@ function AutomationDetailView() {
   };
 
   const deleteDefinition = async () => {
-    const confirmed = await ensureNativeApi().dialogs.confirm(`Delete "${definition.name}"?`);
+    const confirmed = await ensureNativeApi().dialogs.confirm(`删除“${definition.name}”？`);
     if (!confirmed) return;
     deleteMutation.mutate(definition, {
       onSuccess: () => void navigate({ to: "/automations" }),
@@ -524,7 +524,7 @@ function AutomationDetailView() {
                         <CentralIcon
                           name="info-simple"
                           className="size-3 text-muted-foreground/60"
-                          aria-label="Where the automation runs: a worktree, a local checkout, or auto"
+                          aria-label="自动化工作流的运行位置：工作树、本地检出或自动选择"
                         />
                       </>
                     }
@@ -574,7 +574,7 @@ function AutomationDetailView() {
                         {resolveThreadPickerTitle(sourceThread.title)}
                       </button>
                     ) : (
-                      "Thread unavailable"
+                      "对话不可用"
                     )}
                   </DetailRow>
                 ) : null}
@@ -705,10 +705,10 @@ function AutomationDetailView() {
                   onChange={applyModelSelection}
                 />
                 <DetailRow label="Mode">
-                  {definition.mode === "heartbeat" ? "Heartbeat" : "Standalone"}
+                  {definition.mode === "heartbeat" ? "心跳" : "独立运行"}
                 </DetailRow>
                 {definition.mode === "heartbeat" ? (
-                  <EditRow label="Stop when">
+                  <EditRow label="停止条件">
                     <InlineCommitTextInput
                       value={stopWhen}
                       placeholder="Never"
@@ -731,9 +731,7 @@ function AutomationDetailView() {
                 </EditRow>
                 {definition.mode === "heartbeat" ? (
                   <DetailRow label="Thread">
-                    {targetThread
-                      ? resolveThreadPickerTitle(targetThread.title)
-                      : "Thread unavailable"}
+                    {targetThread ? resolveThreadPickerTitle(targetThread.title) : "对话不可用"}
                   </DetailRow>
                 ) : null}
               </DetailGroup>
@@ -896,7 +894,7 @@ function InlineToggle({
       onClick={() => onChange(!value)}
       className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
     >
-      {value ? "On" : "Off"}
+      {value ? "开" : "关"}
     </button>
   );
 }
@@ -1090,7 +1088,7 @@ function RunRow({
             }}
             className="text-muted-foreground transition-colors hover:text-foreground"
           >
-            {unread ? "Read" : "Unread"}
+            {unread ? "已读" : "未读"}
           </button>
           <button
             type="button"
@@ -1101,11 +1099,11 @@ function RunRow({
             title={
               run.permissionSnapshot.worktreeMode === "local"
                 ? undefined
-                : "Archiving does not remove generated worktrees or branches."
+                : "归档不会移除已生成的工作树或分支。"
             }
             className="text-muted-foreground transition-colors hover:text-foreground"
           >
-            {archived ? "Unarchive" : "Archive"}
+            {archived ? "取消归档" : "归档"}
           </button>
         </div>
       ) : null}

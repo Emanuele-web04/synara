@@ -1844,16 +1844,16 @@ function deriveCommandActionDisplay(
   switch (normalizeCommandActionType(action.type)) {
     case "read":
     case "readfile":
-      return makeCommandActionDisplay(running ? "Reading" : "Read", commandActionTarget(action));
+      return makeCommandActionDisplay(running ? "正在读取" : "已读取", commandActionTarget(action));
     case "search":
     case "find":
       return makeCommandActionDisplay(
-        running ? "Searching" : "Searched",
+        running ? "正在搜索" : "已搜索",
         commandActionSearchPreview(action),
       );
     case "listfiles":
       return makeCommandActionDisplay(
-        running ? "Listing" : "Listed",
+        running ? "正在列出" : "已列出",
         commandActionListPreview(action),
       );
     default:
@@ -1876,13 +1876,13 @@ function commandActionSearchPreview(action: CommandAction): string | undefined {
   const query = action.query ?? action.name;
   const path = compactWorkLogPath(action.path);
   if (query && path) {
-    return `for ${query} in ${path}`;
+    return `“${query}”（${path}）`;
   }
   if (query) {
-    return `for ${query}`;
+    return `“${query}”`;
   }
   if (path) {
-    return `in ${path}`;
+    return path;
   }
   return commandActionTarget(action);
 }
@@ -1896,10 +1896,10 @@ function compactWorkLogPath(value: string | undefined): string | null {
     return null;
   }
   if (value === ".") {
-    return "current directory";
+    return "当前目录";
   }
   if (value === "..") {
-    return "parent directory";
+    return "上级目录";
   }
   const parts = value.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 2) {

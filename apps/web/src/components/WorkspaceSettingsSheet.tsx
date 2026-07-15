@@ -2,7 +2,6 @@
 // Purpose: Render per-workspace terminal layout settings with visual preset previews.
 // Layer: Workspace UI controls
 
-import { pluralize } from "@synara/shared/text";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -96,18 +95,16 @@ export default function WorkspaceSettingsSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetPopup side="right" className="w-[min(92vw,420px)] max-w-[420px]" keepMounted>
         <SheetHeader>
-          <SheetTitle>Workspace settings</SheetTitle>
-          <SheetDescription>
-            Choose how terminals are arranged inside {props.workspaceTitle}.
-          </SheetDescription>
+          <SheetTitle>工作区设置</SheetTitle>
+          <SheetDescription>选择 {props.workspaceTitle} 中终端的排列方式。</SheetDescription>
         </SheetHeader>
 
         <SheetPanel className="space-y-6">
           <section className="space-y-3">
             <div>
-              <div className="text-sm font-medium text-foreground">Layout preset</div>
+              <div className="text-sm font-medium text-foreground">布局预设</div>
               <div className="mt-1 text-sm text-muted-foreground">
-                Changes apply immediately to this workspace. Extra terminals stay available as tabs.
+                更改会立即应用到此工作区；多余的终端仍会保留为标签页。
               </div>
             </div>
 
@@ -139,7 +136,7 @@ export default function WorkspaceSettingsSheet(props: {
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <div className="text-sm font-medium text-foreground">{preset.title}</div>
                       <div className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                        {preset.slotCount} {pluralize(preset.slotCount, "pane")}
+                        {preset.slotCount} 个窗格
                       </div>
                     </div>
                     <div className="mt-1 text-xs leading-5 text-muted-foreground">

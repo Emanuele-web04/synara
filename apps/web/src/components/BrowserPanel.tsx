@@ -453,14 +453,14 @@ function BrowserLocalServersHome({
             {loading ? (
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
-                <p className="text-base font-semibold text-white">Scanning local servers</p>
-                <p className="mt-2 text-sm text-white/35">Checking localhost ports</p>
+                <p className="text-base font-semibold text-white">正在扫描本地服务器</p>
+                <p className="mt-2 text-sm text-white/35">正在检查 localhost 端口</p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
-                <p className="text-base font-semibold text-white">No local servers</p>
-                <p className="mt-2 text-sm text-white/35">Try another browser URL</p>
+                <p className="text-base font-semibold text-white">没有本地服务器</p>
+                <p className="mt-2 text-sm text-white/35">请尝试其他浏览器地址</p>
               </>
             )}
           </div>

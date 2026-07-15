@@ -369,10 +369,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, [onResetToHome]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
-  const addProjectLabel = isProjectSelectionMode ? "New project" : "Add new project";
-  const loadingAddProjectLabel = isProjectSelectionMode
-    ? "Adding project..."
-    : "Opening folder picker...";
+  const addProjectLabel = isProjectSelectionMode ? "新建项目" : "添加新项目";
+  const loadingAddProjectLabel = isProjectSelectionMode ? "正在添加项目…" : "正在打开文件夹选择器…";
 
   const renderActiveFolderOption = (folder: ActiveFolderOption, index: number) => {
     const selected = isProjectSelectionMode
@@ -432,7 +430,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       />
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder="Search projects"
+          searchPlaceholder="搜索项目"
           query={query}
           onQueryChange={setQuery}
           footer={
@@ -455,7 +453,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <span className="truncate">Don&apos;t work in a project</span>
+                  <span className="truncate">不在项目中工作</span>
                 </button>
               ) : null}
               {errorMessage ? (

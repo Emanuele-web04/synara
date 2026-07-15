@@ -69,7 +69,7 @@ function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
 }
 
 function triageRunLabel(run: AutomationRun): string {
-  if (run.status === "succeeded" && run.result?.unread) return "New result";
+  if (run.status === "succeeded" && run.result?.unread) return "有新结果";
   return runStatusLabel(run.status);
 }
 
@@ -142,7 +142,7 @@ function rowMeta(definition: AutomationDefinition, latestRun: AutomationRun | nu
   if (isLiveRun(latestRun)) return runStatusLabel(latestRun.status);
   if (latestRun && isTriageRun(latestRun)) return triageRunLabel(latestRun);
   if (!definition.enabled) {
-    return automationLifecycleState(definition) === "done" ? "Done" : "Paused";
+    return automationLifecycleState(definition) === "done" ? "已完成" : "已暂停";
   }
   return formatCadence(definition.schedule);
 }
@@ -235,7 +235,7 @@ function AutomationsRouteView() {
   };
 
   const deleteDefinition = async (definition: AutomationDefinition) => {
-    const confirmed = await ensureNativeApi().dialogs.confirm(`Delete "${definition.name}"?`);
+    const confirmed = await ensureNativeApi().dialogs.confirm(`删除“${definition.name}”？`);
     if (!confirmed) return;
     deleteMutation.mutate(definition);
   };
@@ -307,7 +307,7 @@ function AutomationsRouteView() {
   const renderTriageRow = (run: AutomationRun) => {
     const definition = data.definitions.find((entry) => entry.id === run.automationId);
     const summary = runResultSummary(run);
-    const target = definition ? subtitle(definition) : "Saved run";
+    const target = definition ? subtitle(definition) : "已保存的运行记录";
     return (
       <AutomationListRow
         key={run.id}
@@ -324,7 +324,7 @@ function AutomationsRouteView() {
               : undefined
         }
         leading={<RunStatusIndicator status={run.status} />}
-        title={definition?.name ?? "Automation run"}
+        title={definition?.name ?? "自动化运行"}
         detail={summary || target}
         meta={formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
         trailing={

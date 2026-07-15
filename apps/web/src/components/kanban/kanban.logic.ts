@@ -18,12 +18,12 @@ import type { Project, SidebarThreadSummary } from "../../types";
 export type KanbanColumnKey = "draft" | "inProgress" | "done";
 
 export const KANBAN_COLUMN_LABELS: Record<KanbanColumnKey, string> = {
-  draft: "Draft",
-  inProgress: "In Progress",
-  done: "Done",
+  draft: "草稿",
+  inProgress: "进行中",
+  done: "已完成",
 };
 
-export const KANBAN_FALLBACK_DRAFT_TITLE = "New thread";
+export const KANBAN_FALLBACK_DRAFT_TITLE = "新建对话";
 
 /** Pending composer content for one thread, projected from the composer draft store. */
 export interface KanbanComposerDraftSnapshot {

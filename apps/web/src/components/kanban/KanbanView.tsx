@@ -185,16 +185,16 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
                   size="icon-xs"
                   variant="ghost"
                   onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
+                  aria-label="返回全部项目"
                 >
                   <ArrowLeftIcon className="size-3.5" />
                 </Button>
               ) : null}
               <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground">
-                {projectBoard ? projectBoard.projectName : "Kanban"}
+                {projectBoard ? projectBoard.projectName : "看板"}
               </h2>
               <span className="shrink-0 text-xs text-muted-foreground/70">
-                {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+                {projectBoard ? projectBoard.totalCount : board.totalCount} 个任务
               </span>
               <Tooltip>
                 <TooltipTrigger

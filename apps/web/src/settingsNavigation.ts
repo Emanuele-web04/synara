@@ -99,7 +99,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   {
     id: "appsnap",
     group: "app",
-    label: "AppSnap",
+    label: "应用截图",
     description: "Snap another app's window straight into a task with one key chord.",
     icon: "screen-capture",
     eyebrow: "Screen capture",

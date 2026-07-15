@@ -114,12 +114,8 @@ export function useThreadWorkspaceHandoff(input: {
       } catch (error) {
         toastManager.add({
           type: "error",
-          title:
-            targetMode === "worktree"
-              ? "Could not hand off to worktree"
-              : "Could not hand off to local",
-          description:
-            error instanceof Error ? error.message : "An error occurred during the handoff.",
+          title: targetMode === "worktree" ? "无法交接到工作树" : "无法交接到本地",
+          description: error instanceof Error ? error.message : "交接过程中发生错误。",
         });
         return false;
       }

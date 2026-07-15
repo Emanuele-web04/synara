@@ -9,10 +9,12 @@ import { appHistory } from "./appNavigation";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 import { isElectron } from "./env";
+import { installZhCnUiLocalization } from "./localization/zhCN";
 
 const router = getRouter(appHistory);
 
 document.title = APP_DISPLAY_NAME;
+installZhCnUiLocalization();
 
 if (isElectron) {
   document.documentElement.dataset.runtime = "electron";

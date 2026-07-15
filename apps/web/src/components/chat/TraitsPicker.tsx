@@ -119,7 +119,7 @@ export function resolveTraitsTriggerSummary(options: {
     : effortLabel
       ? effortLabel
       : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
+        ? `思考${thinkingEnabled ? "已开启" : "已关闭"}`
         : isFastOnlyControl
           ? fastModeEnabled
             ? "Fast"
@@ -336,7 +336,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     <>
       {thinkingEnabled !== null ? (
         <TraitRadioSection
-          label="Thinking"
+          label="思考"
           value={thinkingEnabled ? "on" : "off"}
           options={[
             { value: "on", label: "On (default)" },
@@ -372,7 +372,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             note={
               ultrathinkPromptControlled ? (
                 <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Remove Ultrathink from the prompt to change effort.
+                  从提示词中移除 Ultrathink 后才能更改推理强度。
                 </div>
               ) : undefined
             }

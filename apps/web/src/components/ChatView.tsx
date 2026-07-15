@@ -3608,7 +3608,7 @@ export default function ChatView({
         : [],
     [activeThread, providerStatuses],
   );
-  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
+  const handoffActionLabel = activeThread ? "交接对话" : "创建交接对话";
   const activeProviderStatus = useMemo(
     () => findProviderStatus(providerStatuses, selectedProvider),
     [selectedProvider, providerStatuses],
@@ -6457,11 +6457,8 @@ export default function ChatView({
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
+          title: "无法创建交接对话",
+          description: error instanceof Error ? error.message : "创建交接对话时发生错误。",
         });
       }
     },
@@ -10540,7 +10537,7 @@ export default function ChatView({
                             : hasLiveTurn
                               ? "Ask for follow-up changes"
                               : phase === "disconnected"
-                                ? "Ask for follow-up changes or attach images"
+                                ? "提出后续修改，或附加图片"
                                 : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
@@ -10910,7 +10907,7 @@ export default function ChatView({
               : surfaceMode === "split" && isFocusedPane && onMaximizeSurface
                 ? {
                     kind: "maximize",
-                    label: "Expand this chat",
+                    label: "展开此对话",
                     shortcutLabel: null,
                     onClick: onMaximizeSurface,
                   }
@@ -10934,7 +10931,7 @@ export default function ChatView({
           changeThreadAction={
             surfaceMode === "split" && isFocusedPane && onChangeThreadInSplitPane
               ? {
-                  label: "Change thread",
+                  label: "切换对话",
                   onClick: onChangeThreadInSplitPane,
                 }
               : null
@@ -11038,11 +11035,11 @@ export default function ChatView({
                         "What should we work on?"
                       ) : (
                         <>
-                          What should we do in{" "}
+                          想在{" "}
                           <span className={COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}>
-                            {activeProjectDisplayName ?? "this folder"}
+                            {activeProjectDisplayName ?? "此文件夹"}
                           </span>
-                          ?
+                          构建什么？
                         </>
                       )}
                     </h2>

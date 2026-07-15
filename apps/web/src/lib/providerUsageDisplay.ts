@@ -84,7 +84,7 @@ export function providerUsageProgressTrackProps(
   row: ProviderUsageDisplayRow,
 ): ProviderUsageProgressTrackProps {
   return {
-    label: `${row.label} remaining`,
+    label: `${row.label} 剩余额度`,
     remainingPercent: row.remainingPercent,
     markerPercent: row.markerPercent,
     fillClassName: providerUsageToneClassName(row.remainingTone),
@@ -117,9 +117,10 @@ export function deriveProviderUsageDisplayRow(row: VisibleRateLimitRow): Provide
 
   return {
     ...row,
+    label: row.label === "Weekly" ? "每周" : row.label,
     remainingPercent,
     remainingLabel,
-    leftText: `${remainingLabel} left`,
+    leftText: `剩余 ${remainingLabel}`,
     resetText: row.resetsAt ? formatRateLimitResetCountdown(row.resetsAt) : null,
     pace,
     markerPercent: pace ? clampPercent(pace.expectedRemainingPercent) : null,

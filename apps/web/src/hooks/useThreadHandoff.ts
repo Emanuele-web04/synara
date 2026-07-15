@@ -39,7 +39,7 @@ export function useThreadHandoff() {
 
       const project = projects.find((entry) => entry.id === thread.projectId);
       if (!project) {
-        throw new Error("Project not found for handoff thread.");
+        throw new Error("找不到交接对话所属的项目。");
       }
 
       if (!canCreateThreadHandoff({ thread })) {
@@ -50,7 +50,7 @@ export function useThreadHandoff() {
           targetProvider,
         )
       ) {
-        throw new Error("This handoff target is not available for the current thread.");
+        throw new Error("当前对话无法交接到该目标。");
       }
       const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: targetProvider,

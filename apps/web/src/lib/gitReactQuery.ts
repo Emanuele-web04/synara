@@ -509,7 +509,7 @@ export function gitHandoffThreadMutationOptions(input: {
     cwd: input.cwd,
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.handoffThread(input.cwd),
-    unavailableMessage: "Git handoff is unavailable.",
+    unavailableMessage: "Git 交接不可用。",
     run: (api, cwd, request) => api.git.handoffThread({ cwd, ...request }),
   });
 }

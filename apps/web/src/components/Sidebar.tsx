@@ -3025,10 +3025,10 @@ export default function Sidebar() {
         canDeleteWorktree &&
         (await api.dialogs.confirm(
           [
-            "This thread is the only one linked to this worktree:",
+            "此对话是唯一关联到下列工作树的对话：",
             displayWorktreePath ?? orphanedWorktreePath,
             "",
-            "Delete the worktree too?",
+            "同时删除该工作树吗？",
           ].join("\n"),
         ));
 
@@ -3169,11 +3169,8 @@ export default function Sidebar() {
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
+          title: "无法创建交接对话",
+          description: error instanceof Error ? error.message : "创建交接对话时发生错误。",
         });
       }
     },
@@ -3187,8 +3184,8 @@ export default function Sidebar() {
       if (appSettings.confirmThreadDelete) {
         const api = readNativeApi();
         const confirmationMessage = [
-          `Delete thread "${thread.title}"?`,
-          "This permanently clears conversation history for this thread.",
+          `删除对话“${thread.title}”？`,
+          "这会永久清除此对话的聊天记录。",
         ].join("\n");
         const confirmed = api
           ? await api.dialogs.confirm(confirmationMessage)
@@ -3375,8 +3372,8 @@ export default function Sidebar() {
       if (appSettings.confirmThreadArchive) {
         const api = readNativeApi();
         const confirmationMessage = [
-          `Archive thread "${thread.title}"?`,
-          "Archived threads are hidden from the sidebar but can be restored later.",
+          `归档对话“${thread.title}”？`,
+          "已归档的对话会从侧边栏隐藏，之后仍可恢复。",
         ].join("\n");
         const confirmed = api
           ? await api.dialogs.confirm(confirmationMessage)
@@ -3433,14 +3430,11 @@ export default function Sidebar() {
       // `appSettings.confirmThreadArchive` (default `false`) is scoped to
       // single-thread archiving where the user explicitly picked one row.
       const archiveLines = [
-        `Archive ${archivableThreads.length} ${pluralize(archivableThreads.length, "thread")} in "${project.name}"?`,
-        "Archived threads are hidden from the sidebar but can be restored later.",
+        `归档“${project.name}”中的 ${archivableThreads.length} 个对话？`,
+        "已归档的对话会从侧边栏隐藏，之后仍可恢复。",
       ];
       if (runningCount > 0) {
-        archiveLines.push(
-          "",
-          `${runningCount} running ${pluralize(runningCount, "thread is", "threads are")} currently active and will be skipped.`,
-        );
+        archiveLines.push("", `${runningCount} 个对话正在运行，将被跳过。`);
       }
       const archiveConfirmed = api
         ? await api.dialogs.confirm(archiveLines.join("\n"))
@@ -3543,8 +3537,8 @@ export default function Sidebar() {
       const deleteConfirmationMessage =
         options?.confirmMessage === undefined
           ? [
-              `Delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in "${project.name}"?`,
-              "This permanently clears conversation history for these threads.",
+              `删除“${project.name}”中的 ${projectThreads.length} 个对话？`,
+              "这会永久清除这些对话的聊天记录。",
             ].join("\n")
           : options.confirmMessage;
       if (deleteConfirmationMessage !== null) {
@@ -3653,7 +3647,7 @@ export default function Sidebar() {
         : [];
       const handoffItems = handoffTargets.map((provider, index) => ({
         id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+        label: `交接给 ${PROVIDER_DISPLAY_NAMES[provider]}`,
         separatorBefore: index === 0,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
@@ -3866,10 +3860,7 @@ export default function Sidebar() {
       if (clicked === "archive") {
         if (appSettings.confirmThreadArchive) {
           const confirmed = await api.dialogs.confirm(
-            [
-              `Archive ${count} ${pluralize(count, "thread")}?`,
-              "Archived threads are hidden from the sidebar but can be restored later.",
-            ].join("\n"),
+            [`归档 ${count} 个对话？`, "已归档的对话会从侧边栏隐藏，之后仍可恢复。"].join("\n"),
           );
           if (!confirmed) return;
         }
@@ -3885,10 +3876,7 @@ export default function Sidebar() {
 
       if (appSettings.confirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
-          [
-            `Delete ${count} ${pluralize(count, "thread")}?`,
-            "This permanently clears conversation history for these threads.",
-          ].join("\n"),
+          [`删除 ${count} 个对话？`, "这会永久清除这些对话的聊天记录。"].join("\n"),
         );
         if (!confirmed) return;
       }
@@ -4143,10 +4131,10 @@ export default function Sidebar() {
       const confirmed = await api.dialogs.confirm(
         projectThreads.length > 0
           ? [
-              `Remove project "${project.name}"?`,
-              `This will delete ${projectThreads.length} ${pluralize(projectThreads.length, "thread")} in this folder and remove the project.`,
+              `移除项目“${project.name}”？`,
+              `这会删除该文件夹中的 ${projectThreads.length} 个对话，并移除项目。`,
             ].join("\n")
-          : `Remove project "${project.name}"?`,
+          : `移除项目“${project.name}”？`,
       );
       if (!confirmed) return;
 
@@ -7514,7 +7502,7 @@ export default function Sidebar() {
                   }
                 >
                   <ProjectContextMenuIcon icon={ArchiveIcon} />
-                  <span>Archive threads</span>
+                  <span>归档对话</span>
                 </MenuItem>
               ) : null}
               {projectContextMenuHasAnyThreads ? (
@@ -7528,7 +7516,7 @@ export default function Sidebar() {
                   }
                 >
                   <ProjectContextMenuIcon icon={Trash2} />
-                  <span>Delete threads</span>
+                  <span>删除对话</span>
                 </MenuItem>
               ) : null}
               <MenuSeparator />
@@ -7539,7 +7527,7 @@ export default function Sidebar() {
                 }
               >
                 <ProjectContextMenuIcon icon={XIcon} />
-                <span>Remove</span>
+                <span>移除</span>
               </MenuItem>
             </MenuGroup>
           </ComposerPickerMenuPopup>

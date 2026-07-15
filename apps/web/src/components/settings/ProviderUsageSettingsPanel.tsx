@@ -46,13 +46,13 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   switch (status) {
     case "needs-auth":
       return {
-        label: "Not signed in",
+        label: "未登录",
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
-      return { label: "Unsupported", className: "bg-muted text-muted-foreground" };
+      return { label: "不支持", className: "bg-muted text-muted-foreground" };
     case "error":
-      return { label: "Unavailable", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
+      return { label: "不可用", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
     default:
       return null;
   }
@@ -129,7 +129,7 @@ function ProviderUsageCard({
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {status === "ok"
-              ? "No usage data reported yet."
+              ? "尚未报告用量数据。"
               : (snapshot.detail ?? providerUsageNeedsAuthDetail(provider))}
           </p>
         )}
@@ -210,13 +210,13 @@ export function ProviderUsageSettingsPanel() {
           onClick={() => refreshMutation.mutate()}
         >
           <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-          Refresh
+          刷新
         </Button>
       </div>
 
       {showInitialLoading ? (
         <SettingsCard>
-          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
+          <div className="px-4 py-3.5 text-xs text-muted-foreground">正在加载提供商用量…</div>
         </SettingsCard>
       ) : (
         <div className="flex flex-col gap-3">

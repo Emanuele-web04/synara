@@ -38,9 +38,9 @@ function formatEnvironmentLabel(
   envState: ResolvedThreadWorkspaceState,
 ): string {
   if (envMode === "local") {
-    return "Local";
+    return "本地";
   }
-  return envState === "worktree-pending" ? "New worktree (pending)" : "Worktree";
+  return envState === "worktree-pending" ? "新工作树（等待中）" : "工作树";
 }
 
 export function ComposerSlashStatusDialog(props: {
@@ -80,7 +80,7 @@ export function ComposerSlashStatusDialog(props: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Session Status</DialogTitle>
+          <DialogTitle>会话状态</DialogTitle>
           <DialogDescription>
             Runtime controls and local thread state for the active composer.
           </DialogDescription>
@@ -88,45 +88,45 @@ export function ComposerSlashStatusDialog(props: {
         <DialogPanel className="space-y-4">
           <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-sm sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Model</p>
+              <p className="text-xs text-muted-foreground">模型</p>
               <p className="font-medium text-foreground">{selectedModel}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Fast Mode</p>
-              <p className="font-medium text-foreground">{fastModeEnabled ? "On" : "Off"}</p>
+              <p className="text-xs text-muted-foreground">快速模式</p>
+              <p className="font-medium text-foreground">{fastModeEnabled ? "开" : "关"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Reasoning</p>
-              <p className="font-medium text-foreground">{selectedPromptEffort ?? "Default"}</p>
+              <p className="text-xs text-muted-foreground">推理强度</p>
+              <p className="font-medium text-foreground">{selectedPromptEffort ?? "默认"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Mode</p>
+              <p className="text-xs text-muted-foreground">模式</p>
               <p className="font-medium text-foreground">
-                {interactionMode === "plan" ? "Plan" : "Default"}
+                {interactionMode === "plan" ? "计划" : "默认"}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Environment</p>
+              <p className="text-xs text-muted-foreground">环境</p>
               <p className="font-medium text-foreground">
                 {formatEnvironmentLabel(envMode, envState)}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Branch</p>
-              <p className="font-medium text-foreground">{branch ?? "Unknown"}</p>
+              <p className="text-xs text-muted-foreground">分支</p>
+              <p className="font-medium text-foreground">{branch ?? "未知"}</p>
             </div>
           </div>
 
           <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs text-muted-foreground">Context Window</p>
+                <p className="text-xs text-muted-foreground">上下文窗口</p>
                 <p className="text-sm text-muted-foreground">
                   Latest usage reported by the active thread.
                 </p>
                 {pendingContextWindowLabel ? (
                   <p className="text-sm text-muted-foreground">
-                    Current session: {activeContextWindowLabel ?? "Unknown"}. Next turn:{" "}
+                    当前会话：{activeContextWindowLabel ?? "未知"}。下一轮：{" "}
                     {pendingContextWindowLabel}.
                   </p>
                 ) : null}
@@ -143,29 +143,27 @@ export function ComposerSlashStatusDialog(props: {
             {contextWindow ? (
               <div className="grid gap-3 text-sm sm:grid-cols-2">
                 <div>
-                  <p className="text-muted-foreground">Used</p>
+                  <p className="text-muted-foreground">已使用</p>
                   <p className="font-medium text-foreground">
                     {formatContextWindowTokens(contextWindow.usedTokens)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Remaining</p>
+                  <p className="text-muted-foreground">剩余</p>
                   <p className="font-medium text-foreground">
                     {formatContextWindowTokens(contextWindow.remainingTokens)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Window</p>
+                  <p className="text-muted-foreground">窗口</p>
                   <p className="font-medium text-foreground">
                     {formatContextWindowTokens(contextWindow.maxTokens)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Cost</p>
+                  <p className="text-muted-foreground">费用</p>
                   <p className="font-medium text-foreground">
-                    {cumulativeCostUsd !== null
-                      ? formatCostUsd(cumulativeCostUsd)
-                      : "Not available"}
+                    {cumulativeCostUsd !== null ? formatCostUsd(cumulativeCostUsd) : "不可用"}
                   </p>
                 </div>
               </div>
@@ -177,7 +175,7 @@ export function ComposerSlashStatusDialog(props: {
           </div>
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">
-            <p className="text-xs text-muted-foreground">Rate Limits</p>
+            <p className="text-xs text-muted-foreground">速率限制</p>
             {rateLimitStatus ? (
               <p className="text-sm text-foreground">{formatRateLimitMessage(rateLimitStatus)}</p>
             ) : (

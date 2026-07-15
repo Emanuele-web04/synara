@@ -368,22 +368,22 @@ export function formatRateLimitResetCountdown(resetsAt: string): string {
   }
   const diffMs = resetMs - Date.now();
   if (diffMs <= 0) {
-    return "Resets soon";
+    return "即将重置";
   }
   const totalMinutes = Math.floor(diffMs / 60_000);
   const days = Math.floor(totalMinutes / 1_440);
   const hours = Math.floor((totalMinutes % 1_440) / 60);
   const minutes = totalMinutes % 60;
   if (days > 0) {
-    return `Resets in ${days}d ${hours}h`;
+    return `${days} 天 ${hours} 小时后重置`;
   }
   if (hours > 0) {
-    return `Resets in ${hours}h ${minutes}m`;
+    return `${hours} 小时 ${minutes} 分钟后重置`;
   }
   if (minutes > 0) {
-    return `Resets in ${minutes}m`;
+    return `${minutes} 分钟后重置`;
   }
-  return "Resets soon";
+  return "即将重置";
 }
 
 export function formatRateLimitResetTime(resetsAt: string): string {

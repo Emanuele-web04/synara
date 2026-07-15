@@ -314,7 +314,7 @@ export function buildNotificationSettingsSupportText(
   permissionState: BrowserNotificationPermissionState,
 ): string {
   if (isElectron) {
-    return "Desktop app notifications use your operating system notification center.";
+    return "桌面应用通知使用操作系统通知中心。";
   }
   switch (permissionState) {
     case "granted":

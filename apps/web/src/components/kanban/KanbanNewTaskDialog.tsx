@@ -464,7 +464,7 @@ export function KanbanNewTaskDialog({
               terminalContexts={composerTerminalContexts}
               mentionReferences={composerMentions}
               disabled={voice.isVoiceTranscribing}
-              placeholder="Describe the task, @tag files/folders, paste images, or use / for skills"
+              placeholder="描述任务，使用 @ 引用文件/文件夹、粘贴图片，或输入 / 使用技能"
               className={cn(
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,

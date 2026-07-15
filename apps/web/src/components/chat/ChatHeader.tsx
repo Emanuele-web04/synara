@@ -762,7 +762,7 @@ export const ChatHeader = memo(function ChatHeader({
                     }
                   >
                     <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    {!compact ? <span className="truncate font-normal">交接</span> : null}
                   </MenuTrigger>
                 }
               />
@@ -772,7 +772,7 @@ export const ChatHeader = memo(function ChatHeader({
               {handoffActionTargetProviders.map((provider) => (
                 <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
                   {renderProviderIcon(provider, "size-3.5 shrink-0")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  <span>交接给 {PROVIDER_DISPLAY_NAMES[provider]}</span>
                 </MenuItem>
               ))}
             </ComposerPickerMenuPopup>

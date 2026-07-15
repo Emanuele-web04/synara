@@ -329,11 +329,11 @@ export function GitPanel(props: {
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">正在加载更改…</p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
           <p className="px-1.5 py-2 text-center text-[12px] text-muted-foreground/70">
-            No changes in the working tree.
+            工作树中没有更改。
           </p>
         ) : null}
         {hasChanges ? (
