@@ -28,38 +28,38 @@ export const DEFAULT_WORKSPACE_LAYOUT_PRESET_ID: WorkspaceLayoutPresetId = "sing
 export const WORKSPACE_LAYOUT_PRESETS: readonly WorkspaceLayoutPresetDefinition[] = [
   {
     id: "single",
-    title: "Single",
-    description: "One focused terminal.",
+    title: "单窗格",
+    description: "一个聚焦的终端。",
     slotCount: 1,
   },
   {
     id: "two-columns",
-    title: "Two Columns",
-    description: "Two terminals side by side.",
+    title: "双列",
+    description: "两个终端左右并排。",
     slotCount: 2,
   },
   {
     id: "two-rows",
-    title: "Two Rows",
-    description: "Two terminals stacked vertically.",
+    title: "双行",
+    description: "两个终端上下排列。",
     slotCount: 2,
   },
   {
     id: "top-main",
-    title: "Top + Bottom",
-    description: "One large terminal above two smaller panes.",
+    title: "上主下双",
+    description: "上方一个大终端，下方两个小窗格。",
     slotCount: 3,
   },
   {
     id: "left-main",
-    title: "Left + Stack",
-    description: "One large pane on the left and two stacked on the right.",
+    title: "左主右双",
+    description: "左侧一个大窗格，右侧两个上下排列的窗格。",
     slotCount: 3,
   },
   {
     id: "quad",
-    title: "Quad",
-    description: "Four equally visible terminals.",
+    title: "四宫格",
+    description: "四个等大的终端。",
     slotCount: 4,
   },
 ] as const;
@@ -117,8 +117,8 @@ export function getWorkspaceLayoutPreset(
   }
   return {
     id: DEFAULT_WORKSPACE_LAYOUT_PRESET_ID,
-    title: "Single",
-    description: "One focused terminal.",
+    title: "单窗格",
+    description: "一个聚焦的终端。",
     slotCount: 1,
   };
 }

@@ -68,7 +68,7 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
   if (!provider.available) {
     return {
       disabled: true,
-      label: provider.authStatus === "unauthenticated" ? "Sign in" : "Unavailable",
+      label: provider.authStatus === "unauthenticated" ? "登录" : "不可用",
     };
   }
 

@@ -1,0 +1,9 @@
+diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
+index 7a8347082943e6f431929b639bf97da29d584b37..6686d84513caa146c79f0f5f067a3d47d09eb1b2 100644
+--- a/dist/renderers/DiffHunksRenderer.js
++++ b/dist/renderers/DiffHunksRenderer.js
+@@ -639,3 +639,3 @@
+ function getModifiedLinesString(lines) {
+-	return `${lines} unmodified line${lines > 1 ? "s" : ""}`;
++	return `${lines} 行未修改`;
+ }

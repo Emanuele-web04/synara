@@ -50,11 +50,11 @@ export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
 
 export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
   if (isReasoningUpdateWorkEntry(entry)) {
-    return "Reasoning";
+    return "思考过程";
   }
   const heading = normalizeCompactToolLabel(entry.toolTitle ?? entry.label).trim();
   if (!heading) {
-    return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
+    return entry.itemType === "collab_agent_tool_call" ? "智能体任务" : "活动";
   }
   return capitalizePhrase(heading);
 }
@@ -114,14 +114,14 @@ export function deriveAgentActivityTimelineState(
     const displayPreview =
       updateCount > 1
         ? latestPreview
-          ? `${updateCount} updates - ${latestPreview}`
-          : `${updateCount} updates`
+          ? `${updateCount} 次更新 - ${latestPreview}`
+          : `${updateCount} 次更新`
         : latestPreview;
     const displayEntry: WorkLogEntry = {
       ...latest,
       id: groupId,
-      label: "Reasoning trace",
-      toolTitle: "Reasoning trace",
+      label: "思考过程",
+      toolTitle: "思考过程",
       tone: "tool",
       ...(displayPreview ? { preview: displayPreview, detail: displayPreview } : {}),
     };
@@ -151,8 +151,8 @@ export function deriveAgentActivityTimelineState(
     const displayEntry = reasoningPreview
       ? {
           ...entry,
-          label: "Reasoning trace",
-          toolTitle: "Reasoning trace",
+          label: "思考过程",
+          toolTitle: "思考过程",
           preview: reasoningPreview,
           tone: "tool" as const,
         }

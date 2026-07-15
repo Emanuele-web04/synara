@@ -109,9 +109,9 @@ export function SkillsSettingsPanel() {
 
   return (
     <div className="space-y-8">
-      <SettingsSection title="Portable skills">
+      <SettingsSection title="可移植技能">
         <SettingsRow
-          title="Synara skills folder"
+          title="Synara 技能文件夹"
           description="Skills placed here are available on every provider. When a provider already ships its own copy of a skill, that copy is used; otherwise Synara's copy is the fallback."
           status={
             synaraSkillsDir ? (
@@ -121,7 +121,7 @@ export function SkillsSettingsPanel() {
           control={
             <span className="text-xs font-medium text-muted-foreground">
               {catalogQuery.isLoading
-                ? "Scanning…"
+                ? "正在扫描…"
                 : `${enabledSkills} of ${totalSkills} skill${totalSkills === 1 ? "" : "s"} enabled`}
             </span>
           }
@@ -129,19 +129,19 @@ export function SkillsSettingsPanel() {
       </SettingsSection>
 
       {catalogQuery.isError ? (
-        <SettingsSection title="Skills">
+        <SettingsSection title="技能">
           <SettingsRow
-            title="Skill discovery failed"
-            description="Synara could not scan the skill folders. Retry after checking that the server is running."
+            title="技能发现失败"
+            description="Synara 无法扫描技能文件夹。请确认服务正在运行后重试。"
           />
         </SettingsSection>
       ) : null}
 
       {!catalogQuery.isLoading && !catalogQuery.isError && totalSkills === 0 ? (
-        <SettingsSection title="Skills">
+        <SettingsSection title="技能">
           <SettingsRow
-            title="No skills found"
-            description="Add a skill folder containing a SKILL.md to the Synara skills folder above, or install skills for any supported provider."
+            title="未找到技能"
+            description="请将包含 SKILL.md 的技能文件夹添加到上方 Synara 技能目录，或为任一支持的提供商安装技能。"
           />
         </SettingsSection>
       ) : null}

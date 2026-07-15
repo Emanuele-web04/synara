@@ -84,11 +84,11 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
     case "agents":
-      return { label: "Shared (.agents)", provider: null };
+      return { label: "共享（.agents）", provider: null };
     case "project":
-      return { label: "Project", provider: null };
+      return { label: "项目", provider: null };
     default:
-      return { label: scope ?? "Personal", provider: null };
+      return { label: scope ?? "个人", provider: null };
   }
 }
 
@@ -126,7 +126,7 @@ function sourceSortKey(source: SettingsSkillSource): string {
 
 function sectionTitle(section: string): string {
   if (section === SHARED_SKILLS_SECTION) {
-    return "Shared skills";
+    return "共享技能";
   }
   return `From ${skillOriginInfo(section).label}`;
 }
@@ -172,7 +172,7 @@ export function buildSettingsSkillGroups(
       const section =
         sources.length > 1 ? SHARED_SKILLS_SECTION : (sources[0]?.origin ?? PERSONAL_ORIGIN);
       const description =
-        primarySkill.interface?.shortDescription ?? primarySkill.description ?? "No description.";
+        primarySkill.interface?.shortDescription ?? primarySkill.description ?? "无描述。";
       return {
         key,
         displayName: skillDisplayName(primarySkill),

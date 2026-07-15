@@ -335,7 +335,7 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
       <div className="flex items-center gap-2">
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
         <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
-          Preparing worktree...
+          正在准备工作树…
         </span>
       </div>
       <ol className="mt-2 flex flex-col">
@@ -1468,7 +1468,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     >
                       <span>
                         {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
+                          ? `已运行 ${row.collapsedWorkElapsed}`
                           : "Details"}
                       </span>
                       <DisclosureChevron
@@ -1770,7 +1770,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             className="-ml-0.5 pb-2 text-muted-foreground/70"
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            Working for{" "}
+            已运行{" "}
             {nowIso ? (
               (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
             ) : (
@@ -1786,7 +1786,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          Thinking
+          正在思考
         </div>
       )}
 
@@ -2651,7 +2651,7 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
   if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
     const names = workEntry.changedFiles.map((p) => basename(p));
     if (names.length === 1) return names[0]!;
-    return `${names.length} files`;
+    return `${names.length} 个文件`;
   }
 
   if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
@@ -2662,7 +2662,7 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
       const presentation = subagentPrimaryLabel(subagent);
       return presentation.nickname ?? presentation.primaryLabel ?? basename(subagent.threadId);
     });
-    return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
+    return labels.length === 1 ? labels[0]! : `${labels.length} 个子智能体`;
   }
 
   if (workEntry.itemType === "collab_agent_tool_call") {
@@ -2681,8 +2681,8 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
     const trimmedDetail = workEntry.detail.trim();
     if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
 
-    const readLinesMatch = /^Read\s+(\d+\s+lines?)$/i.exec(trimmedDetail);
-    if (readLinesMatch?.[1]) return readLinesMatch[1];
+    const readLinesMatch = /^Read\s+(\d+)\s+lines?$/i.exec(trimmedDetail);
+    if (readLinesMatch?.[1]) return `读取 ${readLinesMatch[1]} 行`;
 
     // Clean, non-JSON detail — show it
     return trimmedDetail;
@@ -2876,11 +2876,11 @@ function commandTooltipContent(command: string, displayText: string) {
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
       <div className="space-y-2">
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Summary</div>
+          <div className="text-muted-foreground/70">摘要</div>
           <div>{displayText}</div>
         </div>
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Raw call</div>
+          <div className="text-muted-foreground/70">原始调用</div>
           <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
             {command}
           </code>

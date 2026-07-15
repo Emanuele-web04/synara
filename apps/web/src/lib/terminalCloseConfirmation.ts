@@ -7,7 +7,7 @@ import type { NativeApi } from "@synara/contracts";
 
 function formatTerminalCloseSubject(terminalTitle: string | null | undefined): string {
   const trimmedTitle = terminalTitle?.trim();
-  return trimmedTitle && trimmedTitle.length > 0 ? `terminal "${trimmedTitle}"` : "this terminal";
+  return trimmedTitle && trimmedTitle.length > 0 ? `终端“${trimmedTitle}”` : "此终端";
 }
 
 // Prefer title overrides, then persisted labels, so confirmation copy matches visible tab names.
@@ -19,7 +19,7 @@ export function resolveTerminalCloseTitle(options: {
   return (
     options.terminalTitleOverridesById[options.terminalId]?.trim() ||
     options.terminalLabelsById[options.terminalId]?.trim() ||
-    "Terminal"
+    "终端"
   );
 }
 
@@ -28,10 +28,10 @@ export function buildTerminalCloseConfirmationMessage(options: {
   willDeleteThread: boolean;
 }): string {
   return [
-    `Close ${formatTerminalCloseSubject(options.terminalTitle)}?`,
+    `关闭${formatTerminalCloseSubject(options.terminalTitle)}？`,
     options.willDeleteThread
-      ? "This permanently clears the terminal history for this tab and deletes the empty terminal thread."
-      : "This permanently clears the terminal history for this tab.",
+      ? "这会永久清除此标签页的终端历史，并删除空的终端对话。"
+      : "这会永久清除此标签页的终端历史。",
   ].join("\n");
 }
 

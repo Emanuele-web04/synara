@@ -41,7 +41,7 @@ export function RenameDialog({
   initialValue,
   allowEmpty = false,
   placeholder,
-  saveLabel = "Save",
+  saveLabel = "保存",
   onOpenChange,
   onSave,
 }: RenameDialogProps) {
@@ -115,10 +115,10 @@ export function RenameDialog({
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
           >
-            Cancel
+            取消
           </Button>
           <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>
-            {isSaving ? "Saving..." : saveLabel}
+            {isSaving ? "正在保存…" : saveLabel}
           </Button>
         </DialogFooter>
       </DialogPopup>

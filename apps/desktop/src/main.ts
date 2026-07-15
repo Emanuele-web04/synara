@@ -1199,10 +1199,10 @@ function handleCheckForUpdatesMenuClick(): void {
     console.info("[desktop-updater] Manual update check requested, but updates are disabled.");
     void dialog.showMessageBox({
       type: "info",
-      title: "Updates unavailable",
-      message: "Automatic updates are not available right now.",
+      title: "暂时无法更新",
+      message: "目前无法使用自动更新。",
       detail: disabledReason,
-      buttons: ["OK"],
+      buttons: ["好"],
     });
     return;
   }
@@ -1219,32 +1219,131 @@ async function checkForUpdatesFromMenu(): Promise<void> {
   if (updateState.status === "up-to-date") {
     void dialog.showMessageBox({
       type: "info",
-      title: "You're up to date!",
-      message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
-      buttons: ["OK"],
+      title: "已是最新版本",
+      message: `Synara ${updateState.currentVersion} 已是当前可用的最新版本。`,
+      buttons: ["好"],
     });
   } else if (updateState.status === "downloading" || updateState.status === "available") {
     void dialog.showMessageBox({
       type: "info",
-      title: "Update found",
-      message: "Synara is preparing the update in the background.",
-      buttons: ["OK"],
+      title: "发现更新",
+      message: "Synara 正在后台准备更新。",
+      buttons: ["好"],
     });
   } else if (updateState.status === "downloaded") {
     void dialog.showMessageBox({
       type: "info",
-      title: "Update ready",
-      message: "Click Update in the sidebar when you’re ready to restart and install it.",
-      buttons: ["OK"],
+      title: "更新已就绪",
+      message: "准备好重启安装时，请点击侧边栏中的“更新”。",
+      buttons: ["好"],
     });
   } else if (updateState.status === "error") {
     void dialog.showMessageBox({
       type: "warning",
-      title: "Update check failed",
-      message: "Could not check for updates.",
-      detail: updateState.message ?? "An unknown error occurred. Please try again later.",
-      buttons: ["OK"],
+      title: "检查更新失败",
+      message: "无法检查更新。",
+      detail: updateState.message ?? "发生未知错误，请稍后重试。",
+      buttons: ["好"],
     });
+  }
+}
+
+function localizeNativeMenuLabel(label: string): string {
+  const labels: Record<string, string> = {
+    "Rename thread": "重命名对话",
+    "Pin thread": "固定对话",
+    "Unpin thread": "取消固定对话",
+    "Clear notification": "清除通知",
+    "Mark unread": "标记为未读",
+    "Copy Path": "复制路径",
+    "Copy path": "复制路径",
+    "Copy Thread ID": "复制对话 ID",
+    "Open Path in Terminal": "在终端中打开路径",
+    "Add to chat": "添加到对话",
+    "Reference selection in chat": "在对话中引用所选内容",
+    "Reference in chat": "在对话中引用",
+    "Ask why this changed": "询问为何发生此更改",
+    Restore: "恢复",
+    Archive: "归档",
+    Delete: "删除",
+    "Delete draft": "删除草稿",
+  };
+  const countedActionMatch = /^(Mark unread|Archive|Delete) \((\d+)\)$/.exec(label);
+  if (countedActionMatch) {
+    const sourceAction = countedActionMatch[1] ?? label;
+    const action = labels[sourceAction] ?? sourceAction;
+    return `${action}（${countedActionMatch[2] ?? ""}）`;
+  }
+  const referenceRangeMatch = /^Reference (.+) in chat$/.exec(label);
+  if (referenceRangeMatch) return `在对话中引用 ${referenceRangeMatch[1]}`;
+  const askWhyRangeMatch = /^Ask why (.+) changed$/.exec(label);
+  if (askWhyRangeMatch) return `询问为何 ${askWhyRangeMatch[1]} 发生更改`;
+  return labels[label] ?? label;
+}
+
+function localizeNativeApplicationMenu(menu: Menu): void {
+  const labels: Record<string, string> = {
+    "About Synara": "关于 Synara",
+    "Check for Updates…": "检查更新…",
+    "Settings…": "设置…",
+    Services: "服务",
+    "Hide Synara": "隐藏 Synara",
+    "Hide Others": "隐藏其他应用",
+    "Show All": "显示全部",
+    "Quit Synara": "退出 Synara",
+    Undo: "撤销",
+    Redo: "重做",
+    Cut: "剪切",
+    Copy: "复制",
+    Paste: "粘贴",
+    "Paste and Match Style": "粘贴并匹配样式",
+    Delete: "删除",
+    "Select All": "全选",
+    Substitutions: "替换",
+    "Show Substitutions": "显示替换…",
+    "Smart Quotes": "智能引号",
+    "Smart Dashes": "智能连字符",
+    "Text Replacement": "文本替换",
+    Speech: "语音",
+    "Start Speaking": "开始朗读",
+    "Stop Speaking": "停止朗读",
+    "Close Window": "关闭窗口",
+    Minimize: "最小化",
+    Zoom: "缩放",
+    "Bring All to Front": "全部置于前台",
+    "Keyboard Shortcuts": "键盘快捷键",
+    "New Terminal Tab": "新建终端标签",
+    "Toggle Sidebar": "切换侧边栏",
+    "Toggle Browser": "切换浏览器",
+    Reload: "重新加载",
+    "Force Reload": "强制重新加载",
+    "Toggle Developer Tools": "切换开发者工具",
+    "Actual Size": "实际大小",
+    "Zoom In": "放大",
+    "Zoom Out": "缩小",
+    "Toggle Full Screen": "切换全屏",
+    "Activity Monitor": "活动监视器",
+    "Allocations & Leaks": "分配与泄漏",
+    "File Activity": "文件活动",
+    "System Trace": "系统跟踪",
+    "Time Profile Active Application": "分析当前应用",
+    "Time Profile App Under Mouse": "分析鼠标下方应用",
+    "Time Profile Entire System": "分析整个系统",
+    "Toggle Instruments Recording": "切换 Instruments 录制",
+  };
+
+  for (const item of menu.items) {
+    if (item.label) item.label = labels[item.label] ?? item.label;
+    if (item.submenu) localizeNativeApplicationMenu(item.submenu);
+  }
+}
+
+function installNativeApplicationMenuLocalization(menu: Menu): void {
+  // macOS fills role- and service-backed submenu items lazily, after the initial
+  // template is built. Re-translate immediately before each native submenu opens.
+  menu.on("menu-will-show", () => localizeNativeApplicationMenu(menu));
+  for (const item of menu.items) {
+    if (item.submenu) installNativeApplicationMenuLocalization(item.submenu);
   }
 }
 
@@ -1259,19 +1358,19 @@ function configureApplicationMenu(): void {
   };
   const zoomMenuItems: MenuItemConstructorOptions[] = shouldUseNativeZoomMenuRoles(process.platform)
     ? [
-        { role: "resetZoom" },
-        { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+=") },
+        { label: "实际大小", role: "resetZoom" },
+        { label: "放大", role: "zoomIn", ...acceleratorProps("CmdOrCtrl+=") },
         { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+Plus"), visible: false },
-        { role: "zoomOut" },
+        { label: "缩小", role: "zoomOut" },
       ]
     : [
-        { label: "Reset Zoom", click: () => resetWindowZoomFromMenu() },
+        { label: "实际大小", click: () => resetWindowZoomFromMenu() },
         {
-          label: "Zoom In",
+          label: "放大",
           click: () => adjustWindowZoomFromMenu(DESKTOP_MENU_ZOOM_FACTOR_STEP),
         },
         {
-          label: "Zoom Out",
+          label: "缩小",
           click: () => adjustWindowZoomFromMenu(1 / DESKTOP_MENU_ZOOM_FACTOR_STEP),
         },
       ];
@@ -1280,95 +1379,126 @@ function configureApplicationMenu(): void {
     template.push({
       label: app.name,
       submenu: [
-        { role: "about" },
+        { label: "关于 Synara", role: "about" },
         {
-          label: "Check for Updates...",
+          label: "检查更新…",
           click: () => handleCheckForUpdatesMenuClick(),
         },
         { type: "separator" },
         {
-          label: "Settings...",
+          label: "设置…",
           accelerator: "CmdOrCtrl+,",
           click: () => dispatchMenuAction("open-settings"),
         },
         { type: "separator" },
-        { role: "services" },
+        { label: "服务", role: "services" },
         { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
+        { label: "隐藏 Synara", role: "hide" },
+        { label: "隐藏其他应用", role: "hideOthers" },
+        { label: "显示全部", role: "unhide" },
         { type: "separator" },
-        { role: "quit" },
+        { label: "退出 Synara", role: "quit" },
       ],
     });
   }
 
   template.push(
     {
-      label: "File",
+      label: "文件",
       submenu: [
         ...(process.platform === "darwin"
           ? []
           : [
               {
-                label: "Settings...",
+                label: "设置…",
                 ...acceleratorProps("CmdOrCtrl+,"),
                 click: () => dispatchMenuAction("open-settings"),
               },
               { type: "separator" as const },
             ]),
-        { role: process.platform === "darwin" ? "close" : "quit" },
+        {
+          label: process.platform === "darwin" ? "关闭窗口" : "退出",
+          role: process.platform === "darwin" ? "close" : "quit",
+        },
       ],
     },
-    { role: "editMenu" },
     {
-      label: "View",
+      // Electron regenerates the labels inside `editMenu` immediately before it
+      // opens, ignoring localized labels assigned after buildFromTemplate. Keep
+      // the same native roles, but make their visible labels explicit.
+      label: "编辑",
+      submenu: [
+        { label: "撤销", role: "undo" },
+        { label: "重做", role: "redo" },
+        { type: "separator" },
+        { label: "剪切", role: "cut" },
+        { label: "复制", role: "copy" },
+        { label: "粘贴", role: "paste" },
+        { label: "粘贴并匹配样式", role: "pasteAndMatchStyle" },
+        { label: "删除", role: "delete" },
+        { label: "全选", role: "selectAll" },
+        { type: "separator" },
+        { label: "显示替换…", role: "showSubstitutions" },
+        { label: "智能引号", role: "toggleSmartQuotes" },
+        { label: "智能连字符", role: "toggleSmartDashes" },
+        { label: "文本替换", role: "toggleTextReplacement" },
+        { type: "separator" },
+        { label: "开始朗读", role: "startSpeaking" },
+        { label: "停止朗读", role: "stopSpeaking" },
+      ],
+    },
+    {
+      label: "视图",
       submenu: [
         {
-          label: "New Terminal Tab",
+          label: "新建终端标签",
           ...acceleratorProps("CmdOrCtrl+T"),
           click: () => dispatchMenuAction("new-terminal-tab"),
         },
         { type: "separator" },
         {
-          label: "Toggle Sidebar",
+          label: "切换侧边栏",
           ...acceleratorProps("CmdOrCtrl+B"),
           click: () => dispatchMenuAction("toggle-sidebar"),
         },
         {
-          label: "Toggle Browser",
+          label: "切换浏览器",
           ...acceleratorProps("CmdOrCtrl+Shift+B"),
           click: () => dispatchMenuAction("toggle-browser"),
         },
         { type: "separator" },
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
+        { label: "重新加载", role: "reload" },
+        { label: "强制重新加载", role: "forceReload" },
+        { label: "切换开发者工具", role: "toggleDevTools" },
         { type: "separator" },
         ...zoomMenuItems,
         { type: "separator" },
-        { role: "togglefullscreen" },
+        { label: "切换全屏", role: "togglefullscreen" },
       ],
     },
-    { role: "windowMenu" },
+    { label: "窗口", role: "windowMenu" },
     {
+      label: "帮助",
       role: "help",
       submenu: [
         {
-          label: "Keyboard Shortcuts",
+          label: "键盘快捷键",
           ...(keyboardShortcutsAccelerator ? { accelerator: keyboardShortcutsAccelerator } : {}),
           click: () => dispatchMenuAction("show-shortcuts"),
         },
         { type: "separator" },
         {
-          label: "Check for Updates...",
+          label: "检查更新…",
           click: () => handleCheckForUpdatesMenuClick(),
         },
       ],
     },
   );
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  const applicationMenu = Menu.buildFromTemplate(template);
+  localizeNativeApplicationMenu(applicationMenu);
+  installNativeApplicationMenuLocalization(applicationMenu);
+  Menu.setApplicationMenu(applicationMenu);
 }
 
 function resolveResourcePath(fileName: string): string | null {
@@ -2928,7 +3058,7 @@ function registerIpcHandlers(): void {
             hasInsertedDestructiveSeparator = true;
           }
           const itemOption: MenuItemConstructorOptions = {
-            label: item.label,
+            label: localizeNativeMenuLabel(item.label),
             click: () => resolve(item.id),
           };
           if (item.destructive) {
@@ -3220,24 +3350,24 @@ function createWindow(): BrowserWindow {
         });
       }
       if (params.dictionarySuggestions.length === 0) {
-        menuTemplate.push({ label: "No suggestions", enabled: false });
+        menuTemplate.push({ label: "没有建议", enabled: false });
       }
       menuTemplate.push({ type: "separator" });
     }
 
     if (params.mediaType === "image") {
       menuTemplate.push({
-        label: "Copy Image",
+        label: "复制图片",
         click: () => window.webContents.copyImageAt(params.x, params.y),
       });
       menuTemplate.push({ type: "separator" });
     }
 
     menuTemplate.push(
-      { role: "cut", enabled: params.editFlags.canCut },
-      { role: "copy", enabled: params.editFlags.canCopy },
-      { role: "paste", enabled: params.editFlags.canPaste },
-      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+      { label: "剪切", role: "cut", enabled: params.editFlags.canCut },
+      { label: "复制", role: "copy", enabled: params.editFlags.canCopy },
+      { label: "粘贴", role: "paste", enabled: params.editFlags.canPaste },
+      { label: "全选", role: "selectAll", enabled: params.editFlags.canSelectAll },
     );
 
     Menu.buildFromTemplate(menuTemplate).popup({ window });

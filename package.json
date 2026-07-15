@@ -52,6 +52,9 @@
     "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64",
     "release:smoke": "node scripts/release-smoke.ts",
     "release:smoke:mac-update": "node scripts/smoke-mac-update-artifact.ts",
+    "zh:build": "bash scripts/build-synara-zh.sh",
+    "zh:install": "bash scripts/install-synara-zh.sh",
+    "zh:update": "bash scripts/update-and-install-synara-zh.sh",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules scripts/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .turbo apps/*/.turbo packages/*/.turbo"
   },
   "devDependencies": {
@@ -75,6 +78,7 @@
     ]
   },
   "patchedDependencies": {
-    "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368": "patches/@effect%2Fplatform-node-shared@8881a9b.patch"
+    "@effect/platform-node-shared@https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node-shared@8881a9b606d84a6f5eb6615279138322984f5368": "patches/@effect%2Fplatform-node-shared@8881a9b.patch",
+    "@pierre/diffs@1.1.0": "patches/@pierre%2Fdiffs@1.1.0.patch"
   }
 }

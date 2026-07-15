@@ -26,15 +26,15 @@ function compactDuration(deltaMs: number): string | null {
   const hours = Math.floor((totalMinutes % 1_440) / 60);
   const minutes = totalMinutes % 60;
   if (days > 0) {
-    return `${days}d ${hours}h`;
+    return `${days} 天 ${hours} 小时`;
   }
   if (hours > 0) {
-    return `${hours}h ${minutes}m`;
+    return `${hours} 小时 ${minutes} 分钟`;
   }
   if (minutes > 0) {
-    return `${minutes}m`;
+    return `${minutes} 分钟`;
   }
-  return "<1m";
+  return "不足 1 分钟";
 }
 
 function paceStatus(usedPercent: number, projectedUsedPercent: number): UsagePaceStatus {
@@ -55,7 +55,7 @@ function reserveOrDeficitText(deltaPercent: number): string | null {
   if (rounded <= 0) {
     return null;
   }
-  return deltaPercent > 0 ? `${rounded}% in deficit` : `${rounded}% in reserve`;
+  return deltaPercent > 0 ? `超出进度 ${rounded}%` : `领先进度 ${rounded}%`;
 }
 
 export function deriveUsagePace(input: {
@@ -90,14 +90,14 @@ export function deriveUsagePace(input: {
   const deltaPercent = usedPercent - expectedUsedPercent;
   const amountText = reserveOrDeficitText(deltaPercent);
 
-  let etaText = status === "behind" ? null : "Lasts until reset";
+  let etaText = status === "behind" ? null : "可用至额度重置";
   if (status === "behind") {
     const ratePercentPerMs = projectedUsedPercent / durationMs;
     const etaMs = ratePercentPerMs > 0 ? (100 - usedPercent) / ratePercentPerMs : 0;
     const remainingMs = resetMs - nowMs;
     const durationText = etaMs > 0 && etaMs < remainingMs ? compactDuration(etaMs) : null;
     etaText =
-      usedPercent >= 100 ? "Limit reached" : durationText ? `Runs out in ${durationText}` : null;
+      usedPercent >= 100 ? "额度已用完" : durationText ? `预计 ${durationText} 后用完` : null;
   }
 
   return {

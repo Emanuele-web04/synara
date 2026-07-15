@@ -167,11 +167,11 @@ export function PullRequestThreadDialog({
     (resolvedPullRequest === null && resolvePullRequestQuery.isError
       ? resolvePullRequestQuery.error instanceof Error
         ? resolvePullRequestQuery.error.message
-        : "Failed to resolve pull request."
+        : "无法解析拉取请求。"
       : preparePullRequestThreadMutation.error instanceof Error
         ? preparePullRequestThreadMutation.error.message
         : preparePullRequestThreadMutation.error
-          ? "Failed to prepare pull request thread."
+          ? "无法准备拉取请求对话。"
           : null);
 
   return (
@@ -185,15 +185,14 @@ export function PullRequestThreadDialog({
     >
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Checkout Pull Request</DialogTitle>
+          <DialogTitle>检出拉取请求</DialogTitle>
           <DialogDescription>
-            Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-            dedicated worktree.
+            解析 GitHub 拉取请求，然后在主仓库或独立工作树中创建草稿对话。
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <label className="grid gap-1.5">
-            <span className="text-xs font-medium text-foreground">Pull request</span>
+            <span className="text-xs font-medium text-foreground">拉取请求</span>
             <Input
               ref={referenceInputRef}
               placeholder="https://github.com/owner/repo/pull/42 or #42"
@@ -220,7 +219,7 @@ export function PullRequestThreadDialog({
                 <div className="min-w-0">
                   <p className="truncate font-medium text-sm">{resolvedPullRequest.title}</p>
                   <p className="truncate text-muted-foreground text-xs">
-                    #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} to{" "}
+                    #{resolvedPullRequest.number} · {resolvedPullRequest.headBranch} 到{" "}
                     {resolvedPullRequest.baseBranch}
                   </p>
                 </div>
@@ -234,7 +233,7 @@ export function PullRequestThreadDialog({
           {isResolving ? (
             <div className="flex items-center gap-2 text-muted-foreground text-xs">
               <Spinner className="size-3.5" />
-              Resolving pull request...
+              正在解析拉取请求…
             </div>
           ) : null}
 
@@ -248,7 +247,7 @@ export function PullRequestThreadDialog({
             onClick={() => onOpenChange(false)}
             disabled={preparePullRequestThreadMutation.isPending}
           >
-            Cancel
+            取消
           </Button>
           <Button
             type="button"
@@ -264,7 +263,7 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "local" ? "Preparing local..." : "Local"}
+            {preparingMode === "local" ? "正在准备本地环境…" : "本地"}
           </Button>
           <Button
             type="button"
@@ -279,7 +278,7 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+            {preparingMode === "worktree" ? "正在准备工作树…" : "工作树"}
           </Button>
         </DialogFooter>
       </DialogPopup>

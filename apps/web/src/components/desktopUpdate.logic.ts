@@ -81,28 +81,28 @@ export function getDesktopUpdateButtonPresentation(
 ): DesktopUpdateButtonPresentation {
   if (options?.installing) {
     return {
-      label: "Updating...",
+      label: "正在更新…",
       secondaryLabel: null,
     };
   }
 
   if (!state) {
     return {
-      label: "Update",
+      label: "更新",
       secondaryLabel: null,
     };
   }
 
   if (state.status === "checking") {
     return {
-      label: "Checking...",
+      label: "正在检查…",
       secondaryLabel: null,
     };
   }
 
   if (state.status === "downloading") {
     return {
-      label: "Preparing",
+      label: "正在准备",
       secondaryLabel: null,
     };
   }
@@ -111,35 +111,35 @@ export function getDesktopUpdateButtonPresentation(
   if (action === "download") {
     if (state.errorContext === "download" || state.errorContext === "install") {
       return {
-        label: "Retry",
+        label: "重试",
         secondaryLabel: null,
       };
     }
     return {
-      label: "Preparing",
+      label: "正在准备",
       secondaryLabel: null,
     };
   }
   if (action === "install") {
     if (state.errorContext === "install") {
       return {
-        label: "Retry",
+        label: "重试",
         secondaryLabel: null,
       };
     }
     return {
-      label: "Update",
+      label: "更新",
       secondaryLabel: null,
     };
   }
   if (action === "check") {
     return {
-      label: "Check updates",
+      label: "检查更新",
       secondaryLabel: null,
     };
   }
   return {
-    label: "Update",
+    label: "更新",
     secondaryLabel: null,
   };
 }
@@ -162,17 +162,17 @@ export function getDesktopUpdateDownloadPercent(state: DesktopUpdateState | null
 
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
   if (!shouldShowArm64IntelBuildWarning(state)) {
-    return "This install is using the correct architecture.";
+    return "当前安装包的架构正确。";
   }
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Synara is preparing the native Apple Silicon update.";
+    return "这台 Mac 使用 Apple 芯片，但 Synara 仍在通过 Rosetta 运行 Intel 版本。Synara 正在准备原生 Apple 芯片版本更新。";
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. Click Update to restart into the native Apple Silicon build.";
+    return "这台 Mac 使用 Apple 芯片，但 Synara 仍在通过 Rosetta 运行 Intel 版本。点击“更新”即可重启并切换到原生 Apple 芯片版本。";
   }
-  return "This Mac has Apple Silicon, but Synara is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return "这台 Mac 使用 Apple 芯片，但 Synara 仍在通过 Rosetta 运行 Intel 版本。下次应用更新会将其替换为原生 Apple 芯片版本。";
 }
 
 export function getDesktopUpdateButtonTooltip(
@@ -180,52 +180,50 @@ export function getDesktopUpdateButtonTooltip(
   options?: { installing?: boolean },
 ): string {
   if (options?.installing) {
-    return "Applying update...";
+    return "正在应用更新…";
   }
   if (state.status === "idle") {
-    return "Check for updates";
+    return "检查更新";
   }
   if (state.status === "checking") {
-    return "Checking for updates...";
+    return "正在检查更新…";
   }
   if (state.status === "up-to-date") {
-    return `You're up to date on ${state.currentVersion}. Click to check again.`;
+    return `当前已是 ${state.currentVersion} 最新版本。点击可再次检查。`;
   }
   if (state.errorContext === "install" && !state.downloadedVersion && state.availableVersion) {
-    return `Synara restarted, but update ${state.availableVersion} was not installed. Click to try again.`;
+    return `Synara 已重启，但未安装 ${state.availableVersion} 更新。点击可重试。`;
   }
   if (state.errorContext === "download" && state.availableVersion) {
-    return `Could not prepare update ${state.availableVersion}. Click to retry.`;
+    return `无法准备 ${state.availableVersion} 更新。点击可重试。`;
   }
   if (state.errorContext === "install" && (state.downloadedVersion || state.availableVersion)) {
-    return `Could not install update ${state.downloadedVersion ?? state.availableVersion}. Click to retry.`;
+    return `无法安装 ${state.downloadedVersion ?? state.availableVersion} 更新。点击可重试。`;
   }
   if (state.status === "available") {
-    return `Preparing update ${state.availableVersion ?? ""}`.trim();
+    return `正在准备更新 ${state.availableVersion ?? ""}`.trim();
   }
   if (state.status === "downloading") {
     const progress =
       typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
-    return `Preparing update${progress}`;
+    return `正在准备更新${progress}`;
   }
   if (state.status === "downloaded") {
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} is ready. Click to restart and install.`;
+    return `${state.downloadedVersion ?? state.availableVersion ?? ""} 更新已就绪。点击可重启并安装。`.trim();
   }
   if (state.status === "error") {
     if (state.errorContext === "check") {
-      return state.message
-        ? `${state.message}. Click to check again.`
-        : "Update check failed. Click to try again.";
+      return state.message ? `${state.message}。点击可再次检查。` : "检查更新失败。点击可重试。";
     }
     if (state.errorContext === "download" && state.availableVersion) {
-      return `Could not prepare update ${state.availableVersion}. Click to retry.`;
+      return `无法准备 ${state.availableVersion} 更新。点击可重试。`;
     }
     if (state.errorContext === "install" && state.downloadedVersion) {
-      return `Could not install update ${state.downloadedVersion}. Click to retry.`;
+      return `无法安装 ${state.downloadedVersion} 更新。点击可重试。`;
     }
-    return state.message ?? "Update failed";
+    return state.message ?? "更新失败";
   }
-  return "Update available";
+  return "有可用更新";
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {

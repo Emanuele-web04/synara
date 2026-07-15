@@ -97,11 +97,11 @@ function ProfileContent({
       <div className="flex items-center justify-end gap-2">
         <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
           <CentralIcon name="share-os" />
-          Share
+          分享
         </Button>
         <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
           <CentralIcon name="pencil" />
-          Edit
+          编辑
         </Button>
       </div>
 
@@ -313,9 +313,7 @@ function InsightRow({ label, value }: { label: string; value: string }) {
 
 function formatHour(hour: number): string {
   const normalized = ((hour % 24) + 24) % 24;
-  if (normalized === 0) return "12 AM";
-  if (normalized === 12) return "12 PM";
-  return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
+  return `${normalized.toString().padStart(2, "0")}:00`;
 }
 
 function formatPeakHourLabel(startHour: number | null): string {
@@ -326,8 +324,7 @@ function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]
   if (!project) {
     return "—";
   }
-  const promptLabel = project.promptCount === 1 ? "prompt" : "prompts";
-  return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
+  return `${project.title} · ${formatNumber(project.promptCount)} 条提示词`;
 }
 
 function formatProviderLabel(provider: ProviderKind): string {

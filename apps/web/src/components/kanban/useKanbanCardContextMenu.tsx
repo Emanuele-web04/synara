@@ -127,10 +127,10 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         project !== null &&
         (await api.dialogs.confirm(
           [
-            "This thread is the only one linked to this worktree:",
+            "此对话是唯一关联到下列工作树的对话：",
             displayWorktreePath ?? orphanedWorktreePath,
             "",
-            "Delete the worktree too?",
+            "同时删除该工作树吗？",
           ].join("\n"),
         ));
 
@@ -271,10 +271,9 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           if (!isThreadActionCard) return;
           if (settings.confirmThreadArchive) {
             const confirmed = await api.dialogs.confirm(
-              [
-                `Archive thread "${card.title}"?`,
-                "Archived threads are hidden from the sidebar but can be restored later.",
-              ].join("\n"),
+              [`归档对话“${card.title}”？`, "已归档的对话会从侧边栏隐藏，之后仍可恢复。"].join(
+                "\n",
+              ),
             );
             if (!confirmed) return;
           }
@@ -285,11 +284,8 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         if (settings.confirmThreadDelete) {
           const confirmed = await api.dialogs.confirm(
             deletesOnlyDraft
-              ? `Delete this draft? This removes its unsent prompt.`
-              : [
-                  `Delete thread "${card.title}"?`,
-                  "This permanently clears conversation history for this thread.",
-                ].join("\n"),
+              ? `删除此草稿？这会移除尚未发送的提示词。`
+              : [`删除对话“${card.title}”？`, "这会永久清除此对话的聊天记录。"].join("\n"),
           );
           if (!confirmed) return;
         }

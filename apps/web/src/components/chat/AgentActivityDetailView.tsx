@@ -95,7 +95,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
           onClick={onBack}
         >
           <ChevronLeftIcon className="size-3.5" />
-          <span>Back</span>
+          <span>返回</span>
         </button>
 
         <div className="mt-3 border-b border-border/55 pb-4">
@@ -122,7 +122,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         </div>
 
         {prompt ? (
-          <AgentActivitySection title="Prompt">
+          <AgentActivitySection title="提示词">
             <ChatMarkdown
               text={prompt}
               cwd={markdownCwd}
@@ -134,7 +134,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         ) : null}
 
         {result ? (
-          <AgentActivitySection title="Result">
+          <AgentActivitySection title="结果">
             <ChatMarkdown
               text={result}
               cwd={markdownCwd}
@@ -146,7 +146,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         ) : null}
 
         {subagents.length > 0 ? (
-          <AgentActivitySection title="Agents">
+          <AgentActivitySection title="智能体">
             <div className="space-y-2">
               {subagents.map((subagent) => (
                 <SubagentDetailRow
@@ -160,7 +160,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
           </AgentActivitySection>
         ) : null}
 
-        <AgentActivitySection title="Activity">
+        <AgentActivitySection title="活动">
           <div className="divide-y divide-border/45">
             {detail.entries.map((entry) => (
               <AgentActivityEventRow

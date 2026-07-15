@@ -151,7 +151,7 @@ export function EditProfileDialog({
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <CentralIcon name="add-image" className="size-3.5" />
-                    {processing ? "Processing…" : draftImage ? "Replace photo" : "Upload photo"}
+                    {processing ? "正在处理…" : draftImage ? "替换照片" : "上传照片"}
                   </Button>
                   {draftImage && (
                     <Button
@@ -165,7 +165,7 @@ export function EditProfileDialog({
                       }}
                     >
                       <CentralIcon name="trash-can-simple" className="size-3.5" />
-                      Remove
+                      移除
                     </Button>
                   )}
                 </div>
@@ -190,7 +190,7 @@ export function EditProfileDialog({
 
                 {draftImage && (
                   <p className="text-center text-xs text-muted-foreground">
-                    Colors apply when no photo is set.
+                    未设置照片时使用所选颜色。
                   </p>
                 )}
               </div>

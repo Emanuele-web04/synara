@@ -456,8 +456,8 @@ function SidebarRail({
   } | null>(null);
   const resolvedResizable = sidebarInstance?.resizable ?? null;
   const canResize = resolvedResizable !== null && open;
-  const railLabel = canResize ? "Resize Sidebar" : "Toggle Sidebar";
-  const railTitle = canResize ? "Drag to resize sidebar" : "Toggle Sidebar";
+  const railLabel = canResize ? "调整侧边栏宽度" : "切换侧边栏";
+  const railTitle = canResize ? "拖动以调整侧边栏宽度" : "切换侧边栏";
 
   const stopResize = React.useCallback(
     (pointerId: number) => {

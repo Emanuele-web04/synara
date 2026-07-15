@@ -751,9 +751,9 @@ export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
   id: WorktreeSetupStepId;
   label: string;
 }> = [
-  { id: "create-worktree", label: "Creating branch and worktree" },
-  { id: "prepare-thread", label: "Linking thread workspace" },
-  { id: "start-session", label: "Starting session" },
+  { id: "create-worktree", label: "正在创建分支和工作树" },
+  { id: "prepare-thread", label: "正在关联对话工作区" },
+  { id: "start-session", label: "正在启动会话" },
 ];
 
 export interface WorktreeSetupSnapshotOptions {
@@ -774,13 +774,13 @@ function worktreeSetupStepDefinitions(
     return WORKTREE_SETUP_STEP_DEFINITIONS;
   }
   return [
-    { id: "create-worktree", label: "Creating branch and worktree" },
-    { id: "prepare-thread", label: "Linking thread workspace" },
+    { id: "create-worktree", label: "正在创建分支和工作树" },
+    { id: "prepare-thread", label: "正在关联对话工作区" },
     {
       id: "run-setup-action",
       label: setupScriptName ? `Running setup action: ${setupScriptName}` : "Running setup action",
     },
-    { id: "start-session", label: "Starting session" },
+    { id: "start-session", label: "正在启动会话" },
   ];
 }
 

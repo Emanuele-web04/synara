@@ -206,9 +206,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "appsnap:enable",
     section: "appsnap",
-    title: "Enable AppSnap",
+    title: "启用应用截图",
     keywords:
-      "Capture the frontmost macOS app window with both Option keys and add it to a recent task. appshot screenshot snap window capture alt",
+      "同时按下两个 Option 键捕捉 macOS 前台应用窗口，并添加到最近任务。应用截图 截图 窗口 捕捉 alt",
   },
   {
     id: "appsnap:shortcut",
@@ -233,8 +233,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "appsnap:permissions",
     section: "appsnap",
     title: "Permission status",
-    keywords:
-      "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
+    keywords: "macOS 系统设置中应用截图所需的输入监控和屏幕录制权限。隐私 安全 重新检查 授权",
     // Renders only in the macOS desktop app, so no stable anchor on other platforms.
     target: null,
   },

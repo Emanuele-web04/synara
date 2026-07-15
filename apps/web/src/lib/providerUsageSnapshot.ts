@@ -44,6 +44,13 @@ export function normalizeServerProviderUsageLines(
   return snapshot.usageLines.map((line) => ({
     label: line.label,
     value: line.value,
-    ...(line.subtitle ? { subtitle: line.subtitle } : {}),
+    ...(line.subtitle
+      ? {
+          subtitle: line.subtitle.replace(
+            /^(\d+) recent sessions$/,
+            (_match, count: string) => `最近 ${count} 个会话`,
+          ),
+        }
+      : {}),
   }));
 }

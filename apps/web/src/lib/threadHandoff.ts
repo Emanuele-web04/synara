@@ -59,13 +59,13 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   if (!thread.handoff) {
     return null;
   }
-  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+  return `来自 ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]} 的交接`;
 }
 
 // Preserve the visible source thread name when creating the destination thread.
 export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string {
   const title = thread.title.trim().replace(/\s+/g, " ");
-  return title.length > 0 ? title : "Handoff";
+  return title.length > 0 ? title : "交接";
 }
 
 export function buildThreadHandoffImportedMessages(
@@ -174,7 +174,7 @@ export function resolveThreadHandoffModelSelection(input: {
   }
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {
-    throw new Error("Select a Pi model before handing off to Pi.");
+    throw new Error("交接给 Pi 前，请先选择 Pi 模型。");
   }
   return {
     provider: input.targetProvider,

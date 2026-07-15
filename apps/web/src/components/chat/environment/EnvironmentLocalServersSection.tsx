@@ -26,8 +26,8 @@ import {
 } from "./EnvironmentRow";
 
 function describeServerCount(count: number): string {
-  if (count === 0) return "No servers running";
-  return `${count} server${count === 1 ? "" : "s"} running`;
+  if (count === 0) return "没有正在运行的服务器";
+  return `${count} 个服务器正在运行`;
 }
 
 /** Compact, non-closing icon action used for the menu's Refresh affordance. */
@@ -43,8 +43,8 @@ function LocalServersRefreshButton({
       closeOnClick={false}
       disabled={refreshing}
       onClick={onRefresh}
-      aria-label="Refresh local servers"
-      title="Refresh"
+      aria-label="刷新本地服务器"
+      title="刷新"
       className="inline-flex size-5 items-center justify-center rounded-md p-0 text-muted-foreground/60 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)]"
     >
       <RefreshCwIcon className={cn("size-3", refreshing && "animate-spin")} />
@@ -70,7 +70,7 @@ function LocalServerRow({
   const stoppable = server.isStoppable && !stopping;
   const primaryLabel = localServerPrimaryLabel(server);
   const stopHint = server.isStoppable
-    ? `Stop ${primaryLabel}`
+    ? `停止 ${primaryLabel}`
     : (server.stopDisabledReason ?? server.args ?? server.displayName);
 
   return (
@@ -161,14 +161,14 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
       <MenuTrigger render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}>
         <EnvironmentRowBody
           icon={<GlobeIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Local Servers"
+          label="本地服务器"
           trailing={trailing}
         />
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
         <div className="flex items-center justify-between gap-2 pb-0.5 pl-2 pr-3 pt-px">
           <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/50">
-            {localServersQuery.isLoading ? "Scanning ports…" : describeServerCount(serverCount)}
+            {localServersQuery.isLoading ? "正在扫描端口…" : describeServerCount(serverCount)}
           </span>
           <LocalServersRefreshButton
             refreshing={localServersQuery.isFetching}
@@ -179,23 +179,23 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
         {localServersQuery.isLoading ? (
           <LocalServersPlaceholder
             icon={<RefreshCwIcon className="size-4 animate-spin" />}
-            title="Scanning local ports"
+            title="正在扫描本地端口"
           />
         ) : localServersQuery.isError ? (
           <LocalServersPlaceholder
             icon={<GlobeIcon className="size-4" />}
-            title="Couldn't scan local ports"
+            title="无法扫描本地端口"
             subtitle={
               localServersQuery.error instanceof Error
                 ? localServersQuery.error.message
-                : "The scan failed. Try refreshing."
+                : "扫描失败，请尝试刷新。"
             }
           />
         ) : serverCount === 0 ? (
           <LocalServersPlaceholder
             icon={<GlobeIcon className="size-4" />}
-            title="No servers running"
-            subtitle="Local dev servers will appear here."
+            title="没有正在运行的服务器"
+            subtitle="本地开发服务器会显示在这里。"
           />
         ) : (
           <div className="flex flex-col gap-0.5">

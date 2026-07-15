@@ -338,17 +338,17 @@ export function humanizeSubagentStatus(
 
   switch (normalized) {
     case "running":
-      return "Running";
+      return "运行中";
     case "completed":
-      return "Completed";
+      return "已完成";
     case "failed":
-      return "Failed";
+      return "失败";
     case "stopped":
-      return "Stopped";
+      return "已停止";
     case "queued":
-      return "Queued";
+      return "已排队";
     case "idle":
-      return "Idle";
+      return "空闲";
   }
 }
 

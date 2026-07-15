@@ -8,14 +8,11 @@ export function formatCompact(value: number | null | undefined): string {
     return "—";
   }
   const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) {
-    return `${trimZero(value / 1_000_000_000)}bn`;
+  if (abs >= 100_000_000) {
+    return `${trimZero(value / 100_000_000)}亿`;
   }
-  if (abs >= 1_000_000) {
-    return `${trimZero(value / 1_000_000)}m`;
-  }
-  if (abs >= 1_000) {
-    return `${trimZero(value / 1_000)}k`;
+  if (abs >= 10_000) {
+    return `${trimZero(value / 10_000)}万`;
   }
   return `${Math.round(value)}`;
 }
@@ -34,7 +31,7 @@ export function formatNumber(value: number | null | undefined): string {
 }
 
 export function formatDays(value: number): string {
-  return `${formatNumber(value)} ${value === 1 ? "day" : "days"}`;
+  return `${formatNumber(value)} 天`;
 }
 
 // Title-case a home-directory basename into a friendly display name.
@@ -71,7 +68,7 @@ export function formatShortDate(day: string | null): string | null {
   if (!year || !month || !date) {
     return null;
   }
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(
     new Date(Date.UTC(year, month - 1, date)),
   );
 }

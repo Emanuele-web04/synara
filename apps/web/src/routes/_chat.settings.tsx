@@ -413,7 +413,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Codex binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>codex</code> from your PATH.
+        留空则使用 PATH 中的 <code>codex</code>。
       </>
     ),
     homePathKey: "codexHomePath",
@@ -432,7 +432,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Claude binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>claude</code> from your PATH.
+        留空则使用 PATH 中的 <code>claude</code>。
       </>
     ),
   },
@@ -448,13 +448,12 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Cursor Agent or Cursor CLI path",
     binaryDescription: (
       <>
-        Leave blank to use <code>cursor-agent</code> from your PATH. Cursor editor CLI paths are
-        accepted too.
+        留空则使用 PATH 中的 <code>cursor-agent</code>。也可填写 Cursor 编辑器 CLI 路径。
       </>
     ),
     apiEndpointKey: "cursorApiEndpoint",
     apiEndpointPlaceholder: "https://api2.cursor.sh",
-    apiEndpointDescription: "Optional Cursor API endpoint override passed to `cursor-agent -e`.",
+    apiEndpointDescription: "可选的 Cursor API 端点覆盖值，将传给 `cursor-agent -e`。",
   },
   {
     provider: "gemini",
@@ -471,7 +470,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Gemini binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>gemini</code> from your PATH.
+        留空则使用 PATH 中的 <code>gemini</code>。
       </>
     ),
   },
@@ -487,7 +486,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Grok binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>grok</code> from your PATH.
+        留空则使用 PATH 中的 <code>grok</code>。
       </>
     ),
   },
@@ -504,7 +503,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "droid",
     binaryDescription: (
       <>
-        Leave blank to use <code>droid</code> from your PATH.
+        留空则使用 PATH 中的 <code>droid</code>。
       </>
     ),
   },
@@ -520,15 +519,15 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Kilo binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>kilo</code> from your PATH.
+        留空则使用 PATH 中的 <code>kilo</code>。
       </>
     ),
     serverUrlKey: "kiloServerUrl",
     serverUrlPlaceholder: "http://127.0.0.1:4096",
-    serverUrlDescription: "Optional existing Kilo server URL. Leave blank to spawn a local server.",
+    serverUrlDescription: "可填写现有 Kilo 服务器 URL；留空则启动本地服务器。",
     serverPasswordKey: "kiloServerPassword",
     serverPasswordPlaceholder: "Kilo server password",
-    serverPasswordDescription: "Optional password for an externally managed Kilo server.",
+    serverPasswordDescription: "外部管理的 Kilo 服务器可选密码。",
   },
   {
     provider: "opencode",
@@ -542,19 +541,18 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "OpenCode binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>opencode</code> from your PATH.
+        留空则使用 PATH 中的 <code>opencode</code>。
       </>
     ),
     serverUrlKey: "openCodeServerUrl",
     serverUrlPlaceholder: "http://127.0.0.1:4096",
-    serverUrlDescription:
-      "Optional existing OpenCode server URL. Leave blank to spawn a local server.",
+    serverUrlDescription: "可填写现有 OpenCode 服务器 URL；留空则启动本地服务器。",
     serverPasswordKey: "openCodeServerPassword",
     serverPasswordPlaceholder: "OpenCode server password",
-    serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
+    serverPasswordDescription: "外部管理的 OpenCode 服务器可选密码。",
     experimentalWebSocketsKey: "openCodeExperimentalWebSockets",
     experimentalWebSocketsDescription:
-      "Use Opencode's experimental OpenAI response WebSocket transport for managed local servers.",
+      "为托管的本地服务器使用 OpenCode 实验性 OpenAI 响应 WebSocket 传输。",
   },
   {
     provider: "pi",
@@ -568,13 +566,12 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryPlaceholder: "Pi binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>pi</code> from your PATH.
+        留空则使用 PATH 中的 <code>pi</code>。
       </>
     ),
     agentDirKey: "piAgentDir",
     agentDirPlaceholder: "Pi agent directory",
-    agentDirDescription:
-      "Optional custom Pi agent directory for auth, models, skills, and commands.",
+    agentDirDescription: "可选的 Pi 智能体目录，用于认证、模型、技能和命令。",
   },
 ];
 
@@ -1271,11 +1268,44 @@ function SettingsRouteView() {
   async function restoreDefaults() {
     if (changedSettingLabels.length === 0) return;
 
+    const resetLabelZh: Readonly<Record<string, string>> = {
+      Theme: "主题",
+      "Dark theme pack": "深色主题包",
+      "Light theme pack": "浅色主题包",
+      "Default provider": "默认提供商",
+      "New thread mode": "新建对话模式",
+      "Project sort order": "项目排序",
+      "Thread sort order": "对话排序",
+      "Chats section": "对话分区",
+      "Studio section": "工作室分区",
+      "Workspace section": "工作区分区",
+      "UI density": "界面密度",
+      "Base font size": "基础字号",
+      "Terminal font size": "终端字号",
+      "Terminal font": "终端字体",
+      "Font smoothing": "字体平滑",
+      "Time format": "时间格式",
+      "Activity toasts": "活动提示条",
+      "Desktop notifications": "桌面通知",
+      "Assistant output": "助手输出",
+      AppSnap: "应用截图",
+      "AppSnap capture sound": "应用截图提示音",
+      "Provider update checks": "提供商更新检查",
+      "Diff line wrapping": "差异行换行",
+      "Delete confirmation": "删除确认",
+      "Archive confirmation": "归档确认",
+      "Terminal close confirmation": "终端关闭确认",
+      "Git writing model": "Git 写作模型",
+      "Custom models": "自定义模型",
+      "Provider installs": "提供商安装",
+      "Provider visibility": "提供商显示",
+      "Provider order": "提供商顺序",
+    };
+    const localizedResetLabels = changedSettingLabels.map((label) => resetLabelZh[label] ?? label);
+
     const api = readNativeApi();
     const confirmed = await (api ?? ensureNativeApi()).dialogs.confirm(
-      ["Restore default settings?", `This will reset: ${changedSettingLabels.join(", ")}.`].join(
-        "\n",
-      ),
+      ["恢复默认设置？", `将重置：${localizedResetLabels.join("、")}。`].join("\n"),
     );
     if (!confirmed) return;
 
@@ -1383,8 +1413,8 @@ function SettingsRouteView() {
     if (!bridge) {
       toastManager.add({
         type: "warning",
-        title: "AppSnap unavailable",
-        description: "AppSnap requires the Synara desktop app on macOS.",
+        title: "应用截图不可用",
+        description: "应用截图需要使用 macOS 版 Synara 桌面应用。",
       });
       return;
     }
@@ -1403,7 +1433,7 @@ function SettingsRouteView() {
       if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
         toastManager.add({
           type: "warning",
-          title: "Finish AppSnap setup",
+          title: "完成应用截图设置",
           description: state.message ?? "Allow the required macOS permissions, then try again.",
         });
       }
@@ -1412,8 +1442,8 @@ function SettingsRouteView() {
       updateSettings({ enableAppSnap: false });
       toastManager.add({
         type: "error",
-        title: "AppSnap setup failed",
-        description: error instanceof Error ? error.message : "Could not configure AppSnap.",
+        title: "应用截图设置失败",
+        description: error instanceof Error ? error.message : "无法配置应用截图。",
       });
     }
   }
@@ -1434,7 +1464,7 @@ function SettingsRouteView() {
       if (!requestGuard.isCurrent(requestId)) return;
       toastManager.add({
         type: "error",
-        title: "Could not check AppSnap permissions",
+        title: "无法检查应用截图权限",
         description: error instanceof Error ? error.message : "Permission check failed.",
       });
     }
@@ -1509,18 +1539,16 @@ function SettingsRouteView() {
       const confirmed = await api.dialogs.confirm(
         linkedConversationCount > 0
           ? [
-              `Delete worktree "${displayName}"?`,
+              `删除工作树“${displayName}”？`,
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
+              `此工作树关联了 ${linkedActiveThreadCount} 个活跃对话和 ${linkedArchivedThreadIds.length} 个已归档对话。`,
               linkedArchivedThreadIds.length > 0
-                ? "Archived conversations will be deleted first."
-                : "Deleting it can break reopening those chats in the same workspace.",
+                ? "将先删除已归档的对话。"
+                : "删除后，可能无法在同一工作区重新打开这些对话。",
               "",
-              "Delete the worktree anyway?",
+              "仍要删除该工作树吗？",
             ].join("\n")
-          : [`Delete worktree "${displayName}"?`, "This removes the Git worktree from disk."].join(
-              "\n",
-            ),
+          : [`删除工作树“${displayName}”？`, "这会从磁盘移除该 Git 工作树。"].join("\n"),
       );
       if (!confirmed) {
         return;
@@ -1585,7 +1613,7 @@ function SettingsRouteView() {
       if (!api) return;
 
       const confirmed = await api.dialogs.confirm(
-        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+        `永久删除“${threadTitle}”？\n\n这会永久移除该对话及其聊天记录。`,
       );
       if (!confirmed) return;
 
@@ -1885,7 +1913,7 @@ function SettingsRouteView() {
             settingKey: "showEnvironmentRepository",
             title: "Repository",
             description:
-              "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
+              "在对话环境面板中显示 GitHub 仓库链接。Git 区块（更改、工作树、分支、提交与推送）始终可见。",
             resetLabel: "repository section",
             ariaLabel: "Show the Repository section in the Environment panel",
           })}
@@ -2244,7 +2272,7 @@ function SettingsRouteView() {
 
         <SettingsRow
           title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
+          description="当应用在后台且对话或受管理终端智能体完成或需要输入时，显示系统通知。"
           status={buildNotificationSettingsSupportText(browserNotificationPermission)}
           resetAction={
             settings.enableSystemTaskCompletionNotifications !==
@@ -2290,19 +2318,17 @@ function SettingsRouteView() {
           </span>
           <div className="min-w-0 space-y-1">
             <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
-              Take an AppSnap to show your agent another app's window
+              使用应用截图向智能体展示其他应用窗口
             </p>
             <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-              Press both <Kbd className="mx-px">⌥ Option</Kbd> keys at once while any app is
-              frontmost. Synara captures that window as an image, brings itself forward, and
-              attaches the snap to a task composer — the capture stays on this device until you send
-              the message.
+              任意应用位于前台时，同时按下两个 <Kbd className="mx-px">⌥ Option</Kbd> 键。Synara 会将
+              该窗口捕获为图片、切换到前台并附加到任务输入框；在你发送消息前，捕获内容始终保留在本机。
             </p>
             {!supported ? (
               <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
                 {appSnapState
-                  ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
-                  : "AppSnap requires the Synara desktop app on macOS."}
+                  ? (appSnapState.message ?? "应用截图仅在 macOS 版 Synara 桌面应用中可用。")
+                  : "应用截图需要使用 macOS 版 Synara 桌面应用。"}
               </p>
             ) : null}
           </div>
@@ -2310,13 +2336,13 @@ function SettingsRouteView() {
 
         <SettingsSection title="Capture">
           <SettingsRow
-            title="Enable AppSnap"
+            title="启用应用截图"
             description="Run the capture listener in the background while Synara is open."
             status={appSnapStatusText(appSnapState)}
             resetAction={
               settings.enableAppSnap !== defaults.enableAppSnap ? (
                 <SettingResetButton
-                  label="AppSnap"
+                  label="应用截图"
                   onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
                 />
               ) : null
@@ -2326,7 +2352,7 @@ function SettingsRouteView() {
                 checked={enabled}
                 disabled={!supported}
                 onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
-                aria-label="Enable AppSnap"
+                aria-label="启用应用截图"
               />
             }
           />
@@ -2370,7 +2396,7 @@ function SettingsRouteView() {
                   onCheckedChange={(checked) =>
                     updateSettings({ appSnapPlaySound: Boolean(checked) })
                   }
-                  aria-label="Play a sound when an AppSnap is captured"
+                  aria-label="捕捉应用截图时播放提示音"
                 />
               </div>
             }
@@ -2713,7 +2739,7 @@ function SettingsRouteView() {
                   textGenerationModel: model,
                 });
               }}
-              ariaLabel="Git text generation model"
+              ariaLabel="Git 文本生成模型"
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
@@ -2887,7 +2913,7 @@ function SettingsRouteView() {
           description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
+              ? `已隐藏 ${hiddenProviderCount} 个提供商`
               : isProviderOrderDirty
                 ? "Custom order"
                 : "All providers visible"
@@ -3026,7 +3052,7 @@ function SettingsRouteView() {
 
   const renderProviderInstallsSection = () => (
     <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
-      <SettingsSection title="Provider tools">
+      <SettingsSection title="提供商工具">
         <SettingsRow
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
@@ -3265,7 +3291,7 @@ function SettingsRouteView() {
                               className="block"
                             >
                               <span className="block text-xs font-medium text-foreground">
-                                {providerSettings.title} binary path
+                                {providerSettings.title} 二进制路径
                               </span>
                               <DebouncedSettingTextInput
                                 id={`provider-install-${providerSettings.binaryPathKey}`}
@@ -3310,7 +3336,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  CODEX_HOME path
+                                  CODEX_HOME 路径
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.homePathKey}`}
@@ -3340,7 +3366,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  Pi agent directory
+                                  Pi 智能体目录
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.agentDirKey}`}
@@ -3370,7 +3396,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  Cursor API endpoint
+                                  Cursor API 端点
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.apiEndpointKey}`}
@@ -3400,7 +3426,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server URL
+                                  {providerSettings.title} 服务器 URL
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverUrlKey}`}
@@ -3436,7 +3462,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server password
+                                  {providerSettings.title} 服务器密码
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverPasswordKey}`}
@@ -3538,7 +3564,7 @@ function SettingsRouteView() {
 
         <SettingsRow
           title="Recovery tools"
-          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
+          description="当本地状态不同步时，重建本地项目索引但不清除已有对话。"
           status={
             shouldOfferRecoveryTools
               ? "Visible because projects exist but no chat history is currently available."

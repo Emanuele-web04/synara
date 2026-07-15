@@ -137,21 +137,19 @@ export const AUTOMATION_TEMPLATES: readonly {
   readonly prompt: string;
 }[] = [
   {
-    label: "Triage new crashes",
-    name: "Triage crashes",
-    prompt: "Look for new crashes in $sentry and open a fix PR for the most impactful one.",
+    label: "分诊新的崩溃",
+    name: "分诊崩溃",
+    prompt: "检查 $sentry 中的新崩溃，并为影响最大的问题创建修复 PR。",
   },
   {
-    label: "Update dependencies",
-    name: "Update dependencies",
-    prompt:
-      "Check for outdated dependencies, bump the safe minor and patch versions, then run the tests.",
+    label: "更新依赖项",
+    name: "更新依赖项",
+    prompt: "检查过期依赖项，安全升级次版本和补丁版本，然后运行测试。",
   },
   {
-    label: "Daily standup summary",
-    name: "Daily summary",
-    prompt:
-      "Summarize what changed on the main branch in the last 24 hours as a short standup update.",
+    label: "每日站会摘要",
+    name: "每日摘要",
+    prompt: "总结主分支过去 24 小时的变更，生成简短的站会更新。",
   },
 ];
 
@@ -292,23 +290,23 @@ export function automationAttentionCount(runs: readonly AutomationRun[]): number
 export function runStatusLabel(status: AutomationRun["status"]): string {
   switch (status) {
     case "pending":
-      return "Queued";
+      return "已排队";
     case "claimed":
-      return "Starting";
+      return "正在启动";
     case "running":
-      return "Running";
+      return "运行中";
     case "waiting-for-approval":
-      return "Waiting for approval";
+      return "等待批准";
     case "succeeded":
-      return "Completed";
+      return "已完成";
     case "failed":
-      return "Failed";
+      return "失败";
     case "cancelled":
-      return "Cancelled";
+      return "已取消";
     case "interrupted":
-      return "Interrupted";
+      return "已中断";
     case "skipped":
-      return "Skipped";
+      return "已跳过";
   }
 }
 
@@ -317,15 +315,15 @@ export function runResultSummary(run: AutomationRun): string {
   if (run.error) return run.error;
   switch (run.result?.outcome) {
     case "findings":
-      return "Found something to review";
+      return "发现需要审阅的内容";
     case "no-findings":
-      return "No findings";
+      return "没有发现问题";
     case "changed-files":
-      return "Changed files";
+      return "已更改文件";
     case "needs-attention":
-      return "Needs attention";
+      return "需要处理";
     case "unknown":
-      return run.threadId ? "Completed; open the thread for the reply" : "Completed";
+      return run.threadId ? "已完成；打开对话查看回复" : "已完成";
     case undefined:
       return runStatusLabel(run.status);
   }
@@ -596,6 +594,11 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
 /** Subtle labeled pill used in the automation composer toolbar. */
 const CHIP_CLASS =
   "gap-1.5 rounded-lg px-2 font-normal text-[var(--color-text-foreground-secondary)]";
+
+function worktreeModeLabel(mode: AutomationWorktreeMode): string {
+  return mode === "auto" ? "自动" : mode === "worktree" ? "工作树" : "本地";
+}
+
 type CadenceOption = { readonly value: string; readonly label: string };
 type IntervalCadenceOption = {
   readonly amount: string;
@@ -605,12 +608,12 @@ type IntervalCadenceOption = {
 
 /** Interval cadence presets shown by default; second-level intervals are preserved when present. */
 const INTERVAL_PRESETS: readonly IntervalCadenceOption[] = [
-  { amount: "15", unit: "minutes", label: "Every 15 min" },
-  { amount: "30", unit: "minutes", label: "Every 30 min" },
-  { amount: "120", unit: "minutes", label: "Every 2 hours" },
-  { amount: "360", unit: "minutes", label: "Every 6 hours" },
-  { amount: "720", unit: "minutes", label: "Every 12 hours" },
-  { amount: "1440", unit: "minutes", label: "Every 24 hours" },
+  { amount: "15", unit: "minutes", label: "每 15 分钟" },
+  { amount: "30", unit: "minutes", label: "每 30 分钟" },
+  { amount: "120", unit: "minutes", label: "每 2 小时" },
+  { amount: "360", unit: "minutes", label: "每 6 小时" },
+  { amount: "720", unit: "minutes", label: "每 12 小时" },
+  { amount: "1440", unit: "minutes", label: "每 24 小时" },
 ];
 
 function intervalOptionValue(option: Pick<IntervalCadenceOption, "amount" | "unit">): string {
@@ -618,12 +621,12 @@ function intervalOptionValue(option: Pick<IntervalCadenceOption, "amount" | "uni
 }
 
 function intervalOptionLabel(amount: string, unit: IntervalUnit): string {
-  return unit === "seconds" ? `Every ${amount} sec` : `Every ${amount} min`;
+  return unit === "seconds" ? `每 ${amount} 秒` : `每 ${amount} 分钟`;
 }
 
 /** Heartbeat run-count presets ("" = unlimited). */
 const MAX_ITERATION_PRESETS: readonly CadenceOption[] = [
-  { value: "", label: "Unlimited" },
+  { value: "", label: "不限次数" },
   { value: "10", label: "10 runs" },
   { value: "25", label: "25 runs" },
   { value: "50", label: "50 runs" },
@@ -632,7 +635,7 @@ const MAX_ITERATION_PRESETS: readonly CadenceOption[] = [
 ];
 
 function maxIterationLabel(value: string): string {
-  return value === "1" ? "1 run" : `${value} runs`;
+  return `${value} 次运行`;
 }
 
 export function maxIterationOptions(
@@ -663,7 +666,7 @@ export function AutomationApprovalBanner({
   }
   return (
     <Alert variant="warning">
-      <AlertTitle>Approval needed</AlertTitle>
+      <AlertTitle>需要批准</AlertTitle>
       <AlertDescription>
         <span>
           This automation needs your approval once before Synara can save changes. When a warning
@@ -827,7 +830,7 @@ export function AutomationDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogPopup surface="solid" showCloseButton={false} className="max-w-3xl">
         <DialogTitle className="sr-only">
-          {editing ? "Edit automation" : "New automation"}
+          {editing ? "编辑自动化工作流" : "新建自动化工作流"}
         </DialogTitle>
 
         <div className="flex items-start gap-3 px-5 pt-5">
@@ -927,7 +930,7 @@ export function AutomationDialog({
               <Menu>
                 <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
                   <WorktreeIcon className="size-4" />
-                  <span className="capitalize">{form.worktreeMode}</span>
+                  <span>{worktreeModeLabel(form.worktreeMode)}</span>
                   <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="start" className="w-40">
@@ -939,7 +942,7 @@ export function AutomationDialog({
                   >
                     {(["auto", "worktree", "local"] as const).map((value) => (
                       <MenuRadioItem key={value} value={value}>
-                        <span className="capitalize">{value}</span>
+                        <span>{worktreeModeLabel(value)}</span>
                       </MenuRadioItem>
                     ))}
                   </MenuRadioGroup>
@@ -951,7 +954,7 @@ export function AutomationDialog({
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
                 <CentralIcon name="folder-2" className="size-4" />
                 <span className="max-w-[10rem] truncate">
-                  {selectedProject?.name ?? "Select project"}
+                  {selectedProject?.name ?? "选择项目"}
                 </span>
                 <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>
@@ -1140,17 +1143,17 @@ export function AutomationDialog({
                     value={form.mode}
                     onValueChange={(value) => setField("mode", value as AutomationMode)}
                   >
-                    <MenuRadioItem value="standalone">Standalone</MenuRadioItem>
-                    <MenuRadioItem value="heartbeat">Heartbeat</MenuRadioItem>
+                    <MenuRadioItem value="standalone">独立运行</MenuRadioItem>
+                    <MenuRadioItem value="heartbeat">心跳</MenuRadioItem>
                   </MenuRadioGroup>
                 </MenuGroup>
                 {form.mode === "heartbeat" ? (
                   <>
                     <MenuSeparator />
                     <MenuGroup>
-                      <MenuGroupLabel>Target thread</MenuGroupLabel>
+                      <MenuGroupLabel>目标对话</MenuGroupLabel>
                       {projectThreads.length === 0 ? (
-                        <MenuItem disabled>No threads in this project</MenuItem>
+                        <MenuItem disabled>此项目没有对话</MenuItem>
                       ) : (
                         <MenuRadioGroup
                           value={form.targetThreadId}
@@ -1168,7 +1171,7 @@ export function AutomationDialog({
                     </MenuGroup>
                     <MenuSeparator />
                     <MenuGroup>
-                      <MenuGroupLabel>Stop when</MenuGroupLabel>
+                      <MenuGroupLabel>停止条件</MenuGroupLabel>
                       <div className="px-2 py-1">
                         <input
                           value={form.stopWhen}
@@ -1189,7 +1192,7 @@ export function AutomationDialog({
                 ) : null}
                 <MenuSeparator />
                 <MenuGroup>
-                  <MenuGroupLabel>Max iterations</MenuGroupLabel>
+                  <MenuGroupLabel>最大迭代次数</MenuGroupLabel>
                   <MenuRadioGroup
                     value={form.maxIterations}
                     onValueChange={(value) => setField("maxIterations", value)}
@@ -1223,8 +1226,8 @@ export function AutomationDialog({
                   value={form.runtimeMode}
                   onValueChange={(value) => setField("runtimeMode", value as RuntimeMode)}
                 >
-                  <MenuRadioItem value="approval-required">Approval required</MenuRadioItem>
-                  <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+                  <MenuRadioItem value="approval-required">需要批准</MenuRadioItem>
+                  <MenuRadioItem value="full-access">完全访问</MenuRadioItem>
                 </MenuRadioGroup>
               </ComposerPickerMenuPopup>
             </Menu>
@@ -1240,7 +1243,7 @@ export function AutomationDialog({
               Cancel
             </Button>
             <Button type="button" onClick={submit} disabled={busy || !submittable}>
-              {editing ? "Save" : "Create"}
+              {editing ? "保存" : "创建"}
             </Button>
           </div>
         </div>

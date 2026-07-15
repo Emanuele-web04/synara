@@ -71,7 +71,7 @@ export function KeyboardShortcutsSettingsPanel() {
           size="sm"
           variant="soft"
           nativeInput
-          placeholder="Search shortcuts..."
+          placeholder="搜索快捷键…"
           value={query}
           aria-label="Search shortcuts"
           onChange={(event) => setQuery(event.target.value)}
@@ -95,8 +95,8 @@ export function KeyboardShortcutsSettingsPanel() {
           className={cn(SETTINGS_CARD_CLASS_NAME, "divide-y divide-[color:var(--color-border)]")}
         >
           <div className="flex items-center justify-between gap-4 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-            <span>Command</span>
-            <span>Keybinding</span>
+            <span>命令</span>
+            <span>快捷键</span>
           </div>
           {filteredSections.flatMap((section) => {
             const muted = section.tone === "muted";

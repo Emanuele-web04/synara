@@ -44,6 +44,89 @@ interface ShortcutDefinition {
   description: string;
 }
 
+const SHORTCUT_TEXT_ZH: Readonly<Record<string, string>> = {
+  "Add project": "添加项目",
+  "Open the folder picker to import a local project into the sidebar.":
+    "打开文件夹选择器，将本地项目导入侧边栏。",
+  "Search projects and threads": "搜索项目和对话",
+  "Open the sidebar search palette from anywhere in the app.": "在应用任意位置打开侧边栏搜索面板。",
+  "Import thread": "导入对话",
+  "Bring an existing conversation into the current workspace.": "将已有对话带入当前工作区。",
+  "New thread": "新建对话",
+  "Start a fresh thread in the current project, or the most recent one.":
+    "在当前项目或最近使用的项目中新建对话。",
+  "New thread in latest project": "在最近项目中新建对话",
+  "Jump back into the most recently used project with a new thread.":
+    "回到最近使用的项目并新建对话。",
+  "New chat": "新建对话",
+  "Open the empty chat landing view.": "打开空白对话首页。",
+  "New terminal thread": "新建终端对话",
+  "Create a thread that opens directly into terminal mode.": "创建直接进入终端模式的对话。",
+  "New Claude thread": "新建 Claude 对话",
+  "New Codex thread": "新建 Codex 对话",
+  "New Cursor thread": "新建 Cursor 对话",
+  "New Gemini thread": "新建 Gemini 对话",
+  "Start a fresh thread with Claude selected.": "新建对话并选择 Claude。",
+  "Start a fresh thread with Codex selected.": "新建对话并选择 Codex。",
+  "Start a fresh thread with Cursor selected.": "新建对话并选择 Cursor。",
+  "Start a fresh thread with Gemini selected.": "新建对话并选择 Gemini。",
+  "Split chat": "拆分对话",
+  "Open the current conversation in a second pane.": "在第二个面板中打开当前对话。",
+  "Previous recent view": "上一个最近视图",
+  "Next recent view": "下一个最近视图",
+  "Cycle backward through recently opened primary views.": "向后切换最近打开的主视图。",
+  "Cycle forward through recently opened primary views.": "向前切换最近打开的主视图。",
+  "Model picker": "模型选择器",
+  "Open the composer provider and model picker.": "打开输入框的提供商和模型选择器。",
+  "Next model": "下一个模型",
+  "Previous model": "上一个模型",
+  "Cycle to the next model for the active provider (favorites first, then remaining models).":
+    "切换到当前提供商的下一个模型（先收藏，再显示其余模型）。",
+  "Cycle to the previous model for the active provider (favorites first, then remaining models).":
+    "切换到当前提供商的上一个模型（先收藏，再显示其余模型）。",
+  "Reasoning picker": "推理选择器",
+  "Open the composer reasoning and trait controls.": "打开输入框的推理和特征控制项。",
+  "Focus composer": "聚焦输入框",
+  "Focus or blur the chat prompt composer.": "聚焦或取消聚焦对话输入框。",
+  "Toggle terminal": "切换终端",
+  "Show or hide the terminal surface for the active thread.": "显示或隐藏当前对话的终端界面。",
+  "Toggle diff": "切换差异",
+  "Open or close the working tree diff panel.": "打开或关闭工作树差异面板。",
+  "Toggle browser": "切换浏览器",
+  "Reveal the built-in browser panel for the active thread.": "显示当前对话的内置浏览器面板。",
+  "Previous visible thread": "上一个可见对话",
+  "Next visible thread": "下一个可见对话",
+  "Cycle to the previous thread that is currently visible in the sidebar.":
+    "切换到侧边栏中上一个可见对话。",
+  "Cycle to the next thread that is currently visible in the sidebar.":
+    "切换到侧边栏中下一个可见对话。",
+  "Open in favorite editor": "在首选编辑器中打开",
+  "Send the current thread or workspace target to your preferred editor.":
+    "将当前对话或工作区目标发送到首选编辑器。",
+  "Focus a visible thread directly from the sidebar number row.":
+    "使用数字键直接聚焦侧边栏中的可见对话。",
+  "Open full-width terminal workspace": "打开全宽终端工作区",
+  "Expand the active thread into the workspace terminal layout.":
+    "将当前对话展开为工作区终端布局。",
+  "Focus terminal tab": "聚焦终端标签",
+  "Switch the workspace to the terminal tab.": "将工作区切换到终端标签。",
+  "Focus chat tab": "聚焦对话标签",
+  "Switch the workspace back to the chat tab.": "将工作区切换回对话标签。",
+  "Close active workspace panel": "关闭当前工作区面板",
+  "Close the currently focused workspace panel or tab.": "关闭当前聚焦的工作区面板或标签。",
+  "Show keyboard shortcuts": "显示键盘快捷键",
+  "Open this sheet from anywhere without leaving your current context.":
+    "在任何位置打开此面板，无需离开当前上下文。",
+  "Toggle sidebar": "切换侧边栏",
+  "Collapse or reveal the sidebar shell.": "收起或展开侧边栏。",
+};
+
+function localizeShortcutText(value: string): string {
+  const jumpMatch = /^Jump to visible thread (\d+)$/.exec(value);
+  if (jumpMatch) return `跳转到可见对话 ${jumpMatch[1]}`;
+  return SHORTCUT_TEXT_ZH[value] ?? value;
+}
+
 const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "sidebar.addProject",
@@ -227,8 +310,8 @@ function definitionToEntry(
   if (!shortcutLabel) return null;
   return {
     id: commands[0] ?? definition.label,
-    label: definition.label,
-    description: definition.description,
+    label: localizeShortcutText(definition.label),
+    description: localizeShortcutText(definition.description),
     shortcutLabel,
   };
 }
@@ -294,10 +377,10 @@ export function buildShortcutSheetSections(
 
   sections.push({
     id: "available-now",
-    title: "Available now",
+    title: "当前可用",
     description: options.context.terminalWorkspaceOpen
-      ? "These reflect the active workspace-terminal context."
-      : "These reflect the current chat and sidebar context.",
+      ? "以下快捷键适用于当前工作区终端环境。"
+      : "以下快捷键适用于当前对话和侧边栏环境。",
     entries: [...currentEntries, ...currentNavigationEntries],
   });
 
@@ -320,10 +403,10 @@ export function buildShortcutSheetSections(
   if (alternateEntries.length > 0) {
     sections.push({
       id: "alternate-context",
-      title: options.context.terminalWorkspaceOpen ? "Outside workspace mode" : "In workspace mode",
+      title: options.context.terminalWorkspaceOpen ? "工作区模式之外" : "工作区模式中",
       description: options.context.terminalWorkspaceOpen
-        ? "Number-row jumps return when the terminal workspace is closed."
-        : "These bindings take over when the terminal switches into workspace mode.",
+        ? "关闭终端工作区后，数字键跳转会恢复。"
+        : "终端切换到工作区模式后，将使用以下快捷键。",
       tone: "muted",
       entries: alternateEntries,
     });
@@ -339,10 +422,10 @@ export function buildShortcutSheetSections(
       if (!shortcutLabel) return null;
       return {
         id: script.id,
-        label: script.runOnWorktreeCreate ? `${script.name} setup script` : script.name,
+        label: script.runOnWorktreeCreate ? `${script.name} 设置脚本` : script.name,
         description: script.runOnWorktreeCreate
-          ? "Run the project setup script directly from the keyboard."
-          : "Run this project script without opening the scripts menu.",
+          ? "直接通过键盘运行项目设置脚本。"
+          : "无需打开脚本菜单即可运行此项目脚本。",
         shortcutLabel,
       } satisfies ShortcutSheetEntry;
     })
@@ -351,8 +434,8 @@ export function buildShortcutSheetSections(
   if (projectScriptEntries.length > 0) {
     sections.push({
       id: "project-scripts",
-      title: "Project scripts",
-      description: "Custom shortcuts defined for the active project's scripts.",
+      title: "项目脚本",
+      description: "为当前项目脚本定义的自定义快捷键。",
       entries: projectScriptEntries,
     });
   }

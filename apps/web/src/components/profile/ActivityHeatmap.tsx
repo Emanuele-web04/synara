@@ -33,18 +33,18 @@ export const CARD_HEATMAP_INTENSITY_CLASSES: readonly string[] = [
 ];
 
 const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+  "1月",
+  "2月",
+  "3月",
+  "4月",
+  "5月",
+  "6月",
+  "7月",
+  "8月",
+  "9月",
+  "10月",
+  "11月",
+  "12月",
 ];
 
 interface ActivityHeatmapProps {
@@ -78,10 +78,10 @@ interface ActivityHeatmapProps {
 function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string): string {
   const date = formatShortDate(cell.day) ?? cell.day;
   if (cell.count <= 0) {
-    return `No ${unit} on ${date}`;
+    return `${date} 无${unit === "tokens" ? " Token" : "提示词"}`;
   }
   const noun = cell.count === 1 && unit.endsWith("s") ? unit.slice(0, -1) : unit;
-  return `${formatCompact(cell.count)} ${noun} on ${date}`;
+  return `${date}：${formatCompact(cell.count)} ${noun === "tokens" || noun === "token" ? "Token" : "条提示词"}`;
 }
 
 type Slot =

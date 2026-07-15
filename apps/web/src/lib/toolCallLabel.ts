@@ -150,13 +150,13 @@ function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
   itemType: ReadableToolTitleInput["itemType"],
 ): string | null {
-  if (requestKind === "file-read") return "Read";
-  if (requestKind === "file-change" || itemType === "file_change") return "Edited";
+  if (requestKind === "file-read") return "已读取";
+  if (requestKind === "file-change" || itemType === "file_change") return "已编辑";
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
-  if (itemType === "web_search") return "Searched the web";
-  if (itemType === "image_generation") return "Generated image";
-  if (itemType === "image_view") return "Viewed image";
-  if (itemType === "collab_agent_tool_call") return "Agent task";
+  if (itemType === "web_search") return "已搜索网页";
+  if (itemType === "image_generation") return "已生成图片";
+  if (itemType === "image_view") return "已查看图片";
+  if (itemType === "collab_agent_tool_call") return "智能体任务";
   return null;
 }
 
@@ -209,10 +209,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   }
   const lowerCollapsed = collapsed.toLowerCase();
   if (lowerCollapsed === "read") {
-    return "Read";
+    return "已读取";
   }
   if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
-    return "Search";
+    return "搜索";
   }
   return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
 }
@@ -371,29 +371,29 @@ export function deriveReadableCommandDisplay(
 
   if (READ_FILE_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Reading" : "Read",
-      target: lastPathComponents(args, "file"),
+      verb: isRunning ? "正在读取" : "已读取",
+      target: lastPathComponents(args, "文件"),
       fullCommand: rawCommand,
     };
   }
   if (SEARCH_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Searching" : "Searched",
+      verb: isRunning ? "正在搜索" : "已搜索",
       target: searchSummary(args),
       fullCommand: rawCommand,
     };
   }
   if (LIST_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Listing" : "Listed",
-      target: lastPathComponents(args, "directory"),
+      verb: isRunning ? "正在列出" : "已列出",
+      target: lastPathComponents(args, "目录"),
       fullCommand: rawCommand,
     };
   }
   if (FIND_COMMAND_TOOLS.has(tool)) {
     return {
-      verb: isRunning ? "Finding" : "Found",
-      target: findTarget(args, "files"),
+      verb: isRunning ? "正在查找" : "已找到",
+      target: findTarget(args, "文件"),
       fullCommand: rawCommand,
     };
   }
@@ -401,14 +401,14 @@ export function deriveReadableCommandDisplay(
   switch (tool) {
     case "mkdir":
       return {
-        verb: isRunning ? "Creating" : "Created",
-        target: lastPathComponents(args, "directory"),
+        verb: isRunning ? "正在创建" : "已创建",
+        target: lastPathComponents(args, "目录"),
         fullCommand: rawCommand,
       };
     case "rm":
       return {
-        verb: isRunning ? "Removing" : "Removed",
-        target: lastPathComponents(args, "file"),
+        verb: isRunning ? "正在移除" : "已移除",
+        target: lastPathComponents(args, "文件"),
         fullCommand: rawCommand,
       };
     case "cp":
@@ -416,12 +416,12 @@ export function deriveReadableCommandDisplay(
       return {
         verb: isRunning
           ? tool === "cp"
-            ? "Copying"
-            : "Moving"
+            ? "正在复制"
+            : "正在移动"
           : tool === "cp"
-            ? "Copied"
-            : "Moved",
-        target: lastPathComponents(args, "file"),
+            ? "已复制"
+            : "已移动",
+        target: lastPathComponents(args, "文件"),
         fullCommand: rawCommand,
       };
     case "git":
@@ -434,19 +434,19 @@ export function deriveReadableCommandDisplay(
     case "ruby":
     case "perl":
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: isRunning ? "正在运行" : "已运行",
         target: inlineScriptTarget(tool, command, args) ?? compactInlineCommand(command),
         fullCommand: rawCommand,
       };
     case "osascript":
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: isRunning ? "正在运行" : "已运行",
         target: "AppleScript",
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: isRunning ? "正在运行" : "已运行",
         target: compactInlineCommand(command),
         fullCommand: rawCommand,
       };
@@ -491,62 +491,62 @@ function humanizeGitCommand(
   switch (subcommand) {
     case "status":
       return {
-        verb: isRunning ? "Checking" : "Checked",
+        verb: isRunning ? "正在检查" : "已检查",
         target: "git status",
         fullCommand: rawCommand,
       };
     case "diff":
       return {
-        verb: isRunning ? "Comparing" : "Compared",
-        target: "changes",
+        verb: isRunning ? "正在比较" : "已比较",
+        target: "更改",
         fullCommand: rawCommand,
       };
     case "show":
       return {
-        verb: isRunning ? "Inspecting" : "Inspected",
-        target: "commit",
+        verb: isRunning ? "正在检查" : "已检查",
+        target: "提交",
         fullCommand: rawCommand,
       };
     case "log":
       return {
-        verb: isRunning ? "Reviewing" : "Reviewed",
-        target: "git history",
+        verb: isRunning ? "正在查看" : "已查看",
+        target: "Git 历史",
         fullCommand: rawCommand,
       };
     case "add":
       return {
-        verb: isRunning ? "Staging" : "Staged",
-        target: "changes",
+        verb: isRunning ? "正在暂存" : "已暂存",
+        target: "更改",
         fullCommand: rawCommand,
       };
     case "commit":
       return {
-        verb: isRunning ? "Committing" : "Committed",
-        target: "changes",
+        verb: isRunning ? "正在提交" : "已提交",
+        target: "更改",
         fullCommand: rawCommand,
       };
     case "push":
       return {
-        verb: isRunning ? "Pushing" : "Pushed",
-        target: "to remote",
+        verb: isRunning ? "正在推送" : "已推送",
+        target: "到远端",
         fullCommand: rawCommand,
       };
     case "pull":
       return {
-        verb: isRunning ? "Pulling" : "Pulled",
-        target: "from remote",
+        verb: isRunning ? "正在拉取" : "已拉取",
+        target: "自远端",
         fullCommand: rawCommand,
       };
     case "checkout":
     case "switch":
       return {
-        verb: isRunning ? "Switching to" : "Switched to",
+        verb: isRunning ? "正在切换到" : "已切换到",
         target: checkoutTarget(args),
         fullCommand: rawCommand,
       };
     default:
       return {
-        verb: isRunning ? "Running" : "Ran",
+        verb: isRunning ? "正在运行" : "已运行",
         target: compactInlineCommand(`git ${normalizedArgs}`.trim()),
         fullCommand: rawCommand,
       };
@@ -582,7 +582,7 @@ function stripGitGlobalOptions(args: string): string {
 
 function checkoutTarget(args: string): string {
   const branch = tokenizeCommandArgs(args).at(-1)?.trim();
-  return branch ? branch : "branch";
+  return branch ? branch : "分支";
 }
 
 function lastPathComponents(args: string, fallback: string): string {
@@ -624,10 +624,10 @@ function findTarget(args: string, fallback: string): string {
 
 function compactPath(path: string): string {
   if (path === ".") {
-    return "current directory";
+    return "当前目录";
   }
   if (path === "..") {
-    return "parent directory";
+    return "上级目录";
   }
   const parts = path.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 2) {
@@ -652,7 +652,7 @@ function firstShellCommandSegment(command: string): string {
 function inlineScriptTarget(tool: string, command: string, args: string): string | null {
   const normalizedTool = tool === "python3" ? "python" : tool;
   if (containsHeredoc(command) || hasInlineScriptFlag(args)) {
-    return `${normalizedTool} script`;
+    return `${normalizedTool} 脚本`;
   }
   return null;
 }
@@ -669,15 +669,15 @@ function hasInlineScriptFlag(args: string): boolean {
 function searchSummary(args: string): string {
   const { pattern, path } = extractSearchPatternAndPath(args);
   if (pattern && path) {
-    return `for ${pattern} in ${path}`;
+    return `“${pattern}”（${path}）`;
   }
   if (pattern) {
-    return `for ${pattern}`;
+    return `“${pattern}”`;
   }
   if (path) {
-    return `in ${path}`;
+    return path;
   }
-  return "files";
+  return "文件";
 }
 
 function extractSearchPatternAndPath(args: string): {
@@ -710,7 +710,7 @@ function extractSearchPatternAndPath(args: string): {
       const normalizedPattern = normalizeSearchPatternToken(token);
       if (!normalizedPattern) {
         const normalizedPath = normalizeSearchPathToken(token);
-        if (normalizedPath && (!path || path === "current directory")) {
+        if (normalizedPath && (!path || path === "当前目录")) {
           path = normalizedPath;
         }
         continue;
@@ -718,13 +718,13 @@ function extractSearchPatternAndPath(args: string): {
       pattern = normalizedPattern;
       continue;
     }
-    if (!path || path === "current directory") {
+    if (!path || path === "当前目录") {
       path = normalizeSearchPathToken(token) ?? path;
       continue;
     }
   }
 
-  if (pattern && path === "current directory" && looksLikeSearchPath(pattern)) {
+  if (pattern && path === "当前目录" && looksLikeSearchPath(pattern)) {
     path = normalizeSearchPathToken(pattern);
     pattern = null;
   }

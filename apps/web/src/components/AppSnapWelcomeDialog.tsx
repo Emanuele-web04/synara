@@ -115,14 +115,11 @@ export function AppSnapWelcomeDialog() {
           </span>
 
           <DialogHeader className="gap-2 p-0">
-            <DialogTitle className="text-[19px] leading-tight">
-              Synara AppSnaps are live!
-            </DialogTitle>
+            <DialogTitle className="text-[19px] leading-tight">应用截图已启用！</DialogTitle>
             {/* Two lines at 378px wide is the reference sheet's proportion; longer copy
                 wraps to three and throws the whole vertical rhythm off. */}
             <DialogDescription className="text-[14px] leading-[19.5px]">
-              Press both Option keys (⌥&thinsp;⌥) to snap any app&rsquo;s window into the task
-              you&rsquo;re working in.
+              同时按下两个 Option 键（⌥&thinsp;⌥），即可把任意应用窗口捕捉到当前任务中。
             </DialogDescription>
           </DialogHeader>
 
@@ -131,7 +128,7 @@ export function AppSnapWelcomeDialog() {
               Not now
             </Button>
             <Button className="rounded-[10px]" onClick={openSettings}>
-              Set up AppSnap
+              设置应用截图
             </Button>
           </DialogFooter>
         </div>
