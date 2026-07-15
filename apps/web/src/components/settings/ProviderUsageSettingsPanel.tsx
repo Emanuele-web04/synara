@@ -237,8 +237,8 @@ export function ProviderUsageSettingsPanel() {
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
         Usage is read from each provider CLI or its backend API. Rate-limit resets and similar
-        features use stored credentials from your provider CLI; re-authenticate with the CLI if
-        a provider shows "Not signed in".
+        features use stored credentials from your provider CLI; re-authenticate with the CLI if a
+        provider shows "Not signed in".
       </p>
     </section>
   );

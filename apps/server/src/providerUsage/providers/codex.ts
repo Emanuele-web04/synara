@@ -183,9 +183,7 @@ function parseResetCreditTimestamp(value: number | undefined): number | undefine
   return value < 1e10 ? value * 1000 : value;
 }
 
-function parseResetCredits(
-  raw: unknown,
-): CodexRateLimitResetCredits | undefined {
+function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined {
   const record = asRecord(raw);
   if (!record) return undefined;
   const availableCount = asFiniteNumber(record.available_count);

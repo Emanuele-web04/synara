@@ -19,11 +19,7 @@ import {
 import { formatRateLimitResetTime } from "~/lib/rateLimits";
 import { consumeCodexResetCreditMutationOptions } from "~/lib/serverReactQuery";
 
-export function CodexResetCreditCard({
-  snapshot,
-}: {
-  snapshot: ServerProviderUsageSnapshot;
-}) {
+export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsageSnapshot }) {
   const credits = snapshot.rateLimitResetCredits;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -66,8 +62,7 @@ export function CodexResetCreditCard({
           <DialogHeader>
             <DialogTitle>Reset Codex limits?</DialogTitle>
             <DialogDescription>
-              This uses one Codex reset credit and resets any eligible usage
-              windows immediately.
+              This uses one Codex reset credit and resets any eligible usage windows immediately.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

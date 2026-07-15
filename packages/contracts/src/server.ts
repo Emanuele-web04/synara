@@ -145,9 +145,7 @@ export type CodexResetCredit = typeof CodexResetCredit.Type;
 
 export const CodexRateLimitResetCredits = Schema.Struct({
   availableCount: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  totalEarnedCount: Schema.optional(
-    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  ),
+  totalEarnedCount: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   nextExpiresAt: Schema.optional(IsoDateTime),
   credits: Schema.optional(Schema.Array(CodexResetCredit)),
 });

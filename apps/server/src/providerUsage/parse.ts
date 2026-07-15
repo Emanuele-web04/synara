@@ -143,9 +143,7 @@ export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot
     status: input.status,
     ...(input.planName ? { planName: input.planName } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
-    ...(input.rateLimitResetCredits
-      ? { rateLimitResetCredits: input.rateLimitResetCredits }
-      : {}),
+    ...(input.rateLimitResetCredits ? { rateLimitResetCredits: input.rateLimitResetCredits } : {}),
   };
 }
 
