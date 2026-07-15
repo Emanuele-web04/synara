@@ -964,7 +964,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         const result = await runAntigravityHelperProcess(
           trim(input.binaryPath) ?? "agy",
           ["models"],
-          { cwd: input.cwd, timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS },
+          {
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+          },
         );
         if (result.code !== 0) throw new Error(result.stderr || "agy models failed");
         const models = parseModelLines(result.stdout);
