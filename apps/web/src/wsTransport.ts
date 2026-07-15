@@ -447,7 +447,7 @@ export class WsTransport {
     };
   }
 
-  dispose() {
+  async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.setState("disposed");
@@ -459,12 +459,8 @@ export class WsTransport {
     void this.reconnectPromise?.catch(() => undefined);
     const runtime = this.runtime;
     const clientScope = this.clientScope;
-    void runtime
-      .runPromise(Scope.close(clientScope, Exit.void))
-      .catch(() => undefined)
-      .finally(() => {
-        void runtime.dispose().catch(() => undefined);
-      });
+    await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+    await runtime.dispose().catch(() => undefined);
   }
 
   private createSession() {

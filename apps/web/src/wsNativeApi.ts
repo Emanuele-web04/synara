@@ -589,7 +589,7 @@ export function createWsNativeApi(): NativeApi {
         const result = await requestAuthJson<AuthLogoutResult>("/api/auth/logout", {
           method: "POST",
         });
-        transport.dispose();
+        await transport.dispose();
         return result;
       },
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
@@ -877,16 +877,17 @@ export function createWsNativeApi(): NativeApi {
 
 // Browser-mode tests mount full app roots repeatedly in one page; reset the
 // singleton so each test gets a fresh WebSocket stream and cached push state.
-export function resetWsNativeApiForTest(): void {
-  instance?.transport.dispose();
+export async function resetWsNativeApiForTest(): Promise<void> {
+  const transport = instance?.transport;
   instance = null;
   clearWsNativeApiListeners();
   fallbackBrowserStates.clear();
+  await transport?.dispose();
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    instance?.transport.dispose();
+    void instance?.transport.dispose();
     instance = null;
     clearWsNativeApiListeners();
   });

@@ -316,11 +316,12 @@ describe("Keybindings update toast", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
-  beforeEach(() => {
-    resetWsNativeApiForTest();
+  beforeEach(async () => {
+    await resetWsNativeApiForTest();
     localStorage.clear();
     document.body.innerHTML = "";
     serverConfigStreamRequestId = null;
@@ -349,7 +350,6 @@ describe("Keybindings update toast", () => {
   });
 
   afterEach(() => {
-    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 

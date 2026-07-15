@@ -193,16 +193,16 @@ describe("WsTransport", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
   });
 
-  it("opens the stable bootstrap endpoint before the feature RPC socket", () => {
+  it("opens the stable bootstrap endpoint before the feature RPC socket", async () => {
     const transport = new WsTransport("ws://localhost:3020");
 
     expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
     expect(transport.getState()).toBe("connecting");
 
-    transport.dispose();
+    await transport.dispose();
   });
 
-  it("uses the desktop bridge URL before falling back to the browser location", () => {
+  it("uses the desktop bridge URL before falling back to the browser location", async () => {
     const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -217,15 +217,15 @@ describe("WsTransport", () => {
     expect(getWsUrl).toHaveBeenCalledTimes(1);
     expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/ws/bootstrap?token=old");
 
-    transport.dispose();
+    await transport.dispose();
   });
 
-  it("falls back to the current browser host when no desktop bridge URL exists", () => {
+  it("falls back to the current browser host when no desktop bridge URL exists", async () => {
     const transport = new WsTransport();
 
     expect(sockets[0]?.url).toBe("ws://localhost:3020/ws/bootstrap");
 
-    transport.dispose();
+    await transport.dispose();
   });
 
   it("pins the feature socket to the negotiated revision and server generation", () => {
@@ -249,7 +249,7 @@ describe("WsTransport", () => {
     );
   });
 
-  it("notifies state listeners and replays the current state on demand", () => {
+  it("notifies state listeners and replays the current state on demand", async () => {
     const transport = new WsTransport();
     const listener = vi.fn();
 
@@ -258,13 +258,13 @@ describe("WsTransport", () => {
     expect(listener).toHaveBeenCalledWith("connecting");
 
     listener.mockClear();
-    transport.dispose();
+    await transport.dispose();
 
     expect(listener).toHaveBeenCalledWith("disposed");
 
     listener.mockClear();
     unsubscribe();
-    transport.dispose();
+    await transport.dispose();
 
     expect(listener).not.toHaveBeenCalled();
   });

@@ -368,11 +368,12 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
-  beforeEach(() => {
-    resetWsNativeApiForTest();
+  beforeEach(async () => {
+    await resetWsNativeApiForTest();
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
@@ -421,7 +422,6 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterEach(() => {
-    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 

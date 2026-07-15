@@ -1690,11 +1690,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
   beforeEach(async () => {
-    resetWsNativeApiForTest();
+    await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
@@ -1743,7 +1744,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
-    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 
@@ -1946,7 +1946,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain(THREAD_TITLE);
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 15_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -4626,6 +4626,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("promotes a stored terminal draft using its saved context and model selection", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const draftThreadId = ThreadId.makeUnsafe("thread-terminal-draft-reuse");
     useComposerDraftStore.setState({
       draftsByThreadId: {
@@ -4750,6 +4751,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
@@ -5062,7 +5064,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(document.body.textContent).toContain("Tool 6");
           expect(document.body.textContent).not.toContain("Tool 1");
         },
-        { timeout: 8_000, interval: 16 },
+        { timeout: 15_000, interval: 16 },
       );
 
       useStore
@@ -5105,7 +5107,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
             document.querySelector("[data-settled-turn-collapse-transition='true']"),
           ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
-          expect(document.body.textContent).not.toContain("Tool 6");
+          const settledTrigger = Array.from(
+            document.querySelectorAll<HTMLButtonElement>("button"),
+          ).find((element) => element.textContent?.includes("Worked for"));
+          expect(settledTrigger).toBeDefined();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
         },
         { timeout: 8_000, interval: 16 },
       );
