@@ -54,9 +54,7 @@ export function CodexResetCreditCard({ snapshot }: { snapshot: ServerProviderUsa
               : `${credits.availableCount} reset credits available`}
           </div>
           {expiryText && (
-            <div className="text-[11px] text-muted-foreground">
-              Count: {credits.availableCount} Expires: {expiryText}
-            </div>
+            <div className="text-[11px] text-muted-foreground">Expires: {expiryText}</div>
           )}
         </div>
 
