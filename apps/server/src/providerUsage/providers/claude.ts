@@ -47,9 +47,12 @@ const KEYCHAIN_SERVICE = "Claude Code-credentials";
  * Older versions use the legacy unsuffixed service.
  * We try both, scoped first, so newer installs resolve correctly.
  */
-function claudeKeychainServices(configDir: string | undefined): string[] {
-  if (!configDir) return [KEYCHAIN_SERVICE];
-  const hash = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
+function claudeKeychainServices(configDir: string | undefined, homeDir: string): string[] {
+  // Claude Code 2.1+ uses a scoped service derived from the config dir.
+  // When CLAUDE_CONFIG_DIR is unset, Claude Code defaults to ~/.claude,
+  // so we compute the scoped hash from that default too.
+  const effectiveConfigDir = configDir ?? nodePath.join(homeDir, ".claude");
+  const hash = createHash("sha256").update(effectiveConfigDir).digest("hex").slice(0, 8);
   return [`${KEYCHAIN_SERVICE}-${hash}`, KEYCHAIN_SERVICE];
 }
 const SCOPES =
@@ -110,7 +113,7 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
   // "Claude Code-credentials-<sha256(configDir).slice(0,8)>".
   // Try the scoped service first, then fall back to the legacy unsuffixed service.
   const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
-  const services = claudeKeychainServices(configDir);
+  const services = claudeKeychainServices(configDir, ctx.homeDir);
   for (const service of services) {
     const raw =
       keychainAccount !== undefined
