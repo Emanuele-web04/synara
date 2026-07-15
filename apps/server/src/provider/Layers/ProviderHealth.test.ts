@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Deferred, Duration, Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -117,7 +117,6 @@ function failingSpawnerLayer(description: string) {
 
 function hangingSpawnerLayer(input: {
   readonly onKill: () => void;
-  readonly onSpawn?: Effect.Effect<void>;
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
@@ -140,7 +139,7 @@ function hangingSpawnerLayer(input: {
         args: ReadonlyArray<string>;
       };
       return input.shouldHang(cmd.args, cmd.command)
-        ? (input.onSpawn ?? Effect.void).pipe(Effect.as(handle))
+        ? Effect.succeed(handle)
         : Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
     }),
   );
@@ -290,7 +289,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("stops a hung provider process and persists a failed update state", () =>
       Effect.gen(function* () {
         let killed = false;
-        const spawned = yield* Deferred.make<void>();
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -328,7 +326,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           Layer.provideMerge(
             hangingSpawnerLayer({
               onKill: () => (killed = true),
-              onSpawn: Deferred.succeed(spawned, undefined).pipe(Effect.asVoid),
               shouldHang: (args, command) =>
                 command === "npm" && args.join(" ") === "install -g @kilocode/cli@latest",
             }),
@@ -337,12 +334,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
         const result = yield* Effect.gen(function* () {
           const providerHealth = yield* ProviderHealth;
-          const updateFiber = yield* providerHealth
-            .updateProvider({ provider: "kilo" })
-            .pipe(Effect.forkChild);
-          yield* Deferred.await(spawned);
-          yield* TestClock.adjust(Duration.millis(20));
-          return yield* Fiber.join(updateFiber);
+          return yield* TestClock.withLive(providerHealth.updateProvider({ provider: "kilo" }));
         }).pipe(Effect.provide(layer));
         const kilo = result.providers.find((provider) => provider.provider === "kilo");
 
