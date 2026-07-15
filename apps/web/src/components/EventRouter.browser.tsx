@@ -477,7 +477,7 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello");
         },
-        { timeout: 15_000, interval: 16 },
+        { timeout: 8_000, interval: 16 },
       );
 
       sendThreadEventPush(firstAssistantChunk);
