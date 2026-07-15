@@ -115,12 +115,16 @@ function failingSpawnerLayer(description: string) {
   );
 }
 
-function hangingSpawnerLayer(onKill: () => void, onSpawn: Effect.Effect<void> = Effect.void) {
+function hangingSpawnerLayer(input: {
+  readonly onKill: () => void;
+  readonly onSpawn?: Effect.Effect<void>;
+  readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
+}) {
   const handle = ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(2),
     exitCode: Effect.never,
     isRunning: Effect.succeed(true),
-    kill: () => Effect.sync(onKill),
+    kill: () => Effect.sync(input.onKill),
     stdin: Sink.drain,
     stdout: Stream.never,
     stderr: Stream.never,
@@ -130,7 +134,15 @@ function hangingSpawnerLayer(onKill: () => void, onSpawn: Effect.Effect<void> = 
   });
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => onSpawn.pipe(Effect.as(handle))),
+    ChildProcessSpawner.make((command) => {
+      const cmd = command as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+      };
+      return input.shouldHang(cmd.args, cmd.command)
+        ? (input.onSpawn ?? Effect.void).pipe(Effect.as(handle))
+        : Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+    }),
   );
 }
 
@@ -316,10 +328,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           Layer.provideMerge(ServerSettingsService.layerTest(settings)),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
-            hangingSpawnerLayer(
-              () => (killed = true),
-              Deferred.succeed(spawned, undefined).pipe(Effect.asVoid),
-            ),
+            hangingSpawnerLayer({
+              onKill: () => (killed = true),
+              onSpawn: Deferred.succeed(spawned, undefined).pipe(Effect.asVoid),
+              shouldHang: (args, command) =>
+                command === "npm" && args.join(" ") === "install -g @kilocode/cli@latest",
+            }),
           ),
         );
 
