@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { consumeCodexRateLimitResetCredit, parseCodexUsage } from "./codex";
 
 describe("parseCodexUsage — reset credits", () => {
-  it("parses availableCount and credits array from rate_limit_reset_credits", () => {
+  it("parses availableCount and credits array from rateLimitResetCredits", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
@@ -14,13 +14,13 @@ describe("parseCodexUsage — reset credits", () => {
           primary_window: { used_percent: 50 },
           secondary_window: { used_percent: 30 },
         },
-        rate_limit_reset_credits: {
-          available_count: 2,
-          total_earned_count: 3,
+        rateLimitResetCredits: {
+          availableCount: 2,
+          totalEarnedCount: 3,
           credits: [
-            { status: "available", expires_at: 1719326400, granted_at: 1718721600000 },
-            { status: "available", expires_at: 1719412800, granted_at: 1718808000000 },
-            { status: "redeemed", expires_at: 1719240000, granted_at: 1718635200000 },
+            { status: "available", expiresAt: 1719326400, grantedAt: 1718721600000 },
+            { status: "available", expiresAt: 1719412800, grantedAt: 1718808000000 },
+            { status: "redeemed", expiresAt: 1719240000, grantedAt: 1718635200000 },
           ],
         },
       },
@@ -51,7 +51,7 @@ describe("parseCodexUsage — reset credits", () => {
     });
   });
 
-  it("returns undefined when rate_limit_reset_credits is absent", () => {
+  it("returns undefined when rateLimitResetCredits is absent", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
@@ -63,11 +63,28 @@ describe("parseCodexUsage — reset credits", () => {
     expect(result.rateLimitResetCredits).toBeUndefined();
   });
 
-  it("returns undefined when available_count is 0", () => {
+  it("parses nextExpiresAt from top-level field when credits array is absent", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
-        rate_limit_reset_credits: { available_count: 0, credits: [] },
+        rate_limit: { primary_window: { used_percent: 50 } },
+        rateLimitResetCredits: { availableCount: 1, nextExpiresAt: 1719326400 },
+      },
+      nowMs: 1780000000000,
+    });
+
+    expect(result.rateLimitResetCredits?.availableCount).toBe(1);
+    expect(result.rateLimitResetCredits?.nextExpiresAt).toBe(
+      new Date(1719326400 * 1000).toISOString(),
+    );
+    expect(result.rateLimitResetCredits?.credits).toBeUndefined();
+  });
+
+  it("returns undefined when availableCount is 0", () => {
+    const result = parseCodexUsage({
+      json: {
+        plan_type: "pro",
+        rateLimitResetCredits: { availableCount: 0, credits: [] },
       },
       nowMs: 1780000000000,
     });
@@ -79,9 +96,9 @@ describe("parseCodexUsage — reset credits", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
-        rate_limit_reset_credits: {
-          available_count: 1,
-          credits: [{ status: "available", expires_at: 1719326400 }],
+        rateLimitResetCredits: {
+          availableCount: 1,
+          credits: [{ status: "available", expiresAt: 1719326400 }],
         },
       },
       nowMs: 1780000000000,
@@ -96,9 +113,9 @@ describe("parseCodexUsage — reset credits", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
-        rate_limit_reset_credits: {
-          available_count: 1,
-          credits: [{ status: "available", expires_at: 1718721600000 }],
+        rateLimitResetCredits: {
+          availableCount: 1,
+          credits: [{ status: "available", expiresAt: 1718721600000 }],
         },
       },
       nowMs: 1780000000000,
@@ -113,12 +130,12 @@ describe("parseCodexUsage — reset credits", () => {
     const result = parseCodexUsage({
       json: {
         plan_type: "pro",
-        rate_limit_reset_credits: {
-          available_count: 2,
+        rateLimitResetCredits: {
+          availableCount: 2,
           credits: [
-            { status: "available", expires_at: 2000000000 }, // later
-            { status: "available", expires_at: 1000000000 }, // earliest
-            { status: "redeemed", expires_at: 500000000 }, // not available, excluded
+            { status: "available", expiresAt: 2000000000 }, // later
+            { status: "available", expiresAt: 1000000000 }, // earliest
+            { status: "redeemed", expiresAt: 500000000 }, // not available, excluded
           ],
         },
       },
