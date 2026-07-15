@@ -20,7 +20,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -71,7 +71,7 @@ type LegacyProviderRuntimeEvent = {
 };
 
 function createProviderServiceHarness() {
-  const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const runtimeEventQueue = Effect.runSync(Queue.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -94,7 +94,7 @@ function createProviderServiceHarness() {
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),
     closeRuntimeEvents: Effect.void,
-    streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+    streamEvents: Stream.fromQueue(runtimeEventQueue),
   };
 
   const setSession = (session: ProviderSession): void => {
@@ -109,7 +109,7 @@ function createProviderServiceHarness() {
   const emit = (event: LegacyProviderRuntimeEvent): void => {
     const canonicalEvent = event.payload === undefined ? { ...event, payload: {} } : event;
     Effect.runSync(
-      PubSub.publish(runtimeEventPubSub, canonicalEvent as unknown as ProviderRuntimeEvent),
+      Queue.offer(runtimeEventQueue, canonicalEvent as unknown as ProviderRuntimeEvent),
     );
   };
 

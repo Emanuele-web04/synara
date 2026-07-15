@@ -12,7 +12,11 @@ import {
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
 } from "@synara/contracts";
-import { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
+import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
+import {
+  isValidGitHubRepositoryNameWithOwner,
+  parseGitHubRepositoryNameWithOwnerFromRemoteUrl,
+} from "@synara/shared/githubRepository";
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
@@ -22,6 +26,7 @@ import {
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
   type GitHubPullRequestDetailData,
+  type GitHubPullRequestListBatch,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
 } from "../Services/GitHubCli.ts";
@@ -31,9 +36,9 @@ const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
 const GITHUB_HOST = "github.com";
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
-  "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,reviews,labels,mergedAt";
+  "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
-  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,headRepository,reviewDecision,reviewRequests,reviews,latestReviews,comments,statusCheckRollup,commits,labels,milestone,assignees,maintainerCanModify,autoMergeRequest,createdAt,updatedAt,mergedAt,closedAt";
+  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -250,6 +255,11 @@ const RawPullRequestListItemSchema = Schema.Struct({
   reviewRequests: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
   reviews: Schema.optional(Schema.NullOr(Schema.Array(RawReviewSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(RawLabelSchema))),
+  mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawPullRequestNumberSchema = Schema.Struct({
+  number: PositiveInt,
 });
 
 const RawPullRequestDetailSchema = Schema.Struct({
@@ -470,7 +480,10 @@ function normalizeActor(
   return {
     login,
     name: raw.name?.trim() || null,
-    avatarUrl: raw.avatarUrl?.trim() || null,
+    // gh's JSON never includes avatar URLs, so derive the canonical login-addressed one —
+    // but only from a real user login. A team's slug is not a username, and deriving from it
+    // could show an unrelated user who happens to share the name.
+    avatarUrl: raw.avatarUrl?.trim() || (raw.login ? githubAvatarUrlForLogin(raw.login) : null),
     url: raw.url?.trim() || null,
   };
 }
@@ -507,10 +520,8 @@ function normalizePullRequestListItem(
     reviewRequestLogins: (raw.reviewRequests ?? []).flatMap((actor) =>
       actor.login ? [actor.login] : [],
     ),
-    reviewerLogins: (raw.reviews ?? []).flatMap((review) =>
-      review.author?.login ? [review.author.login] : [],
-    ),
     labels: normalizeLabels(raw.labels),
+    mergeability: normalizePullRequestMergeability(raw.mergeable),
   };
 }
 
@@ -614,24 +625,25 @@ const decodeRawPullRequestListItem = Schema.decodeUnknownSync(RawPullRequestList
 
 export function decodeRepositoryPullRequestListJson(
   raw: string,
-): Effect.Effect<ReadonlyArray<GitHubPullRequestListItem>, GitHubCliError> {
+): Effect.Effect<GitHubPullRequestListBatch, GitHubCliError> {
   const trimmed = raw.trim();
-  if (!trimmed) return Effect.succeed([]);
+  if (!trimmed) return Effect.succeed({ entries: [], rawCount: 0 });
   return decodeGitHubJson(
     trimmed,
     Schema.Array(Schema.Unknown),
     "listRepositoryPullRequests",
     "GitHub CLI returned invalid repository PR list JSON.",
   ).pipe(
-    Effect.map((entries) =>
-      entries.flatMap((entry) => {
+    Effect.map((rawEntries) => ({
+      rawCount: rawEntries.length,
+      entries: rawEntries.flatMap((entry) => {
         try {
           return [normalizePullRequestListItem(decodeRawPullRequestListItem(entry))];
         } catch {
           return [];
         }
       }),
-    ),
+    })),
   );
 }
 
@@ -705,6 +717,8 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "getPullRequestReviewComments"
     | "listRepositoryPullRequests"
     | "getPullRequestDetail"
+    | "getPullRequestListItem"
+    | "listReviewRequestedPullRequestNumbers"
     | "getRepositoryMergeCapabilities",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
@@ -758,14 +772,192 @@ export function decodePullRequestListJson(
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
-      try: () =>
+      try: (signal) =>
         runProcess("gh", input.args, {
           cwd: input.cwd,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          signal,
+          // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
+          // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
+          env: { ...process.env, GH_HOST: GITHUB_HOST },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
+          ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
         }),
       catch: (error) => normalizeGitHubCliError("execute", error),
+    });
+
+  const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
+  const PULL_REQUEST_DIFF_MISSING_OBJECT_PATTERN =
+    /bad object|unknown revision|not a valid object name|no merge base|bad revision/i;
+  const PULL_REQUEST_DIFF_NO_MERGE_BASE_PATTERN = /no merge base/i;
+  // Deepen incrementally instead of turning an intentionally shallow checkout into a full clone.
+  // Additional fetched history is bounded to 1,344 generations per oversized-diff recovery.
+  const PULL_REQUEST_DIFF_INITIAL_DEEPEN = 64;
+  const PULL_REQUEST_DIFF_DEEPEN_STEPS = [256, 1_024] as const;
+
+  const runGit = (gitInput: {
+    cwd: string;
+    args: readonly string[];
+    maxBufferBytes?: number;
+    outputMode?: "error" | "truncate";
+    timeoutMs?: number;
+  }) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        runProcess("git", gitInput.args, {
+          cwd: gitInput.cwd,
+          timeoutMs: gitInput.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          signal,
+          // Never let git block on an interactive credential prompt; fail instead so the
+          // caller can surface the error.
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          ...(gitInput.maxBufferBytes !== undefined
+            ? { maxBufferBytes: gitInput.maxBufferBytes }
+            : {}),
+          ...(gitInput.outputMode !== undefined ? { outputMode: gitInput.outputMode } : {}),
+        }),
+      catch: (error) => normalizeGitHubCliError("execute", error),
+    });
+
+  const repositoryFromConfiguredRemoteUrl = (remoteUrl: string): string | null => {
+    const direct = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+    if (direct) return direct;
+    try {
+      const parsed = new URL(remoteUrl);
+      if (!parsed.username && !parsed.password) return null;
+      parsed.username = "";
+      parsed.password = "";
+      return parseGitHubRepositoryNameWithOwnerFromRemoteUrl(parsed.toString());
+    } catch {
+      return null;
+    }
+  };
+
+  // Prefer the name of a configured remote that already points at the repository. Git resolves its
+  // URL and credentials internally, so an HTTPS token embedded in remote config never enters argv
+  // or process-runner error text. `--` makes the name an operand; suspicious leading-dash names are
+  // ignored entirely and use the anonymous HTTPS fallback instead.
+  const resolvePullRequestFetchSource = (cwd: string, repository: string) =>
+    runGit({ cwd, args: ["remote", "-v"] }).pipe(
+      Effect.map((result) => {
+        const target = repository.toLowerCase();
+        for (const line of result.stdout.split("\n")) {
+          const match = /^(\S+)\t(\S+)\s+\(fetch\)$/.exec(line);
+          const remoteName = match?.[1];
+          const remoteUrl = match?.[2];
+          if (!remoteName || !remoteUrl) continue;
+          const parsed = repositoryFromConfiguredRemoteUrl(remoteUrl);
+          if (parsed?.toLowerCase() === target && !remoteName.startsWith("-")) {
+            return remoteName;
+          }
+        }
+        return `https://github.com/${repository}.git`;
+      }),
+      Effect.catch(() => Effect.succeed(`https://github.com/${repository}.git`)),
+    );
+
+  // Local fallback for oversized pull request diffs: resolve the PR's base/head commits via
+  // the REST API, diff them with `git diff base...head` (the same merge-base semantics the
+  // GitHub diff uses), and fetch the advertised pull head ref plus the base branch first only
+  // when the commits are not already in the local object database.
+  const localPullRequestDiff = (
+    cwd: string,
+    repository: string,
+    number: number,
+  ): Effect.Effect<{ patch: string; truncated: boolean }, GitHubCliError> =>
+    Effect.gen(function* () {
+      const meta = yield* execute({
+        cwd,
+        args: [
+          "api",
+          "--hostname",
+          GITHUB_HOST,
+          `repos/${repository}/pulls/${number}`,
+          "--jq",
+          '[.base.ref, .base.sha, .head.sha] | join(" ")',
+        ],
+      });
+      const [baseRef, baseSha, headSha] = meta.stdout.trim().split(/\s+/);
+      if (!baseRef || !baseSha || !headSha) {
+        return yield* Effect.fail(
+          new GitHubCliError({
+            operation: "getPullRequestDiff",
+            detail: "Could not resolve the pull request's base and head commits.",
+            reason: "other",
+          }),
+        );
+      }
+      const diff = runGit({
+        cwd,
+        args: ["diff", "--no-color", `${baseSha}...${headSha}`],
+        maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
+        outputMode: "truncate",
+      });
+      const fetchPullRequestRefs = (fetchSource: string, history?: { deepen: number }) =>
+        runGit({
+          cwd,
+          args: [
+            "fetch",
+            "--quiet",
+            ...(history === undefined ? [] : [`--deepen=${history.deepen}`]),
+            "--",
+            fetchSource,
+            `refs/pull/${number}/head`,
+            baseRef,
+          ],
+          timeoutMs: 120_000,
+        });
+      const deepenShallowHistoryAndDiff = (fetchSource: string, initialError: GitHubCliError) =>
+        Effect.gen(function* () {
+          let lastError = initialError;
+          for (const deepenBy of PULL_REQUEST_DIFF_DEEPEN_STEPS) {
+            yield* fetchPullRequestRefs(fetchSource, { deepen: deepenBy });
+            const attempt = yield* diff.pipe(
+              Effect.map((value) => ({ success: true as const, value })),
+              Effect.catch((error) => Effect.succeed({ success: false as const, error })),
+            );
+            if (attempt.success) return attempt.value;
+            lastError = attempt.error;
+            if (!PULL_REQUEST_DIFF_NO_MERGE_BASE_PATTERN.test(lastError.detail)) {
+              return yield* Effect.fail(lastError);
+            }
+          }
+          return yield* Effect.fail(lastError);
+        });
+      const result = yield* diff.pipe(
+        Effect.catch((error) =>
+          // Fetch-and-retry only when the failure means the commits are absent locally;
+          // timeouts, permission errors, or an unrelated git failure must surface as-is.
+          !PULL_REQUEST_DIFF_MISSING_OBJECT_PATTERN.test(error.detail)
+            ? Effect.fail(error)
+            : resolvePullRequestFetchSource(cwd, repository).pipe(
+                Effect.flatMap((fetchSource) =>
+                  runGit({ cwd, args: ["rev-parse", "--is-shallow-repository"] }).pipe(
+                    Effect.flatMap((shallowResult) => {
+                      const isShallow = shallowResult.stdout.trim() === "true";
+                      return fetchPullRequestRefs(
+                        fetchSource,
+                        isShallow ? { deepen: PULL_REQUEST_DIFF_INITIAL_DEEPEN } : undefined,
+                      ).pipe(
+                        Effect.flatMap(() =>
+                          diff.pipe(
+                            Effect.catch((retryError) =>
+                              isShallow &&
+                              PULL_REQUEST_DIFF_NO_MERGE_BASE_PATTERN.test(retryError.detail)
+                                ? deepenShallowHistoryAndDiff(fetchSource, retryError)
+                                : Effect.fail(retryError),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ),
+        ),
+      );
+      return { patch: result.stdout, truncated: result.stdoutTruncated === true };
     });
 
   const validateRepository = (
@@ -864,6 +1056,73 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
       );
     },
+    getPullRequestListItem: (input) =>
+      validateRepository(input.repository, "getPullRequestListItem").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "pr",
+              "view",
+              String(input.number),
+              "--repo",
+              repositorySelector(repository),
+              "--json",
+              PULL_REQUEST_LIST_JSON_FIELDS,
+            ],
+          }),
+        ),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            Schema.Unknown,
+            "getPullRequestListItem",
+            "GitHub CLI returned invalid pull request JSON.",
+          ),
+        ),
+        Effect.flatMap((entry) =>
+          Effect.try({
+            try: () => normalizePullRequestListItem(decodeRawPullRequestListItem(entry)),
+            catch: () =>
+              new GitHubCliError({
+                operation: "getPullRequestListItem",
+                detail: "GitHub CLI returned an unrecognized pull request shape.",
+                reason: "other",
+              }),
+          }),
+        ),
+      ),
+    listReviewRequestedPullRequestNumbers: (input) =>
+      validateRepository(input.repository, "listReviewRequestedPullRequestNumbers").pipe(
+        Effect.flatMap((repository) =>
+          execute({
+            cwd: input.cwd,
+            args: [
+              "search",
+              "prs",
+              "--repo",
+              repository,
+              "--review-requested",
+              input.viewer,
+              "--state",
+              "open",
+              "--limit",
+              String(input.limit ?? 1_000),
+              "--json",
+              "number",
+            ],
+          }),
+        ),
+        Effect.flatMap((result) =>
+          decodeGitHubJson(
+            result.stdout.trim(),
+            Schema.Array(RawPullRequestNumberSchema),
+            "listReviewRequestedPullRequestNumbers",
+            "GitHub CLI returned invalid review-requested pull request JSON.",
+          ),
+        ),
+        Effect.map((entries) => entries.map((entry) => entry.number)),
+      ),
     getPullRequestDetail: (input) =>
       validateRepository(input.repository, "getPullRequestDetail").pipe(
         Effect.flatMap((repository) =>
@@ -938,12 +1197,22 @@ const makeGitHubCli = Effect.sync(() => {
             ],
             maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
             outputMode: "truncate",
-          }),
+          }).pipe(
+            Effect.map((result) => ({
+              patch: result.stdout,
+              truncated: result.stdoutTruncated === true,
+            })),
+            // GitHub's diff media type rejects pull requests touching more than 300 files
+            // (HTTP 406 "diff exceeded the maximum number of files" / "too_large"). The
+            // repository is checked out locally, so recover by producing the same merge-base
+            // diff with git itself.
+            Effect.catch((error) =>
+              PULL_REQUEST_DIFF_TOO_LARGE_PATTERN.test(error.detail)
+                ? localPullRequestDiff(input.cwd, repository, input.number)
+                : Effect.fail(error),
+            ),
+          ),
         ),
-        Effect.map((result) => ({
-          patch: result.stdout,
-          truncated: result.stdoutTruncated === true,
-        })),
       ),
     runPullRequestAction: (input) =>
       validateRepository(input.repository, "runPullRequestAction").pipe(
@@ -966,6 +1235,28 @@ const makeGitHubCli = Effect.sync(() => {
           })();
           return execute({ cwd: input.cwd, args }).pipe(Effect.asVoid);
         }),
+      ),
+    commentOnPullRequest: (input) =>
+      validateRepository(input.repository, "commentOnPullRequest").pipe(
+        Effect.flatMap((repository) =>
+          // Body travels over stdin (--body-file -): argv is visible in process listings and
+          // is echoed back inside process-runner failure messages, so it must never carry
+          // user-authored content.
+          execute({
+            cwd: input.cwd,
+            args: [
+              "pr",
+              "comment",
+              String(input.number),
+              "--repo",
+              repositorySelector(repository),
+              "--body-file",
+              "-",
+            ],
+            stdin: input.body,
+          }),
+        ),
+        Effect.asVoid,
       ),
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, {
