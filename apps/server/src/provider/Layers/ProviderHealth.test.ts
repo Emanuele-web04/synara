@@ -316,7 +316,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             kilo: {
               ...DEFAULT_SERVER_SETTINGS.providers.kilo,
               enabled: true,
-              binaryPath: "kilo",
+              binaryPath:
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
             },
           },
         } satisfies typeof DEFAULT_SERVER_SETTINGS;
