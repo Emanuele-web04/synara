@@ -9,11 +9,6 @@ import {
   WsRpcError,
   WsRpcGroup,
   PullRequestsUnavailableError,
-  type OrchestrationProject,
-  type ProjectId,
-  type PullRequestDetail,
-  type PullRequestInvolvement,
-  type PullRequestListEntry,
   type GitActionProgressEvent,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
@@ -23,9 +18,8 @@ import {
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
 } from "@synara/contracts";
-import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Semaphore, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -43,9 +37,8 @@ import {
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
-import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
+import { GitCore } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
-import { GitHubCli, type GitHubPullRequestListItem } from "./git/Services/GitHubCli";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
@@ -76,12 +69,8 @@ import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { shouldRejectUntrustedRequestOrigin } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
-import {
-  isPullRequestMergeMethodAllowed,
-  isViewerReviewRequested,
-  isValidGitHubRepositoryNameWithOwner,
-  pullRequestListCacheKey,
-} from "./pullRequests.logic";
+import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
@@ -97,109 +86,6 @@ interface ProcessTableRow {
   readonly virtualSizeBytes: number;
   readonly command: string;
   readonly args: string;
-}
-
-function normalizeGitRemoteName(value: string | null): string | null {
-  const normalized = value?.trim() ?? "";
-  return normalized.length > 0 && normalized !== "." ? normalized : null;
-}
-
-function uniqueRemoteCandidates(candidates: ReadonlyArray<string | null>): string[] {
-  const unique = new Set<string>();
-  for (const candidate of candidates) {
-    const normalized = normalizeGitRemoteName(candidate);
-    if (normalized) {
-      unique.add(normalized);
-    }
-  }
-  return [...unique];
-}
-
-function readGitStdoutOrNull(
-  git: GitCoreShape,
-  cwd: string,
-  operation: string,
-  args: ReadonlyArray<string>,
-) {
-  return git
-    .execute({
-      operation,
-      cwd,
-      args,
-      allowNonZeroExit: true,
-      maxOutputBytes: 16_384,
-    })
-    .pipe(
-      Effect.map((result) => {
-        if (result.code !== 0) {
-          return null;
-        }
-        const trimmed = result.stdout.trim();
-        return trimmed.length > 0 ? trimmed : null;
-      }),
-      Effect.catch(() => Effect.succeed(null)),
-    );
-}
-
-function parseGitRemoteNames(stdout: string | null): string[] {
-  if (!stdout) {
-    return [];
-  }
-  return stdout
-    .split(/\r?\n/g)
-    .map((line) => normalizeGitRemoteName(line))
-    .filter((remoteName): remoteName is string => remoteName !== null);
-}
-
-interface GitHubRepositoryLink {
-  readonly nameWithOwner: string;
-  readonly url: string;
-}
-
-// Resolves every GitHub remote in preference order. The first entry remains the preferred
-// repository link; the complete set drives PR listing and binds detail/action RPCs to repositories
-// actually configured for the project.
-function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
-  return Effect.gen(function* () {
-    const branch = yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.currentBranch", [
-      "branch",
-      "--show-current",
-    ]);
-    const remoteNames = parseGitRemoteNames(
-      yield* readGitStdoutOrNull(git, cwd, "WsRpc.githubRepository.remotes", ["remote"]),
-    );
-    const branchRemote = branch ? yield* git.readConfigValue(cwd, `branch.${branch}.remote`) : null;
-    const pushDefaultRemote = yield* git.readConfigValue(cwd, "remote.pushDefault");
-
-    const repositories: GitHubRepositoryLink[] = [];
-    const seen = new Set<string>();
-    for (const remoteName of uniqueRemoteCandidates([
-      branchRemote,
-      pushDefaultRemote,
-      "origin",
-      ...remoteNames,
-    ])) {
-      const remoteUrl = yield* git.readConfigValue(cwd, `remote.${remoteName}.url`);
-      const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-      const key = nameWithOwner?.toLowerCase() ?? null;
-      if (nameWithOwner && key && !seen.has(key)) {
-        seen.add(key);
-        repositories.push({
-          nameWithOwner,
-          url: `https://github.com/${nameWithOwner}`,
-        });
-      }
-    }
-
-    return repositories;
-  });
-}
-
-// Resolves the preferred GitHub repository link from Git config without running full status.
-function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
-  return resolveGitHubRepositories(git, cwd).pipe(
-    Effect.map((repositories) => ({ repository: repositories[0] ?? null, repositories })),
-  );
 }
 
 function truncateDiagnosticText(value: string, limit: number): string {
@@ -360,13 +246,13 @@ export const makeWsRpcLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const git = yield* GitCore;
-      const github = yield* GitHubCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const path = yield* Path.Path;
+      const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
@@ -381,50 +267,6 @@ export const makeWsRpcLayer = () =>
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
-
-      const repositoryCache = new Map<
-        string,
-        {
-          expiresAt: number;
-          generation: number;
-          repositories: ReadonlyArray<GitHubRepositoryLink>;
-        }
-      >();
-      type ResolvedRepositories = ReadonlyArray<GitHubRepositoryLink>;
-      const repositoryInFlight = new Map<string, Effect.Effect<ResolvedRepositories, unknown>>();
-      const pullRequestListCache = new Map<
-        string,
-        {
-          expiresAt: number;
-          generation: number;
-          value: {
-            entries: ReadonlyArray<GitHubPullRequestListItem>;
-            truncated: boolean;
-          };
-        }
-      >();
-      const pullRequestListInFlight = new Map<
-        string,
-        Effect.Effect<
-          { entries: ReadonlyArray<GitHubPullRequestListItem>; truncated: boolean },
-          GitHubCliError
-        >
-      >();
-      const mergeCapabilitiesCache = new Map<
-        string,
-        {
-          expiresAt: number;
-          value: PullRequestDetail["mergeCapabilities"];
-        }
-      >();
-      let viewerCache: { expiresAt: number; login: string } | null = null;
-      const viewerInFlight = new Map<string, Effect.Effect<string, GitHubCliError>>();
-      const repositoryCacheLock = yield* Semaphore.make(1);
-      const pullRequestListCacheLock = yield* Semaphore.make(1);
-      const viewerCacheLock = yield* Semaphore.make(1);
-      let repositoryCacheGeneration = 0;
-      let pullRequestListCacheGeneration = 0;
-      let viewerCacheGeneration = 0;
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -444,280 +286,6 @@ export const makeWsRpcLayer = () =>
         effect: Effect.Effect<A, E, R>,
         fallbackMessage: string,
       ) => effect.pipe(Effect.mapError((cause) => toPullRequestsRpcError(cause, fallbackMessage)));
-
-      const resolveProjectRepositories = (project: OrchestrationProject) =>
-        Effect.gen(function* () {
-          const cached = repositoryCache.get(project.workspaceRoot);
-          const generation = repositoryCacheGeneration;
-          if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
-            return cached.repositories;
-          }
-          const inFlightKey = `${generation}:${project.workspaceRoot}`;
-          const shared = yield* repositoryCacheLock.withPermits(1)(
-            Effect.gen(function* () {
-              const freshCached = repositoryCache.get(project.workspaceRoot);
-              if (
-                freshCached &&
-                freshCached.generation === generation &&
-                freshCached.expiresAt > Date.now()
-              ) {
-                return Effect.succeed(freshCached.repositories);
-              }
-              const existing = repositoryInFlight.get(inFlightKey);
-              if (existing) return existing;
-              let singleFlight!: Effect.Effect<ResolvedRepositories, unknown>;
-              singleFlight = yield* Effect.cached(
-                resolveGitHubRepositories(git, project.workspaceRoot).pipe(
-                  Effect.tap((repositories) =>
-                    Effect.sync(() => {
-                      if (repositoryCacheGeneration === generation) {
-                        repositoryCache.set(project.workspaceRoot, {
-                          expiresAt: Date.now() + 30_000,
-                          generation,
-                          repositories,
-                        });
-                      }
-                    }),
-                  ),
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      if (repositoryInFlight.get(inFlightKey) === singleFlight) {
-                        repositoryInFlight.delete(inFlightKey);
-                      }
-                    }),
-                  ),
-                ),
-              );
-              repositoryInFlight.set(inFlightKey, singleFlight);
-              return singleFlight;
-            }),
-          );
-          return yield* shared;
-        });
-
-      const loadViewer = () =>
-        Effect.gen(function* () {
-          if (viewerCache && viewerCache.expiresAt > Date.now()) return viewerCache.login;
-          const generation = viewerCacheGeneration;
-          const inFlightKey = String(generation);
-          const shared = yield* viewerCacheLock.withPermits(1)(
-            Effect.gen(function* () {
-              if (viewerCache && viewerCache.expiresAt > Date.now()) {
-                return Effect.succeed(viewerCache.login);
-              }
-              const existing = viewerInFlight.get(inFlightKey);
-              if (existing) return existing;
-              let singleFlight!: Effect.Effect<string, GitHubCliError>;
-              singleFlight = yield* Effect.cached(
-                github.getViewerLogin({ cwd: config.homeDir }).pipe(
-                  Effect.tap((login) =>
-                    Effect.sync(() => {
-                      if (viewerCacheGeneration === generation) {
-                        viewerCache = { expiresAt: Date.now() + 5 * 60_000, login };
-                      }
-                    }),
-                  ),
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      if (viewerInFlight.get(inFlightKey) === singleFlight) {
-                        viewerInFlight.delete(inFlightKey);
-                      }
-                    }),
-                  ),
-                ),
-              );
-              viewerInFlight.set(inFlightKey, singleFlight);
-              return singleFlight;
-            }),
-          );
-          return yield* shared;
-        });
-
-      const loadRepositoryPullRequests = (
-        cwd: string,
-        repository: string,
-        state: "open" | "closed" | "merged",
-        involvement: PullRequestInvolvement,
-        viewer: string,
-      ) =>
-        Effect.gen(function* () {
-          const cacheKey = pullRequestListCacheKey(repository, state, involvement, viewer);
-          const cached = pullRequestListCache.get(cacheKey);
-          const generation = pullRequestListCacheGeneration;
-          if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
-            return cached.value;
-          }
-          const inFlightKey = `${generation}:${cacheKey}`;
-          const shared = yield* pullRequestListCacheLock.withPermits(1)(
-            Effect.gen(function* () {
-              const freshCached = pullRequestListCache.get(cacheKey);
-              if (
-                freshCached &&
-                freshCached.generation === generation &&
-                freshCached.expiresAt > Date.now()
-              ) {
-                return Effect.succeed(freshCached.value);
-              }
-              const existing = pullRequestListInFlight.get(inFlightKey);
-              if (existing) return existing;
-              const limit = 50;
-              const fetchLimit = limit + 1;
-              let singleFlight!: Effect.Effect<
-                { entries: ReadonlyArray<GitHubPullRequestListItem>; truncated: boolean },
-                GitHubCliError
-              >;
-              singleFlight = yield* Effect.cached(
-                github
-                  .listRepositoryPullRequests({
-                    cwd,
-                    repository,
-                    state,
-                    involvement,
-                    viewer,
-                    limit: fetchLimit,
-                  })
-                  .pipe(
-                    Effect.map((entries) => ({
-                      entries: entries.slice(0, limit),
-                      truncated: entries.length > limit,
-                    })),
-                    Effect.tap((value) =>
-                      Effect.sync(() => {
-                        if (pullRequestListCacheGeneration === generation) {
-                          pullRequestListCache.set(cacheKey, {
-                            expiresAt: Date.now() + 30_000,
-                            generation,
-                            value,
-                          });
-                        }
-                      }),
-                    ),
-                    Effect.ensuring(
-                      Effect.sync(() => {
-                        if (pullRequestListInFlight.get(inFlightKey) === singleFlight) {
-                          pullRequestListInFlight.delete(inFlightKey);
-                        }
-                      }),
-                    ),
-                  ),
-              );
-              pullRequestListInFlight.set(inFlightKey, singleFlight);
-              return singleFlight;
-            }),
-          );
-          return yield* shared;
-        });
-
-      const findProject = (projectId: ProjectId) =>
-        projectionReadModelQuery.getSnapshot().pipe(
-          Effect.flatMap((snapshot) => {
-            const project = snapshot.projects.find(
-              (candidate) =>
-                candidate.id === projectId &&
-                candidate.kind === "project" &&
-                candidate.deletedAt === null,
-            );
-            return project ? Effect.succeed(project) : Effect.fail(new Error("Project not found."));
-          }),
-        );
-
-      const loadMergeCapabilities = (cwd: string, repository: string) =>
-        Effect.gen(function* () {
-          const key = repository.toLowerCase();
-          const cached = mergeCapabilitiesCache.get(key);
-          if (cached && cached.expiresAt > Date.now()) return cached.value;
-          const value = yield* github.getRepositoryMergeCapabilities({ cwd, repository });
-          mergeCapabilitiesCache.set(key, { expiresAt: Date.now() + 5 * 60_000, value });
-          return value;
-        });
-
-      const validatePullRequestRepository = (repository: string) => {
-        const normalized = repository.trim();
-        return isValidGitHubRepositoryNameWithOwner(normalized)
-          ? Effect.succeed(normalized)
-          : Effect.fail(new Error("Invalid GitHub repository identity."));
-      };
-
-      const validateProjectPullRequestRepository = (
-        project: OrchestrationProject,
-        repositoryInput: string,
-      ) =>
-        Effect.gen(function* () {
-          const repository = yield* validatePullRequestRepository(repositoryInput);
-          const configuredRepositories = yield* resolveProjectRepositories(project);
-          const matched = configuredRepositories.find(
-            (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
-          );
-          if (!matched) {
-            return yield* Effect.fail(
-              new Error("GitHub repository does not belong to the selected project."),
-            );
-          }
-          return matched.nameWithOwner;
-        });
-
-      const loadPullRequestDetail = (
-        project: OrchestrationProject,
-        repositoryInput: string,
-        number: number,
-      ) =>
-        Effect.gen(function* () {
-          const repository = yield* validateProjectPullRequestRepository(project, repositoryInput);
-          const [detail, mergeCapabilities] = yield* Effect.all(
-            [
-              github.getPullRequestDetail({
-                cwd: project.workspaceRoot,
-                repository,
-                number,
-              }),
-              loadMergeCapabilities(project.workspaceRoot, repository),
-            ],
-            { concurrency: 2 },
-          );
-          const [owner = "", repo = ""] = repository.split("/");
-          const reviewCommentsResult = yield* github
-            .getPullRequestReviewComments({
-              cwd: project.workspaceRoot,
-              host: "github.com",
-              owner,
-              repo,
-              number,
-            })
-            .pipe(
-              Effect.map((result) => ({ ...result, incomplete: false })),
-              Effect.catch(() =>
-                Effect.succeed({ comments: [], truncated: false, incomplete: true }),
-              ),
-            );
-          const comments = [
-            ...detail.comments,
-            ...reviewCommentsResult.comments.map((comment) => ({
-              id: comment.id,
-              kind: "review-comment" as const,
-              author: comment.author
-                ? { login: comment.author, name: null, avatarUrl: null, url: null }
-                : null,
-              body: comment.body,
-              createdAt: comment.createdAt ?? detail.updatedAt,
-              updatedAt: null,
-              url: comment.url,
-              path: comment.path,
-              reviewState: null,
-            })),
-          ].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
-          return {
-            projectId: project.id,
-            projectTitle: project.title,
-            workspaceRoot: project.workspaceRoot,
-            repository,
-            ...detail,
-            comments,
-            commentsTruncated: reviewCommentsResult.truncated,
-            commentsIncomplete: reviewCommentsResult.incomplete,
-            mergeCapabilities,
-          } satisfies PullRequestDetail;
-        });
-
       const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
         workspaceRoot: string,
         options: { readonly createIfMissing?: boolean } = {},
@@ -1228,250 +796,22 @@ export const makeWsRpcLayer = () =>
             "Failed to prepare pull request thread",
           ),
         [WS_METHODS.pullRequestsList]: (input) =>
+          pullRequestsEffect(pullRequests.list(input), "Failed to list pull requests"),
+        [WS_METHODS.pullRequestsReviewRequestCount]: (input) =>
           pullRequestsEffect(
-            Effect.gen(function* () {
-              if (input.forceRefresh === true) {
-                yield* Effect.sync(() => {
-                  repositoryCacheGeneration += 1;
-                  repositoryCache.clear();
-                  pullRequestListCacheGeneration += 1;
-                  pullRequestListCache.clear();
-                  mergeCapabilitiesCache.clear();
-                  viewerCacheGeneration += 1;
-                  viewerCache = null;
-                });
-              }
-              const snapshot = yield* projectionReadModelQuery.getSnapshot();
-              const projects = snapshot.projects.filter(
-                (project) =>
-                  project.deletedAt === null &&
-                  project.kind === "project" &&
-                  (input.projectId == null || project.id === input.projectId),
-              );
-              const resolved = yield* Effect.forEach(
-                projects,
-                (project) =>
-                  resolveProjectRepositories(project).pipe(
-                    Effect.match({
-                      onFailure: (error) => ({ project, error, repositories: [] }),
-                      onSuccess: (repositories) => ({ project, error: null, repositories }),
-                    }),
-                  ),
-                { concurrency: 6 },
-              );
-
-              const errors: Array<{
-                projectId: ProjectId;
-                projectTitle: string;
-                message: string;
-              }> = resolved.flatMap(({ project, error }) =>
-                error
-                  ? [
-                      {
-                        projectId: project.id,
-                        projectTitle: project.title,
-                        message:
-                          error instanceof Error ? error.message : "Repository lookup failed.",
-                      },
-                    ]
-                  : [],
-              );
-              const uniqueRepositories = new Map<
-                string,
-                {
-                  repository: { nameWithOwner: string; url: string };
-                  projects: OrchestrationProject[];
-                }
-              >();
-              for (const item of resolved) {
-                for (const repository of item.repositories) {
-                  const key = repository.nameWithOwner.toLowerCase();
-                  const existing = uniqueRepositories.get(key);
-                  if (existing) {
-                    if (!existing.projects.some((project) => project.id === item.project.id)) {
-                      existing.projects.push(item.project);
-                    }
-                  } else {
-                    uniqueRepositories.set(key, {
-                      repository,
-                      projects: [item.project],
-                    });
-                  }
-                }
-              }
-
-              if (uniqueRepositories.size === 0) {
-                return {
-                  viewer: null,
-                  entries: [],
-                  errors,
-                  repositoryBatches: [],
-                };
-              }
-
-              const involvement = input.involvement ?? "all";
-              const viewer = yield* loadViewer();
-              const batches = yield* Effect.forEach(
-                uniqueRepositories.values(),
-                ({ projects: repositoryProjects, repository }) =>
-                  Effect.gen(function* () {
-                    const cwd = repositoryProjects[0]!.workspaceRoot;
-                    const [result, reviewingResult] = yield* Effect.all(
-                      [
-                        loadRepositoryPullRequests(
-                          cwd,
-                          repository.nameWithOwner,
-                          input.state,
-                          involvement,
-                          viewer,
-                        ),
-                        involvement === "all"
-                          ? loadRepositoryPullRequests(
-                              cwd,
-                              repository.nameWithOwner,
-                              input.state,
-                              "reviewing",
-                              viewer,
-                            )
-                          : Effect.succeed(null),
-                      ],
-                      { concurrency: 2 },
-                    );
-                    const reviewingNumbers = new Set(
-                      reviewingResult?.entries.map((pullRequest) => pullRequest.number) ?? [],
-                    );
-                    return {
-                      entries: repositoryProjects.flatMap((project) =>
-                        result.entries.map(
-                          (pullRequest): PullRequestListEntry => ({
-                            projectId: project.id,
-                            projectTitle: project.title,
-                            repository: repository.nameWithOwner,
-                            number: pullRequest.number,
-                            title: pullRequest.title,
-                            url: pullRequest.url,
-                            author: pullRequest.author,
-                            headBranch: pullRequest.headBranch,
-                            baseBranch: pullRequest.baseBranch,
-                            state: pullRequest.state,
-                            isDraft: pullRequest.isDraft,
-                            additions: pullRequest.additions,
-                            deletions: pullRequest.deletions,
-                            createdAt: pullRequest.createdAt,
-                            updatedAt: pullRequest.updatedAt,
-                            reviewDecision: pullRequest.reviewDecision,
-                            viewerReviewRequested: isViewerReviewRequested(
-                              pullRequest.author,
-                              pullRequest.reviewRequestLogins,
-                              viewer,
-                              involvement === "reviewing" ||
-                                reviewingNumbers.has(pullRequest.number),
-                            ),
-                            labels: pullRequest.labels,
-                          }),
-                        ),
-                      ),
-                      repositoryBatches: repositoryProjects.map((project) => ({
-                        projectId: project.id,
-                        projectTitle: project.title,
-                        repository: repository.nameWithOwner,
-                        truncated: result.truncated,
-                      })),
-                      errors: [],
-                    };
-                  }).pipe(
-                    Effect.catch((error) =>
-                      error.reason === "not-installed" || error.reason === "not-authenticated"
-                        ? Effect.fail(error)
-                        : Effect.succeed({
-                            entries: [] as PullRequestListEntry[],
-                            repositoryBatches: [],
-                            errors: repositoryProjects.map((project) => ({
-                              projectId: project.id,
-                              projectTitle: project.title,
-                              message: error.message,
-                            })),
-                          }),
-                    ),
-                  ),
-                { concurrency: 6 },
-              );
-              return {
-                viewer,
-                entries: batches
-                  .flatMap((batch) => batch.entries)
-                  .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-                errors: [...errors, ...batches.flatMap((batch) => batch.errors)],
-                repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
-              };
-            }),
-            "Failed to list pull requests",
+            pullRequests.reviewRequestCount(input),
+            "Failed to count pull request review requests",
           ),
         [WS_METHODS.pullRequestsDetail]: (input) =>
-          pullRequestsEffect(
-            findProject(input.projectId).pipe(
-              Effect.flatMap((project) =>
-                loadPullRequestDetail(project, input.repository, input.number),
-              ),
-            ),
-            "Failed to load pull request",
-          ),
+          pullRequestsEffect(pullRequests.detail(input), "Failed to load pull request"),
         [WS_METHODS.pullRequestsDiff]: (input) =>
-          pullRequestsEffect(
-            Effect.gen(function* () {
-              const project = yield* findProject(input.projectId);
-              const repository = yield* validateProjectPullRequestRepository(
-                project,
-                input.repository,
-              );
-              return yield* github.getPullRequestDiff({
-                cwd: project.workspaceRoot,
-                repository,
-                number: input.number,
-              });
-            }),
-            "Failed to load pull request diff",
-          ),
+          pullRequestsEffect(pullRequests.diff(input), "Failed to load pull request diff"),
         [WS_METHODS.pullRequestsAction]: (input) =>
-          pullRequestsEffect(
-            Effect.gen(function* () {
-              const project = yield* findProject(input.projectId);
-              const repository = yield* validateProjectPullRequestRepository(
-                project,
-                input.repository,
-              );
-              if (input.action === "merge") {
-                const mergeMethod = input.mergeMethod ?? "merge";
-                const capabilities = yield* loadMergeCapabilities(
-                  project.workspaceRoot,
-                  repository,
-                );
-                if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
-                  return yield* Effect.fail(
-                    new Error(`The repository does not allow the ${mergeMethod} merge method.`),
-                  );
-                }
-              }
-              yield* github.runPullRequestAction({
-                cwd: project.workspaceRoot,
-                repository,
-                number: input.number,
-                action: input.action,
-                ...(input.mergeMethod ? { mergeMethod: input.mergeMethod } : {}),
-              });
-              yield* Effect.sync(() => {
-                pullRequestListCacheGeneration += 1;
-                pullRequestListCache.clear();
-              });
-              return {
-                projectId: project.id,
-                repository,
-                number: input.number,
-                workspaceRoot: project.workspaceRoot,
-              };
-            }),
-            "Pull request action failed",
-          ),
+          pullRequestsEffect(pullRequests.action(input), "Pull request action failed"),
+        [WS_METHODS.pullRequestsComment]: (input) =>
+          pullRequestsEffect(pullRequests.comment(input), "Could not post the comment"),
+        [WS_METHODS.pullRequestsSetPinned]: (input) =>
+          rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>

@@ -158,6 +158,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
     electron: isElectron,
     isMac: isMacPlatform(typeof navigator === "undefined" ? "" : navigator.platform),
+    systemUiFont: state.systemUiFont,
   });
 
   root.classList.toggle("dark", variant === "dark");
@@ -231,6 +232,13 @@ export function useTheme() {
     }));
   }, []);
 
+  const setSystemUiFont = useCallback((enabled: boolean) => {
+    updateStoredThemeState((state) => ({
+      ...state,
+      systemUiFont: enabled,
+    }));
+  }, []);
+
   const canImportThemeString = useCallback(
     (value: string, variant: ThemeVariant = resolvedTheme) =>
       canParseThemeShareString(value, variant),
@@ -291,6 +299,8 @@ export function useTheme() {
   return {
     activeTheme,
     canImportThemeString,
+    systemUiFont: snapshot.state.systemUiFont,
+    setSystemUiFont,
     darkTheme,
     defaultActiveTheme,
     exportThemeString,

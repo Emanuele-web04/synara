@@ -80,8 +80,14 @@ export interface GitHubPullRequestListItem {
   readonly updatedAt: string;
   readonly reviewDecision: string | null;
   readonly reviewRequestLogins: ReadonlyArray<string>;
-  readonly reviewerLogins: ReadonlyArray<string>;
   readonly labels: ReadonlyArray<PullRequestLabel>;
+  readonly mergeability: "mergeable" | "conflicting" | "unknown";
+}
+
+/** Internal list result retaining the raw array cardinality before malformed entries are dropped. */
+export interface GitHubPullRequestListBatch {
+  readonly entries: ReadonlyArray<GitHubPullRequestListItem>;
+  readonly rawCount: number;
 }
 
 export interface GitHubPullRequestDetailData {
@@ -93,6 +99,7 @@ export interface GitHubPullRequestDetailData {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeable: string | null;
+  readonly mergeability: "mergeable" | "conflicting" | "unknown";
   readonly mergeStateStatus: string | null;
   readonly reviewDecision: string | null;
   readonly additions: number;
@@ -125,6 +132,8 @@ export interface GitHubCliShape {
     readonly timeoutMs?: number;
     readonly maxBufferBytes?: number;
     readonly outputMode?: "error" | "truncate";
+    /** Piped to the child's stdin — for payloads that must never appear in argv. */
+    readonly stdin?: string;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
   readonly getViewerLogin: (input: {
@@ -138,7 +147,29 @@ export interface GitHubCliShape {
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
     readonly limit?: number;
-  }) => Effect.Effect<ReadonlyArray<GitHubPullRequestListItem>, GitHubCliError>;
+  }) => Effect.Effect<GitHubPullRequestListBatch, GitHubCliError>;
+
+  /**
+   * Fetch one pull request in the list-item shape (`gh pr view --json <list fields>`).
+   * Used to restore pinned PRs that fall outside the capped list results.
+   */
+  readonly getPullRequestListItem: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubPullRequestListItem, GitHubCliError>;
+
+  /**
+   * List open PR numbers for which GitHub's review-requested search matches the viewer. Unlike
+   * `pr view` reviewRequests, this authoritative search includes requests to teams the viewer
+   * belongs to. Used sparingly to verify pinned PRs beyond the normal list cap.
+   */
+  readonly listReviewRequestedPullRequestNumbers: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly viewer: string;
+    readonly limit?: number;
+  }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
 
   readonly getPullRequestDetail: (input: {
     readonly cwd: string;
@@ -163,6 +194,16 @@ export interface GitHubCliShape {
     readonly number: number;
     readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
     readonly mergeMethod?: PullRequestMergeMethod;
+  }) => Effect.Effect<void, GitHubCliError>;
+
+  /**
+   * Post an issue comment on a pull request as the authenticated gh user.
+   */
+  readonly commentOnPullRequest: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly body: string;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**

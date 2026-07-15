@@ -693,7 +693,15 @@ function SettingsRouteView() {
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
+  const {
+    isDefaultActiveTheme,
+    resetAllThemes,
+    resolvedTheme,
+    theme,
+    setTheme,
+    systemUiFont,
+    setSystemUiFont,
+  } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
@@ -1975,6 +1983,22 @@ function SettingsRouteView() {
                 }}
                 ariaLabel="Theme preference"
                 options={THEME_OPTIONS}
+              />
+            }
+          />
+          <SettingsRow
+            title="Use system UI font"
+            description="Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS)."
+            resetAction={
+              !systemUiFont ? (
+                <SettingResetButton label="system UI font" onClick={() => setSystemUiFont(true)} />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={systemUiFont}
+                onCheckedChange={(checked) => setSystemUiFont(Boolean(checked))}
+                aria-label="Use system UI font"
               />
             }
           />

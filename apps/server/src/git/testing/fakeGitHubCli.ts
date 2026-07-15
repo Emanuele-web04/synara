@@ -23,6 +23,7 @@ import {
 import {
   type GitHubCliShape,
   type GitHubPullRequestDetailData,
+  type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
@@ -53,6 +54,8 @@ export interface FakeGhScenario {
   viewerLogin?: string;
   repositoryPullRequestListJson?: string;
   pullRequestDetail?: GitHubPullRequestDetailData;
+  pullRequestListItems?: GitHubPullRequestListItem[];
+  reviewRequestedPullRequestNumbers?: number[];
   mergeCapabilities?: PullRequestMergeCapabilities;
   pullRequestDiff?: { patch: string; truncated: boolean };
 }
@@ -322,6 +325,32 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(
           `pr action ${input.action} ${input.number} --repo ${input.repository}${input.mergeMethod ? ` --${input.mergeMethod}` : ""}`,
         );
+        return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
+      },
+      getPullRequestListItem: (input) => {
+        ghCalls.push(`pr view ${input.number} --repo ${input.repository} (list-item)`);
+        const item = scenario.pullRequestListItems?.find((entry) => entry.number === input.number);
+        return item
+          ? Effect.succeed(item)
+          : Effect.fail(
+              scenario.failWith ??
+                new GitHubCliError({
+                  operation: "getPullRequestListItem",
+                  detail: "Pull request not found.",
+                  reason: "other",
+                }),
+            );
+      },
+      listReviewRequestedPullRequestNumbers: (input) => {
+        ghCalls.push(
+          `search prs --repo ${input.repository} --review-requested ${input.viewer} --state open --limit ${input.limit ?? 1_000} --json number`,
+        );
+        return scenario.failWith
+          ? Effect.fail(scenario.failWith)
+          : Effect.succeed(scenario.reviewRequestedPullRequestNumbers ?? []);
+      },
+      commentOnPullRequest: (input) => {
+        ghCalls.push(`pr comment ${input.number} --repo ${input.repository}`);
         return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
       },
       listOpenPullRequests: (input) =>

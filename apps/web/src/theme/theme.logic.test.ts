@@ -79,6 +79,36 @@ describe("parseStoredThemeState", () => {
     expect(migrated.codeThemeIds.dark).toBe("linear");
     expect(migrated.chromeThemes.dark.accent).toBe("#606acc");
   });
+
+  it("preserves a custom UI font when migrating a stored state without the system-font flag", () => {
+    const migrated = normalizeThemeState({
+      chromeThemes: {
+        dark: {
+          fonts: { ui: "Inter" },
+        },
+      },
+    });
+
+    expect(migrated.systemUiFont).toBe(false);
+    expect(migrated.chromeThemes.dark.fonts.ui).toBe("Inter");
+  });
+
+  it("uses the system UI font for older states that did not store a custom font", () => {
+    expect(normalizeThemeState({ mode: "dark" }).systemUiFont).toBe(true);
+  });
+
+  it("keeps an explicit system-font preference even when the theme stores a UI font", () => {
+    expect(
+      normalizeThemeState({
+        chromeThemes: {
+          dark: {
+            fonts: { ui: "Inter" },
+          },
+        },
+        systemUiFont: true,
+      }).systemUiFont,
+    ).toBe(true);
+  });
 });
 
 describe("theme share strings", () => {

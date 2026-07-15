@@ -15,9 +15,11 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
-import { DiffStatLabel } from "../DiffStatLabel";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
 import { PullRequestCheckStatusIcon } from "../../pullRequest/PullRequestCheckStatusIcon";
+import { PullRequestDiffStat } from "../../pullRequest/PullRequestDiffStat";
+import { PullRequestConflictIcon } from "../../pullRequest/pullRequestStatePresentation";
+import { PR_QUIET_INK_CLASS_NAME } from "../../pullRequest/pullRequestText";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import {
@@ -160,7 +162,12 @@ function CommentsMenuRow({
           {display.snippet}
         </span>
       ) : null}
-      <span className="flex items-center justify-between gap-2 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+      <span
+        className={cn(
+          PR_QUIET_INK_CLASS_NAME,
+          "flex items-center justify-between gap-2 text-[length:var(--app-font-size-ui-xs,10px)]",
+        )}
+      >
         <span className="min-w-0 truncate">{comment.path ?? comment.author ?? ""}</span>
         {comment.createdAt ? (
           <span className="shrink-0 tabular-nums">{formatRelativeTime(comment.createdAt)}</span>
@@ -308,7 +315,9 @@ export function EnvironmentPullRequestSection({
           icon={<DiffIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="flex min-w-0 items-center gap-1.5">
-              <DiffStatLabel additions={diffStat.additions} deletions={diffStat.deletions} />
+              {/* Muted like every other pull request diff stat, not the green/red used by
+                  working-tree diffs — PR change counts read as ambient metadata. */}
+              <PullRequestDiffStat additions={diffStat.additions} deletions={diffStat.deletions} />
               {diffStat.filesLabel ? (
                 <span className="truncate text-muted-foreground">{diffStat.filesLabel}</span>
               ) : null}
@@ -326,12 +335,10 @@ export function EnvironmentPullRequestSection({
         <div className="flex w-full items-center gap-1">
           <EnvironmentRow
             className="min-w-0 flex-1"
-            icon={
-              <CircleAlertIcon
-                className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "text-warning")}
-                aria-hidden
-              />
-            }
+            // Same glyph and same red as the PR badge one dock away: this row used to say
+            // conflicts with a generic amber alert, which read as a softer problem than the
+            // state it mirrors.
+            icon={<PullRequestConflictIcon className="size-4" />}
             label={<span className="truncate">{`Conflicts with ${displayPr.baseBranch}`}</span>}
             trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {

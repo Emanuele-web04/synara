@@ -10,6 +10,11 @@
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
+  --color-status-success: var(--status-success);
+  --color-status-failure: var(--status-failure);
+  --color-status-open: var(--status-open);
+  --color-status-merged: var(--status-merged);
+  --color-status-neutral: var(--status-neutral);
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
   --color-destructive-foreground: var(--destructive-foreground);
@@ -522,6 +527,12 @@
   --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
   --accent: --alpha(var(--color-black) / 4%);
   --accent-foreground: var(--color-neutral-800);
+  /* `--destructive/success/warning-foreground` are ON-FILL contrast ink: they only ever go on
+     top of a solid `bg-<role>` fill. The runtime theme resolves all three to the surface color
+     (near-white in light), so painting copy with them over a tint or a plain surface renders it
+     invisible — the values below are just the unthemed fallback and must not be read as
+     "the readable role text color". For text on a tint, use the role token (`text-destructive`,
+     `text-warning`) and let the tint/border carry the signal, as `ui/alert.tsx` does. */
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 5%);
   --input: --alpha(var(--color-black) / 6%);
@@ -536,6 +547,17 @@
   --info-foreground: var(--color-text-accent, #526fff);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
+  /* Status tints — the one source of color for status indicators (PR state glyphs, check
+     glyphs, the checks ring). Each is the plain role color in light and a step toward white
+     in dark, where the near-black surface makes the role weight read as a heavy block. Mix
+     from the role tokens only, never from `--success-foreground`/`--destructive-foreground`:
+     those are the on-fill contrast ink (white under the runtime theme), not a lighter shade.
+     `--color-decoration-added` is injected by the runtime theme, hence the fallback. */
+  --status-success: var(--success);
+  --status-failure: var(--destructive);
+  --status-open: var(--color-decoration-added, var(--success));
+  --status-merged: var(--color-indigo-500);
+  --status-neutral: var(--color-zinc-500);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -581,6 +603,15 @@
     --info-foreground: var(--color-text-accent, #6073cc);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
+    --status-success: color-mix(in srgb, var(--success) 72%, var(--color-white));
+    --status-failure: color-mix(in srgb, var(--destructive) 72%, var(--color-white));
+    --status-open: color-mix(
+      in srgb,
+      var(--color-decoration-added, var(--success)) 72%,
+      var(--color-white)
+    );
+    --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
+    --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -2441,6 +2472,41 @@ diffs-container {
   :root:not([data-runtime="electron"]) .chat-composer-surface-banner {
     corner-shape: squircle;
   }
+}
+
+/* Pull request description/comment prose: long-form reading, roomier than chat bubbles.
+   Composes with .chat-markdown (which zeroes first/last child margins). */
+.pull-request-prose {
+  line-height: 1.7;
+}
+.pull-request-prose p,
+.pull-request-prose ul,
+.pull-request-prose ol,
+.pull-request-prose blockquote,
+.pull-request-prose pre,
+.pull-request-prose table {
+  margin: 0.8rem 0;
+}
+.pull-request-prose li + li {
+  margin-top: 0.4rem;
+}
+.pull-request-prose h1,
+.pull-request-prose h2,
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  margin: 1.4rem 0 0.5rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.pull-request-prose h1 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.3);
+}
+.pull-request-prose h2 {
+  font-size: calc(var(--app-font-size-ui-lg, 13px) * 1.16);
+}
+.pull-request-prose h3,
+.pull-request-prose h4 {
+  font-size: var(--app-font-size-ui-lg, 13px);
 }
 
 .chat-composer-surface-banner,

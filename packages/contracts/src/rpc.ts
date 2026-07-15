@@ -64,10 +64,15 @@ import {
 } from "./git";
 import {
   PullRequestActionInput,
+  PullRequestCommentInput,
   PullRequestActionResult,
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
   PullRequestsListInput,
   PullRequestsListResult,
   PullRequestsUnavailableError,
@@ -433,6 +438,15 @@ export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
   error: PullRequestsRpcError,
 });
 
+export const WsPullRequestsReviewRequestCountRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewRequestCount,
+  {
+    payload: PullRequestReviewRequestCountInput,
+    success: PullRequestReviewRequestCountResult,
+    error: PullRequestsRpcError,
+  },
+);
+
 export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
   payload: PullRequestDetailInput,
   success: PullRequestDetail,
@@ -449,6 +463,20 @@ export const WsPullRequestsActionRpc = Rpc.make(WS_METHODS.pullRequestsAction, {
   payload: PullRequestActionInput,
   success: PullRequestActionResult,
   error: PullRequestsRpcError,
+});
+
+// Comments reuse the action acknowledgment shape: the mutation is confirmed independently of
+// the follow-up detail refetch that surfaces the new comment.
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPinned, {
+  payload: PullRequestSetPinnedInput,
+  success: PullRequestSetPinnedResult,
+  error: WsRpcError,
 });
 
 export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
@@ -879,9 +907,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitPullRequestSnapshotRpc,
   WsGitPreparePullRequestThreadRpc,
   WsPullRequestsListRpc,
+  WsPullRequestsReviewRequestCountRpc,
   WsPullRequestsDetailRpc,
   WsPullRequestsDiffRpc,
   WsPullRequestsActionRpc,
+  WsPullRequestsCommentRpc,
+  WsPullRequestsSetPinnedRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,

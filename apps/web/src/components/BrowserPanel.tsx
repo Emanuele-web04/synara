@@ -1385,7 +1385,7 @@ export function BrowserPanel({
             }}
             placeholder="Search or enter a URL"
             className={cn(
-              "font-mono min-w-0 [-webkit-app-region:no-drag]",
+              "min-w-0 [-webkit-app-region:no-drag]",
               BROWSER_CHROME_CONTROL_CLASS_NAME,
               BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
             )}

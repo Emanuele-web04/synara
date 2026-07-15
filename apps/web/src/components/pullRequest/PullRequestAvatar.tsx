@@ -5,6 +5,8 @@
 // Layer: Pull request presentation
 // Exports: PullRequestAvatar
 
+import { useState } from "react";
+
 import type { PullRequestActor } from "@synara/contracts";
 
 import { cn } from "~/lib/utils";
@@ -12,7 +14,7 @@ import { cn } from "~/lib/utils";
 const SIZE_CLASS_NAME = {
   sm: "size-4 text-[8px]",
   md: "size-5 text-[9px]",
-  lg: "size-7 text-[11px]",
+  lg: "size-7 text-[length:var(--app-font-size-ui-sm,11px)]",
 } as const;
 
 function initialFor(actor: PullRequestActor | null): string {
@@ -29,13 +31,21 @@ export function PullRequestAvatar({
   size?: keyof typeof SIZE_CLASS_NAME;
   className?: string;
 }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const sizeClassName = SIZE_CLASS_NAME[size];
-  if (actor?.avatarUrl) {
+  // Only render an image URL that GitHub explicitly attached to this actor. `login` can also
+  // carry a team slug, and deriving avatars.githubusercontent.com/<slug> on the client can
+  // display an unrelated user who happens to own that login.
+  const src = actor?.avatarUrl;
+  if (src && src !== failedSrc) {
     return (
       <img
-        src={actor.avatarUrl}
+        src={src}
         alt=""
+        loading="lazy"
+        decoding="async"
         draggable={false}
+        onError={() => setFailedSrc(src)}
         className={cn(
           sizeClassName,
           "shrink-0 rounded-full object-cover ring-1 ring-border/50",

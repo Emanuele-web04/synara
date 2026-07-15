@@ -25,7 +25,7 @@ describe("fakeGitHubCli pull request surface", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const viewer = yield* service.getViewerLogin({ cwd: "/repo" });
-        const entries = yield* service.listRepositoryPullRequests({
+        const batch = yield* service.listRepositoryPullRequests({
           cwd: "/repo",
           repository: "acme/app",
           state: "open",
@@ -43,12 +43,13 @@ describe("fakeGitHubCli pull request surface", () => {
           number: 2,
           action: "close",
         });
-        return { viewer, entries, diff };
+        return { viewer, batch, diff };
       }),
     );
 
     expect(result.viewer).toBe("octocat");
-    expect(result.entries).toHaveLength(1);
+    expect(result.batch.entries).toHaveLength(1);
+    expect(result.batch.rawCount).toBe(1);
     expect(result.diff.patch).toContain("diff --git");
     expect(
       ghCalls.some((call) => call.includes("--search review-requested:octocat --state open")),

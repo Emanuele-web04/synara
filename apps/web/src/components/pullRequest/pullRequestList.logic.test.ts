@@ -4,7 +4,10 @@ import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
 
 import {
   countUniqueViewerReviewRequests,
+  filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
+  matchesPullRequestSearchQuery,
+  orderPullRequestEntriesPinnedFirst,
   pullRequestListEntryKey,
 } from "./pullRequestList.logic";
 
@@ -31,12 +34,27 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     updatedAt: new Date().toISOString(),
     reviewDecision: null,
     viewerReviewRequested: false,
+    isPinned: false,
+    mergeability: "unknown",
     labels: [],
     ...overrides,
   };
 }
 
 describe("groupPullRequestEntriesByInvolvement", () => {
+  it("places pinned entries in one leading group without duplicating their involvement", () => {
+    const pinned = makeEntry({
+      isPinned: true,
+      author: makeActor("viewer"),
+      viewerReviewRequested: true,
+    });
+    const reviewing = makeEntry({ number: 2, viewerReviewRequested: true });
+    const groups = groupPullRequestEntriesByInvolvement([reviewing, pinned], "viewer");
+
+    expect(groups.map((group) => group.key)).toEqual(["pinned", "reviewRequested"]);
+    expect(groups.flatMap((group) => group.entries)).toEqual([pinned, reviewing]);
+  });
+
   it("buckets self-authored entries into Authored regardless of review-request state", () => {
     const entry = makeEntry({ author: makeActor("viewer"), viewerReviewRequested: true });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
@@ -96,6 +114,21 @@ describe("groupPullRequestEntriesByInvolvement", () => {
   });
 });
 
+describe("orderPullRequestEntriesPinnedFirst", () => {
+  it("moves pins first without disturbing order inside either section", () => {
+    const first = makeEntry({ number: 1 });
+    const pinnedFirst = makeEntry({ number: 2, isPinned: true });
+    const second = makeEntry({ number: 3 });
+    const pinnedSecond = makeEntry({ number: 4, isPinned: true });
+
+    expect(
+      orderPullRequestEntriesPinnedFirst([first, pinnedFirst, second, pinnedSecond]).map(
+        (entry) => entry.number,
+      ),
+    ).toEqual([2, 4, 1, 3]);
+  });
+});
+
 describe("pull request list identity", () => {
   it("keeps rows from projects sharing one repository distinct", () => {
     const first = makeEntry();
@@ -114,5 +147,59 @@ describe("pull request list identity", () => {
     });
     const other = makeEntry({ number: 2, viewerReviewRequested: true });
     expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
+  });
+});
+
+describe("filterPullRequestEntriesByInvolvement", () => {
+  it("returns every entry for the all tab", () => {
+    const entries = [makeEntry(), makeEntry({ number: 2 })];
+    expect(filterPullRequestEntriesByInvolvement(entries, "viewer", "all")).toEqual(entries);
+  });
+
+  it("keeps only entries with an active review request for the reviewing tab", () => {
+    const requested = makeEntry({ viewerReviewRequested: true });
+    const other = makeEntry({ number: 2 });
+    expect(
+      filterPullRequestEntriesByInvolvement([requested, other], "viewer", "reviewing"),
+    ).toEqual([requested]);
+  });
+
+  it("matches the viewer's authored entries case-insensitively", () => {
+    const authored = makeEntry({ author: makeActor("Viewer") });
+    const other = makeEntry({ number: 2, author: makeActor("teammate") });
+    expect(filterPullRequestEntriesByInvolvement([authored, other], "viewer", "authored")).toEqual([
+      authored,
+    ]);
+  });
+
+  it("returns no authored entries when the viewer login is unknown", () => {
+    const entry = makeEntry({ author: makeActor("someone") });
+    expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  });
+});
+
+describe("matchesPullRequestSearchQuery", () => {
+  it("matches every entry when the query is empty", () => {
+    expect(matchesPullRequestSearchQuery(makeEntry(), "")).toBe(true);
+  });
+
+  it("matches title, repository, branch, and author case-insensitively", () => {
+    const entry = makeEntry({
+      title: "Fix Widget",
+      repository: "acme/widgets",
+      headBranch: "feat/widget-fix",
+      author: makeActor("Reviewer"),
+    });
+    expect(matchesPullRequestSearchQuery(entry, "widget")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "acme/")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "feat/")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "reviewer")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "nomatch")).toBe(false);
+  });
+
+  it("matches the pull request number with and without the leading hash", () => {
+    const entry = makeEntry({ number: 350 });
+    expect(matchesPullRequestSearchQuery(entry, "#350")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "350")).toBe(true);
   });
 });

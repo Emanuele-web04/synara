@@ -72,9 +72,14 @@ import type {
 import type {
   PullRequestActionInput,
   PullRequestActionResult,
+  PullRequestCommentInput,
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
   PullRequestsListInput,
   PullRequestsListResult,
 } from "./pullRequests";
@@ -564,9 +569,14 @@ export interface NativeApi {
   };
   pullRequests: {
     list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
+    reviewRequestCount: (
+      input: PullRequestReviewRequestCountInput,
+    ) => Promise<PullRequestReviewRequestCountResult>;
     detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
     diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
+    comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
+    setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
   };
   contextMenu: {
     show: <T extends string>(

@@ -7,6 +7,7 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
+import { GitPullRequestMergeability } from "./git";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
 export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
@@ -109,6 +110,12 @@ export const PullRequestListEntry = Schema.Struct({
   updatedAt: IsoDateTime,
   reviewDecision: Schema.NullOr(Schema.String),
   viewerReviewRequested: Schema.Boolean,
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  // Decoding default keeps a newer client compatible with an older server that predates
+  // the field (brief version skew during dev restarts must not reject whole payloads).
+  mergeability: Schema.optional(GitPullRequestMergeability).pipe(
+    Schema.withDecodingDefault(() => "unknown"),
+  ),
   labels: Schema.Array(PullRequestLabel),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
@@ -143,6 +150,18 @@ export const PullRequestsListResult = Schema.Struct({
 });
 export type PullRequestsListResult = typeof PullRequestsListResult.Type;
 
+export const PullRequestReviewRequestCountInput = Schema.Struct({
+  projectId: Schema.optional(Schema.NullOr(ProjectId)),
+});
+export type PullRequestReviewRequestCountInput = typeof PullRequestReviewRequestCountInput.Type;
+
+export const PullRequestReviewRequestCountResult = Schema.Struct({
+  count: NonNegativeInt,
+  /** True means at least one repository could not be counted or reached the search cap. */
+  incomplete: Schema.Boolean,
+});
+export type PullRequestReviewRequestCountResult = typeof PullRequestReviewRequestCountResult.Type;
+
 export const PullRequestDetailInput = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
@@ -163,6 +182,11 @@ export const PullRequestDetail = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   mergeable: Schema.NullOr(Schema.String),
+  // Decoding default keeps a newer client compatible with an older server that predates
+  // the field (brief version skew during dev restarts must not reject whole payloads).
+  mergeability: Schema.optional(GitPullRequestMergeability).pipe(
+    Schema.withDecodingDefault(() => "unknown"),
+  ),
   mergeStateStatus: Schema.NullOr(Schema.String),
   reviewDecision: Schema.NullOr(Schema.String),
   additions: NonNegativeInt,
@@ -200,6 +224,32 @@ export const PullRequestActionInput = Schema.Struct({
   mergeMethod: Schema.optional(PullRequestMergeMethod),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
+
+export const PullRequestCommentInput = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  // GitHub rejects comment bodies past 65536 characters; enforcing it here keeps oversized
+  // payloads off the wire and out of subprocess plumbing entirely.
+  body: TrimmedNonEmptyString.check(Schema.isMaxLength(65536)),
+});
+export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
+
+export const PullRequestSetPinnedInput = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  isPinned: Schema.Boolean,
+});
+export type PullRequestSetPinnedInput = typeof PullRequestSetPinnedInput.Type;
+
+export const PullRequestSetPinnedResult = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  isPinned: Schema.Boolean,
+});
+export type PullRequestSetPinnedResult = typeof PullRequestSetPinnedResult.Type;
 
 // Actions acknowledge the mutation independently from the follow-up detail refetch. This keeps
 // a successful GitHub mutation from being reported as failed when a later read is unavailable.

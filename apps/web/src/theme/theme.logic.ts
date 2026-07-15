@@ -43,6 +43,8 @@ export interface ThemeState {
   chromeThemes: Record<ThemeVariant, ChromeTheme>;
   codeThemeIds: Record<ThemeVariant, string>;
   mode: ThemeMode;
+  /** Ignore the theme pack's custom UI font and let the native system stack apply. */
+  systemUiFont: boolean;
 }
 
 export interface CodeThemeOption {
@@ -266,6 +268,7 @@ export const DEFAULT_THEME_STATE: ThemeState = {
     dark: "codex",
     light: "codex",
   },
+  systemUiFont: true,
   mode: "system",
 };
 
@@ -352,6 +355,22 @@ export function normalizeThemePack(value: unknown, variant: ThemeVariant): Theme
   };
 }
 
+function hasStoredCustomUiFont(state: Record<string, unknown>): boolean {
+  const chromeThemes = isRecord(state.chromeThemes) ? state.chromeThemes : {};
+  const packs = isRecord(state.packs) ? state.packs : {};
+
+  return (["dark", "light"] as const).some((variant) => {
+    const chromeTheme = isRecord(chromeThemes[variant]) ? chromeThemes[variant] : {};
+    const chromeFonts = isRecord(chromeTheme.fonts) ? chromeTheme.fonts : {};
+    if (normalizeFontSelection(chromeFonts.ui) !== null) return true;
+
+    const legacyPack = isRecord(packs[variant]) ? packs[variant] : {};
+    const legacyTheme = isRecord(legacyPack.theme) ? legacyPack.theme : {};
+    const legacyFonts = isRecord(legacyTheme.fonts) ? legacyTheme.fonts : {};
+    return normalizeFontSelection(legacyFonts.ui) !== null;
+  });
+}
+
 export function normalizeThemeState(value: unknown): ThemeState {
   const state = isRecord(value) ? value : {};
   const codeThemeIds = isRecord(state.codeThemeIds) ? state.codeThemeIds : {};
@@ -377,6 +396,10 @@ export function normalizeThemeState(value: unknown): ThemeState {
       light: normalizeCodeThemeId(codeThemeIds.light ?? legacyLightPack.codeThemeId, "light"),
     },
     mode: isThemeMode(state.mode) ? state.mode : DEFAULT_THEME_STATE.mode,
+    // Preserve the UI font older theme states already rendered. New/default states use the
+    // native stack, while an explicit preference always wins after the first save.
+    systemUiFont:
+      typeof state.systemUiFont === "boolean" ? state.systemUiFont : !hasStoredCustomUiFont(state),
   };
 }
 
@@ -662,7 +685,7 @@ export function resolveThemeVariant(mode: ThemeMode, systemDark: boolean): Theme
 export function buildThemeCssVariables(
   pack: ThemePack,
   variant: ThemeVariant,
-  options?: { electron?: boolean; isMac?: boolean },
+  options?: { electron?: boolean; isMac?: boolean; systemUiFont?: boolean },
 ): ThemeCssVariableBuild {
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
@@ -772,7 +795,11 @@ export function buildThemeCssVariables(
     "--success": pack.theme.semanticColors.diffAdded,
     "--success-foreground": pack.theme.surface,
     "--theme-font-code-family": normalizeMonospaceFontFamilyCssValue(pack.theme.fonts.code) ?? "",
-    "--theme-font-ui-family": normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? "",
+    // Empty string → the applier removes the property, so the base -apple-system stack
+    // (SF Pro on macOS) takes over when the user prefers the native font.
+    "--theme-font-ui-family": options?.systemUiFont
+      ? ""
+      : (normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? ""),
     "--warning": warningColor,
     "--warning-foreground": pack.theme.surface,
   };

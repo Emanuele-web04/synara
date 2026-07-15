@@ -21,6 +21,7 @@ import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { CheckIcon, CopyIcon, GitPullRequestIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
+import { PR_FINE_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 
 export function isPullRequestsUnavailableError(
   error: unknown,
@@ -80,10 +81,15 @@ function CommandLine({ command }: { command: string }) {
       title="Copy to clipboard"
       className="group flex w-full items-center gap-2 rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)] px-3 py-2 text-left transition-colors hover:border-border"
     >
-      <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">{command}</code>
+      <code
+        className={cn(PR_META_TEXT_CLASS_NAME, "min-w-0 flex-1 truncate font-mono text-foreground")}
+      >
+        {command}
+      </code>
       <span
         className={cn(
-          "flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors group-hover:text-foreground",
+          PR_FINE_TEXT_CLASS_NAME,
+          "flex shrink-0 items-center gap-1 text-muted-foreground transition-colors group-hover:text-foreground",
           copied && "text-emerald-600 dark:text-emerald-400",
         )}
       >
@@ -169,7 +175,12 @@ export function PullRequestsUnavailableState({
         </EmptyContent>
       ) : (
         <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            className={cn(
+              PR_META_TEXT_CLASS_NAME,
+              "flex items-center gap-1.5 text-muted-foreground",
+            )}
+          >
             <TriangleAlertIcon className="size-3.5" />
             <span>Check your connection and try again.</span>
           </div>

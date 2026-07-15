@@ -111,7 +111,10 @@ import {
 import { ProviderCompactThreadInput } from "./provider";
 import {
   PullRequestActionInput,
+  PullRequestCommentInput,
   PullRequestDetailInput,
+  PullRequestReviewRequestCountInput,
+  PullRequestSetPinnedInput,
   PullRequestsListInput,
 } from "./pullRequests";
 
@@ -170,9 +173,12 @@ export const WS_METHODS = {
 
   // Global pull request methods
   pullRequestsList: "pullRequests.list",
+  pullRequestsReviewRequestCount: "pullRequests.reviewRequestCount",
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsDiff: "pullRequests.diff",
   pullRequestsAction: "pullRequests.action",
+  pullRequestsComment: "pullRequests.comment",
+  pullRequestsSetPinned: "pullRequests.setPinned",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -331,9 +337,12 @@ const WebSocketRequestBody = Schema.Union([
 
   // Global pull requests
   tagRequestBody(WS_METHODS.pullRequestsList, PullRequestsListInput),
+  tagRequestBody(WS_METHODS.pullRequestsReviewRequestCount, PullRequestReviewRequestCountInput),
   tagRequestBody(WS_METHODS.pullRequestsDetail, PullRequestDetailInput),
   tagRequestBody(WS_METHODS.pullRequestsDiff, PullRequestDetailInput),
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
+  tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
+  tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
