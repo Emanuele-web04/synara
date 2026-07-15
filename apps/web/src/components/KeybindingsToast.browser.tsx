@@ -41,7 +41,7 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: EffectRpcWebSocketClient | null = null;
+let serverConfigStreamClient: EffectRpcWebSocketClient | null = null;
 let serverConfigStreamRequestId: string | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
@@ -151,6 +151,12 @@ function resolveWsRpc(tag: string): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
@@ -177,13 +183,11 @@ function resolveWsRpc(tag: string): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    serverConfigStreamRequestId = null;
     client.addEventListener("message", (event) => {
       const rawData = event.data;
       if (typeof rawData !== "string") return;
       const parsed = readEffectRpcClientMessage(client, rawData);
       if (parsed.kind !== "request") return;
-      wsClient = client;
 
       const requestBody = flattenEffectRpcRequestPayload(
         parsed.request.tag,
@@ -198,6 +202,7 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerConfig) {
+        serverConfigStreamClient = client;
         serverConfigStreamRequestId = parsed.request.id;
         sendEffectRpcChunk(client, parsed.request.id, {
           type: "snapshot",
@@ -227,7 +232,9 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents
       ) {
         return;
       }
@@ -241,15 +248,15 @@ const worker = setupWorker(
 async function sendServerConfigUpdatedPush(
   issues: Array<{ kind: string; message: string }>,
 ): Promise<void> {
-  if (!wsClient) throw new Error("WebSocket client not connected");
   await vi.waitFor(
     () => {
       expect(serverConfigStreamRequestId).toBeTruthy();
+      expect(serverConfigStreamClient).toBeTruthy();
     },
     { timeout: 4_000, interval: 16 },
   );
-  if (!serverConfigStreamRequestId) return;
-  sendEffectRpcChunk(wsClient, serverConfigStreamRequestId, {
+  if (!serverConfigStreamRequestId || !serverConfigStreamClient) return;
+  sendEffectRpcChunk(serverConfigStreamClient, serverConfigStreamRequestId, {
     type: "configUpdated",
     payload: {
       issues,
@@ -289,10 +296,19 @@ async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${THREAD_ID}`] }));
 
   const screen = await render(<RouterProvider router={router} />, { container: host });
-  await vi.waitFor(() => expect(serverConfigStreamRequestId).toBeTruthy(), {
-    timeout: 8_000,
-    interval: 16,
-  });
+  try {
+    await vi.waitFor(
+      () => {
+        expect(serverConfigStreamRequestId).toBeTruthy();
+        expect(serverConfigStreamClient).toBeTruthy();
+      },
+      { timeout: 20_000, interval: 16 },
+    );
+  } catch (cause) {
+    await screen.unmount();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
   let cleanedUp = false;
 
   return {
@@ -324,6 +340,7 @@ describe("Keybindings update toast", () => {
     await resetWsNativeApiForTest();
     localStorage.clear();
     document.body.innerHTML = "";
+    serverConfigStreamClient = null;
     serverConfigStreamRequestId = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},

@@ -107,7 +107,35 @@ function createProviderServiceHarness() {
   };
 
   const emit = (event: LegacyProviderRuntimeEvent): void => {
-    const canonicalEvent = event.payload === undefined ? { ...event, payload: {} } : event;
+    const canonicalEvent = (() => {
+      if (event.payload !== undefined) return event;
+      const {
+        type,
+        eventId,
+        provider,
+        createdAt,
+        threadId,
+        turnId,
+        itemId,
+        requestId,
+        ...legacyPayload
+      } = event;
+      const payload =
+        type === "turn.completed" && legacyPayload.state === undefined
+          ? { ...legacyPayload, state: legacyPayload.status }
+          : legacyPayload;
+      return {
+        type,
+        eventId,
+        provider,
+        createdAt,
+        threadId,
+        ...(turnId === undefined ? {} : { turnId }),
+        ...(itemId === undefined ? {} : { itemId }),
+        ...(requestId === undefined ? {} : { requestId }),
+        payload,
+      };
+    })();
     Effect.runSync(
       PubSub.publish(runtimeEventPubSub, canonicalEvent as unknown as ProviderRuntimeEvent),
     );
@@ -5272,13 +5300,13 @@ describe("ProviderRuntimeIngestion", () => {
     harness.emit(makeUsageEvent("evt-context-first", 4_000));
     harness.emit(makeUsageEvent("evt-context-duplicate", 4_000));
     harness.emit(makeUsageEvent("evt-context-changed", 4_001));
-    await harness.drain();
-
-    const readModel = await Effect.runPromise(harness.engine.getReadModel());
-    const contextActivities = readModel.threads
-      .find((thread) => thread.id === "thread-1")
-      ?.activities.filter((activity) => activity.kind === "context-window.updated");
-    expect(contextActivities?.map((activity) => activity.id).toSorted()).toEqual([
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-context-changed"),
+    );
+    const contextActivities = thread.activities.filter(
+      (activity) => activity.kind === "context-window.updated",
+    );
+    expect(contextActivities.map((activity) => activity.id).toSorted()).toEqual([
       "evt-context-changed",
       "evt-context-first",
     ]);

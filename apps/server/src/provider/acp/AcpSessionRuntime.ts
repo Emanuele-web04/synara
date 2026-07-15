@@ -10,6 +10,7 @@ import {
   Cause,
   Deferred,
   Effect,
+  Fiber,
   Layer,
   Option,
   Queue,
@@ -42,6 +43,8 @@ import {
 } from "./AcpRuntimeModel.ts";
 
 const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
+const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
+export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
 
 export interface AcpProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -60,6 +63,39 @@ type ConfigOptionUpdateWaiter = {
   readonly value: string | boolean;
   readonly deferred: Deferred.Deferred<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
 };
+
+type AcpIncomingFrame =
+  | { readonly _tag: "chunk"; readonly chunk: Uint8Array }
+  | { readonly _tag: "error"; readonly error: unknown }
+  | { readonly _tag: "end" };
+
+export function makeAcpIncomingFrameGuard(
+  maxFrameBytes = ACP_MAX_INCOMING_FRAME_BYTES,
+): (chunk: Uint8Array) => EffectAcpErrors.AcpTransportError | undefined {
+  let pendingFrameBytes = 0;
+
+  return (chunk) => {
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      const newlineIndex = chunk.indexOf(0x0a, offset);
+      const segmentEnd = newlineIndex === -1 ? chunk.byteLength : newlineIndex;
+      pendingFrameBytes += segmentEnd - offset;
+      if (pendingFrameBytes > maxFrameBytes) {
+        const cause = new Error(
+          `ACP incoming frame exceeded the ${String(maxFrameBytes)}-byte limit`,
+        );
+        return new EffectAcpErrors.AcpTransportError({
+          detail: cause.message,
+          cause,
+        });
+      }
+      if (newlineIndex === -1) break;
+      pendingFrameBytes = 0;
+      offset = newlineIndex + 1;
+    }
+    return undefined;
+  };
+}
 
 export interface AcpSpawnInput {
   readonly command: string;
@@ -391,19 +427,44 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         ),
       ),
   });
+  const incoming = yield* Queue.bounded<AcpIncomingFrame>(ACP_INCOMING_CHUNK_QUEUE_CAPACITY);
+  const guardIncomingFrame = makeAcpIncomingFrameGuard();
+  const incomingFiber = yield* child.stdout.pipe(
+    Stream.runForEach((chunk) =>
+      Effect.gen(function* () {
+        const frameError = guardIncomingFrame(chunk);
+        if (frameError) return yield* frameError;
+        yield* logProtocol("incoming", "raw", chunk);
+        yield* Queue.offer(incoming, { _tag: "chunk", chunk });
+      }),
+    ),
+    Effect.matchEffect({
+      onFailure: (error) => Queue.offer(incoming, { _tag: "error", error }).pipe(Effect.asVoid),
+      onSuccess: () => Queue.offer(incoming, { _tag: "end" }).pipe(Effect.asVoid),
+    }),
+    Effect.forkIn(runtimeScope),
+  );
+  yield* Scope.addFinalizer(runtimeScope, Queue.shutdown(incoming));
   const input = new ReadableStream<Uint8Array>({
-    start(controller) {
-      Effect.runFork(
-        child.stdout.pipe(
-          Stream.runForEach((chunk) =>
-            logProtocol("incoming", "raw", chunk).pipe(
-              Effect.andThen(Effect.sync(() => controller.enqueue(chunk))),
-            ),
-          ),
-          Effect.match({
-            onFailure: (error) => controller.error(error),
-            onSuccess: () => controller.close(),
-          }),
+    pull(controller) {
+      return Effect.runPromise(Queue.take(incoming)).then((frame) => {
+        switch (frame._tag) {
+          case "chunk":
+            controller.enqueue(frame.chunk);
+            return;
+          case "error":
+            controller.error(frame.error);
+            return;
+          case "end":
+            controller.close();
+        }
+      });
+    },
+    cancel() {
+      return Effect.runPromise(
+        Fiber.interrupt(incomingFiber).pipe(
+          Effect.andThen(Queue.shutdown(incoming)),
+          Effect.asVoid,
         ),
       );
     },

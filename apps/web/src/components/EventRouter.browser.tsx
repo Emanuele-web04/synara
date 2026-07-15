@@ -49,9 +49,10 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: EffectRpcWebSocketClient | null = null;
 let shellStreamRequestId: string | null = null;
+let shellStreamClient: EffectRpcWebSocketClient | null = null;
 const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
+const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
@@ -176,6 +177,12 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
@@ -210,13 +217,13 @@ const worker = setupWorker(
       if (parsed.kind !== "request") {
         return;
       }
-      wsClient = client;
       const request = parsed.request;
       const requestBody = flattenEffectRpcRequestPayload(request.tag, request.payload);
       const method = requestBody._tag;
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
         subscribeShellRequestCount += 1;
         shellStreamRequestId = request.id;
+        shellStreamClient = client;
         sendEffectRpcChunk(client, request.id, {
           kind: "snapshot",
           snapshot: createShellSnapshotFromReadModel(fixture.snapshot),
@@ -241,7 +248,9 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents
       ) {
         return;
       }
@@ -253,6 +262,7 @@ const worker = setupWorker(
         );
         subscribeThreadRequests.push(threadId);
         threadStreamRequestIdByThreadId.set(threadId, request.id);
+        threadStreamClientByThreadId.set(threadId, client);
         if (delayNextThreadSnapshot) {
           delayNextThreadSnapshot = false;
           return;
@@ -325,28 +335,25 @@ async function mountApp(options?: {
 }
 
 function sendThreadEventPush(event: OrchestrationEvent) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
-  }
-  const requestId = threadStreamRequestIdByThreadId.get(event.aggregateId as ThreadId);
-  if (!requestId) {
+  const threadId = event.aggregateId as ThreadId;
+  const requestId = threadStreamRequestIdByThreadId.get(threadId);
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
     throw new Error(`Thread stream is not connected for ${event.aggregateId}`);
   }
-  sendEffectRpcChunk(wsClient, requestId, {
+  sendEffectRpcChunk(client, requestId, {
     kind: "event",
     event,
   });
 }
 
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
-  }
   const requestId = threadStreamRequestIdByThreadId.get(threadId);
-  if (!requestId) {
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
     throw new Error(`Thread stream is not connected for ${threadId}`);
   }
-  sendEffectRpcChunk(wsClient, requestId, {
+  sendEffectRpcChunk(client, requestId, {
     kind: "snapshot",
     snapshot: {
       snapshotSequence,
@@ -356,13 +363,10 @@ function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
 }
 
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
-  if (!wsClient) {
-    throw new Error("WebSocket client not connected");
-  }
-  if (!shellStreamRequestId) {
+  if (!shellStreamRequestId || !shellStreamClient) {
     throw new Error("Shell stream is not connected");
   }
-  sendEffectRpcChunk(wsClient, shellStreamRequestId, event);
+  sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, event);
 }
 
 describe("EventRouter scoped orchestration sync", () => {
@@ -385,7 +389,9 @@ describe("EventRouter scoped orchestration sync", () => {
     fixture = buildFixture();
     document.body.innerHTML = "";
     shellStreamRequestId = null;
+    shellStreamClient = null;
     threadStreamRequestIdByThreadId.clear();
+    threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
     localStorage.clear();
     useComposerDraftStore.setState({
@@ -476,6 +482,15 @@ describe("EventRouter scoped orchestration sync", () => {
 
       sendThreadEventPush(firstAssistantChunk);
 
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+      const threadAfterDuplicate = useStore.getState();
+      expect(
+        getThreadFromState(threadAfterDuplicate, THREAD_ID)?.messages.filter(
+          (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
+        ),
+      ).toHaveLength(1);
+
       const secondAssistantChunk = {
         ...firstAssistantChunk,
         sequence: 3,
@@ -499,11 +514,6 @@ describe("EventRouter scoped orchestration sync", () => {
           );
           expect(message?.text).toBe("hello world");
           expect(message?.streaming).toBe(false);
-          expect(
-            thread?.messages.filter(
-              (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-1"),
-            ),
-          ).toHaveLength(1);
         },
         { timeout: 8_000, interval: 16 },
       );

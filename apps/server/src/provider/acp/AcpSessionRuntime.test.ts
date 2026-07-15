@@ -6,9 +6,31 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   assistantItemId,
   decodeSetSessionConfigOptionResponse,
+  makeAcpIncomingFrameGuard,
   sessionConfigOptionsFromSetup,
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
+
+describe("makeAcpIncomingFrameGuard", () => {
+  const encode = (value: string) => new TextEncoder().encode(value);
+
+  it("enforces the frame budget across split chunks and resets it at newline boundaries", () => {
+    const guard = makeAcpIncomingFrameGuard(5);
+
+    expect(guard(encode("123"))).toBeUndefined();
+    expect(guard(encode("45\n12345\n"))).toBeUndefined();
+    expect(guard(encode("1\n"))).toBeUndefined();
+  });
+
+  it("rejects an oversized unterminated frame", () => {
+    const guard = makeAcpIncomingFrameGuard(5);
+
+    expect(guard(encode("123"))).toBeUndefined();
+    const error = guard(encode("456"));
+    expect(error?._tag).toBe("AcpTransportError");
+    expect(error?.detail).toContain("5-byte limit");
+  });
+});
 
 describe("teardownAcpChildProcess", () => {
   it("keeps ACP scope closure pending until the owned root exit settles", async () => {

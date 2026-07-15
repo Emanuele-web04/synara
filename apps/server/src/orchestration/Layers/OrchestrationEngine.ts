@@ -210,14 +210,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         .filter((attachment) => attachment.type === "image" || attachment.type === "file")
         .map((attachment) => attachment.id)
         .sort();
-      const claimed = yield* managedAttachments.findClaimedForCommand({
-        commandId: command.commandId,
-      });
-      const claimedIds = claimed.map((attachment) => attachment.attachmentId).sort();
+      const claimed = yield* Effect.forEach(
+        requestedIds,
+        (attachmentId) => managedAttachments.findClaimedById({ attachmentId }),
+        { concurrency: 1 },
+      );
+      const claimedAttachments = claimed.flatMap((attachment) =>
+        Option.isSome(attachment) ? [attachment.value] : [],
+      );
       const exactIdentity =
-        requestedIds.length === claimedIds.length &&
-        requestedIds.every((attachmentId, index) => attachmentId === claimedIds[index]) &&
-        claimed.every(
+        requestedIds.length === claimedAttachments.length &&
+        claimedAttachments.every(
           (attachment) =>
             attachment.ownerThreadId === command.threadId &&
             attachment.ownerKind === principal.ownerKind &&

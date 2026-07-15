@@ -3477,7 +3477,7 @@ const make = Effect.gen(function* () {
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause)
-                : Effect.logWarning("provider runtime event rejected before journal append", {
+                : Effect.logWarning("provider runtime event journal ingestion failed", {
                     eventId: event.eventId,
                     eventType: event.type,
                     cause: Cause.pretty(cause),

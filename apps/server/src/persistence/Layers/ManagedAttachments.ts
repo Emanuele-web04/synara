@@ -219,7 +219,7 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
       return sql<ManagedAttachmentBlob>`
           UPDATE managed_attachment_blobs
           SET state = 'claimed',
-              claim_command_id = ${input.commandId},
+              claim_command_id = COALESCE(claim_command_id, ${input.commandId}),
               claim_message_id = ${input.messageId},
               claimed_at = COALESCE(claimed_at, ${input.now}),
               staging_expires_at = NULL,

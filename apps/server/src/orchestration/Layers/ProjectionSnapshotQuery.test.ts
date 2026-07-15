@@ -677,6 +677,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const messageCount = 2_005;
 
       yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_pending_interactions`;
       yield* sql`DELETE FROM projection_threads`;
       yield* sql`DELETE FROM projection_projects`;
 
@@ -778,6 +779,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const threadId = asThreadId("thread-causal-message-snapshot");
 
       yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_pending_interactions`;
       yield* sql`DELETE FROM projection_threads`;
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`

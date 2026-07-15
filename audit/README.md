@@ -1,5 +1,9 @@
 # Synara Focused Codebase Roadmap
 
+> **Superseded:** this is the historical implementation roadmap. The current, evidence-backed audit
+> and integrated TODO list live in [`PR357_MERGE_READINESS_AUDIT.md`](./PR357_MERGE_READINESS_AUDIT.md).
+> Keep this file only for the detailed history of work already performed.
+
 ## Audit scope and constraints
 
 This roadmap replaces the previous broad audit with the smallest evidence-backed set of work that materially improves Synara's correctness, security, reliability, performance, maintainability, and provider/ACP foundation.

@@ -17,6 +17,10 @@ import {
   WS_METHODS,
   OrchestrationSessionStatus,
 } from "@synara/contracts";
+import {
+  ATTACHMENT_CANCEL_ROUTE_PATH,
+  ATTACHMENT_UPLOAD_ROUTE_PATH,
+} from "@synara/shared/binaryTransfer";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
@@ -68,6 +72,7 @@ const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
 let attachmentResponseDelayMs = 0;
+let attachmentUploadSequence = 0;
 
 interface WsRequestEnvelope {
   id: string;
@@ -1005,6 +1010,12 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
     const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
@@ -1210,27 +1221,33 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents
       ) {
         return;
       }
       sendEffectRpcExit(client, parsed.request.id, resolveWsRpc(requestBody));
     });
   }),
-  http.post("*/api/attachments/upload", ({ request }) => {
+  http.post(`*${ATTACHMENT_UPLOAD_ROUTE_PATH}`, async ({ request }) => {
     const url = new URL(request.url);
-    const threadId = url.searchParams.get("threadId") ?? THREAD_ID;
+    const bytes = await request.arrayBuffer();
+    attachmentUploadSequence += 1;
     return HttpResponse.json(
       {
-        type: url.searchParams.get("type") ?? "image",
-        id: `${threadId}-11111111-1111-4111-8111-111111111111`,
-        name: url.searchParams.get("name") ?? "attachment.png",
-        mimeType: url.searchParams.get("mimeType") ?? "image/png",
-        sizeBytes: 8,
+        type: url.searchParams.get("type") ?? "file",
+        id: `att_v2_${String(attachmentUploadSequence).padStart(32, "0")}`,
+        name: url.searchParams.get("name") ?? "attachment.bin",
+        mimeType: url.searchParams.get("mimeType") ?? "application/octet-stream",
+        sizeBytes: bytes.byteLength,
       },
       { status: 201 },
     );
   }),
+  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, () =>
+    HttpResponse.json({ cancelled: true }, { status: 200 }),
+  ),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
       await new Promise<void>((resolve) => {
@@ -1671,15 +1688,24 @@ async function mountChatView(options: {
     container: host,
   });
 
-  await waitForMountedChatReady({
-    host,
-    snapshot: options.snapshot,
-    routeThreadId: ThreadId.makeUnsafe(initialEntry.slice(1)),
-  });
-
-  const cleanup = async () => {
+  try {
+    await waitForMountedChatReady({
+      host,
+      snapshot: options.snapshot,
+      routeThreadId: ThreadId.makeUnsafe(initialEntry.slice(1)),
+    });
+  } catch (cause) {
     await screen.unmount();
-    host.remove();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
+
+  let cleanedUp = false;
+  const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    await screen.unmount();
+    if (host.isConnected) host.remove();
   };
 
   return {
@@ -1741,6 +1767,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
+    attachmentUploadSequence = 0;
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;

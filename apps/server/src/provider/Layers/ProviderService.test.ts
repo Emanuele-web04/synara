@@ -1082,8 +1082,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
-
       routing.codex.sendTurn.mockClear();
+      routing.codex.interruptTurn.mockClear();
+      routing.codex.respondToRequest.mockClear();
+      routing.codex.respondToUserInput.mockClear();
 
       const session = yield* provider.startSession(asThreadId("thread-1"), {
         provider: "codex",

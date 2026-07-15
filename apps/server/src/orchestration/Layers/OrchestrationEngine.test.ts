@@ -365,6 +365,22 @@ describe("OrchestrationEngine", () => {
       system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
     ).resolves.toEqual(accepted);
 
+    const editResendClaim = await system.run(
+      repository.claimForAcceptedTurn({
+        attachmentIds: [firstAttachmentId],
+        ownerThreadId: threadId,
+        ownerKind: principal.ownerKind,
+        ownerId: principal.ownerId,
+        commandId: "cmd-attachment-edit-resend",
+        messageId,
+        now: new Date().toISOString(),
+      }),
+    );
+    expect(editResendClaim.status).toBe("claimed");
+    await expect(
+      system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
+    ).resolves.toEqual(accepted);
+
     await expect(
       system.run(
         engine.dispatch(
