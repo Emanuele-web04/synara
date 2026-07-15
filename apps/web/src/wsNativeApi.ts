@@ -47,14 +47,55 @@ import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEve
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
-const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
-const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
-const serverProviderStatusesUpdatedListeners = new Set<
-  (payload: ServerProviderStatusesUpdatedPayload) => void
->();
-const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
-const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
-const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+
+function createListenerRegistry<T>() {
+  const listeners = new Set<(payload: T) => void>();
+  return {
+    get size() {
+      return listeners.size;
+    },
+    subscribe(listener: (payload: T) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    emit(payload: T) {
+      for (const listener of listeners) {
+        try {
+          listener(payload);
+        } catch {
+          // A listener must not prevent delivery to the remaining subscribers.
+        }
+      }
+    },
+    clear() {
+      listeners.clear();
+    },
+  };
+}
+
+function subscribeWithReplay<T>(input: {
+  readonly registry: { subscribe: (listener: (payload: T) => void) => () => unknown };
+  readonly listener: (payload: T) => void;
+  readonly latest: T | null;
+}): () => void {
+  const unsubscribe = input.registry.subscribe(input.listener);
+  if (input.latest) {
+    try {
+      input.listener(input.latest);
+    } catch {
+      // Replay follows the same listener isolation as live delivery.
+    }
+  }
+  return () => void unsubscribe();
+}
+
+const welcomeListeners = createListenerRegistry<WsWelcomePayload>();
+const serverConfigUpdatedListeners = createListenerRegistry<ServerConfigUpdatedPayload>();
+const serverProviderStatusesUpdatedListeners =
+  createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
+const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
+const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -72,16 +113,30 @@ function omitNullUserInputAnswers(
     ),
   };
 }
-const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
-const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
-const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
-const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
-const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
-const orchestrationThreadEventListeners = new Set<
-  (payload: OrchestrationThreadStreamItem) => void
->();
-const fallbackBrowserStateListeners = new Set<(state: ThreadBrowserState) => void>();
+const terminalEventListeners = createListenerRegistry<TerminalEvent>();
+const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
+const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
+const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
+const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
+
+function clearWsNativeApiListeners(): void {
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  projectDevServerEventListeners.clear();
+  automationEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+}
 
 function defaultBrowserState(threadId: ThreadId): ThreadBrowserState {
   return {
@@ -203,9 +258,7 @@ function getFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
 
 function emitFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
   const state = cloneBrowserState(getFallbackBrowserState(threadId));
-  for (const listener of fallbackBrowserStateListeners) {
-    listener(state);
-  }
+  fallbackBrowserStateListeners.emit(state);
   return state;
 }
 
@@ -245,20 +298,8 @@ function resolveFallbackBrowserTab(state: ThreadBrowserState, tabId?: string) {
  * This avoids the race between WebSocket connect and React effect registration.
  */
 export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): () => void {
-  welcomeListeners.add(listener);
-
   const latestWelcome = instance?.transport.getLatestPush(WS_CHANNELS.serverWelcome)?.data ?? null;
-  if (latestWelcome) {
-    try {
-      listener(latestWelcome);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    welcomeListeners.delete(listener);
-  };
+  return subscribeWithReplay({ registry: welcomeListeners, listener, latest: latestWelcome });
 }
 
 /**
@@ -268,21 +309,13 @@ export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): 
 export function onServerConfigUpdated(
   listener: (payload: ServerConfigUpdatedPayload) => void,
 ): () => void {
-  serverConfigUpdatedListeners.add(listener);
-
   const latestConfig =
     instance?.transport.getLatestPush(WS_CHANNELS.serverConfigUpdated)?.data ?? null;
-  if (latestConfig) {
-    try {
-      listener(latestConfig);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverConfigUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverConfigUpdatedListeners,
+    listener,
+    latest: latestConfig,
+  });
 }
 
 /**
@@ -291,61 +324,37 @@ export function onServerConfigUpdated(
 export function onServerProviderStatusesUpdated(
   listener: (payload: ServerProviderStatusesUpdatedPayload) => void,
 ): () => void {
-  serverProviderStatusesUpdatedListeners.add(listener);
-
   const latestProviderStatuses =
     instance?.transport.getLatestPush(WS_CHANNELS.serverProviderStatusesUpdated)?.data ?? null;
-  if (latestProviderStatuses) {
-    try {
-      listener(latestProviderStatuses);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverProviderStatusesUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverProviderStatusesUpdatedListeners,
+    listener,
+    latest: latestProviderStatuses,
+  });
 }
 
 export function onServerMaintenanceUpdated(
   listener: (payload: ServerLifecycleStreamEvent) => void,
 ): () => void {
-  serverMaintenanceUpdatedListeners.add(listener);
-
   const latestMaintenance =
     instance?.transport.getLatestPush(WS_CHANNELS.serverMaintenanceUpdated)?.data ?? null;
-  if (latestMaintenance) {
-    try {
-      listener(latestMaintenance);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverMaintenanceUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverMaintenanceUpdatedListeners,
+    listener,
+    latest: latestMaintenance,
+  });
 }
 
 export function onServerSettingsUpdated(
   listener: (payload: ServerSettingsUpdatedPayload) => void,
 ): () => void {
-  serverSettingsUpdatedListeners.add(listener);
-
   const latestSettings =
     instance?.transport.getLatestPush(WS_CHANNELS.serverSettingsUpdated)?.data ?? null;
-  if (latestSettings) {
-    try {
-      listener(latestSettings);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverSettingsUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverSettingsUpdatedListeners,
+    listener,
+    latest: latestSettings,
+  });
 }
 
 export function createWsNativeApi(): NativeApi {
@@ -364,114 +373,37 @@ export function createWsNativeApi(): NativeApi {
   });
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
-    const payload = message.data;
-    for (const listener of welcomeListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    welcomeListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverConfigUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverConfigUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverProviderStatusesUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverProviderStatusesUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverMaintenanceUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverMaintenanceUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverMaintenanceUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverSettingsUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverSettingsUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
-    const payload = message.data;
-    for (const listener of gitActionProgressListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    gitActionProgressListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.terminalEvent, (message) => {
-    const payload = message.data;
-    for (const listener of terminalEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    terminalEventListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
-    const payload = message.data;
-    for (const listener of projectDevServerEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    projectDevServerEventListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
-    const payload = message.data;
-    for (const listener of automationEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    automationEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationShellEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    orchestrationShellEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationThreadEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    orchestrationThreadEventListeners.emit(message.data);
   });
   const api: NativeApi = {
     dialogs: {
@@ -507,12 +439,7 @@ export function createWsNativeApi(): NativeApi {
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),
       close: (input) => transport.request(WS_METHODS.terminalClose, input),
-      onEvent: (callback) => {
-        terminalEventListeners.add(callback);
-        return () => {
-          terminalEventListeners.delete(callback);
-        };
-      },
+      onEvent: terminalEventListeners.subscribe,
     },
     projects: {
       discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
@@ -527,12 +454,7 @@ export function createWsNativeApi(): NativeApi {
       runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
       listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
-      onDevServerEvent: (callback) => {
-        projectDevServerEventListeners.add(callback);
-        return () => {
-          projectDevServerEventListeners.delete(callback);
-        };
-      },
+      onDevServerEvent: projectDevServerEventListeners.subscribe,
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -595,12 +517,7 @@ export function createWsNativeApi(): NativeApi {
       pullRequestSnapshot: (input) => transport.request(WS_METHODS.gitPullRequestSnapshot, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
-      onActionProgress: (callback) => {
-        gitActionProgressListeners.add(callback);
-        return () => {
-          gitActionProgressListeners.delete(callback);
-        };
-      },
+      onActionProgress: gitActionProgressListeners.subscribe,
     },
     contextMenu: {
       show: async <T extends string>(
@@ -732,42 +649,23 @@ export function createWsNativeApi(): NativeApi {
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeThread, input),
       onDomainEvent: (callback) => {
         const shouldStartTransport = orchestrationDomainEventListeners.size === 0;
-        orchestrationDomainEventListeners.add(callback);
+        const unsubscribe = orchestrationDomainEventListeners.subscribe(callback);
         if (shouldStartTransport) {
           unsubscribeDomainEventTransport = transport.subscribe(
             ORCHESTRATION_WS_CHANNELS.domainEvent,
-            (message) => {
-              const payload = message.data;
-              for (const listener of orchestrationDomainEventListeners) {
-                try {
-                  listener(payload);
-                } catch {
-                  // Swallow listener errors
-                }
-              }
-            },
+            (message) => orchestrationDomainEventListeners.emit(message.data),
           );
         }
         return () => {
-          orchestrationDomainEventListeners.delete(callback);
+          unsubscribe();
           if (orchestrationDomainEventListeners.size === 0) {
             unsubscribeDomainEventTransport?.();
             unsubscribeDomainEventTransport = null;
           }
         };
       },
-      onShellEvent: (callback) => {
-        orchestrationShellEventListeners.add(callback);
-        return () => {
-          orchestrationShellEventListeners.delete(callback);
-        };
-      },
-      onThreadEvent: (callback) => {
-        orchestrationThreadEventListeners.add(callback);
-        return () => {
-          orchestrationThreadEventListeners.delete(callback);
-        };
-      },
+      onShellEvent: orchestrationShellEventListeners.subscribe,
+      onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
@@ -778,12 +676,7 @@ export function createWsNativeApi(): NativeApi {
       cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
       markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
-      onEvent: (callback) => {
-        automationEventListeners.add(callback);
-        return () => {
-          automationEventListeners.delete(callback);
-        };
-      },
+      onEvent: automationEventListeners.subscribe,
     },
     browser: {
       open: async (input) => {
@@ -952,10 +845,7 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.onState(callback);
         }
-        fallbackBrowserStateListeners.add(callback);
-        return () => {
-          fallbackBrowserStateListeners.delete(callback);
-        };
+        return fallbackBrowserStateListeners.subscribe(callback);
       },
       onCopyLink: (callback) => {
         if (window.desktopBridge) {
@@ -975,19 +865,7 @@ export function createWsNativeApi(): NativeApi {
 export function resetWsNativeApiForTest(): void {
   instance?.transport.dispose();
   instance = null;
-  welcomeListeners.clear();
-  serverConfigUpdatedListeners.clear();
-  serverProviderStatusesUpdatedListeners.clear();
-  serverMaintenanceUpdatedListeners.clear();
-  serverSettingsUpdatedListeners.clear();
-  gitActionProgressListeners.clear();
-  terminalEventListeners.clear();
-  projectDevServerEventListeners.clear();
-  automationEventListeners.clear();
-  orchestrationDomainEventListeners.clear();
-  orchestrationShellEventListeners.clear();
-  orchestrationThreadEventListeners.clear();
-  fallbackBrowserStateListeners.clear();
+  clearWsNativeApiListeners();
   fallbackBrowserStates.clear();
 }
 
@@ -995,16 +873,6 @@ if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     instance?.transport.dispose();
     instance = null;
-    welcomeListeners.clear();
-    serverConfigUpdatedListeners.clear();
-    serverProviderStatusesUpdatedListeners.clear();
-    serverSettingsUpdatedListeners.clear();
-    gitActionProgressListeners.clear();
-    terminalEventListeners.clear();
-    projectDevServerEventListeners.clear();
-    orchestrationDomainEventListeners.clear();
-    orchestrationShellEventListeners.clear();
-    orchestrationThreadEventListeners.clear();
-    fallbackBrowserStateListeners.clear();
+    clearWsNativeApiListeners();
   });
 }

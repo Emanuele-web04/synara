@@ -20,10 +20,8 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import type * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
 import * as EffectAcpSchema from "effect-acp/schema";
-import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
@@ -44,6 +42,18 @@ import {
 } from "./AcpRuntimeModel.ts";
 
 const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
+
+export interface AcpProtocolLogEvent {
+  readonly direction: "incoming" | "outgoing";
+  readonly stage: "raw" | "decoded";
+  readonly payload: unknown;
+}
+
+type AcpHandler<Request, Response> = (
+  request: Request,
+) => Effect.Effect<Response, EffectAcpErrors.AcpError>;
+
+type AcpHandlerRegistration<Handler> = (handler: Handler) => Effect.Effect<void>;
 
 type ConfigOptionUpdateWaiter = {
   readonly configId: string;
@@ -76,7 +86,7 @@ export interface AcpSessionRuntimeOptions {
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
-    readonly logger?: (event: EffectAcpProtocol.AcpProtocolLogEvent) => Effect.Effect<void, never>;
+    readonly logger?: (event: AcpProtocolLogEvent) => Effect.Effect<void, never>;
   };
   /** Test seam for the single shared ACP subprocess teardown owner. */
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
@@ -103,19 +113,58 @@ export interface AcpSessionRuntimeStartResult {
 }
 
 export interface AcpSessionRuntimeShape {
-  readonly handleRequestPermission: EffectAcpClient.AcpClientShape["handleRequestPermission"];
-  readonly handleElicitation: EffectAcpClient.AcpClientShape["handleElicitation"];
-  readonly handleReadTextFile: EffectAcpClient.AcpClientShape["handleReadTextFile"];
-  readonly handleWriteTextFile: EffectAcpClient.AcpClientShape["handleWriteTextFile"];
-  readonly handleCreateTerminal: EffectAcpClient.AcpClientShape["handleCreateTerminal"];
-  readonly handleTerminalOutput: EffectAcpClient.AcpClientShape["handleTerminalOutput"];
-  readonly handleTerminalWaitForExit: EffectAcpClient.AcpClientShape["handleTerminalWaitForExit"];
-  readonly handleTerminalKill: EffectAcpClient.AcpClientShape["handleTerminalKill"];
-  readonly handleTerminalRelease: EffectAcpClient.AcpClientShape["handleTerminalRelease"];
-  readonly handleSessionUpdate: EffectAcpClient.AcpClientShape["handleSessionUpdate"];
-  readonly handleElicitationComplete: EffectAcpClient.AcpClientShape["handleElicitationComplete"];
-  readonly handleExtRequest: EffectAcpClient.AcpClientShape["handleExtRequest"];
-  readonly handleExtNotification: EffectAcpClient.AcpClientShape["handleExtNotification"];
+  readonly handleRequestPermission: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.RequestPermissionRequest, EffectAcpSchema.RequestPermissionResponse>
+  >;
+  readonly handleElicitation: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.ElicitationRequest, EffectAcpSchema.ElicitationResponse>
+  >;
+  readonly handleReadTextFile: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.ReadTextFileRequest, EffectAcpSchema.ReadTextFileResponse>
+  >;
+  readonly handleWriteTextFile: AcpHandlerRegistration<
+    AcpHandler<
+      EffectAcpSchema.WriteTextFileRequest,
+      EffectAcpSchema.WriteTextFileResponse | void
+    >
+  >;
+  readonly handleCreateTerminal: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.CreateTerminalRequest, EffectAcpSchema.CreateTerminalResponse>
+  >;
+  readonly handleTerminalOutput: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.TerminalOutputRequest, EffectAcpSchema.TerminalOutputResponse>
+  >;
+  readonly handleTerminalWaitForExit: AcpHandlerRegistration<
+    AcpHandler<
+      EffectAcpSchema.WaitForTerminalExitRequest,
+      EffectAcpSchema.WaitForTerminalExitResponse
+    >
+  >;
+  readonly handleTerminalKill: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.KillTerminalRequest, EffectAcpSchema.KillTerminalResponse | void>
+  >;
+  readonly handleTerminalRelease: AcpHandlerRegistration<
+    AcpHandler<
+      EffectAcpSchema.ReleaseTerminalRequest,
+      EffectAcpSchema.ReleaseTerminalResponse | void
+    >
+  >;
+  readonly handleSessionUpdate: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.SessionNotification, void>
+  >;
+  readonly handleElicitationComplete: AcpHandlerRegistration<
+    AcpHandler<EffectAcpSchema.ElicitationCompleteNotification, void>
+  >;
+  readonly handleExtRequest: <A, I>(
+    method: string,
+    payload: Schema.Codec<A, I>,
+    handler: AcpHandler<A, unknown>,
+  ) => Effect.Effect<void>;
+  readonly handleExtNotification: <A, I>(
+    method: string,
+    payload: Schema.Codec<A, I>,
+    handler: AcpHandler<A, void>,
+  ) => Effect.Effect<void>;
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
   // Monotonic count of parsed session/update events enqueued for the
@@ -216,18 +265,23 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   runtimeScope: Scope.Scope,
   protocolLogging?: AcpSessionRuntimeOptions["protocolLogging"],
 ) {
-  type Client = EffectAcpClient.AcpClientShape;
-  type RequestPermissionHandler = Parameters<Client["handleRequestPermission"]>[0];
-  type ElicitationHandler = Parameters<Client["handleElicitation"]>[0];
-  type ReadTextFileHandler = Parameters<Client["handleReadTextFile"]>[0];
-  type WriteTextFileHandler = Parameters<Client["handleWriteTextFile"]>[0];
-  type CreateTerminalHandler = Parameters<Client["handleCreateTerminal"]>[0];
-  type TerminalOutputHandler = Parameters<Client["handleTerminalOutput"]>[0];
-  type TerminalWaitHandler = Parameters<Client["handleTerminalWaitForExit"]>[0];
-  type TerminalKillHandler = Parameters<Client["handleTerminalKill"]>[0];
-  type TerminalReleaseHandler = Parameters<Client["handleTerminalRelease"]>[0];
-  type SessionUpdateHandler = Parameters<Client["handleSessionUpdate"]>[0];
-  type ElicitationCompleteHandler = Parameters<Client["handleElicitationComplete"]>[0];
+  type RequestPermissionHandler = Parameters<
+    AcpSessionRuntimeShape["handleRequestPermission"]
+  >[0];
+  type ElicitationHandler = Parameters<AcpSessionRuntimeShape["handleElicitation"]>[0];
+  type ReadTextFileHandler = Parameters<AcpSessionRuntimeShape["handleReadTextFile"]>[0];
+  type WriteTextFileHandler = Parameters<AcpSessionRuntimeShape["handleWriteTextFile"]>[0];
+  type CreateTerminalHandler = Parameters<AcpSessionRuntimeShape["handleCreateTerminal"]>[0];
+  type TerminalOutputHandler = Parameters<AcpSessionRuntimeShape["handleTerminalOutput"]>[0];
+  type TerminalWaitHandler = Parameters<
+    AcpSessionRuntimeShape["handleTerminalWaitForExit"]
+  >[0];
+  type TerminalKillHandler = Parameters<AcpSessionRuntimeShape["handleTerminalKill"]>[0];
+  type TerminalReleaseHandler = Parameters<AcpSessionRuntimeShape["handleTerminalRelease"]>[0];
+  type SessionUpdateHandler = Parameters<AcpSessionRuntimeShape["handleSessionUpdate"]>[0];
+  type ElicitationCompleteHandler = Parameters<
+    AcpSessionRuntimeShape["handleElicitationComplete"]
+  >[0];
 
   let requestPermission: RequestPermissionHandler | undefined;
   let elicitation: ElicitationHandler | undefined;
@@ -376,7 +430,7 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
       Effect.andThen(fromPromise(() => getConnection().agent.notify(method, payload))),
     );
   const register = (set: () => void) => Effect.sync(set);
-  const client: Client = {
+  const client = {
     raw: {
       notifications: Stream.empty,
       request,

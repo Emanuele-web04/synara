@@ -43,8 +43,8 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 
 - **State:** `CODE COMPLETE`
 - **Active workstream:** none; the shortened 17-workstream controller is implemented.
-- **Active phase:** direct implementation and focused sweeps are complete. Heavyweight workspace
-  verification remains intentionally deferred under the checkpoint rules.
+- **Active phase:** the net-negative consolidation closeout is implemented. Focused server and web
+  unit gates pass; the browser gate is blocked by its pre-existing incomplete welcome fixture.
 - **Phase boundary:** only the existing 17-workstream controller is in scope. No audit expansion,
   P4/P5 work, or unrelated product roadmap additions.
 
@@ -97,7 +97,7 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 | 12 | `P1-GIT-01` | Canonical repository mutation/worktree saga | `P1-DELIVERY-01` where accepted work crosses workspace preparation | CODE COMPLETE — migration 68 journals handoff phases; stored Git results replay before command readiness and pre-result interruptions fail closed |
 | 13 | `P1-SETTINGS-01` | Revisioned settings/provider configuration authority | `P0-SEC-01`, `P1-PROVIDER-01` | CODE COMPLETE — server owns serialized intent commits; no client CAS path remains |
 | 14 | `P1-AUTO-01` | One revision-fenced automation run saga | `P1-DELIVERY-01`, `P1-PROVIDER-01`, `P1-SETTINGS-01` | CODE COMPLETE — bounded keyset recovery and one web summary subscription owner |
-| 15 | `P2-ACP-01` | Official ACP SDK production wire authority | `P1-PROVIDER-01`, `P1-RUNTIME-01` | CODE COMPLETE — official SDK owns all production wire paths; legacy branch deleted |
+| 15 | `P2-ACP-01` | Official ACP SDK production wire authority | `P1-PROVIDER-01`, `P1-RUNTIME-01` | CODE COMPLETE — official SDK owns production and canary wire paths; private client/agent/protocol stack deleted |
 | 16 | `P2-WEB-STATE-01` | Normalized frontend entity and persistence authority | `P1-IDENTITY-01`, `P1-TRANSPORT-01` | CODE COMPLETE — normalized slices are the only runtime thread authority |
 | 17 | `P2-PROVIDER-META-01` | One provider metadata/discovery/health/usage descriptor | `P0-SEC-01`, `P1-SETTINGS-01` | CODE COMPLETE — descriptor order, revision-fenced health, and account-safe usage ownership |
 
@@ -141,8 +141,10 @@ No roadmap scope was added. The checkpoint changed only the seven existing rows:
   and cancellation for Grok, Droid, and Cursor; runtime/event queues are bounded and resume/load no
   longer falls back to a new session. The deprecated constructor and legacy production wire branch
   are deleted; explicit extensions use SDK parsers and raw logging wraps bytes without a second
-  parser. `effect-acp` remains only as existing Effect error/schema adapter types. Focused evidence:
-  prior **40/40** sweep plus **25/25** official conformance/runtime tests.
+  parser. The mock agent now uses the official SDK too. The private `effect-acp` client, agent,
+  protocol, RPC, terminal, stdio helpers, tests, examples, and fixtures are deleted; the package now
+  exports only the still-consumed Effect error/schema adapters. Focused evidence: prior **40/40**
+  sweep plus the current **48/48** ACP/adapter/attachment gates.
 - `P2-WEB-STATE-01`: normalized slices are the only runtime thread authority. The derived `threads`
   property, every transition-side synchronization branch, and the one-way legacy-fixture gate were
   deleted; the two remaining production reads use the existing cached derivation helper. Phase
@@ -160,6 +162,17 @@ Prior sweep: `git diff --check` and residual-ownership searches pass. Focused re
 claimed as net-negative: tracked diff is **+23,908 / -9,254 (net +14,654)**. The shortened checklist
 is code-complete except for the Git process-crash durability phase; this
 checkpoint does not hide that blocker or create a replacement workstream.
+
+Net-negative consolidation closeout: shared ACP locks, settlement, plan dedupe, logging, and image
+attachment loading replace provider-local copies; `wsNativeApi` owns one listener registry/reset
+path; three browser files share only their identical server/host fixtures. Runtime-source change for
+this closeout is **+426 / -2,943 (net -2,517 LOC)**; total code change including retained tests and
+the official mock agent is approximately **net -4,590 LOC**. Focused gates pass **48/48 server** and
+**29/29 web unit**. The browser rerun exposed and fixed the missing registry reset operation, then hit
+the existing incomplete WebSocket welcome fixture (`protocolEpoch` missing); no replacement scaffold
+was added. Remaining deletion work is limited to replacing the still-consumed `effect-acp`
+schema/error adapters with official SDK types and completing the already-recorded stdout
+backpressure gate.
 
 ## Dirty worktree reconciliation
 

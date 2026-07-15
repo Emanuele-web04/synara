@@ -48,6 +48,7 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
+import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
@@ -142,23 +143,7 @@ function isoAt(offsetSeconds: number): string {
 }
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createUserMessage(options: {
@@ -1624,14 +1609,7 @@ async function mountChatView(options: {
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+  const host = createFullscreenTestHost();
 
   const router = getRouter(
     createMemoryHistory({

@@ -1,0 +1,105 @@
+{
+  "createdAt": "2026-07-14T16:28:06.263Z",
+  "baseline": {
+    "engine": "effect-acp",
+    "commit": "5056e395ea185683ef18b86ebb12403d8d1a0a41"
+  },
+  "current": {
+    "engine": "official-sdk",
+    "commit": "9780ff8bb23e999d2bd841453c93aaa02e01f3b8"
+  },
+  "setup": {
+    "effectMs": 89.30975,
+    "officialMs": 256.601625,
+    "officialChangePercent": 187.31647440509016
+  },
+  "shutdown": {
+    "effectMs": 1.0405000000000655,
+    "officialMs": 1.508291999999983,
+    "officialChangePercent": 44.958385391627885
+  },
+  "memory": {
+    "effectAfterSetupRssBytes": 131497984,
+    "officialAfterSetupRssBytes": 90947584,
+    "effectMaxObservedRssBytes": 924385280,
+    "officialMaxObservedRssBytes": 485490688,
+    "officialMaxRssChangePercent": -47.479617157036515
+  },
+  "comparisons": [
+    {
+      "name": "notification-64k",
+      "operations": 2000,
+      "effect": {
+        "name": "notification-64k",
+        "operations": 2000,
+        "samplesMs": [
+          38.009874999999965,
+          34.48583400000007,
+          36.85208399999999,
+          34.572,
+          36.15491599999996,
+          34.57599999999991,
+          35.41395799999998,
+          35.37312499999996,
+          35.40412500000002,
+          37.52520799999991,
+          38.1836669999999,
+          36.6706660000001,
+          37.18349999999998,
+          36.544750000000136,
+          40.45920799999999,
+          39.464291,
+          34.248374999999896,
+          40.28045899999984,
+          35.93991700000015,
+          36.3968339999999
+        ],
+        "p50Ms": 36.3968339999999,
+        "p95Ms": 40.28045899999984,
+        "minMs": 34.248374999999896,
+        "maxMs": 40.45920799999999,
+        "operationsPerSecond": 54949.83437295688,
+        "afterRssBytes": 924401664,
+        "afterHeapUsedBytes": 276608671,
+        "maxSampleRssBytes": 924385280
+      },
+      "official": {
+        "name": "notification-64k",
+        "operations": 2000,
+        "samplesMs": [
+          70.84216700000002,
+          53.775041999999985,
+          59.93704200000002,
+          68.71870899999999,
+          61.047624999999925,
+          59.11400000000003,
+          56.11349999999993,
+          60.592166000000134,
+          73.41358300000002,
+          53.37808300000006,
+          61.930834000000004,
+          107.49641599999995,
+          103.66154200000005,
+          116.79029199999991,
+          114.13716700000032,
+          72.94250000000011,
+          72.67200000000003,
+          77.66683299999977,
+          92.4116670000003,
+          85.240542
+        ],
+        "p50Ms": 70.84216700000002,
+        "p95Ms": 114.13716700000032,
+        "minMs": 53.37808300000006,
+        "maxMs": 116.79029199999991,
+        "operationsPerSecond": 28231.773316589813,
+        "afterRssBytes": 485523456,
+        "afterHeapUsedBytes": 86482330,
+        "maxSampleRssBytes": 485490688
+      },
+      "officialThroughputChangePercent": -48.622641653522706,
+      "officialP50LatencyChangePercent": 94.63826716356762,
+      "officialP95LatencyChangePercent": 183.35617277847004
+    }
+  ]
+}

@@ -49,6 +49,7 @@
         "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
       },
       "dependencies": {
+        "@agentclientprotocol/sdk": "1.2.1",
         "@anthropic-ai/claude-agent-sdk": "0.3.207",
         "@anthropic-ai/sdk": "^0.100.0",
         "@earendil-works/pi-agent-core": "^0.80.6",
@@ -66,7 +67,6 @@
         "ws": "^8.21.0",
       },
       "devDependencies": {
-        "@agentclientprotocol/sdk": "1.2.1",
         "@effect/language-service": "catalog:",
         "@effect/vitest": "catalog:",
         "@synara/contracts": "workspace:*",
@@ -175,11 +175,8 @@
       "devDependencies": {
         "@effect/language-service": "catalog:",
         "@effect/openapi-generator": "catalog:",
-        "@effect/platform-node": "catalog:",
-        "@effect/vitest": "catalog:",
         "tsdown": "catalog:",
         "typescript": "catalog:",
-        "vitest": "catalog:",
       },
     },
     "packages/shared": {

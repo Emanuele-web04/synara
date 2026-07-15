@@ -19,7 +19,7 @@ const fixturePath = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../scripts/acp-conformance-agent.ts",
 );
-const legacyFixturePath = path.join(
+const officialMockFixturePath = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../scripts/acp-mock-agent.ts",
 );
@@ -348,17 +348,17 @@ describe("official ACP SDK conformance at the current Synara boundary", () => {
   });
 });
 
-describe("official ACP SDK client against the legacy effect-acp agent", () => {
+describe("official ACP SDK client against the official SDK mock agent", () => {
   test("completes initialize, authentication, session, prompt, updates, stop, and teardown", async () => {
     const requestLogPath = createFixtureLog();
     const exitLogPath = createFixtureLog();
-    const child = spawn(process.execPath, [legacyFixturePath], {
+    const child = spawn(process.execPath, [officialMockFixturePath], {
       cwd: process.cwd(),
       env: {
         ...process.env,
         SYNARA_ACP_REQUEST_LOG_PATH: requestLogPath,
         SYNARA_ACP_EXIT_LOG_PATH: exitLogPath,
-        SYNARA_ACP_PROMPT_RESPONSE_TEXT: "legacy says héllo 👋",
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: "mock says héllo 👋",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -441,18 +441,18 @@ describe("official ACP SDK client against the legacy effect-acp agent", () => {
           sessionId: "mock-session-1",
           update: {
             sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "legacy says héllo 👋" },
+            content: { type: "text", text: "mock says héllo 👋" },
           },
         },
       ]);
 
-      const rawLegacyNotifications = Buffer.concat(agentWireChunks)
+      const rawNotifications = Buffer.concat(agentWireChunks)
         .toString("utf8")
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as Record<string, unknown>)
         .filter((message) => message.method === "session/update");
-      expect(rawLegacyNotifications).toEqual(
+      expect(rawNotifications).toEqual(
         result.updates.map((params) => ({
           jsonrpc: "2.0",
           method: "session/update",

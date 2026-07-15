@@ -43,9 +43,9 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -2056,38 +2056,17 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       });
     }
 
-    for (const attachment of input.attachments ?? []) {
-      if (attachment.type !== "image") {
-        continue;
-      }
-      const attachmentPath = resolveAttachmentPath({
+    blocks.push(
+      ...(yield* loadProviderPromptImageBlocks({
+        attachments: input.attachments,
         attachmentsDir: serverConfig.attachmentsDir,
-        attachment,
-      });
-      if (!attachmentPath) {
-        return yield* new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "turn/start",
-          detail: `Invalid attachment id '${attachment.id}'.`,
-        });
-      }
-      const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "turn/start",
-              detail: `Failed to read attachment file: ${cause.message}.`,
-              cause,
-            }),
-        ),
-      );
-      blocks.push({
-        type: "image",
-        mimeType: attachment.mimeType,
-        data: Buffer.from(bytes).toString("base64"),
-      });
-    }
+        provider: PROVIDER,
+        method: "turn/start",
+        readFile: fileSystem.readFile,
+        readErrorDetail: (cause) =>
+          `Failed to read attachment file: ${cause instanceof Error ? cause.message : String(cause)}.`,
+      })),
+    );
 
     return blocks;
   });

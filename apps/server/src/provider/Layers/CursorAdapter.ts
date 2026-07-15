@@ -35,17 +35,14 @@ import {
   PubSub,
   Random,
   Scope,
-  Semaphore,
   Stream,
-  SynchronizedRef,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -59,6 +56,13 @@ import {
   selectAcpFullAccessPermissionOptionId,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
+import {
+  acceptAcpPlanUpdate,
+  makeAcpThreadLock,
+  readAcpUsdCost,
+  settleAcpPendingApprovalsAsCancelled,
+  settleAcpPendingUserInputsAsEmptyAnswers,
+} from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -230,13 +234,6 @@ function completeCursorAssistantItemTurnId(
   return turnId;
 }
 
-function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
-  if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
-    return undefined;
-  }
-  return cost.amount >= 0 ? cost.amount : undefined;
-}
-
 function recordCursorSessionCost(
   ctx: CursorSessionContext,
   cost: EffectAcpSchema.Cost | null | undefined,
@@ -257,19 +254,6 @@ function finalizeCursorActiveTurnCost(ctx: CursorSessionContext): {
     : {};
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
 function withCursorPlanModePrompt(input: {
   readonly text: string;
   readonly interactionMode?: ProviderInteractionMode;
@@ -282,19 +266,6 @@ function withCursorPlanModePrompt(input: {
   return text.length > 0
     ? `${CURSOR_PLAN_MODE_PROMPT_PREFIX}\n\nUser request:\n${text}`
     : CURSOR_PLAN_MODE_PROMPT_PREFIX;
-}
-
-function settlePendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingUserInputs.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.answers, {}).pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -457,7 +428,7 @@ export function makeCursorAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, CursorSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const withThreadLock = yield* makeAcpThreadLock();
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -472,27 +443,6 @@ export function makeCursorAdapter(
         runtimeEventPubSub,
         stampAcpRuntimeEventLifecycleGeneration(event, lifecycleGeneration),
       ).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,
@@ -609,11 +559,7 @@ export function makeCursorAdapter(
       method: string,
     ) =>
       Effect.gen(function* () {
-        const fingerprint = `${ctx.activeTurnId ?? "no-turn"}:${JSON.stringify(payload)}`;
-        if (ctx.lastPlanFingerprint === fingerprint) {
-          return;
-        }
-        ctx.lastPlanFingerprint = fingerprint;
+        if (!acceptAcpPlanUpdate(ctx, payload)) return;
         yield* offerRuntimeEvent(
           ctx.lifecycleGeneration,
           makeAcpPlanUpdatedEvent({
@@ -645,8 +591,8 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -1174,37 +1120,15 @@ export function makeCursorAdapter(
             text: promptText,
           });
         }
-        if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!attachmentPath) {
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail: `Invalid attachment id '${attachment.id}'.`,
-              });
-            }
-            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "session/prompt",
-                    detail: cause.message,
-                    cause,
-                  }),
-              ),
-            );
-            promptParts.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
-            });
-          }
-        }
+        promptParts.push(
+          ...(yield* loadProviderPromptImageBlocks({
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            provider: PROVIDER,
+            method: "session/prompt",
+            readFile: fileSystem.readFile,
+          })),
+        );
 
         if (promptParts.length === 0) {
           return yield* new ProviderAdapterValidationError({
@@ -1367,8 +1291,8 @@ export function makeCursorAdapter(
     const interruptTurn: CursorAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         const activePromptFiber = ctx.activePromptFiber;
         yield* Effect.ignore(
           ctx.acp.cancel.pipe(

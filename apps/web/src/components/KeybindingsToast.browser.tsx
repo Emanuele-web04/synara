@@ -27,6 +27,7 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
+import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
@@ -46,23 +47,7 @@ let serverConfigStreamRequestId: string | null = null;
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createMinimalSnapshot(): OrchestrationReadModel {
@@ -299,14 +284,7 @@ async function waitForNoToast(title: string): Promise<void> {
 }
 
 async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+  const host = createFullscreenTestHost();
 
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${THREAD_ID}`] }));
 

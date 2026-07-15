@@ -32,6 +32,7 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
+import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
 import { useWorkspaceStore } from "../workspaceStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
@@ -61,23 +62,7 @@ let replayRequestCursors: number[] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][number]>) {
@@ -296,14 +281,7 @@ async function mountApp(options?: {
   routeThreadId?: ThreadId;
   waitForThreadId?: ThreadId | null;
 }): Promise<{ cleanup: () => Promise<void> }> {
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+  const host = createFullscreenTestHost();
 
   const routeThreadId = options?.routeThreadId ?? THREAD_ID;
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${routeThreadId}`] }));

@@ -12,8 +12,11 @@ import { it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Stream } from "effect";
 import { describe, expect } from "vitest";
 
-import { AcpSessionRuntime, type AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
-import type * as EffectAcpProtocol from "effect-acp/protocol";
+import {
+  AcpSessionRuntime,
+  type AcpProtocolLogEvent,
+  type AcpSessionRequestLogEvent,
+} from "./AcpSessionRuntime.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
@@ -595,7 +598,7 @@ describe("AcpSessionRuntime", () => {
   });
 
   it.effect("emits low-level ACP protocol logs for raw and decoded messages", () => {
-    const protocolEvents: Array<EffectAcpProtocol.AcpProtocolLogEvent> = [];
+    const protocolEvents: Array<AcpProtocolLogEvent> = [];
     return Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       yield* runtime.start();

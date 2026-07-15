@@ -46,11 +46,10 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -64,13 +63,13 @@ import {
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
+  acceptAcpPlanUpdate,
   makeAcpThreadLock,
   readAcpUsdCost,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
-import type { AcpSessionRuntimeOptions } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -87,7 +86,7 @@ import {
   type AcpToolCallState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
-import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
   resolveAcpTurnIdleTimeoutMs,
@@ -172,30 +171,6 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-function summarizeGrokAcpLogPayload(payload: unknown): unknown {
-  const text =
-    typeof payload === "string"
-      ? payload
-      : (() => {
-          try {
-            return JSON.stringify(payload, null, 2);
-          } catch {
-            return String(payload);
-          }
-        })();
-  if (text.length <= GROK_ACP_LOG_PAYLOAD_LIMIT) {
-    return text;
-  }
-  return `${text.slice(0, GROK_ACP_LOG_PAYLOAD_LIMIT)}... [truncated ${text.length - GROK_ACP_LOG_PAYLOAD_LIMIT} chars]`;
-}
-
-function summarizeGrokAcpRequestPayload(method: string, payload: unknown): unknown {
-  if (method === "session/prompt") {
-    return "[redacted session/prompt payload]";
-  }
-  return summarizeGrokAcpLogPayload(payload);
-}
-
 function isGrokAcpDebugEnabled(): boolean {
   return (
     process.env[GROK_ACP_DEBUG_ENV] === "1" ||
@@ -214,69 +189,6 @@ function mapGrokModelDiscoveryError(cause: unknown): ProviderAdapterRequestError
     detail: cause instanceof Error ? cause.message : String(cause),
     cause,
   });
-}
-
-function shouldMirrorGrokAcpProtocolLog(event: {
-  readonly direction: "incoming" | "outgoing";
-  readonly stage: "raw" | "decoded" | "decode_failed" | "dropped";
-  readonly payload: unknown;
-}): boolean {
-  if (event.stage === "decode_failed") return true;
-  if (event.stage === "dropped") return true;
-  if (event.direction !== "incoming" || event.stage !== "raw") return false;
-  const payload = summarizeGrokAcpLogPayload(event.payload);
-  if (typeof payload !== "string") return false;
-  return payload.includes("grokShell") || payload.includes("x.ai/fs_notify");
-}
-
-function makeGrokAcpRuntimeLoggers(
-  base: Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging">,
-): Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging"> {
-  const debugEnabled = isGrokAcpDebugEnabled();
-  const requestLogger: AcpSessionRuntimeOptions["requestLogger"] =
-    base.requestLogger || debugEnabled
-      ? (event) =>
-          Effect.gen(function* () {
-            if (base.requestLogger) {
-              yield* base.requestLogger(event);
-            }
-            if (debugEnabled && event.status === "failed") {
-              yield* Effect.logWarning("grok.acp.request_failed", {
-                marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-                method: event.method,
-                payload: summarizeGrokAcpRequestPayload(event.method, event.payload),
-                cause: event.cause ? Cause.pretty(event.cause) : undefined,
-              });
-            }
-          })
-      : undefined;
-  const protocolLogging: AcpSessionRuntimeOptions["protocolLogging"] =
-    base.protocolLogging || debugEnabled
-      ? {
-          logIncoming: base.protocolLogging?.logIncoming ?? debugEnabled,
-          logOutgoing: base.protocolLogging?.logOutgoing ?? false,
-          logger: (event) =>
-            Effect.gen(function* () {
-              if (base.protocolLogging?.logger) {
-                yield* base.protocolLogging.logger(event);
-              }
-              if (!debugEnabled || !shouldMirrorGrokAcpProtocolLog(event)) {
-                return;
-              }
-              yield* Effect.logWarning("grok.acp.protocol", {
-                marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-                direction: event.direction,
-                stage: event.stage,
-                payload: summarizeGrokAcpLogPayload(event.payload),
-              });
-            }),
-        }
-      : undefined;
-
-  return {
-    ...(requestLogger ? { requestLogger } : {}),
-    ...(protocolLogging ? { protocolLogging } : {}),
-  };
 }
 
 export interface GrokAdapterLiveOptions {
@@ -821,11 +733,7 @@ export function makeGrokAdapter(
       rawPayload: unknown,
     ) =>
       Effect.gen(function* () {
-        const fingerprint = `${ctx.activeTurnId ?? "no-turn"}:${JSON.stringify(payload)}`;
-        if (ctx.lastPlanFingerprint === fingerprint) {
-          return;
-        }
-        ctx.lastPlanFingerprint = fingerprint;
+        if (!acceptAcpPlanUpdate(ctx, payload)) return;
         yield* offerRuntimeEvent(
           ctx.lifecycleGeneration,
           makeAcpPlanUpdatedEvent({
@@ -1106,7 +1014,15 @@ export function makeGrokAdapter(
             provider: PROVIDER,
             threadId: input.threadId,
           });
-          const acpRuntimeLoggers = makeGrokAcpRuntimeLoggers(acpNativeLoggers);
+          const acpRuntimeLoggers = makeAcpDebugLoggers({
+            base: acpNativeLoggers,
+            enabled: isGrokAcpDebugEnabled(),
+            provider: PROVIDER,
+            marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
+            payloadLimit: GROK_ACP_LOG_PAYLOAD_LIMIT,
+            shouldMirrorIncomingRaw: (payload) =>
+              payload.includes("grokShell") || payload.includes("x.ai/fs_notify"),
+          });
           const providerGrokOptions = input.providerOptions?.grok;
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
             ...(grokSettings.binaryPath !== undefined
@@ -1754,37 +1670,15 @@ export function makeGrokAdapter(
             text: promptText,
           });
         }
-        if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!attachmentPath) {
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail: `Invalid attachment id '${attachment.id}'.`,
-              });
-            }
-            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "session/prompt",
-                    detail: cause.message,
-                    cause,
-                  }),
-              ),
-            );
-            promptParts.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
-            });
-          }
-        }
+        promptParts.push(
+          ...(yield* loadProviderPromptImageBlocks({
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            provider: PROVIDER,
+            method: "session/prompt",
+            readFile: fileSystem.readFile,
+          })),
+        );
 
         if (promptParts.length === 0) {
           return yield* new ProviderAdapterValidationError({

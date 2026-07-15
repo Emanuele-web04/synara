@@ -863,7 +863,9 @@ The worktree is intentionally dirty and is the authority for this roadmap. Do no
   exact terminal evidence and require explicit, audited operator reconciliation.
 - ACP conformance fixtures gate the single production wire boundary. `AcpSessionRuntime` uses the
   official SDK for Grok, Droid, and Cursor; the legacy production wire branch and deprecated SDK
-  constructor are deleted. `effect-acp` remains only for existing Effect schema/error adapter types.
+  constructor are deleted. The mock agent now uses the same official SDK boundary, and the private
+  `effect-acp` client/agent/protocol/RPC/terminal/stdio stack plus its tests and fixtures is deleted.
+  `effect-acp` remains only for existing Effect schema/error adapter types.
   The production stdout-to-Web-Stream admission path still needs the bounded/backpressured closeout
   recorded in the full-scan checkpoint; do not describe the resource boundary as complete before it.
 - WebSocket connection/subscription admission, short-lived ticket ownership, authenticated attachment cache policy, initial provider-input limits, symlink-safe workspace writes, and several baseline lifecycle fixes are already implemented. Do not reopen them under new names.
@@ -883,7 +885,7 @@ This is not a choice between “official ACP” and “Effect.” They solve dif
 | What remains Synara-owned? | Effect scopes/fibers, byte and queue budgets, process teardown, lifecycle-generation fences, persistence, recovery, provider extensions, and normalized events. | Preserve these product/runtime policies above the SDK. |
 | Will it be faster? | There is no evidence of a material latency or throughput win from swapping JSON-RPC implementations alone; provider/model latency dominates. | Treat performance as neutral until the same corpus measures it. Any concrete win must come from removing duplicate queues/copies. |
 | Will it be better? | The private wire layer can drift from the standard and duplicates schema/protocol work. | Better compatibility, less protocol maintenance, and a stronger provider foundation, while retaining stricter Synara resource/lifecycle policy. |
-| Will it be lighter? | The competing production wire implementation is deleted; type-only Effect adapters remain. | Synara owns less protocol code. Do not claim a smaller shipped bundle until measured. |
+| Will it be lighter? | The competing production and mock wire implementation is deleted; Effect schema/error adapters remain. | Synara owns less protocol code. Do not claim a smaller shipped bundle until measured. |
 
 The official SDK exposes high-level session/update queues, so its adoption does not remove Synara's obligation to enforce byte bounds, slow-consumer admission, deterministic close, and handler concurrency. Those policies remain above the SDK boundary; permanent dual wire ownership remains forbidden.
 
@@ -908,26 +910,20 @@ Boundary rules:
 - The official-SDK conformance corpus remains the baseline for Synara policy and integration.
 - Raw diagnostics wrap byte streams and decoded SDK callbacks; they do not create a second parser.
 
-Exact deletion ledger after the final provider cutover:
+Completed deletion ledger:
 
-1. Remove `EffectAcpClient.layerChildProcess`, `acp.raw`, and the duplicate
-   `Stream.runDrain(acp.raw.notifications)` workaround from `AcpSessionRuntime.ts`.
-2. Remove every production `effect-acp/*` import. Schema types come directly from the official SDK;
-   stable Synara error translation lives beside `AcpSessionRuntime`, not in a second protocol package.
-3. Delete `packages/effect-acp` in full: `client.ts`, `agent.ts`, `protocol.ts`, `rpc.ts`, `errors.ts`,
-   `terminal.ts`, `_internal/*`, `_generated/*`, and `scripts/generate.ts`. This retires approximately
-   **13,123 non-test source/generator LOC**, including 10,375 generated schema lines.
-4. Delete the package's protocol/client/agent tests and fixtures, and remove the reverse-compatibility
-   “official client against legacy effect-acp agent” block from `AcpSdkConformance.test.ts`. Retain a
-   focused official-boundary integration corpus plus runtime policy tests in
-   `AcpJsonRpcConnection.test.ts`.
-5. Remove `effect-acp` from `apps/server/package.json`, the workspace graph, and `bun.lock`. Move
-   `@agentclientprotocol/sdk` from test-only use to the server runtime dependency in the same cutover.
+1. `AcpSessionRuntime` and the mock agent both use the official SDK; no provider can select a legacy
+   wire and the conformance test no longer depends on a private agent implementation.
+2. `effect-acp/client`, `agent`, `protocol`, `rpc`, `terminal`, and `_internal` are deleted together
+   with their tests, fixtures, and example. Their unused test dependencies and script are removed.
+3. The server declares `@agentclientprotocol/sdk` as a runtime dependency. Residual searches find no
+   imports from any deleted `effect-acp` subpath.
 
-Deletion is complete only when
-`rg 'from "effect-acp/' apps/server/src --glob '!*.test.ts'` returns no production imports and no
-provider can select the legacy wire. Until then, do not add methods, schemas, generators, queues, or
-compatibility patches to `effect-acp`; only deletion-oriented maintenance is allowed.
+Remaining deletion condition: replace the still-consumed `effect-acp/schema` and
+`effect-acp/errors` adapters with official SDK types plus one local Effect error translation, then
+delete the generated schema, generator, and package entry. Do not expand those adapters while they
+remain. The separate slow-consumer stdout/backpressure acceptance gate stays open as already recorded;
+it must not create a compatibility wire.
 
 ## Priority definitions
 
@@ -1261,9 +1257,10 @@ Keep these as regression baselines, not open work: `SEC-01`, `SEC-AUTH-01`, `SEC
     validation, JSON-RPC correlation/dispatch, and both cancellation layers for Grok, Droid, and
     Cursor. The deprecated constructor and legacy production wire branch are deleted; explicit
     extensions use SDK parsers, raw diagnostics wrap bytes without a second parser, and failed
-    resume/load remains terminal. `effect-acp` remains only as existing Effect
-    error/schema adapter types, not as wire authority. Focused sweep: prior 40/40 tests plus 25/25
-    official conformance/runtime tests. The sweep did not exercise the production push-driven stdout
+    resume/load remains terminal. The official SDK also owns the mock-agent canary. The private
+    `effect-acp` wire/client/agent stack and its tests/fixtures are deleted; only existing Effect
+    error/schema adapter types remain. Focused sweep: prior 40/40 tests plus the current 48/48
+    ACP/adapter/attachment tests. The sweep did not exercise the production push-driven stdout
     adapter under a slow consumer and therefore cannot certify its frame/queue bounds; the exact
     replacement and focused gate are listed in the full-scan checkpoint.
   - **Absorbs:** `TEST-ACP-01`, `ACP-BOUNDARY-01`, `DEP-ACP-01`, `ARCH-ACP-01`, `COMPAT-ACP-01`, `ARCH-ACP-02`, `REL-ACP-01`, `CLEAN-ACP-01`, `COR-ACP-RESUME-01`, `COR-ACP-ELICITATION-01`.
@@ -1275,7 +1272,7 @@ Keep these as regression baselines, not open work: `SEC-01`, `SEC-AUTH-01`, `SEC
   - **Dependencies:** lifecycle/teardown `P1-PROVIDER-01` and bounded runtime primitives `P1-RUNTIME-01`.
   - **Effort / risk / confidence:** L / High / High.
   - **Acceptance:** malformed/unterminated/oversize/split UTF-8, slow consumer, handler concurrency, exact IDs/metadata/extensions, both cancellation layers, exit/pending rejection, resume ambiguity, and elicitation constraints match the corpus within declared resource budgets; one canary runs at a time; final production wire imports of `effect-acp` are zero, while existing Effect error/schema adapter types may remain.
-  - **Future verification:** `bun run --cwd apps/server test -- src/provider/acp/AcpSdkConformance.test.ts src/provider/acp/AcpSessionRuntime.test.ts src/provider/acp/AcpJsonRpcConnection.test.ts`; `bun run --cwd packages/effect-acp test`.
+  - **Future verification:** `bun run --cwd apps/server test -- src/provider/acp/AcpSdkConformance.test.ts src/provider/acp/AcpSessionRuntime.test.ts src/provider/acp/AcpJsonRpcConnection.test.ts`.
   - **STOP/rollback:** stop before canary if framing/backpressure/parity is incomplete; roll back the single canary if two clients can touch one session or canonical transcripts diverge.
 
 - [x] **P2-WEB-STATE-01 — Normalized frontend entity and persistence authority**
