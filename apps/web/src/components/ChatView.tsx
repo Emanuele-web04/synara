@@ -9445,6 +9445,7 @@ export default function ChatView({
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
+    environmentMode: envMode ?? null,
     runtimeMode,
     interactionMode,
     threadId,

@@ -36,6 +36,7 @@ import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
 import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
+import { useFeedbackDialogStore } from "../feedbackDialogStore";
 
 type ComposerSnapshot = {
   value: string;
@@ -65,6 +66,7 @@ export function useComposerSlashCommands(input: {
   selectedProvider: ProviderKind;
   currentProviderModelOptions: ProviderModelOptions[ProviderKind] | undefined;
   selectedModelSelection: ModelSelection;
+  environmentMode: string | null;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   threadId: ThreadId;
@@ -98,6 +100,7 @@ export function useComposerSlashCommands(input: {
   };
 }) {
   const [isSlashStatusDialogOpen, setIsSlashStatusDialogOpen] = useState(false);
+  const openGlobalFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const {
     activeProject,
     activeThread,
@@ -114,6 +117,7 @@ export function useComposerSlashCommands(input: {
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
+    environmentMode,
     runtimeMode,
     interactionMode,
     threadId,
@@ -596,6 +600,33 @@ export function useComposerSlashCommands(input: {
     });
   }, [canOfferExportCommand, threadId]);
 
+  const openFeedbackDialog = useCallback(() => {
+    openGlobalFeedbackDialog({
+      provider: selectedProvider,
+      model: selectedModelSelection.model,
+      projectKind: activeProject?.kind ?? null,
+      environmentMode,
+      runtimeMode,
+      interactionMode,
+      sessionStatus: activeThread?.session?.status ?? null,
+      latestTurnState: activeThread?.latestTurn?.state ?? null,
+      messageCount: activeThread?.messages.length ?? 0,
+      activityCount: activeThread?.activities.length ?? 0,
+      hasPendingApproval: activeThread?.hasPendingApprovals === true,
+      hasPendingUserInput: activeThread?.hasPendingUserInput === true,
+      hasThreadError: Boolean(activeThread?.error),
+    });
+  }, [
+    activeProject?.kind,
+    activeThread,
+    environmentMode,
+    interactionMode,
+    openGlobalFeedbackDialog,
+    runtimeMode,
+    selectedModelSelection.model,
+    selectedProvider,
+  ]);
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -640,6 +671,11 @@ export function useComposerSlashCommands(input: {
       if (slashInvocation.command === "export") {
         editorActions.clearComposerSlashDraft();
         runExportSlashCommand();
+        return true;
+      }
+      if (slashInvocation.command === "feedback") {
+        editorActions.clearComposerSlashDraft();
+        openFeedbackDialog();
         return true;
       }
       if (slashInvocation.command === "review") {
@@ -738,6 +774,7 @@ export function useComposerSlashCommands(input: {
       handleClearConversation,
       handleInteractionModeChange,
       openForkTargetPicker,
+      openFeedbackDialog,
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,
@@ -873,6 +910,16 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
+      if (item.command === "feedback") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        openFeedbackDialog();
+        return;
+      }
+
       if (item.command === "review") {
         if (selectedProvider === "codex") {
           const applied = clearSlashCommandFromComposer();
@@ -946,6 +993,7 @@ export function useComposerSlashCommands(input: {
       handleClearConversation,
       handleInteractionModeChange,
       openForkTargetPicker,
+      openFeedbackDialog,
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,
