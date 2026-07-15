@@ -26,6 +26,7 @@ import type {
   ProviderKind,
   ProviderModelOptions,
 } from "@synara/contracts";
+import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
 
@@ -93,6 +94,9 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   }
   if (provider === "grok") {
     return slug.trim();
+  }
+  if (provider === "cursor") {
+    return normalizeCursorModelVariantBaseId(slug) ?? slug.trim();
   }
   return normalizeModelSlug(slug, provider) ?? slug;
 }
@@ -165,7 +169,9 @@ export function mergeDynamicModelOptions(input: {
       ? []
       : input.staticOptions.filter(
           (model) =>
-            "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
+            "isCustom" in model &&
+            model.isCustom &&
+            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
         );
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,

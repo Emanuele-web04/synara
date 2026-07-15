@@ -24,6 +24,7 @@ import {
 } from "@synara/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
+import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
 import {
   DEFAULT_PROVIDER_ORDER,
@@ -800,7 +801,10 @@ export function getAppModelOptions(
     });
   }
 
-  const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
+  const normalizedSelectedModel =
+    provider === "cursor"
+      ? normalizeCursorModelVariantBaseId(selectedModel)
+      : normalizeModelSlug(selectedModel, provider);
   const selectedModelMatchesExistingName =
     typeof trimmedSelectedModel === "string" &&
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);

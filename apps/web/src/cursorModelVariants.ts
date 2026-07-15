@@ -242,21 +242,3 @@ export function collapseCursorModelVariants(
     };
   });
 }
-
-export function mergeCursorModelVariantsWithBaseControls(
-  models: ReadonlyArray<ProviderModelDescriptor>,
-): ProviderModelDescriptor[] {
-  const seen = new Set<string>();
-  const merged: ProviderModelDescriptor[] = [];
-
-  for (const model of [...collapseCursorModelVariants(models), ...models]) {
-    const key = model.slug.trim().toLowerCase();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(model);
-  }
-
-  return merged;
-}

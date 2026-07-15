@@ -323,6 +323,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   it("returns Grok effort options for Grok Build models", () => {
     expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
     expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+    expect(values("grok", "grok-4.5")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -816,6 +817,9 @@ describe("normalizeGrokModelOptions", () => {
       normalizeGrokModelOptions("grok-build", { reasoningEffort: "xhigh" as never }),
     ).toBeUndefined();
     expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+    });
+    expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
   });

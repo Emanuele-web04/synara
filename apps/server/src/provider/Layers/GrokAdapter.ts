@@ -7,12 +7,14 @@ import * as nodePath from "node:path";
 
 import {
   ApprovalRequestId,
+  GROK_REASONING_EFFORT_OPTIONS,
   type GrokModelOptions,
   EventId,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderListModelsResult,
+  type ProviderModelDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -148,6 +150,8 @@ const GROK_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 const GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const GROK_TURN_SETTLE_DRAIN_POLL_MS = 25;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
+const GROK_DEFAULT_REASONING_EFFORT = "low";
+const GROK_RUNTIME_REASONING_EFFORTS = GROK_REASONING_EFFORT_OPTIONS.map((value) => ({ value }));
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
@@ -529,8 +533,8 @@ export function parseXaiLanguageModelDescriptors(
 
 export function mergeGrokModelDescriptors(
   groups: ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>>,
-): Array<{ slug: string; name: string }> {
-  const models: Array<{ slug: string; name: string }> = [];
+): ProviderModelDescriptor[] {
+  const models: ProviderModelDescriptor[] = [];
   const seen = new Set<string>();
   for (const group of groups) {
     for (const model of group) {
@@ -540,7 +544,12 @@ export function mergeGrokModelDescriptors(
         continue;
       }
       seen.add(key);
-      models.push({ slug, name: model.name.trim() || formatGrokModelName(slug) });
+      models.push({
+        slug,
+        name: model.name.trim() || formatGrokModelName(slug),
+        supportedReasoningEfforts: GROK_RUNTIME_REASONING_EFFORTS,
+        defaultReasoningEffort: GROK_DEFAULT_REASONING_EFFORT,
+      });
     }
   }
   return models;

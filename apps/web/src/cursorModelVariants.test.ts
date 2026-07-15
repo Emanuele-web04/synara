@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   collapseCursorModelVariants,
-  mergeCursorModelVariantsWithBaseControls,
   normalizeCursorModelVariantBaseId,
 } from "./cursorModelVariants";
 
@@ -19,46 +18,41 @@ describe("normalizeCursorModelVariantBaseId", () => {
   });
 });
 
-describe("mergeCursorModelVariantsWithBaseControls", () => {
-  it("keeps raw Cursor CLI variants while adding a rich base model first", () => {
-    const models = [
-      {
-        slug: "claude-fable-5-high",
-        name: "Fable 5 1M",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-        supportedReasoningEfforts: [{ value: "high", label: "High" }],
-        defaultReasoningEffort: "high",
-      },
-      {
-        slug: "claude-fable-5-max",
-        name: "Fable 5 1M Max",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-        supportedReasoningEfforts: [{ value: "max", label: "Max" }],
-        defaultReasoningEffort: "max",
-      },
-    ];
-
-    const merged = mergeCursorModelVariantsWithBaseControls(models);
-
-    expect(merged.map((model) => model.slug)).toEqual([
-      "claude-fable-5",
-      "claude-fable-5-high",
-      "claude-fable-5-max",
-    ]);
-    expect(merged[0]).toMatchObject({
-      slug: "claude-fable-5",
-      contextWindowOptions: [
-        { value: "300k", label: "300K", isDefault: true },
-        { value: "1m", label: "1M" },
-      ],
-      defaultContextWindow: "300k",
-    });
-  });
-});
-
 describe("collapseCursorModelVariants", () => {
+  it("keeps transport variants out of the model picker", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "grok-4.5",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportsThinkingToggle: true,
+        },
+        {
+          slug: "grok-4.5[thinking=true]",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+        },
+        {
+          slug: "grok-4.5[thinking=false]",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "grok-4.5",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportsThinkingToggle: true,
+      },
+    ]);
+  });
+
   it("collapses Cursor CLI variants into one model with trait capabilities", () => {
     expect(
       collapseCursorModelVariants([

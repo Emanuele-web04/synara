@@ -20,7 +20,6 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
-  normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveLabeledOptionValue,
@@ -194,7 +193,12 @@ function getProviderStateFromCapabilities(
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeGrokModelOptions(model, providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? providerOptions?.reasoningEffort
+          : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
     case "droid": {

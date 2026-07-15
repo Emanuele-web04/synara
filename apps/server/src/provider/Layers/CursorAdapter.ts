@@ -133,23 +133,6 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-function mergeCursorModelDescriptors(
-  preferredModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
-  additionalModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
-): ProviderListModelsResult["models"] {
-  const seen = new Set<string>();
-  const merged: Array<ProviderListModelsResult["models"][number]> = [];
-  for (const model of [...preferredModels, ...additionalModels]) {
-    const key = model.slug.trim().toLowerCase();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(model);
-  }
-  return merged;
-}
-
 export interface CursorAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -1582,21 +1565,13 @@ export function makeCursorAdapter(
       );
 
       const discovery = runCursorAcpModelDiscovery.pipe(
-        Effect.flatMap((acpModels) =>
-          runCursorModelListCommand.pipe(
-            Effect.map((cliModels) => mergeCursorModelDescriptors(acpModels, cliModels)),
-            // ACP is the authoritative source for editable model parameters; keep
-            // it even if the raw CLI variant list is temporarily unavailable.
-            Effect.catch(() => Effect.succeed(acpModels)),
-          ),
-        ),
         Effect.map((models) => ({
           models,
           source: "cursor.acp",
           cached: false,
         })),
-        // The CLI list still works without an authenticated ACP session and keeps
-        // discovery resilient if the extension method is unavailable.
+        // The flat CLI list expands transport variants that ACP already represents
+        // as per-model controls. Use it only when the richer ACP catalog is unavailable.
         Effect.catch(() =>
           runCursorModelListCommand.pipe(
             Effect.map(

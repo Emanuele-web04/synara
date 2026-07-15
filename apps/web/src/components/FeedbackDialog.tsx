@@ -91,7 +91,9 @@ export function FeedbackDialog({ open, context, onOpenChange }: FeedbackDialogPr
                   variant={selected ? "secondary" : "outline"}
                   size="sm"
                   aria-pressed={selected}
-                  className="rounded-full font-normal"
+                  // Reference pills breathe at ~14px per side; the default `sm`
+                  // padding (10px) crams the label against the pill wall.
+                  className="rounded-full px-3.5 font-normal"
                   disabled={isSending}
                   // Keeps the caret (and the field's focus ring) in the details
                   // textarea, so picking a category never interrupts typing.
