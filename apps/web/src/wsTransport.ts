@@ -588,6 +588,9 @@ export class WsTransport {
     const delayMs = Math.min(500 * 2 ** this.reconnectFailures, 5_000);
     this.reconnectFailures += 1;
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    if (this.disposed) {
+      throw new Error("Transport disposed");
+    }
 
     const session = this.createSession();
     this.runtime = session.runtime;
@@ -831,7 +834,11 @@ export class WsTransport {
                 if (!this.disposed && !this.streamCleanups.has(key)) {
                   void this.reconnect()
                     .then(() => restart())
-                    .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+                    .catch((error) => {
+                      if (!this.disposed) {
+                        console.warn("WebSocket RPC stream reconnect failed", error);
+                      }
+                    });
                 }
               },
               Cause.hasInterruptsOnly(exit.cause) ? 0 : 500,
