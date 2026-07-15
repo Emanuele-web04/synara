@@ -27,17 +27,11 @@ export function resolveDesktopMigrationRecoveryPaths(input: {
   return {
     dbPath,
     markerPath: migrationRecoveryMarkerPath(dbPath),
-    restoreEntryPath: Path.join(
-      input.appRoot,
-      "apps/server/dist/restoreMigrationBackup.mjs",
-    ),
+    restoreEntryPath: Path.join(input.appRoot, "apps/server/dist/restoreMigrationBackup.mjs"),
   };
 }
 
-export type DesktopMigrationRecoveryOutcome =
-  | "continue"
-  | "restart-requested"
-  | "quit-requested";
+export type DesktopMigrationRecoveryOutcome = "continue" | "restart-requested" | "quit-requested";
 
 export async function recoverDesktopMigrationIfRequired(input: {
   readonly markerExists: () => boolean;
@@ -79,9 +73,7 @@ export async function recoverDesktopMigrationIfRequired(input: {
   }
 }
 
-export function hasPendingDesktopMigrationRecovery(
-  paths: DesktopMigrationRecoveryPaths,
-): boolean {
+export function hasPendingDesktopMigrationRecovery(paths: DesktopMigrationRecoveryPaths): boolean {
   return FS.existsSync(paths.markerPath);
 }
 

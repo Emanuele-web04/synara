@@ -256,7 +256,7 @@ describe("ServerAuthLive", () => {
         expect(
           (yield* Effect.flip(
             serverAuth.authenticateHttpRequest(makeCookieRequest(currentExchange.sessionToken)),
-          )).status,
+          ).pipe(Effect.orDie)).status,
         ).toBe(401);
         expect(
           (yield* Effect.flip(
@@ -265,7 +265,7 @@ describe("ServerAuthLive", () => {
               cookies: {},
               url: new URL(`ws://127.0.0.1:3773/?wsToken=${websocketToken.token}`),
             }),
-          )).status,
+          ).pipe(Effect.orDie)).status,
         ).toBe(401);
         expect(
           (yield* serverAuth.authenticateHttpRequest(makeCookieRequest(otherExchange.sessionToken)))
@@ -294,12 +294,10 @@ describe("ServerAuthLive", () => {
             url: new URL("ws://192.168.1.50:3773/ws?token=remote-startup-secret"),
           },
           serverAuth,
-        }).pipe(Effect.flip);
+        }).pipe(Effect.flip, Effect.orDie);
         expect(legacyError.status).toBe(401);
 
-        const pairingUrl = yield* serverAuth.issueStartupPairingUrl(
-          "http://192.168.1.50:3773",
-        );
+        const pairingUrl = yield* serverAuth.issueStartupPairingUrl("http://192.168.1.50:3773");
         const bootstrapToken =
           new URLSearchParams(new URL(pairingUrl).hash.slice(1)).get("token") ?? "";
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(

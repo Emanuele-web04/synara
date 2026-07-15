@@ -201,16 +201,18 @@ function makeKeyedThreadLock() {
     }
     entry.users += 1;
     const acquiredEntry = entry;
-    return acquiredEntry.semaphore.withPermits(1)(effect).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          acquiredEntry.users -= 1;
-          if (acquiredEntry.users === 0 && entries.get(threadId) === acquiredEntry) {
-            entries.delete(threadId);
-          }
-        }),
-      ),
-    );
+    return acquiredEntry.semaphore
+      .withPermits(1)(effect)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            acquiredEntry.users -= 1;
+            if (acquiredEntry.users === 0 && entries.get(threadId) === acquiredEntry) {
+              entries.delete(threadId);
+            }
+          }),
+        ),
+      );
   };
   return withLock;
 }
@@ -292,9 +294,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     }
     const runtimeEventBufferCapacity = Math.max(
       1,
-      Math.floor(
-        options?.runtimeEventBufferCapacity ?? PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY,
-      ),
+      Math.floor(options?.runtimeEventBufferCapacity ?? PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY),
     );
     const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(
       runtimeEventBufferCapacity,
@@ -595,10 +595,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     };
     const hasAmbiguousTerminalTurn = (threadId: ThreadId): boolean => {
       const state = dispatchStateByThread.get(threadId);
-      return state !== undefined &&
+      return (
+        state !== undefined &&
         (state.outstandingTurnIds.size > 1 ||
           state.inFlightGenerations.size > 1 ||
-          (state.outstandingTurnIds.size > 0 && state.inFlightGenerations.size > 0));
+          (state.outstandingTurnIds.size > 0 && state.inFlightGenerations.size > 0))
+      );
     };
 
     const persistStartedTurn = (input: StartedTurnPersistenceInput) => {
@@ -688,10 +690,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const candidate = yield* Effect.sync(() => {
           const state = getDispatchState(threadId);
           state.inFlightGenerations.delete(generation);
-          if (
-            state.latestGeneration === generation &&
-            !state.successfulResults.has(generation)
-          ) {
+          if (state.latestGeneration === generation && !state.successfulResults.has(generation)) {
             state.latestGeneration = Math.max(
               state.ownerGeneration,
               ...state.inFlightGenerations,
@@ -724,7 +723,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         Effect.suspend(() => {
           const generation = beginTurnDispatch(threadId);
           return dispatch(generation).pipe(
-            Effect.ensuring(finishTurnDispatch(threadId, generation)),
+            Effect.ensuring(finishTurnDispatch(threadId, generation).pipe(Effect.ignore)),
           );
         }),
       );
@@ -1004,7 +1003,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             adapter.hasSession(threadId).pipe(
               Effect.map((hasSession) => (hasSession ? adapter : null)),
               Effect.orElseSucceed(() => null),
-          ),
+            ),
           { concurrency: "unbounded" },
         );
         return matches.find((adapter) => adapter !== null) ?? null;
@@ -1075,9 +1074,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* waitForRuntimeIdleStop(threadId);
         return yield* lifecycle.run(threadId, (lease) =>
           Effect.gen(function* () {
-            const persistedBinding = Option.getOrUndefined(
-              yield* directory.getBinding(threadId),
-            );
+            const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
             const effectiveResumeCursor =
               input.resumeCursor ??
               (persistedBinding?.provider === input.provider
@@ -1684,9 +1681,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 threadId: input.threadId,
                 provider: binding.provider,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-                ...(binding.runtimeMode !== undefined
-                  ? { runtimeMode: binding.runtimeMode }
-                  : {}),
+                ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: "stopped",
                 lifecycleGeneration: lease.generation,
                 resumeCursor: binding.resumeCursor,
@@ -1796,9 +1791,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 threadId: input.threadId,
                 provider: binding.provider,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-                ...(binding.runtimeMode !== undefined
-                  ? { runtimeMode: binding.runtimeMode }
-                  : {}),
+                ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: "stopped",
                 lifecycleGeneration: lease.generation,
                 resumeCursor: null,
@@ -1823,9 +1816,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const listSessions: ProviderServiceShape["listSessions"] = () =>
       Effect.gen(function* () {
-        const activeSessions = (
-          yield* Effect.forEach(adapters, (adapter) => adapter.listSessions())
-        ).flatMap((sessions) => sessions);
+        const activeSessions = (yield* Effect.forEach(adapters, (adapter) =>
+          adapter.listSessions(),
+        )).flatMap((sessions) => sessions);
         const persistedBindings = yield* directory.listThreadIds().pipe(
           Effect.flatMap((threadIds) =>
             Effect.forEach(
@@ -1970,7 +1963,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
         yield* Effect.forEach(
           new Set([...threadIds, ...activeSessionByThreadId.keys()]),
-          (threadId) => markThreadStopped(threadId, stoppedAt, activeSessionByThreadId.get(threadId)),
+          (threadId) =>
+            markThreadStopped(threadId, stoppedAt, activeSessionByThreadId.get(threadId)),
         );
         yield* Effect.forEach(adapters, (adapter) => adapter.stopAll());
         yield* analytics.record("provider.sessions.stopped_all", {

@@ -1016,7 +1016,7 @@ function EventRouter() {
       // projection reader is fully ready. Let the later non-empty shell query win.
       return (
         (currentState.projects.length === 0 && snapshot.projects.length > 0) ||
-        (currentState.threads.length === 0 && snapshot.threads.length > 0)
+        ((currentState.threadIds?.length ?? 0) === 0 && snapshot.threads.length > 0)
       );
     };
 

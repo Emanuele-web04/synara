@@ -108,10 +108,7 @@ interface ActiveConnectionLease {
   readonly expiresAt: DateTime.DateTime;
 }
 
-type ActiveConnections = ReadonlyMap<
-  AuthSessionId,
-  ReadonlyMap<string, Effect.Effect<void>>
->;
+type ActiveConnections = ReadonlyMap<AuthSessionId, ReadonlyMap<string, Effect.Effect<void>>>;
 
 interface OutstandingWebSocketTicket {
   readonly sessionId: AuthSessionId;
@@ -129,9 +126,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   // Tickets are an in-memory allowlist, not merely signed bearer claims. A restart
   // intentionally invalidates every outstanding ticket, so an old signed value
   // cannot become replayable when the process-local consumption ledger is lost.
-  const outstandingWebSocketTicketsRef = yield* Ref.make<OutstandingWebSocketTickets>(
-    new Map(),
-  );
+  const outstandingWebSocketTicketsRef = yield* Ref.make<OutstandingWebSocketTickets>(new Map());
   const activeConnectionsSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
   const cookieName = resolveSessionCookieName({ mode: serverConfig.mode, port: serverConfig.port });
@@ -170,112 +165,114 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     });
 
   const acquireConnection = (sessionId: AuthSessionId, interrupt: Effect.Effect<void>) =>
-    activeConnectionsSemaphore.withPermit(
-      Effect.gen(function* () {
-        const row = yield* authSessions.getById({ sessionId });
-        const now = yield* DateTime.now;
-        if (Option.isNone(row)) {
-          return yield* toSessionCredentialError("Unknown authenticated session.");
-        }
-        if (row.value.revokedAt !== null) {
-          return yield* toSessionCredentialError("Authenticated session revoked.");
-        }
-        if (DateTime.toEpochMillis(row.value.expiresAt) <= DateTime.toEpochMillis(now)) {
-          return yield* toSessionCredentialError("Authenticated session expired.");
-        }
+    activeConnectionsSemaphore
+      .withPermit(
+        Effect.gen(function* () {
+          const row = yield* authSessions.getById({ sessionId });
+          const now = yield* DateTime.now;
+          if (Option.isNone(row)) {
+            return yield* toSessionCredentialError("Unknown authenticated session.");
+          }
+          if (row.value.revokedAt !== null) {
+            return yield* toSessionCredentialError("Authenticated session revoked.");
+          }
+          if (DateTime.toEpochMillis(row.value.expiresAt) <= DateTime.toEpochMillis(now)) {
+            return yield* toSessionCredentialError("Authenticated session expired.");
+          }
 
-        const connectionId = Crypto.randomUUID();
-        const currentConnections = yield* Ref.get(activeConnectionsRef);
-        const activeConnectionCount = currentConnections.get(sessionId)?.size ?? 0;
-        if (activeConnectionCount >= MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION) {
-          yield* Effect.logWarning("Rejected authenticated websocket connection capacity.").pipe(
-            Effect.annotateLogs({
+          const connectionId = Crypto.randomUUID();
+          const currentConnections = yield* Ref.get(activeConnectionsRef);
+          const activeConnectionCount = currentConnections.get(sessionId)?.size ?? 0;
+          if (activeConnectionCount >= MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION) {
+            yield* Effect.logWarning("Rejected authenticated websocket connection capacity.").pipe(
+              Effect.annotateLogs({
+                scope: "connections",
+                active: activeConnectionCount,
+                limit: MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION,
+              }),
+            );
+            return yield* new SessionCapacityError({
+              message: "Authenticated websocket connection capacity exceeded.",
               scope: "connections",
-              active: activeConnectionCount,
               limit: MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION,
-            }),
-          );
-          return yield* new SessionCapacityError({
-            message: "Authenticated websocket connection capacity exceeded.",
-            scope: "connections",
-            limit: MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION,
-            active: activeConnectionCount,
-            retryAfterSeconds: CAPACITY_RETRY_AFTER_SECONDS,
+              active: activeConnectionCount,
+              retryAfterSeconds: CAPACITY_RETRY_AFTER_SECONDS,
+            });
+          }
+          const wasDisconnected = !currentConnections.has(sessionId);
+          if (wasDisconnected) {
+            yield* authSessions.setLastConnectedAt({ sessionId, lastConnectedAt: now });
+          }
+          yield* Ref.update(activeConnectionsRef, (current) => {
+            const next = new Map(current);
+            const sessionConnections = new Map(next.get(sessionId) ?? []);
+            sessionConnections.set(connectionId, interrupt);
+            next.set(sessionId, sessionConnections);
+            return next;
           });
-        }
-        const wasDisconnected = !currentConnections.has(sessionId);
-        if (wasDisconnected) {
-          yield* authSessions.setLastConnectedAt({ sessionId, lastConnectedAt: now });
-        }
-        yield* Ref.update(activeConnectionsRef, (current) => {
-          const next = new Map(current);
-          const sessionConnections = new Map(next.get(sessionId) ?? []);
-          sessionConnections.set(connectionId, interrupt);
-          next.set(sessionId, sessionConnections);
-          return next;
-        });
 
-        return {
-          connectionId,
-          sessionId,
-          expiresAt: row.value.expiresAt,
-        } satisfies ActiveConnectionLease;
-      }),
-    ).pipe(
-      Effect.mapError((cause) =>
-        cause instanceof SessionCredentialError || cause instanceof SessionCapacityError
-          ? cause
-          : toSessionCredentialError("Failed to register authenticated connection.", cause),
-      ),
-      Effect.tap(() =>
-        loadActiveSession(sessionId).pipe(
-          Effect.flatMap((session) =>
-            Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logError("Failed to publish connected-session auth update", {
-              sessionId,
-              cause,
-            }),
+          return {
+            connectionId,
+            sessionId,
+            expiresAt: row.value.expiresAt,
+          } satisfies ActiveConnectionLease;
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof SessionCredentialError || cause instanceof SessionCapacityError
+            ? cause
+            : toSessionCredentialError("Failed to register authenticated connection.", cause),
+        ),
+        Effect.tap(() =>
+          loadActiveSession(sessionId).pipe(
+            Effect.flatMap((session) =>
+              Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logError("Failed to publish connected-session auth update", {
+                sessionId,
+                cause,
+              }),
+            ),
           ),
         ),
-      ),
-    );
+      );
 
   const releaseConnection = (lease: ActiveConnectionLease) =>
-    activeConnectionsSemaphore.withPermit(
-      Ref.modify(activeConnectionsRef, (current) => {
-        const existing = current.get(lease.sessionId);
-        if (!existing?.has(lease.connectionId)) return [false, current] as const;
+    activeConnectionsSemaphore
+      .withPermit(
+        Ref.modify(activeConnectionsRef, (current) => {
+          const existing = current.get(lease.sessionId);
+          if (!existing?.has(lease.connectionId)) return [false, current] as const;
 
-        const next = new Map(current);
-        const sessionConnections = new Map(existing);
-        sessionConnections.delete(lease.connectionId);
-        if (sessionConnections.size === 0) next.delete(lease.sessionId);
-        else next.set(lease.sessionId, sessionConnections);
-        return [sessionConnections.size === 0, next] as const;
-      }),
-    ).pipe(
-      Effect.flatMap((wasLastConnection) =>
-        wasLastConnection
-          ? loadActiveSession(lease.sessionId).pipe(
-              Effect.flatMap((session) =>
-                Option.isSome(session)
-                  ? emitUpsert(session.value)
-                  : emitRemoved(lease.sessionId),
-              ),
-            )
-          : Effect.void,
-      ),
-      Effect.uninterruptible,
-      Effect.catchCause((cause) =>
-        Effect.logError("Failed to publish disconnected-session auth update", {
-          sessionId: lease.sessionId,
-          connectionId: lease.connectionId,
-          cause,
+          const next = new Map(current);
+          const sessionConnections = new Map(existing);
+          sessionConnections.delete(lease.connectionId);
+          if (sessionConnections.size === 0) next.delete(lease.sessionId);
+          else next.set(lease.sessionId, sessionConnections);
+          return [sessionConnections.size === 0, next] as const;
         }),
-      ),
-    );
+      )
+      .pipe(
+        Effect.flatMap((wasLastConnection) =>
+          wasLastConnection
+            ? loadActiveSession(lease.sessionId).pipe(
+                Effect.flatMap((session) =>
+                  Option.isSome(session) ? emitUpsert(session.value) : emitRemoved(lease.sessionId),
+                ),
+              )
+            : Effect.void,
+        ),
+        Effect.uninterruptible,
+        Effect.catchCause((cause) =>
+          Effect.logError("Failed to publish disconnected-session auth update", {
+            sessionId: lease.sessionId,
+            connectionId: lease.connectionId,
+            cause,
+          }),
+        ),
+      );
 
   const interruptConnections = (sessionIds: ReadonlyArray<AuthSessionId>) =>
     Effect.gen(function* () {
@@ -419,78 +416,80 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     sessionId,
     input,
   ) =>
-    activeConnectionsSemaphore.withPermit(
-      Effect.gen(function* () {
-        const row = yield* authSessions.getById({ sessionId });
-        const issuedAt = yield* DateTime.now;
-        const issuedAtMillis = DateTime.toEpochMillis(issuedAt);
-        if (Option.isNone(row)) {
-          return yield* toSessionCredentialError("Unknown websocket session.");
-        }
-        if (row.value.revokedAt !== null) {
-          return yield* toSessionCredentialError("Websocket session revoked.");
-        }
-        const sessionExpiresAtMillis = DateTime.toEpochMillis(row.value.expiresAt);
-        if (sessionExpiresAtMillis <= issuedAtMillis) {
-          return yield* toSessionCredentialError("Websocket session expired.");
-        }
+    activeConnectionsSemaphore
+      .withPermit(
+        Effect.gen(function* () {
+          const row = yield* authSessions.getById({ sessionId });
+          const issuedAt = yield* DateTime.now;
+          const issuedAtMillis = DateTime.toEpochMillis(issuedAt);
+          if (Option.isNone(row)) {
+            return yield* toSessionCredentialError("Unknown websocket session.");
+          }
+          if (row.value.revokedAt !== null) {
+            return yield* toSessionCredentialError("Websocket session revoked.");
+          }
+          const sessionExpiresAtMillis = DateTime.toEpochMillis(row.value.expiresAt);
+          if (sessionExpiresAtMillis <= issuedAtMillis) {
+            return yield* toSessionCredentialError("Websocket session expired.");
+          }
 
-        const requestedExpiresAt = DateTime.addDuration(
-          issuedAt,
-          input?.ttl ?? DEFAULT_WEBSOCKET_TOKEN_TTL,
-        );
-        const expiresAtMillis = Math.min(
-          DateTime.toEpochMillis(requestedExpiresAt),
-          sessionExpiresAtMillis,
-        );
-        const expiresAt = DateTime.makeUnsafe(expiresAtMillis);
-        const currentTickets = pruneOutstandingWebSocketTickets(
-          yield* Ref.get(outstandingWebSocketTicketsRef),
-          issuedAtMillis,
-        );
-        const activeTicketCount = Array.from(currentTickets.values()).filter(
-          (ticket) => ticket.sessionId === sessionId,
-        ).length;
-        if (activeTicketCount >= MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION) {
-          yield* Ref.set(outstandingWebSocketTicketsRef, currentTickets);
-          yield* Effect.logWarning("Rejected websocket ticket capacity.").pipe(
-            Effect.annotateLogs({
-              scope: "websocket-tickets",
-              active: activeTicketCount,
-              limit: MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION,
-            }),
+          const requestedExpiresAt = DateTime.addDuration(
+            issuedAt,
+            input?.ttl ?? DEFAULT_WEBSOCKET_TOKEN_TTL,
           );
-          return yield* new SessionCapacityError({
-            message: "Outstanding websocket ticket capacity exceeded.",
-            scope: "websocket-tickets",
-            limit: MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION,
-            active: activeTicketCount,
-            retryAfterSeconds: CAPACITY_RETRY_AFTER_SECONDS,
-          });
-        }
+          const expiresAtMillis = Math.min(
+            DateTime.toEpochMillis(requestedExpiresAt),
+            sessionExpiresAtMillis,
+          );
+          const expiresAt = DateTime.makeUnsafe(expiresAtMillis);
+          const currentTickets = pruneOutstandingWebSocketTickets(
+            yield* Ref.get(outstandingWebSocketTicketsRef),
+            issuedAtMillis,
+          );
+          const activeTicketCount = Array.from(currentTickets.values()).filter(
+            (ticket) => ticket.sessionId === sessionId,
+          ).length;
+          if (activeTicketCount >= MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION) {
+            yield* Ref.set(outstandingWebSocketTicketsRef, currentTickets);
+            yield* Effect.logWarning("Rejected websocket ticket capacity.").pipe(
+              Effect.annotateLogs({
+                scope: "websocket-tickets",
+                active: activeTicketCount,
+                limit: MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION,
+              }),
+            );
+            return yield* new SessionCapacityError({
+              message: "Outstanding websocket ticket capacity exceeded.",
+              scope: "websocket-tickets",
+              limit: MAX_OUTSTANDING_WEBSOCKET_TICKETS_PER_SESSION,
+              active: activeTicketCount,
+              retryAfterSeconds: CAPACITY_RETRY_AFTER_SECONDS,
+            });
+          }
 
-        const ticketId = Crypto.randomUUID();
-        const claims: WebSocketClaims = {
-          v: 2,
-          kind: "websocket",
-          sid: sessionId,
-          jti: ticketId,
-          iat: issuedAtMillis,
-          exp: expiresAtMillis,
-        };
-        const encodedPayload = base64UrlEncode(JSON.stringify(claims));
-        const signature = signPayload(encodedPayload, signingSecret);
-        currentTickets.set(ticketId, { sessionId, expiresAtMillis });
-        yield* Ref.set(outstandingWebSocketTicketsRef, currentTickets);
-        return { token: `${encodedPayload}.${signature}`, expiresAt };
-      }),
-    ).pipe(
-      Effect.mapError((cause) =>
-        cause instanceof SessionCredentialError || cause instanceof SessionCapacityError
-          ? cause
-          : toSessionCredentialError("Failed to issue websocket token.", cause),
-      ),
-    );
+          const ticketId = Crypto.randomUUID();
+          const claims: WebSocketClaims = {
+            v: 2,
+            kind: "websocket",
+            sid: sessionId,
+            jti: ticketId,
+            iat: issuedAtMillis,
+            exp: expiresAtMillis,
+          };
+          const encodedPayload = base64UrlEncode(JSON.stringify(claims));
+          const signature = signPayload(encodedPayload, signingSecret);
+          currentTickets.set(ticketId, { sessionId, expiresAtMillis });
+          yield* Ref.set(outstandingWebSocketTicketsRef, currentTickets);
+          return { token: `${encodedPayload}.${signature}`, expiresAt };
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof SessionCredentialError || cause instanceof SessionCapacityError
+            ? cause
+            : toSessionCredentialError("Failed to issue websocket token.", cause),
+        ),
+      );
 
   const verifyWebSocketToken: SessionCredentialServiceShape["verifyWebSocketToken"] = (token) =>
     Effect.gen(function* () {
@@ -579,66 +578,70 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     );
 
   const revoke: SessionCredentialServiceShape["revoke"] = (sessionId) =>
-    activeConnectionsSemaphore.withPermit(
-      Effect.gen(function* () {
-        const revokedAt = yield* DateTime.now;
-        const revoked = yield* authSessions.revoke({ sessionId, revokedAt });
-        if (revoked) {
-          yield* clearOutstandingWebSocketTickets([sessionId]);
-          yield* interruptConnections([sessionId]);
-          yield* emitRemoved(sessionId);
-        }
-        return revoked;
-      }),
-    ).pipe(
-      Effect.mapError((cause) => toSessionCredentialError("Failed to revoke session.", cause)),
-    );
+    activeConnectionsSemaphore
+      .withPermit(
+        Effect.gen(function* () {
+          const revokedAt = yield* DateTime.now;
+          const revoked = yield* authSessions.revoke({ sessionId, revokedAt });
+          if (revoked) {
+            yield* clearOutstandingWebSocketTickets([sessionId]);
+            yield* interruptConnections([sessionId]);
+            yield* emitRemoved(sessionId);
+          }
+          return revoked;
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) => toSessionCredentialError("Failed to revoke session.", cause)),
+      );
 
   const revokeAllExcept: SessionCredentialServiceShape["revokeAllExcept"] = (sessionId) =>
-    activeConnectionsSemaphore.withPermit(
-      Effect.gen(function* () {
-        const revokedAt = yield* DateTime.now;
-        const revokedSessionIds = yield* authSessions.revokeAllExcept({
-          currentSessionId: sessionId,
-          revokedAt,
-        });
-        if (revokedSessionIds.length > 0) {
-          yield* clearOutstandingWebSocketTickets(revokedSessionIds);
-          yield* interruptConnections(revokedSessionIds);
-          yield* Effect.forEach(revokedSessionIds, emitRemoved, {
-            concurrency: "unbounded",
-            discard: true,
-          });
-        }
-        return revokedSessionIds.length;
-      }),
-    ).pipe(
-      Effect.mapError((cause) =>
-        toSessionCredentialError("Failed to revoke other sessions.", cause),
-      ),
-    );
-
-  const runAuthenticatedConnection: SessionCredentialServiceShape["runAuthenticatedConnection"] =
-    (sessionId, effect) =>
-      Effect.acquireUseRelease(
+    activeConnectionsSemaphore
+      .withPermit(
         Effect.gen(function* () {
-          const start = yield* Deferred.make<void>();
-          const connectionFiber = yield* Effect.forkChild(
-            Deferred.await(start).pipe(Effect.andThen(effect)),
-            { startImmediately: true },
-          );
-          const lease = yield* acquireConnection(sessionId, Fiber.interrupt(connectionFiber)).pipe(
-            Effect.onError(() => Fiber.interrupt(connectionFiber)),
-          );
-          yield* Deferred.succeed(start, undefined);
-          return { lease, connectionFiber } as const;
+          const revokedAt = yield* DateTime.now;
+          const revokedSessionIds = yield* authSessions.revokeAllExcept({
+            currentSessionId: sessionId,
+            revokedAt,
+          });
+          if (revokedSessionIds.length > 0) {
+            yield* clearOutstandingWebSocketTickets(revokedSessionIds);
+            yield* interruptConnections(revokedSessionIds);
+            yield* Effect.forEach(revokedSessionIds, emitRemoved, {
+              concurrency: "unbounded",
+              discard: true,
+            });
+          }
+          return revokedSessionIds.length;
         }),
-        ({ lease, connectionFiber }) => Effect.gen(function* () {
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          toSessionCredentialError("Failed to revoke other sessions.", cause),
+        ),
+      );
+
+  const runAuthenticatedConnection: SessionCredentialServiceShape["runAuthenticatedConnection"] = (
+    sessionId,
+    effect,
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.gen(function* () {
+        const start = yield* Deferred.make<void>();
+        const connectionFiber = yield* Effect.forkChild(
+          Deferred.await(start).pipe(Effect.andThen(effect)),
+          { startImmediately: true },
+        );
+        const lease = yield* acquireConnection(sessionId, Fiber.interrupt(connectionFiber)).pipe(
+          Effect.onError(() => Fiber.interrupt(connectionFiber)),
+        );
+        yield* Deferred.succeed(start, undefined);
+        return { lease, connectionFiber } as const;
+      }),
+      ({ lease, connectionFiber }) =>
+        Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          const expiresIn = Math.max(
-            0,
-            DateTime.toEpochMillis(lease.expiresAt) - now,
-          );
+          const expiresIn = Math.max(0, DateTime.toEpochMillis(lease.expiresAt) - now);
           const expiryFiber = yield* Effect.forkChild(
             Effect.sleep(Duration.millis(expiresIn)).pipe(
               Effect.andThen(Fiber.interrupt(connectionFiber)),
@@ -649,9 +652,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             Effect.ensuring(Fiber.interrupt(expiryFiber)),
           );
         }),
-        ({ lease, connectionFiber }) =>
-          Fiber.interrupt(connectionFiber).pipe(Effect.andThen(releaseConnection(lease))),
-      );
+      ({ lease, connectionFiber }) =>
+        Fiber.interrupt(connectionFiber).pipe(Effect.andThen(releaseConnection(lease))),
+    );
 
   return {
     cookieName,

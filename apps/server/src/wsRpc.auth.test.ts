@@ -107,32 +107,34 @@ it.effect("preserves the legacy query token for loopback desktop sessions", () =
   }),
 );
 
-it.effect("disables the legacy loopback query token when an HTTPS public origin is configured", () =>
-  Effect.gen(function* () {
-    const authenticatedSession = {
-      sessionId: "proxy-session" as never,
-      subject: "owner-bootstrap",
-      method: "browser-session-cookie" as const,
-      role: "owner" as const,
-    };
-    const authenticateWebSocketUpgrade = vi.fn(() => Effect.succeed(authenticatedSession));
+it.effect(
+  "disables the legacy loopback query token when an HTTPS public origin is configured",
+  () =>
+    Effect.gen(function* () {
+      const authenticatedSession = {
+        sessionId: "proxy-session" as never,
+        subject: "owner-bootstrap",
+        method: "browser-session-cookie" as const,
+        role: "owner" as const,
+      };
+      const authenticateWebSocketUpgrade = vi.fn(() => Effect.succeed(authenticatedSession));
 
-    const session = yield* authenticateRpcWebSocketUpgrade({
-      config: {
-        host: "127.0.0.1",
-        authToken: "proxy-secret",
-        publicUrl: new URL("https://synara.example.test/"),
-      },
-      legacyToken: "proxy-secret",
-      request: {
-        headers: {},
-        cookies: { "synara-session": "paired-session-credential" },
-        url: new URL("http://127.0.0.1:3773/ws?token=proxy-secret"),
-      },
-      serverAuth: { authenticateWebSocketUpgrade },
-    });
+      const session = yield* authenticateRpcWebSocketUpgrade({
+        config: {
+          host: "127.0.0.1",
+          authToken: "proxy-secret",
+          publicUrl: new URL("https://synara.example.test/"),
+        },
+        legacyToken: "proxy-secret",
+        request: {
+          headers: {},
+          cookies: { "synara-session": "paired-session-credential" },
+          url: new URL("http://127.0.0.1:3773/ws?token=proxy-secret"),
+        },
+        serverAuth: { authenticateWebSocketUpgrade },
+      });
 
-    assert.equal(session, authenticatedSession);
-    assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 1);
-  }),
+      assert.equal(session, authenticatedSession);
+      assert.equal(authenticateWebSocketUpgrade.mock.calls.length, 1);
+    }),
 );

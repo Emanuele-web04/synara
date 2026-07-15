@@ -12,10 +12,7 @@ import type {
 } from "@synara/contracts";
 import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
 import { requestChatGptVoiceTranscription } from "@synara/shared/chatGptVoiceTranscription";
-import {
-  decodeOutboundJson,
-  type OutboundHttpResponse,
-} from "@synara/shared/outboundHttp";
+import { decodeOutboundJson, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
 
 const MAX_DURATION_MS = 120_000;
 
@@ -57,7 +54,10 @@ export async function transcribeVoiceWithChatGptSession(input: {
 
   let payload: { text?: unknown; transcript?: unknown } | null = null;
   try {
-    payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as typeof payload;
+    payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
+      text?: unknown;
+      transcript?: unknown;
+    };
   } catch {
     payload = null;
   }

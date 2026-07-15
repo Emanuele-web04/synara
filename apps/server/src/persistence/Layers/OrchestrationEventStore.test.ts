@@ -56,16 +56,11 @@ layer("OrchestrationEventStore", (it) => {
       assert.equal(storedRows.length, 1);
       assert.equal(typeof storedRows[0]?.payloadJson, "string");
       assert.equal(typeof storedRows[0]?.metadataJson, "string");
-      assert.equal(
-        JSON.parse(storedRows[0]!.metadataJson).persistedEventSchemaVersion,
-        1,
-      );
+      assert.equal(JSON.parse(storedRows[0]!.metadataJson).persistedEventSchemaVersion, 1);
 
       const replayed = yield* Stream.runCollect(
         eventStore.readFromSequence(startSequence, 10),
-      ).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      );
+      ).pipe(Effect.map((chunk) => Array.from(chunk)));
       assert.equal(replayed.length, 1);
       assert.equal(replayed[0]?.type, "project.created");
       assert.equal(replayed[0]?.metadata.adapterKey, "codex");
@@ -327,10 +322,7 @@ layer("OrchestrationEventStore", (it) => {
       assert.equal(replayResult._tag, "Failure");
       if (replayResult._tag === "Failure") {
         assert.ok(Schema.is(PersistenceDecodeError)(replayResult.failure));
-        assert.match(
-          replayResult.failure.operation,
-          /sequence=\d+, type=project\.created/,
-        );
+        assert.match(replayResult.failure.operation, /sequence=\d+, type=project\.created/);
         assert.ok(
           replayResult.failure.issue.includes("Unsupported persisted event schema version 2"),
           replayResult.failure.issue,

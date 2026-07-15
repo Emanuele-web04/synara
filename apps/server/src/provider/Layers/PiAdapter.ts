@@ -137,8 +137,7 @@ export function makePiBashProcessSupervisor(
       if (execution.signal?.aborted) {
         throw new Error("aborted");
       }
-      const timeoutMs =
-        execution.timeout === undefined ? undefined : execution.timeout * 1_000;
+      const timeoutMs = execution.timeout === undefined ? undefined : execution.timeout * 1_000;
       if (
         execution.timeout !== undefined &&
         (!Number.isFinite(execution.timeout) || execution.timeout <= 0)
@@ -1799,6 +1798,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           );
         }
         const shellPath = services.settingsManager.getShellPath();
+        const commandPrefix = services.settingsManager.getShellCommandPrefix();
         input.processSupervisor.setShellPath(shellPath);
         return {
           ...(await input.sdk.createAgentSessionFromServices({
@@ -1808,11 +1808,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             ...(model ? { model } : {}),
             thinkingLevel: input.thinkingLevel ?? DEFAULT_PI_THINKING_LEVEL,
             customTools: [
-              input.sdk.createBashToolDefinition(cwd, {
-                operations: input.processSupervisor.operations,
-                commandPrefix: services.settingsManager.getShellCommandPrefix(),
-                shellPath,
-              }),
+              input.sdk.defineTool(
+                input.sdk.createBashToolDefinition(cwd, {
+                  operations: input.processSupervisor.operations,
+                  ...(commandPrefix === undefined ? {} : { commandPrefix }),
+                  ...(shellPath === undefined ? {} : { shellPath }),
+                }),
+              ),
             ],
           })),
           services,

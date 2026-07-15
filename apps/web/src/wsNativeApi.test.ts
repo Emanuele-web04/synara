@@ -747,16 +747,13 @@ describe("wsNativeApi", () => {
       ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
       { threadId: "thread-1", limit: 10 },
     );
-    expect(requestMock).toHaveBeenCalledWith(
-      ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
-      {
-        eventSequence: 42,
-        threadId: "thread-1",
-        expectedState: "uncertain",
-        outcome: "safe_retry",
-        note: "The provider confirms it did not accept the command.",
-      },
-    );
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, {
+      eventSequence: 42,
+      threadId: "thread-1",
+      expectedState: "uncertain",
+      outcome: "safe_retry",
+      note: "The provider confirms it did not accept the command.",
+    });
   });
 
   it("forwards browser webview detach requests to the desktop bridge", async () => {

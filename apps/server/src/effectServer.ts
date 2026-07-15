@@ -80,10 +80,7 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
 ) {}
 
 export function closeServerRuntimePipeline(input: {
-  readonly orchestrationEngine: Pick<
-    OrchestrationEngineShape,
-    "quiesce" | "drain" | "stop"
-  >;
+  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "quiesce" | "drain" | "stop">;
   readonly providerService: Pick<ProviderServiceShape, "closeRuntimeEvents">;
   readonly managedAttachmentCleanup: Pick<ManagedAttachmentCleanupShape, "drain">;
   readonly subscriptionsScope: Scope.Closeable;

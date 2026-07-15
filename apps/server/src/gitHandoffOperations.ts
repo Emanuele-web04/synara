@@ -86,10 +86,7 @@ export const beginGitHandoff = (input: GitHandoffThreadInput) =>
     return yield* decodeOperation(existing);
   });
 
-export const recordGitHandoffResult = (
-  commandId: string,
-  result: GitHandoffThreadResult,
-) =>
+export const recordGitHandoffResult = (commandId: string, result: GitHandoffThreadResult) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const resultJson = JSON.stringify(result);

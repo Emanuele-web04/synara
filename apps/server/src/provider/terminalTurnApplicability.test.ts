@@ -8,9 +8,9 @@ import {
 describe("isStartedTurnApplicable", () => {
   it("accepts the first start and a repeated start for the active turn", () => {
     expect(isStartedTurnApplicable({ activeTurnId: null, eventTurnId: "turn-first" })).toBe(true);
-    expect(
-      isStartedTurnApplicable({ activeTurnId: "turn-first", eventTurnId: "turn-first" }),
-    ).toBe(true);
+    expect(isStartedTurnApplicable({ activeTurnId: "turn-first", eventTurnId: "turn-first" })).toBe(
+      true,
+    );
   });
 
   it("rejects a start for a different turn while one is active", () => {

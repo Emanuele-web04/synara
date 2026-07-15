@@ -80,26 +80,26 @@ Do not copy the full audit into a prompt. Before working on an item, read only:
 
 ## Execution order and status
 
-| Order | Workstream | Outcome | Depends on | Status |
-| ---: | --- | --- | --- | --- |
-| 0 | Reconcile dirty worktree | Map partial implementations; avoid duplicate authorities | — | DONE |
-| 1 | `P0-REL-01` | Fail-closed exact-source release/update authority | Reconcile | CODE COMPLETE |
-| 2 | `P0-SEC-01` | Server-only provider secrets and minimal child capabilities | Reconcile | CODE COMPLETE |
-| 3 | `P0-SEC-02` | Pinned credential-bearing outbound HTTP authority | `P0-SEC-01` where credentials move | CODE COMPLETE |
-| 4 | `P1-PERSIST-01` | One durable SQLite/projection/migration/recovery authority | Reconcile | CODE COMPLETE |
-| 5 | `P1-IDENTITY-01` | Composite command/message/interaction identity | Persistence migration boundary stable | CODE COMPLETE |
-| 6 | `P1-PROVIDER-01` | One per-thread provider lifecycle/turn/process owner | Thread-scoped identity phases 1-3 | CODE COMPLETE |
-| 7 | `P1-RUNTIME-01` | Bounded pipelines and staged shutdown | `P1-PROVIDER-01` lifecycle contract | CODE COMPLETE |
-| 8 | `P1-TRANSPORT-01` | Cursor-safe live transport, compatibility, and request admission | `P1-PERSIST-01`, `P1-RUNTIME-01` | CODE COMPLETE |
-| 9 | `P1-DELIVERY-01` | Crash-recoverable accepted intent/output delivery | `P1-IDENTITY-01`, `P1-PROVIDER-01`, `P1-RUNTIME-01` | CODE COMPLETE |
-| 10 | `P1-FILE-01` | Finish the exact-owner managed attachment lifecycle | `P1-PERSIST-01` | CODE COMPLETE |
-| 11 | `P1-DESKTOP-SEC-01` | Generation-scoped browser/native-control boundary | `P0-SEC-01`, `P1-PROVIDER-01` | CODE COMPLETE — unsupported Windows pipe fails closed |
-| 12 | `P1-GIT-01` | Canonical repository mutation/worktree saga | `P1-DELIVERY-01` where accepted work crosses workspace preparation | CODE COMPLETE — migration 68 journals handoff phases; stored Git results replay before command readiness and pre-result interruptions fail closed |
-| 13 | `P1-SETTINGS-01` | Revisioned settings/provider configuration authority | `P0-SEC-01`, `P1-PROVIDER-01` | CODE COMPLETE — server owns serialized intent commits; no client CAS path remains |
-| 14 | `P1-AUTO-01` | One revision-fenced automation run saga | `P1-DELIVERY-01`, `P1-PROVIDER-01`, `P1-SETTINGS-01` | CODE COMPLETE — bounded keyset recovery and one web summary subscription owner |
-| 15 | `P2-ACP-01` | Official ACP SDK production wire authority | `P1-PROVIDER-01`, `P1-RUNTIME-01` | CODE COMPLETE — official SDK owns production and canary wire paths; private client/agent/protocol stack deleted |
-| 16 | `P2-WEB-STATE-01` | Normalized frontend entity and persistence authority | `P1-IDENTITY-01`, `P1-TRANSPORT-01` | CODE COMPLETE — normalized slices are the only runtime thread authority |
-| 17 | `P2-PROVIDER-META-01` | One provider metadata/discovery/health/usage descriptor | `P0-SEC-01`, `P1-SETTINGS-01` | CODE COMPLETE — descriptor order, revision-fenced health, and account-safe usage ownership |
+| Order | Workstream               | Outcome                                                          | Depends on                                                         | Status                                                                                                                                            |
+| ----: | ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     0 | Reconcile dirty worktree | Map partial implementations; avoid duplicate authorities         | —                                                                  | DONE                                                                                                                                              |
+|     1 | `P0-REL-01`              | Fail-closed exact-source release/update authority                | Reconcile                                                          | CODE COMPLETE                                                                                                                                     |
+|     2 | `P0-SEC-01`              | Server-only provider secrets and minimal child capabilities      | Reconcile                                                          | CODE COMPLETE                                                                                                                                     |
+|     3 | `P0-SEC-02`              | Pinned credential-bearing outbound HTTP authority                | `P0-SEC-01` where credentials move                                 | CODE COMPLETE                                                                                                                                     |
+|     4 | `P1-PERSIST-01`          | One durable SQLite/projection/migration/recovery authority       | Reconcile                                                          | CODE COMPLETE                                                                                                                                     |
+|     5 | `P1-IDENTITY-01`         | Composite command/message/interaction identity                   | Persistence migration boundary stable                              | CODE COMPLETE                                                                                                                                     |
+|     6 | `P1-PROVIDER-01`         | One per-thread provider lifecycle/turn/process owner             | Thread-scoped identity phases 1-3                                  | CODE COMPLETE                                                                                                                                     |
+|     7 | `P1-RUNTIME-01`          | Bounded pipelines and staged shutdown                            | `P1-PROVIDER-01` lifecycle contract                                | CODE COMPLETE                                                                                                                                     |
+|     8 | `P1-TRANSPORT-01`        | Cursor-safe live transport, compatibility, and request admission | `P1-PERSIST-01`, `P1-RUNTIME-01`                                   | CODE COMPLETE                                                                                                                                     |
+|     9 | `P1-DELIVERY-01`         | Crash-recoverable accepted intent/output delivery                | `P1-IDENTITY-01`, `P1-PROVIDER-01`, `P1-RUNTIME-01`                | CODE COMPLETE                                                                                                                                     |
+|    10 | `P1-FILE-01`             | Finish the exact-owner managed attachment lifecycle              | `P1-PERSIST-01`                                                    | CODE COMPLETE                                                                                                                                     |
+|    11 | `P1-DESKTOP-SEC-01`      | Generation-scoped browser/native-control boundary                | `P0-SEC-01`, `P1-PROVIDER-01`                                      | CODE COMPLETE — unsupported Windows pipe fails closed                                                                                             |
+|    12 | `P1-GIT-01`              | Canonical repository mutation/worktree saga                      | `P1-DELIVERY-01` where accepted work crosses workspace preparation | CODE COMPLETE — migration 68 journals handoff phases; stored Git results replay before command readiness and pre-result interruptions fail closed |
+|    13 | `P1-SETTINGS-01`         | Revisioned settings/provider configuration authority             | `P0-SEC-01`, `P1-PROVIDER-01`                                      | CODE COMPLETE — server owns serialized intent commits; no client CAS path remains                                                                 |
+|    14 | `P1-AUTO-01`             | One revision-fenced automation run saga                          | `P1-DELIVERY-01`, `P1-PROVIDER-01`, `P1-SETTINGS-01`               | CODE COMPLETE — bounded keyset recovery and one web summary subscription owner                                                                    |
+|    15 | `P2-ACP-01`              | Official ACP SDK production wire authority                       | `P1-PROVIDER-01`, `P1-RUNTIME-01`                                  | CODE COMPLETE — official SDK owns production and canary wire paths; private client/agent/protocol stack deleted                                   |
+|    16 | `P2-WEB-STATE-01`        | Normalized frontend entity and persistence authority             | `P1-IDENTITY-01`, `P1-TRANSPORT-01`                                | CODE COMPLETE — normalized slices are the only runtime thread authority                                                                           |
+|    17 | `P2-PROVIDER-META-01`    | One provider metadata/discovery/health/usage descriptor          | `P0-SEC-01`, `P1-SETTINGS-01`                                      | CODE COMPLETE — descriptor order, revision-fenced health, and account-safe usage ownership                                                        |
 
 Independent items may be reordered only when their dependencies and the audit's
 "must not run concurrently" rules remain satisfied.
@@ -1052,7 +1052,7 @@ backpressure gate.
   deletion boundary.
 - `PRUNE-167` — three Droid fork/sidechat recovery tests now reuse the typed harness reader for their
   custom thread IDs. Net test-source change: **-9 LOC**. Direct lookup equivalence and `git diff
-  --check` pass; two focused gates timed out because the reactor skipped each target thread as already
+--check` pass; two focused gates timed out because the reactor skipped each target thread as already
   quarantined before the unchanged predicate could succeed. Cumulative pruning runtime change remains
   **-981 LOC**. Next: continue only net-negative focused-test fixture consolidation; ACP implementation
   remains frozen.
@@ -1080,7 +1080,7 @@ backpressure gate.
   **999 LOC**. Nine focused-test fixture phases also removed **107 test-source LOC** without changing
   their predicates or assertions. The official ACP SDK seam, static Grok canary, no-fallback rule,
   parity gate, and full `effect-acp` deletion ledger remain defined but unimplemented. `git diff
-  --check` passes; heavyweight workspace checks remain deferred by instruction. Two focused Droid
+--check` passes; heavyweight workspace checks remain deferred by instruction. Two focused Droid
   gates retain their recorded pre-predicate quarantine timeouts. Next: no implementation work until
   an unopened roadmap row or ACP cutover is explicitly unfrozen.
 - `PRUNE-172` — `sendTurn`, `steerTurn`, and `startReview` now share one ProviderService dispatch-

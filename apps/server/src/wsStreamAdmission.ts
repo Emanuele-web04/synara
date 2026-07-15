@@ -73,9 +73,7 @@ export const makeWsStreamAdmission = Effect.gen(function* () {
       const leases = client.leases;
       const active = leases.size;
       const activeThreads = activeThreadCount(leases);
-      const duplicate = Array.from(leases.values()).some(
-        (lease) => lease.key === subscription.key,
-      );
+      const duplicate = Array.from(leases.values()).some((lease) => lease.key === subscription.key);
       if (duplicate) {
         return [
           {
@@ -182,10 +180,7 @@ export const makeWsStreamAdmission = Effect.gen(function* () {
     stream: Stream.Stream<A, E, R>,
   ): Stream.Stream<A, E | WsRpcError, R> =>
     Stream.unwrap(
-      Effect.acquireRelease(
-        acquire(clientId, subscription),
-        release,
-      ).pipe(Effect.as(stream)),
+      Effect.acquireRelease(acquire(clientId, subscription), release).pipe(Effect.as(stream)),
     );
 
   const snapshot = Ref.get(ledgerRef).pipe(

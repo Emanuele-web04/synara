@@ -10,7 +10,7 @@ import {
   resolveBooleanConfig,
 } from "./cli";
 
-const parseBooleanFlag = (args: ReadonlyArray<string>) =>
+const parseBooleanFlag = (args: ReadonlyArray<string>): Effect.Effect<boolean | undefined> =>
   Effect.gen(function* () {
     const parsed = yield* Ref.make<boolean | undefined>(undefined);
     const command = Command.make("test", {
@@ -19,7 +19,7 @@ const parseBooleanFlag = (args: ReadonlyArray<string>) =>
 
     yield* Command.runWith(command, { version: "test" })(args);
     return yield* Ref.get(parsed);
-  });
+  }) as Effect.Effect<boolean | undefined>;
 
 it.effect("keeps absent, positive, negative, and explicit false boolean flags distinct", () =>
   Effect.gen(function* () {

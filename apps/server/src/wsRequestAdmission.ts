@@ -97,46 +97,49 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
   const ledgerRef = yield* Ref.make<AdmissionLedger>(initialLedger());
 
   const acquire = (clientId: number, method: string) =>
-    Ref.modify(ledgerRef, (ledger) => {
-      const requestClass = classifyWsRequest(method);
-      const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
-      const activeForClass = Array.from(clientLeases.values()).reduce(
-        (count, lease) => count + (lease.requestClass === requestClass ? 1 : 0),
-        0,
-      );
-      if (activeForClass >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
-        const code =
-          requestClass === "expensive-read"
-            ? "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED"
-            : "RPC_REQUEST_CAPACITY_EXCEEDED";
-        return [
-          Effect.fail(
-            new WsRpcError({
-              message: `WebSocket ${requestClass} request capacity exceeded.`,
-              code,
-              retryable: true,
-              retryAfterMs: 250,
-            }),
-          ),
-          { ...ledger, rejectedTotal: ledger.rejectedTotal + 1 },
-        ] as const;
-      }
+    Ref.modify(
+      ledgerRef,
+      (ledger): readonly [Effect.Effect<WsRequestLease, WsRpcError>, AdmissionLedger] => {
+        const requestClass = classifyWsRequest(method);
+        const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
+        const activeForClass = Array.from(clientLeases.values()).reduce(
+          (count, lease) => count + (lease.requestClass === requestClass ? 1 : 0),
+          0,
+        );
+        if (activeForClass >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
+          const code =
+            requestClass === "expensive-read"
+              ? "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED"
+              : "RPC_REQUEST_CAPACITY_EXCEEDED";
+          return [
+            Effect.fail(
+              new WsRpcError({
+                message: `WebSocket ${requestClass} request capacity exceeded.`,
+                code,
+                retryable: true,
+                retryAfterMs: 250,
+              }),
+            ),
+            { ...ledger, rejectedTotal: ledger.rejectedTotal + 1 },
+          ] as const;
+        }
 
-      const lease: WsRequestLease = {
-        clientId,
-        leaseId: Crypto.randomUUID(),
-        method,
-        requestClass,
-      };
-      const nextClientLeases = new Map(clientLeases);
-      nextClientLeases.set(lease.leaseId, lease);
-      const nextClients = new Map(ledger.clients);
-      nextClients.set(clientId, nextClientLeases);
-      return [
-        Effect.succeed(lease),
-        { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
-      ] as const;
-    }).pipe(Effect.flatten);
+        const lease: WsRequestLease = {
+          clientId,
+          leaseId: Crypto.randomUUID(),
+          method,
+          requestClass,
+        };
+        const nextClientLeases = new Map(clientLeases);
+        nextClientLeases.set(lease.leaseId, lease);
+        const nextClients = new Map(ledger.clients);
+        nextClients.set(clientId, nextClientLeases);
+        return [
+          Effect.succeed(lease),
+          { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
+        ] as const;
+      },
+    ).pipe(Effect.flatten);
 
   const release = (lease: WsRequestLease) =>
     Ref.update(ledgerRef, (ledger) => {
@@ -155,11 +158,7 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
     });
 
   const guard = <A, E, R>(clientId: number, method: string, effect: Effect.Effect<A, E, R>) =>
-    Effect.acquireUseRelease(
-      acquire(clientId, method),
-      () => effect,
-      release,
-    );
+    Effect.acquireUseRelease(acquire(clientId, method), () => effect, release);
 
   const snapshot = Ref.get(ledgerRef).pipe(
     Effect.map(

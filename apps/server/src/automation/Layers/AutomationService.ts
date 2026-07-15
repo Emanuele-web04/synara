@@ -1131,8 +1131,7 @@ export const AutomationServiceLive = Layer.effect(
               ? definition.targetThreadId
               : ids.threadId,
         messageId: ids.messageId,
-        threadCreateCommandId:
-          definition.mode === "heartbeat" ? null : ids.threadCreateCommandId,
+        threadCreateCommandId: definition.mode === "heartbeat" ? null : ids.threadCreateCommandId,
         turnStartCommandId: ids.turnStartCommandId,
         trigger,
         scheduledFor,
@@ -1193,14 +1192,14 @@ export const AutomationServiceLive = Layer.effect(
           scheduleAdvance,
         );
       }).pipe(
-          Effect.mapError(toServiceError("Failed to claim automation run.")),
-          Effect.tap((run) =>
-            Option.match(run, {
-              onNone: () => Effect.void,
-              onSome: (claimed) => publish({ type: "run-upserted", run: claimed }),
-            }),
-          ),
-        );
+        Effect.mapError(toServiceError("Failed to claim automation run.")),
+        Effect.tap((run) =>
+          Option.match(run, {
+            onNone: () => Effect.void,
+            onSome: (claimed) => publish({ type: "run-upserted", run: claimed }),
+          }),
+        ),
+      );
 
     // Recovery may find a durable run + thread without the queued turn row; retire it so
     // future heartbeat ticks and scheduled occurrences are not blocked forever.
@@ -1929,7 +1928,7 @@ export const AutomationServiceLive = Layer.effect(
     };
 
     const recoverPendingRuns: AutomationServiceShape["recoverPendingRuns"] = () => {
-      const recoverPage = (after?: AutomationRun) =>
+      const recoverPage = (after?: AutomationRun): Effect.Effect<void, AutomationServiceError> =>
         automationRepository
           .listRecoverableRuns({
             limit: 200,
@@ -2173,12 +2172,7 @@ export const AutomationServiceLive = Layer.effect(
           }
         }
         const runnableDefinition = yield* restartExhaustedBoundedDefinition(definition, now);
-        const claimedRun = yield* claimPendingRun(
-          runnableDefinition,
-          { type: "manual" },
-          now,
-          now,
-        );
+        const claimedRun = yield* claimPendingRun(runnableDefinition, { type: "manual" }, now, now);
         if (Option.isNone(claimedRun)) {
           return yield* Effect.fail(
             new AutomationServiceError({

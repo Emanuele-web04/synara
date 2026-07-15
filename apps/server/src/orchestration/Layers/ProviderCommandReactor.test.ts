@@ -31,7 +31,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
-import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterValidationError,
+} from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
@@ -41,6 +44,7 @@ import {
 } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
   ProviderService,
@@ -335,6 +339,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const publishBranch = vi.fn(() => Effect.void);
+    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect;
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
@@ -408,7 +413,11 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
-        Layer.succeed(GitCore, { renameBranch, publishBranch } as unknown as GitCoreShape),
+        Layer.succeed(GitCore, {
+          renameBranch,
+          publishBranch,
+          withMutation,
+        } as unknown as GitCoreShape),
       ),
       Layer.provideMerge(
         Layer.succeed(TextGeneration, {
@@ -435,6 +444,9 @@ describe("ProviderCommandReactor", () => {
       Effect.service(QueuedTurnPromotionRepository),
     );
     const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
+    const managedAttachments = await runtime.runPromise(
+      Effect.service(ManagedAttachmentRepository),
+    );
     const pendingInteractionRepository = await runtime.runPromise(
       Effect.service(ProjectionPendingInteractionRepository),
     );
@@ -502,6 +514,50 @@ describe("ProviderCommandReactor", () => {
       captureStudioOutputBaseline,
       cancelPendingStudioOutputBaseline,
       stateDir,
+      stageAttachment: async (attachment: {
+        readonly type: "image" | "file";
+        readonly id: string;
+        readonly name: string;
+        readonly mimeType: string;
+        readonly sizeBytes: number;
+      }) => {
+        const relativePath = attachmentRelativePath(attachment);
+        const attachmentPath = path.join(stateDir, "attachments", relativePath);
+        fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
+        if (!fs.existsSync(attachmentPath)) {
+          fs.writeFileSync(attachmentPath, Buffer.alloc(attachment.sizeBytes));
+        }
+        const stagedAt = new Date().toISOString();
+        await runtime.runPromise(
+          managedAttachments
+            .reserve({
+              attachmentId: attachment.id,
+              ownerThreadId: "thread-1",
+              ownerKind: "local-loopback",
+              ownerId: "local-loopback",
+              kind: attachment.type,
+              originalName: attachment.name,
+              mimeType: attachment.mimeType,
+              reservedBytes: attachment.sizeBytes,
+              relativePath,
+              now: stagedAt,
+            })
+            .pipe(
+              Effect.andThen(
+                managedAttachments.finalizeStaged({
+                  attachmentId: attachment.id,
+                  ownerThreadId: "thread-1",
+                  ownerKind: "local-loopback",
+                  ownerId: "local-loopback",
+                  sizeBytes: attachment.sizeBytes,
+                  sha256: "0".repeat(64),
+                  stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+                  now: stagedAt,
+                }),
+              ),
+            ),
+        );
+      },
       drain,
       emitRuntimeEvent,
       setRuntimeSessionTurnState,
@@ -704,7 +760,7 @@ describe("ProviderCommandReactor", () => {
       harness.deliveryRepository.claim({
         consumerName: "provider-command-reactor.v1",
         eventSequence: threadCreated.sequence,
-        threadId: "thread-1",
+        threadId: ThreadId.makeUnsafe("thread-1"),
         claimOwner: "crashed-process",
         claimedAt: "2020-01-01T00:00:00.000Z",
         claimExpiresAt: "2020-01-01T00:01:00.000Z",
@@ -788,9 +844,7 @@ describe("ProviderCommandReactor", () => {
     const consumerState = await Effect.runPromise(
       harness.deliveryRepository.getConsumerState("provider-command-reactor.v1"),
     );
-    expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(
-      events.at(-1)!.sequence,
-    );
+    expect(consumerState.pipe(Option.getOrThrow).lastAckedSequence).toBe(events.at(-1)!.sequence);
   });
 
   it("REL-01B gate: quarantines one thread and resumes it after explicit safe retry", async () => {
@@ -802,10 +856,7 @@ describe("ProviderCommandReactor", () => {
     let failFirstThreadInterrupt = true;
     const harness = await createHarness({
       interruptTurn: (request) => {
-        if (
-          request.threadId === ThreadId.makeUnsafe("thread-1") &&
-          failFirstThreadInterrupt
-        ) {
+        if (request.threadId === ThreadId.makeUnsafe("thread-1") && failFirstThreadInterrupt) {
           failFirstThreadInterrupt = false;
           return Effect.fail(failure);
         }
@@ -935,7 +986,7 @@ describe("ProviderCommandReactor", () => {
     const reconciliation = await Effect.runPromise(
       harness.reactor.reconcileDelivery({
         eventSequence: blocker.pipe(Option.getOrThrow).eventSequence,
-        threadId: "thread-1",
+        threadId: ThreadId.makeUnsafe("thread-1"),
         expectedState: "uncertain",
         outcome: "safe_retry",
         reconciledBy: "test-operator",
@@ -1806,10 +1857,10 @@ describe("ProviderCommandReactor", () => {
     const now = new Date().toISOString();
     harness.sendTurn.mockImplementationOnce(() =>
       Effect.fail(
-        new ProviderAdapterRequestError({
+        new ProviderAdapterValidationError({
           provider: "droid",
-          method: "session/prompt",
-          detail: "simulated Droid prompt failure",
+          operation: "session/prompt",
+          issue: "simulated Droid prompt preflight failure",
         }),
       ),
     );
@@ -2129,6 +2180,8 @@ describe("ProviderCommandReactor", () => {
       path: "/tmp/project/README.md",
     };
 
+    await harness.stageAttachment(imageAttachment);
+
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2403,6 +2456,7 @@ describe("ProviderCommandReactor", () => {
     );
     fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
     fs.writeFileSync(attachmentPath, Buffer.from([1, 2, 3, 4]));
+    await harness.stageAttachment(imageAttachment);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -5599,10 +5653,11 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () =>
-      (await readHarnessThread(harness))?.activities.some(
-        (activity) => activity.kind === "provider.approval.respond.failed",
-      ) === true,
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.approval.respond.failed",
+        ) === true,
     );
 
     const thread = await readHarnessThread(harness);
@@ -5735,10 +5790,11 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () =>
-      (await readHarnessThread(harness))?.activities.some(
-        (activity) => activity.kind === "provider.user-input.respond.failed",
-      ) === true,
+    await waitFor(
+      async () =>
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ) === true,
     );
 
     const thread = await readHarnessThread(harness);

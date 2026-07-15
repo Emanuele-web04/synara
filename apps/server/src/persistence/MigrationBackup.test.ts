@@ -141,9 +141,9 @@ describe("migration backups", () => {
 
     await expect(
       Effect.runPromise(
-        Layer.build(
-          makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer)),
-        ).pipe(Effect.scoped),
+        Layer.build(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))).pipe(
+          Effect.scoped,
+        ),
       ),
     ).rejects.toThrow(MigrationRecoveryRequiredError);
 
@@ -172,9 +172,7 @@ describe("migration backups", () => {
         const rows = yield* sql<{ readonly value: string }>`SELECT value FROM recovery_probe`;
         return rows[0]?.value;
       }).pipe(
-        Effect.provide(
-          makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer)),
-        ),
+        Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
       ),
     );
     expect(restoredValue).toBe("before-failure");
@@ -204,10 +202,7 @@ describe("migration backups", () => {
           const sql = yield* SqlClient.SqlClient;
           yield* runMigrations({ toMigrationInclusive: 52 });
           yield* sql`CREATE TABLE marker_probe(value TEXT NOT NULL)`;
-          yield* runWithPreMigrationBackup(
-            dbPath,
-            Effect.fail(new Error("leave durable marker")),
-          );
+          yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("leave durable marker")));
         }),
       ),
     ).rejects.toThrow("leave durable marker");
@@ -332,9 +327,7 @@ describe("migration backups", () => {
     const backup = new DatabaseSync(backupPath!, { readOnly: true });
     try {
       expect(
-        backup
-          .prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 17")
-          .get(),
+        backup.prepare("SELECT name FROM effect_sql_migrations WHERE migration_id = 17").get(),
       ).toMatchObject({ name: "ImportedMigration17" });
       expect(backup.prepare("SELECT value FROM imported_probe").get()).toMatchObject({
         value: "imported-state",
@@ -414,9 +407,7 @@ describe("migration backups", () => {
           }
         }
       }).pipe(
-        Effect.provide(
-          makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer)),
-        ),
+        Effect.provide(makeSqlitePersistenceLive(dbPath).pipe(Layer.provide(NodeServices.layer))),
       ),
     );
     expect(await backupPaths(dbPath)).toEqual([]);

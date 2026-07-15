@@ -259,9 +259,8 @@ async function cancelManagedAttachments(attachmentIds: readonly string[]): Promi
   };
 
   await Promise.all(
-    Array.from(
-      { length: Math.min(ATTACHMENT_CANCEL_CONCURRENCY, attachmentIds.length) },
-      () => worker(),
+    Array.from({ length: Math.min(ATTACHMENT_CANCEL_CONCURRENCY, attachmentIds.length) }, () =>
+      worker(),
     ),
   );
 }

@@ -120,9 +120,7 @@ export function assertJsonWithinLimits(
   value: unknown,
   limits: { readonly maxDepth: number; readonly maxNodes: number },
 ): void {
-  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [
-    { value, depth: 0 },
-  ];
+  const stack: Array<{ readonly value: unknown; readonly depth: number }> = [{ value, depth: 0 }];
   const seen = new Set<object>();
   let nodes = 0;
 

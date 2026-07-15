@@ -24,9 +24,7 @@ afterEach(async () => {
 
 function makeRuntime(root: string) {
   const persistence = makeSqlitePersistenceLive(path.join(root, "state.sqlite"));
-  const repository = makeManagedAttachmentRepositoryLive().pipe(
-    Layer.provideMerge(persistence),
-  );
+  const repository = makeManagedAttachmentRepositoryLive().pipe(Layer.provideMerge(persistence));
   return ManagedRuntime.make(
     Layer.mergeAll(
       persistence,
@@ -101,9 +99,7 @@ describe("managed attachment process-loss recovery", () => {
           sizeBytes: 4,
           sha256: "a".repeat(64),
           stagingExpiresAt:
-            attachmentId === ids.staged
-              ? "2020-01-01T00:01:00.000Z"
-              : "2099-01-01T00:00:00.000Z",
+            attachmentId === ids.staged ? "2020-01-01T00:01:00.000Z" : "2099-01-01T00:00:00.000Z",
           now: old,
         }),
       );
@@ -132,9 +128,9 @@ describe("managed attachment process-loss recovery", () => {
         relativePath: relativePath(attachmentId),
       });
       await expect(fs.stat(finalPath!)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        fs.stat(path.join(stagingDir, `${attachmentId}.part`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.join(stagingDir, `${attachmentId}.part`))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }
     const claimedPath = resolveAttachmentRelativePath({
       attachmentsDir,

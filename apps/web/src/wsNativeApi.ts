@@ -193,7 +193,9 @@ async function requestAuthJson<T>(
   return payload as T;
 }
 
-async function requestVoiceTranscriptionUpload(input: Parameters<NativeApi["server"]["transcribeVoice"]>[0]) {
+async function requestVoiceTranscriptionUpload(
+  input: Parameters<NativeApi["server"]["transcribeVoice"]>[0],
+) {
   const params = new URLSearchParams({
     provider: input.provider,
     cwd: input.cwd,

@@ -233,9 +233,7 @@ function decodePersistedEventRow(
       ? metadata[PERSISTED_EVENT_SCHEMA_VERSION_KEY]
       : undefined;
     const schemaVersion =
-      rawSchemaVersion === undefined
-        ? LEGACY_PERSISTED_EVENT_SCHEMA_VERSION
-        : rawSchemaVersion;
+      rawSchemaVersion === undefined ? LEGACY_PERSISTED_EVENT_SCHEMA_VERSION : rawSchemaVersion;
 
     if (
       typeof schemaVersion !== "number" ||
@@ -290,9 +288,7 @@ function decodePersistedEventRow(
 
     return yield* decodeEvent(candidate).pipe(
       Effect.mapError(
-        toPersistenceDecodeError(
-          persistedEventDecodeOperation(operation, row, schemaVersion),
-        ),
+        toPersistenceDecodeError(persistedEventDecodeOperation(operation, row, schemaVersion)),
       ),
     );
   });
@@ -479,10 +475,7 @@ const makeEventStore = Effect.gen(function* () {
           ),
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) =>
-              decodePersistedEventRow(
-                "OrchestrationEventStore.readFromSequence:rowToEvent",
-                row,
-              ),
+              decodePersistedEventRow("OrchestrationEventStore.readFromSequence:rowToEvent", row),
             ),
           ),
         ),

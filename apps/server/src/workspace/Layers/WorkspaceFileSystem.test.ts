@@ -433,9 +433,7 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
         const saved = yield* Effect.promise(() =>
           NodeFs.readFile(path.join(cwd, "existing.txt"), "utf8"),
         );
-        const savedStat = yield* Effect.promise(() =>
-          NodeFs.lstat(path.join(cwd, "existing.txt")),
-        );
+        const savedStat = yield* Effect.promise(() => NodeFs.lstat(path.join(cwd, "existing.txt")));
         expect(saved).toBe("after\n");
         expect(savedStat.isFile()).toBe(true);
       }),

@@ -16,10 +16,7 @@ describe("Codex app-server transport", () => {
     const emojiStart = encoded.indexOf(Buffer.from("😀", "utf8"));
 
     expect(framer.push(encoded.subarray(0, emojiStart + 2))).toEqual([]);
-    expect(framer.push(encoded.subarray(emojiStart + 2))).toEqual([
-      '{"text":"A😀B"}',
-      '{"id":2}',
-    ]);
+    expect(framer.push(encoded.subarray(emojiStart + 2))).toEqual(['{"text":"A😀B"}', '{"id":2}']);
     framer.finish();
     expect(framer.bufferedBytes).toBe(0);
 
@@ -80,11 +77,7 @@ describe("Codex app-server transport", () => {
     expect(stream.chunks.map((chunk) => JSON.parse(chunk.toString("utf8")))).toEqual(messages);
 
     const blockedStream = new ControlledWritable();
-    const blockedWriter = new CodexJsonlWriter(
-      blockedStream as unknown as Writable,
-      64,
-      120,
-    );
+    const blockedWriter = new CodexJsonlWriter(blockedStream as unknown as Writable, 64, 120);
     const blockedWrite = blockedWriter.write({ id: "blocked" });
     blockedWriter.close(new Error("session stopped"));
     await expect(blockedWrite).rejects.toThrow("session stopped");

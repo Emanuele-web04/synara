@@ -106,9 +106,7 @@ function openCodeRuntimePoolTestLayer(state: {
         if (url) state.killUrls.push(url);
         return { escalated: false, signalErrors: [] };
       },
-    }).pipe(
-      Layer.provide(mockPooledOpenCodeServerSpawnerLayer({ ...state, processUrls })),
-    ),
+    }).pipe(Layer.provide(mockPooledOpenCodeServerSpawnerLayer({ ...state, processUrls }))),
     TestClock.layer(),
   );
 }

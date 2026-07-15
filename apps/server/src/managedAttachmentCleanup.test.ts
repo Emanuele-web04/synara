@@ -56,16 +56,16 @@ function makeRepository(job: ManagedAttachmentCleanupJob) {
     markExpiredForCleanup: () => Effect.succeed([]),
     leaseCleanup: () => Effect.succeed([job]),
     compactDeleted: () => Effect.succeed([]),
-    completeCleanup: ({ attachmentId }: Parameters<
-      ManagedAttachmentRepositoryShape["completeCleanup"]
-    >[0]) =>
+    completeCleanup: ({
+      attachmentId,
+    }: Parameters<ManagedAttachmentRepositoryShape["completeCleanup"]>[0]) =>
       Effect.sync(() => {
         completed.push(attachmentId);
         return true;
       }),
-    retryCleanup: ({ attachmentId }: Parameters<
-      ManagedAttachmentRepositoryShape["retryCleanup"]
-    >[0]) =>
+    retryCleanup: ({
+      attachmentId,
+    }: Parameters<ManagedAttachmentRepositoryShape["retryCleanup"]>[0]) =>
       Effect.sync(() => {
         retried.push(attachmentId);
         return true;

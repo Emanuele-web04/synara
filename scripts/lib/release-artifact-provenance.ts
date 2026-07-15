@@ -231,11 +231,7 @@ function verifyMacSignatures(
 
     const diskImagePath = join(input.assetsDirectory, diskImage.fileName);
     runCommand("codesign", ["--verify", "--strict", "--verbose=4", diskImagePath]);
-    const diskImageIdentityOutput = runCommand("codesign", [
-      "-d",
-      "--verbose=4",
-      diskImagePath,
-    ]);
+    const diskImageIdentityOutput = runCommand("codesign", ["-d", "--verbose=4", diskImagePath]);
     const diskImageIdentity = parseMacIdentity(
       `${diskImageIdentityOutput.stdout}\n${diskImageIdentityOutput.stderr}`,
     );
@@ -304,13 +300,7 @@ function verifyWindowsSignatures(
   if (!systemRoot) {
     throw new Error("SystemRoot is required for Windows signature verification.");
   }
-  const powershell = join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
+  const powershell = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const identity: WindowsSignatureEvidence[] = [];
   for (const executable of executables) {
     const executablePath = resolve(input.assetsDirectory, executable.fileName);

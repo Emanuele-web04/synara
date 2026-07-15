@@ -68,13 +68,11 @@ layer("ProviderRuntimeEventRepository", (it) => {
         first.sequence,
       );
       assert.deepStrictEqual(
-        (
-          yield* repository.readAcceptedOpenTurnEvents({
-            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
-            sequenceExclusive: 0,
-            limit: 10,
-          })
-        ).map((row) => row.event.eventId),
+        (yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        })).map((row) => row.event.eventId),
         ["runtime-event-1"],
       );
 

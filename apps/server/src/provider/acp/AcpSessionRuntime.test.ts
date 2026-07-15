@@ -28,14 +28,11 @@ describe("teardownAcpChildProcess", () => {
 
     await Effect.runPromise(
       Effect.addFinalizer(() =>
-        teardownAcpChildProcess(
-          { pid: 4_242, exitCode },
-          async (input) => {
-            observeTeardown(input);
-            await input.rootExited;
-            return { escalated: false, signalErrors: [] };
-          },
-        ),
+        teardownAcpChildProcess({ pid: 4_242, exitCode }, async (input) => {
+          observeTeardown(input);
+          await input.rootExited;
+          return { escalated: false, signalErrors: [] };
+        }),
       ).pipe(Effect.provideService(Scope.Scope, scope)),
     );
 

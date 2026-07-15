@@ -7954,7 +7954,10 @@ export default function ChatView({
     })().catch(async (err: unknown) => {
       // Uploads start in parallel with workspace/session preparation. If any
       // earlier step fails, settle that promise and release every staged blob.
-      await turnAttachmentsPromise.then((staged) => staged.cleanup(), () => undefined);
+      await turnAttachmentsPromise.then(
+        (staged) => staged.cleanup(),
+        () => undefined,
+      );
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
       failLocalDispatchWorktreeSetup();
@@ -8100,9 +8103,7 @@ export default function ChatView({
             err instanceof Error ? err.message : "Failed to submit user input.",
           );
         });
-      setRespondingUserInputRequestKeys((existing) =>
-        existing.filter((key) => key !== requestKey),
-      );
+      setRespondingUserInputRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
     [activeThreadId, setStoreThreadError],
   );

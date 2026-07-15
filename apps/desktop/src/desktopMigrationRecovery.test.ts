@@ -46,9 +46,7 @@ describe("desktop migration recovery", () => {
       isDevelopment: true,
     });
 
-    expect(paths.dbPath).toBe(
-      Path.join(Path.sep, "home", "synara", "dev", "state.sqlite"),
-    );
+    expect(paths.dbPath).toBe(Path.join(Path.sep, "home", "synara", "dev", "state.sqlite"));
   });
 
   it("continues only when the server-owned command clears the durable marker", async () => {
@@ -120,10 +118,7 @@ describe("desktop migration recovery", () => {
   });
 
   it("retries a failed restore and keeps the backend blocked until the user quits", async () => {
-    const choose = vi
-      .fn()
-      .mockResolvedValueOnce("restore")
-      .mockResolvedValueOnce("quit");
+    const choose = vi.fn().mockResolvedValueOnce("restore").mockResolvedValueOnce("quit");
     const requestQuit = vi.fn();
 
     await expect(

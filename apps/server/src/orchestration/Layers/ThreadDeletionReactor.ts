@@ -1,8 +1,5 @@
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
-import {
-  makeDrainableWorker,
-  startDrainableWorkerProducers,
-} from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Stream } from "effect";
 
 import { ProfileStatsArchive } from "../../profileStatsArchive";

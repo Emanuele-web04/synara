@@ -280,13 +280,11 @@ describe("official ACP SDK conformance at the current Synara boundary", () => {
     return Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       yield* runtime.start();
-      const ready = yield* runtime
-        .getEvents()
-        .pipe(
-          Stream.filter((event) => event._tag === "ContentDelta" && event.text === "cancel-ready"),
-          Stream.runHead,
-          Effect.forkChild,
-        );
+      const ready = yield* runtime.getEvents().pipe(
+        Stream.filter((event) => event._tag === "ContentDelta" && event.text === "cancel-ready"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
       const prompt = yield* runtime
         .prompt({ prompt: [{ type: "text", text: "wait-for-cancel" }] })
         .pipe(Effect.forkChild);
@@ -314,10 +312,8 @@ describe("official ACP SDK conformance at the current Synara boundary", () => {
       const runtime = yield* AcpSessionRuntime;
       const ready = yield* Deferred.make<void>();
       const observed = yield* Deferred.make<void>();
-      yield* runtime.handleExtNotification(
-        "conformance/generic-cancel-ready",
-        Schema.Unknown,
-        () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      yield* runtime.handleExtNotification("conformance/generic-cancel-ready", Schema.Unknown, () =>
+        Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
       );
       yield* runtime.handleExtNotification(
         "conformance/generic-cancel-observed",
@@ -336,10 +332,7 @@ describe("official ACP SDK conformance at the current Synara boundary", () => {
         readFixtureLog(logPath)
           .filter((entry) => entry.type.startsWith("conformance/"))
           .map((entry) => entry.type),
-      ).toEqual([
-        "conformance/wait-for-generic-cancel",
-        "conformance/generic-cancel-observed",
-      ]);
+      ).toEqual(["conformance/wait-for-generic-cancel", "conformance/generic-cancel-observed"]);
     }).pipe(
       Effect.provide(runtimeLayer(logPath)),
       Effect.scoped,
@@ -365,9 +358,11 @@ describe("official ACP SDK client against the official SDK mock agent", () => {
     const stderrChunks: Buffer[] = [];
     const agentWireChunks: Uint8Array[] = [];
     child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      },
+    );
     let workflowCompleted = false;
     try {
       const agentOutput = captureByteStream(
@@ -496,10 +491,7 @@ describe("official ACP SDK client against the official SDK mock agent", () => {
       const exit = await exited;
       if (workflowCompleted) {
         expect(exit).toEqual({ code: 0, signal: null });
-        expect(readFileSync(exitLogPath, "utf8").trim().split("\n")).toEqual([
-          "SIGTERM",
-          "exit:0",
-        ]);
+        expect(readFileSync(exitLogPath, "utf8").trim().split("\n")).toEqual(["SIGTERM", "exit:0"]);
         expect(Buffer.concat(stderrChunks).toString("utf8")).toBe("");
       }
     }
@@ -576,6 +568,7 @@ describe("official ACP SDK byte-stream characterization", () => {
       const item = await reader.read();
       if (item.done) break;
       received += 1;
+      if (!("params" in item.value)) throw new Error("Expected ACP notification params");
       lastSequence = (item.value.params as { sequence: number }).sequence;
     }
 

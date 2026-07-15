@@ -1649,9 +1649,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "turn.aborted",
     ]);
     expect(
-      result.events.every(
-        (event) => event.lifecycleGeneration === "generation-opencode-a",
-      ),
+      result.events.every((event) => event.lifecycleGeneration === "generation-opencode-a"),
     ).toBe(true);
     expect(result.events[3]).toMatchObject({
       type: "turn.aborted",

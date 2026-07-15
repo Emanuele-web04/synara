@@ -189,15 +189,16 @@ function parsePorcelainV2Records(stdout: string): Array<{ record: string; path: 
   for (let index = 0; index < rawRecords.length; index += 1) {
     const record = rawRecords[index] ?? "";
     if (record.length === 0) continue;
-    const path = record.startsWith("? ") || record.startsWith("! ")
-      ? record.slice(2)
-      : record.startsWith("1 ")
-        ? porcelainPathAfterFields(record, 8)
-        : record.startsWith("2 ")
-          ? porcelainPathAfterFields(record, 9)
-          : record.startsWith("u ")
-            ? porcelainPathAfterFields(record, 10)
-            : null;
+    const path =
+      record.startsWith("? ") || record.startsWith("! ")
+        ? record.slice(2)
+        : record.startsWith("1 ")
+          ? porcelainPathAfterFields(record, 8)
+          : record.startsWith("2 ")
+            ? porcelainPathAfterFields(record, 9)
+            : record.startsWith("u ")
+              ? porcelainPathAfterFields(record, 10)
+              : null;
     records.push({ record, path });
     if (record.startsWith("2 ")) index += 1;
   }
@@ -1519,11 +1520,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         const numstatOutputs = yield* Effect.all(
           [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, [
-              "diff",
-              "--numstat",
-              "-z",
-            ]),
+            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat", "-z"]),
             runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
               "diff",
               "--cached",

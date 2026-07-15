@@ -3,12 +3,7 @@ import type { Effect } from "effect";
 
 import type { PersistenceSqlError } from "../Errors.ts";
 
-export type ManagedAttachmentState =
-  | "uploading"
-  | "staged"
-  | "claimed"
-  | "deleting"
-  | "deleted";
+export type ManagedAttachmentState = "uploading" | "staged" | "claimed" | "deleting" | "deleted";
 
 export interface ManagedAttachmentBlob {
   readonly attachmentId: string;

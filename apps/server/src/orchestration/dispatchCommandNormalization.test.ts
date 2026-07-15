@@ -244,36 +244,36 @@ describe("makeDispatchCommandNormalizer", () => {
     try {
       const result = await Effect.runPromise(
         normalizer({
-            command: {
-              type: "thread.turn.start",
-              commandId: CommandId.makeUnsafe("cmd-turn-attachments"),
-              threadId: ThreadId.makeUnsafe("thread-rollback-attachments"),
-              message: {
-                messageId: MessageId.makeUnsafe("msg-attachments"),
-                role: "user",
-                text: "send files",
-                attachments: [
-                  {
-                    type: "image",
-                    id: validId,
-                    name: "ok.png",
-                    mimeType: "image/png",
-                    sizeBytes: 1,
-                  },
-                  {
-                    type: "image",
-                    id: "thread-rollback-attachments-22222222-2222-4222-8222-222222222222",
-                    name: "bad.png",
-                    mimeType: "image/png",
-                    sizeBytes: 1,
-                  },
-                ],
-              },
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              createdAt: "2026-01-01T00:00:00.000Z",
-            } satisfies Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>,
-          }),
+          command: {
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("cmd-turn-attachments"),
+            threadId: ThreadId.makeUnsafe("thread-rollback-attachments"),
+            message: {
+              messageId: MessageId.makeUnsafe("msg-attachments"),
+              role: "user",
+              text: "send files",
+              attachments: [
+                {
+                  type: "image",
+                  id: validId,
+                  name: "ok.png",
+                  mimeType: "image/png",
+                  sizeBytes: 1,
+                },
+                {
+                  type: "image",
+                  id: "thread-rollback-attachments-22222222-2222-4222-8222-222222222222",
+                  name: "bad.png",
+                  mimeType: "image/png",
+                  sizeBytes: 1,
+                },
+              ],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          } satisfies Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>,
+        }),
       );
 
       expect(result.command.type).toBe("thread.turn.start");

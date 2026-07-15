@@ -21,16 +21,17 @@ const columns = (sql: SqlClient.SqlClient) => sql`
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const getBySequence: QueuedTurnPromotionRepositoryShape["getBySequence"] =
-    (queuedEventSequence) =>
-      sql<QueuedTurnPromotion>`
+  const getBySequence: QueuedTurnPromotionRepositoryShape["getBySequence"] = (
+    queuedEventSequence,
+  ) =>
+    sql<QueuedTurnPromotion>`
         SELECT ${columns(sql)}
         FROM queued_turn_promotions
         WHERE queued_event_sequence = ${queuedEventSequence}
       `.pipe(
-        Effect.map((rows) => Option.fromNullishOr(rows[0])),
-        Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.getBySequence")),
-      );
+      Effect.map((rows) => Option.fromNullishOr(rows[0])),
+      Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.getBySequence")),
+    );
 
   const enqueue: QueuedTurnPromotionRepositoryShape["enqueue"] = (input) =>
     sql`
@@ -56,15 +57,13 @@ const make = Effect.gen(function* () {
         promoted_at = NULL
       WHERE queued_turn_promotions.state IN ('promoted', 'cancelled')
         AND excluded.queued_event_sequence > queued_turn_promotions.queued_event_sequence
-    `.pipe(
-      Effect.asVoid,
-      Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.enqueue")),
-    );
+    `.pipe(Effect.asVoid, Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.enqueue")));
 
   const claimNext: QueuedTurnPromotionRepositoryShape["claimNext"] = (input) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
           UPDATE queued_turn_promotions
           SET state = 'queued', claim_owner = NULL, claimed_at = NULL,
               claim_expires_at = NULL, updated_at = ${input.claimedAt}
@@ -75,7 +74,7 @@ const make = Effect.gen(function* () {
               OR claim_owner <> ${input.claimOwner}
             )
         `;
-        const candidates = yield* sql<{ readonly queuedEventSequence: number }>`
+          const candidates = yield* sql<{ readonly queuedEventSequence: number }>`
           SELECT queued_event_sequence AS "queuedEventSequence"
           FROM queued_turn_promotions
           WHERE thread_id = ${input.threadId} AND state = 'queued'
@@ -85,9 +84,9 @@ const make = Effect.gen(function* () {
             queued_event_sequence ASC
           LIMIT 1
         `;
-        const sequence = candidates[0]?.queuedEventSequence;
-        if (sequence === undefined) return Option.none<QueuedTurnPromotion>();
-        const rows = yield* sql<QueuedTurnPromotion>`
+          const sequence = candidates[0]?.queuedEventSequence;
+          if (sequence === undefined) return Option.none<QueuedTurnPromotion>();
+          const rows = yield* sql<QueuedTurnPromotion>`
           UPDATE queued_turn_promotions
           SET state = 'promoting', claim_owner = ${input.claimOwner},
               claimed_at = ${input.claimedAt}, claim_expires_at = ${input.claimExpiresAt},
@@ -95,9 +94,10 @@ const make = Effect.gen(function* () {
           WHERE queued_event_sequence = ${sequence} AND state = 'queued'
           RETURNING ${columns(sql)}
         `;
-        return Option.fromNullishOr(rows[0]);
-      }),
-    ).pipe(Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.claimNext")));
+          return Option.fromNullishOr(rows[0]);
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("QueuedTurnPromotion.claimNext")));
 
   const markPromoted: QueuedTurnPromotionRepositoryShape["markPromoted"] = (input) =>
     sql<{ readonly sequence: number }>`
@@ -183,7 +183,4 @@ const make = Effect.gen(function* () {
   } satisfies QueuedTurnPromotionRepositoryShape;
 });
 
-export const QueuedTurnPromotionRepositoryLive = Layer.effect(
-  QueuedTurnPromotionRepository,
-  make,
-);
+export const QueuedTurnPromotionRepositoryLive = Layer.effect(QueuedTurnPromotionRepository, make);

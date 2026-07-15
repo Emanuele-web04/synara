@@ -232,8 +232,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
 
         const fs = yield* FileSystem.FileSystem;
         const baseDir =
-          typeof baseDirOrPrefix === "string" &&
-          path.resolve(baseDirOrPrefix) !== path.resolve(cwd)
+          typeof baseDirOrPrefix === "string" && path.resolve(baseDirOrPrefix) !== path.resolve(cwd)
             ? baseDirOrPrefix
             : yield* fs.makeTempDirectoryScoped({
                 prefix:

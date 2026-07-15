@@ -277,16 +277,14 @@ export function collectThreadAttentionCandidates(
     }
 
     const previousApprovalIds = new Set(
-      derivePendingApprovals(
-        previousThread.activities,
-        previousThread.pendingInteractions,
-      ).map((approval) => approval.requestId),
+      derivePendingApprovals(previousThread.activities, previousThread.pendingInteractions).map(
+        (approval) => approval.requestId,
+      ),
     );
     const previousUserInputIds = new Set(
-      derivePendingUserInputs(
-        previousThread.activities,
-        previousThread.pendingInteractions,
-      ).map((request) => request.requestId),
+      derivePendingUserInputs(previousThread.activities, previousThread.pendingInteractions).map(
+        (request) => request.requestId,
+      ),
     );
 
     for (const approval of derivePendingApprovals(thread.activities, thread.pendingInteractions)) {

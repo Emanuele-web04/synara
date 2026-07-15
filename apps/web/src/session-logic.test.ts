@@ -88,10 +88,12 @@ describe("derivePendingApprovals", () => {
       }),
     ];
 
-    expect(derivePendingApprovals(activities, [makePendingInteraction("approval", "responding")]))
-      .toEqual([]);
-    expect(derivePendingApprovals(activities, [makePendingInteraction("approval", "uncertain")]))
-      .toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "responding")]),
+    ).toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "uncertain")]),
+    ).toEqual([]);
     expect(
       derivePendingApprovals(activities, [makePendingInteraction("approval", "retryable")]),
     ).toHaveLength(1);

@@ -152,13 +152,11 @@ function rawSocketUrl(explicitUrl: string | null): string {
   if (explicitUrl) return explicitUrl;
   const bridgeUrl = window.desktopBridge?.getWsUrl();
   const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  return (
-    bridgeUrl && bridgeUrl.length > 0
-      ? bridgeUrl
-      : envUrl && envUrl.length > 0
-        ? envUrl
-        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`
-  );
+  return bridgeUrl && bridgeUrl.length > 0
+    ? bridgeUrl
+    : envUrl && envUrl.length > 0
+      ? envUrl
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
 }
 
 function makeSocketUrl(explicitUrl: string | null, path: string): string {
@@ -171,18 +169,12 @@ export function makeFeatureSocketUrl(
 ): string {
   const url = new URL(makeSocketUrl(explicitUrl, WS_FEATURE_PATH));
   url.searchParams.set(WS_COMPATIBILITY_QUERY.clientBuild, APP_VERSION);
-  url.searchParams.set(
-    WS_COMPATIBILITY_QUERY.protocolEpoch,
-    String(compatibility.protocolEpoch),
-  );
+  url.searchParams.set(WS_COMPATIBILITY_QUERY.protocolEpoch, String(compatibility.protocolEpoch));
   url.searchParams.set(
     WS_COMPATIBILITY_QUERY.protocolRevision,
     String(compatibility.negotiatedRevision),
   );
-  url.searchParams.set(
-    WS_COMPATIBILITY_QUERY.serverInstanceId,
-    compatibility.serverInstanceId,
-  );
+  url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
   return url.toString();
 }
 
@@ -278,9 +270,7 @@ export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
   private readonly stateListeners = new Set<(state: WsTransportState) => void>();
-  private readonly compatibilityListeners = new Set<
-    (issue: WsCompatibilityError | null) => void
-  >();
+  private readonly compatibilityListeners = new Set<(issue: WsCompatibilityError | null) => void>();
   private readonly latestPushByChannel = new Map<string, WsPush>();
   private sequence = 0;
   private sessionVersion = 0;
@@ -507,9 +497,7 @@ export class WsTransport {
       const featureScope = featureRuntime.runSync(Scope.make());
       this.runtime = featureRuntime;
       this.clientScope = featureScope;
-      const client = await featureRuntime.runPromise(
-        Scope.provide(featureScope)(makeRpcClient),
-      );
+      const client = await featureRuntime.runPromise(Scope.provide(featureScope)(makeRpcClient));
       if (!this.disposed && this.sessionVersion === sessionVersion) {
         if (
           this.compatibility &&
@@ -837,11 +825,7 @@ export class WsTransport {
           if (wasReplacedOrStopped || this.disposed) {
             return;
           }
-          if (
-            restart &&
-            Exit.isFailure(exit) &&
-            shouldReconnectAfterStreamFailure(exit.cause)
-          ) {
+          if (restart && Exit.isFailure(exit) && shouldReconnectAfterStreamFailure(exit.cause)) {
             window.setTimeout(
               () => {
                 if (!this.disposed && !this.streamCleanups.has(key)) {

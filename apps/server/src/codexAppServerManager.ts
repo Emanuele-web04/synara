@@ -1761,10 +1761,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     context.stopping = true;
 
-    this.rejectPendingRequests(
-      context,
-      new Error("Session stopped before request completed."),
-    );
+    this.rejectPendingRequests(context, new Error("Session stopped before request completed."));
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
 
@@ -1803,7 +1800,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       result.status === "rejected" ? [result.reason] : [],
     );
     if (failures.length > 0) {
-      throw new AggregateError(failures, "One or more Codex app-server process trees did not exit.");
+      throw new AggregateError(
+        failures,
+        "One or more Codex app-server process trees did not exit.",
+      );
     }
   }
 
@@ -2216,7 +2216,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.child.stdout.off("data", onStdoutData);
       context.child.stdout.off("end", onStdoutEnd);
       context.stdoutFramer.reset();
-      context.detachStdout = undefined;
+      delete context.detachStdout;
     };
 
     context.child.stderr.on("data", (chunk: Buffer) => {

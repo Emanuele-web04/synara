@@ -84,9 +84,7 @@ describe("thread shell event relevance", () => {
       true,
     );
     expect(
-      shouldApplyDeferredThreadShellSummary(
-        messageEvent({ role: "user", streaming: false }),
-      ),
+      shouldApplyDeferredThreadShellSummary(messageEvent({ role: "user", streaming: false })),
     ).toBe(true);
     expect(
       shouldPublishThreadShellForEvent(messageEvent({ role: "assistant", streaming: false })),

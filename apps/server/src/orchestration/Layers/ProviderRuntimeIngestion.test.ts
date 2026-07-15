@@ -16,7 +16,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
-  ProviderItemId,
+  RuntimeItemId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -51,7 +51,7 @@ import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
-const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
+const asItemId = (value: string): RuntimeItemId => RuntimeItemId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -107,8 +107,7 @@ function createProviderServiceHarness() {
   };
 
   const emit = (event: LegacyProviderRuntimeEvent): void => {
-    const canonicalEvent =
-      event.payload === undefined ? { ...event, payload: {} } : event;
+    const canonicalEvent = event.payload === undefined ? { ...event, payload: {} } : event;
     Effect.runSync(
       PubSub.publish(runtimeEventPubSub, canonicalEvent as unknown as ProviderRuntimeEvent),
     );
@@ -152,9 +151,7 @@ type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][nu
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    | OrchestrationEngineService
-    | ProviderRuntimeIngestionService
-    | ProviderRuntimeEventRepository,
+    OrchestrationEngineService | ProviderRuntimeIngestionService | ProviderRuntimeEventRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -333,9 +330,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       await Effect.runPromise(
-        harness.runtimeEventRepository.getConsumerCursor(
-          PROVIDER_RUNTIME_INGESTION_CONSUMER,
-        ),
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
       ),
     ).toBe(persisted.sequence);
 
@@ -346,9 +341,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(recoveredActivities).toHaveLength(1);
     expect(
       await Effect.runPromise(
-        harness.runtimeEventRepository.getConsumerCursor(
-          PROVIDER_RUNTIME_INGESTION_CONSUMER,
-        ),
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
       ),
     ).toBe(persisted.sequence);
   });
@@ -370,9 +363,7 @@ describe("ProviderRuntimeIngestion", () => {
         delta: "buffered before restart",
       },
     };
-    const persisted = await Effect.runPromise(
-      harness.runtimeEventRepository.append(bufferedEvent),
-    );
+    const persisted = await Effect.runPromise(harness.runtimeEventRepository.append(bufferedEvent));
     expect(
       await Effect.runPromise(
         harness.runtimeEventRepository.advanceConsumerCursor({
@@ -429,9 +420,7 @@ describe("ProviderRuntimeIngestion", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.message.assistant.delta",
-        commandId: CommandId.makeUnsafe(
-          `provider:${event.eventId}:assistant-delta:${messageId}`,
-        ),
+        commandId: CommandId.makeUnsafe(`provider:${event.eventId}:assistant-delta:${messageId}`),
         threadId: asThreadId("thread-1"),
         messageId,
         delta: "streamed once",
@@ -468,9 +457,7 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.messages.some((message) => message.id === messageId && message.streaming === false),
     );
-    expect(thread.messages.find((message) => message.id === messageId)?.text).toBe(
-      "streamed once",
-    );
+    expect(thread.messages.find((message) => message.id === messageId)?.text).toBe("streamed once");
   });
 
   it("maps turn started/completed events into thread session updates", async () => {
@@ -3239,8 +3226,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       streamingThread.messages.find(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-overlap-streaming",
+        (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-overlap-streaming",
       )?.streaming,
     ).toBe(true);
 
@@ -3248,8 +3234,7 @@ describe("ProviderRuntimeIngestion", () => {
     const bufferedThread = readModel.threads.find((thread) => thread.id === secondThreadId);
     expect(
       bufferedThread?.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-overlap-buffered",
+        (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-overlap-buffered",
       ),
     ).toBe(false);
 
@@ -3278,8 +3263,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(
       completedBufferedThread.messages.find(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-overlap-buffered",
+        (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-overlap-buffered",
       )?.streaming,
     ).toBe(false);
 

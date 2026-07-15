@@ -3,7 +3,12 @@
 // Layer: Desktop update runtime
 // Exports: updater patching, shell-free PowerShell signature verification helpers.
 
-import { execFile, spawnSync, type ExecFileException, type ExecFileOptions } from "node:child_process";
+import {
+  execFile,
+  spawnSync,
+  type ExecFileException,
+  type ExecFileOptions,
+} from "node:child_process";
 import * as Path from "node:path";
 
 import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
@@ -223,11 +228,7 @@ function parseSignatureOutput(out: string): Record<string, unknown> {
   return data;
 }
 
-function handleSignatureError(
-  logger: Logger,
-  error: unknown,
-  stderr: string | null,
-): string {
+function handleSignatureError(logger: Logger, error: unknown, stderr: string | null): string {
   const detail =
     error instanceof Error
       ? error.message

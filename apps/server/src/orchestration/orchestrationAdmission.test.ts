@@ -9,10 +9,10 @@ describe("orchestration command admission", () => {
       Effect.gen(function* () {
         const queue = yield* Queue.bounded<string>(4);
         const policy = { capacity: 4, reservedCapacity: 1 } as const;
-        const admit = (envelope: string, commandType: Parameters<
-          typeof tryAdmitOrchestrationCommand<string>
-        >[0]["commandType"]) =>
-          tryAdmitOrchestrationCommand({ queue, envelope, commandType, policy });
+        const admit = (
+          envelope: string,
+          commandType: Parameters<typeof tryAdmitOrchestrationCommand<string>>[0]["commandType"],
+        ) => tryAdmitOrchestrationCommand({ queue, envelope, commandType, policy });
 
         expect(admit("normal-1", "project.create")).toEqual({ accepted: true });
         expect(admit("normal-2", "project.create")).toEqual({ accepted: true });

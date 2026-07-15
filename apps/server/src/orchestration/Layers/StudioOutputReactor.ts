@@ -26,10 +26,7 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
-import {
-  makeDrainableWorker,
-  startDrainableWorkerProducers,
-} from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";

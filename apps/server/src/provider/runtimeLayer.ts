@@ -1,15 +1,12 @@
-import { Effect, FileSystem, Layer, Path } from "effect";
-import { ChildProcessSpawner } from "effect/unstable/process";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { Effect, Layer } from "effect";
 
 import { ServerConfig } from "../config";
 import {
+  makeProviderServerPasswordResolver,
+  ProviderCredentials,
   ProviderCredentialsLive,
-  resolveProviderServerPassword,
 } from "../providerCredentials";
 import { ServerSettingsLive } from "../serverSettings";
-import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
-import { ProviderUnsupportedError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
@@ -23,24 +20,13 @@ import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
-import { ProviderAdapterRegistry } from "./Services/ProviderAdapterRegistry";
-import { ProviderDiscoveryService } from "./Services/ProviderDiscoveryService";
-import { ProviderService } from "./Services/ProviderService";
-import { ProviderSessionDirectory } from "./Services/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
 import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/ProviderRuntimeEvents";
 
-export function makeServerProviderLayer(): Layer.Layer<
-  ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry | ProviderSessionDirectory,
-  ProviderUnsupportedError,
-  | SqlClient.SqlClient
-  | ServerConfig
-  | FileSystem.FileSystem
-  | Path.Path
-  | AnalyticsService
-  | ChildProcessSpawner.ChildProcessSpawner
-> {
+export function makeServerProviderLayer() {
   return Effect.gen(function* () {
+    const credentials = yield* ProviderCredentials;
+    const resolveProviderServerPassword = makeProviderServerPasswordResolver(credentials);
     const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
     const nativeEventLogger = logProviderEvents
       ? yield* makeEventNdjsonLogger(providerEventLogPath, {
@@ -64,11 +50,11 @@ export function makeServerProviderLayer(): Layer.Layer<
     const openCodeAdapterLayer = makeOpenCodeAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
-    }).pipe(Layer.provide(ProviderCredentialsLive));
+    });
     const kiloAdapterLayer = makeKiloAdapterLive({
       ...(nativeEventLogger ? { nativeEventLogger } : {}),
       resolveServerPassword: resolveProviderServerPassword,
-    }).pipe(Layer.provide(ProviderCredentialsLive));
+    });
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
@@ -116,5 +102,5 @@ export function makeServerProviderLayer(): Layer.Layer<
       adapterRegistryLayer,
       providerSessionDirectoryLayer,
     );
-  }).pipe(Layer.unwrap);
+  }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 }

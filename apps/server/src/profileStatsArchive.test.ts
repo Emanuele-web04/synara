@@ -493,12 +493,10 @@ describe("ProfileStatsArchive", () => {
           )
         `;
 
-        expect(
-          yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }),
-        ).toBe(true);
-        expect(
-          yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" }),
-        ).toBe(false);
+        expect(yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" })).toBe(true);
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          false,
+        );
         const retained = yield* sql<{ readonly threads: number; readonly deliveries: number }>`
           SELECT
             (SELECT COUNT(*) FROM projection_threads WHERE thread_id = 'thread-purge') AS threads,
@@ -529,12 +527,10 @@ describe("ProfileStatsArchive", () => {
           )
         `;
 
-        expect(
-          yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" }),
-        ).toBe(false);
-        expect(
-          yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" }),
-        ).toBe(true);
+        expect(yield* archive.hasThreadPurgeFence({ threadId: "thread-purge" })).toBe(false);
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          true,
+        );
         const purgedEvidence = yield* sql<{
           readonly deliveries: number;
           readonly promotions: number;

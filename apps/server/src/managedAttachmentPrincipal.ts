@@ -14,11 +14,10 @@ export const LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL: ManagedAttachmentPrincipal = {
  * It is inherited by RPC handler fibers and never enters public commands or
  * persisted orchestration events.
  */
-export const CurrentManagedAttachmentPrincipal =
-  ServiceMap.Reference<ManagedAttachmentPrincipal>(
-    "synara/attachments/CurrentManagedAttachmentPrincipal",
-    { defaultValue: () => LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL },
-  );
+export const CurrentManagedAttachmentPrincipal = ServiceMap.Reference<ManagedAttachmentPrincipal>(
+  "synara/attachments/CurrentManagedAttachmentPrincipal",
+  { defaultValue: () => LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL },
+);
 
 export function attachmentPrincipalForSession(sessionId: string): ManagedAttachmentPrincipal {
   return { ownerKind: "session", ownerId: sessionId };

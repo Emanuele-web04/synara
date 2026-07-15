@@ -1,5 +1,5 @@
 import { Config, Effect, Option, Schema } from "effect";
-import { CliError, Flag, type Param } from "effect/unstable/cli";
+import { CliError, Flag } from "effect/unstable/cli";
 
 export interface OptionalBooleanFlagOptions {
   readonly description?: string;
@@ -16,8 +16,7 @@ export interface BooleanFlagInput {
 /** Preserves missing values while still rejecting malformed boolean text. */
 export const optionalBooleanEnvironmentConfig = (
   name: string,
-): Config.Config<boolean | undefined> =>
-  Config.schema(Schema.optional(Config.Boolean), name);
+): Config.Config<boolean | undefined> => Config.schema(Schema.optional(Config.Boolean), name);
 
 const requiredBooleanFlag = (
   name: string,
@@ -33,7 +32,7 @@ const requiredBooleanFlag = (
 
   const parse = flag.parse;
   return Object.assign(Object.create(Object.getPrototypeOf(flag)), flag, {
-    parse: (args: Param.ParsedArgs) =>
+    parse: (args: Parameters<typeof parse>[0]) =>
       (args.flags[name]?.length ?? 0) > 0
         ? parse(args)
         : Effect.fail(new CliError.MissingOption({ option: name })),

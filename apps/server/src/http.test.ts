@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,15 +103,15 @@ const projectFaviconResolver: ProjectFaviconResolverShape = {
   resolvePath: () => Effect.succeed(null),
 };
 
-type TestedRouteLayer =
-  | ReturnType<typeof makeHealthEffectRouteLayer>
-  | typeof staticAndDevEffectRouteLayer
-  | typeof projectFaviconEffectRouteLayer
-  | typeof editorIconEffectRouteLayer;
+type TestedRoute =
+  | { readonly kind: "health"; readonly readiness: typeof readiness }
+  | { readonly kind: "static" }
+  | { readonly kind: "favicon" }
+  | { readonly kind: "editor-icon" };
 
 async function withEffectServer(
   config: ServerConfigShape,
-  routeLayer: TestedRouteLayer,
+  route: TestedRoute,
   run: (origin: string) => Promise<void>,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -128,15 +127,24 @@ async function withEffectServer(
             },
             { port: 0, host: "127.0.0.1" },
           );
-          const httpApp = yield* HttpRouter.toHttpEffect(routeLayer);
-          yield* httpServer.serve(httpApp);
+          if (route.kind === "static") {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(staticAndDevEffectRouteLayer));
+          } else if (route.kind === "favicon") {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
+          } else if (route.kind === "editor-icon") {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(editorIconEffectRouteLayer));
+          } else {
+            yield* httpServer.serve(
+              yield* HttpRouter.toHttpEffect(makeHealthEffectRouteLayer(route.readiness)),
+            );
+          }
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
               Layer.succeed(ServerAuth, serverAuth),
               Layer.succeed(ProjectFaviconResolver, projectFaviconResolver),
-              NodeServices.layer,
+              NodeHttpServer.layerHttpServices,
             ),
           ),
         ),
@@ -175,7 +183,7 @@ describe("production Effect HTTP routes", () => {
   });
 
   it("serves readiness through the deployed health route", async () => {
-    await withEffectServer(makeConfig(), makeHealthEffectRouteLayer(readiness), async (origin) => {
+    await withEffectServer(makeConfig(), { kind: "health", readiness }, async (origin) => {
       const response = await fetch(`${origin}/health`);
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
@@ -189,7 +197,7 @@ describe("production Effect HTTP routes", () => {
   it("preserves dev redirect, static file, and SPA fallback behavior", async () => {
     await withEffectServer(
       makeConfig({ devUrl: new URL("http://localhost:5173/") }),
-      staticAndDevEffectRouteLayer,
+      { kind: "static" },
       async (origin) => {
         const response = await fetch(`${origin}/chat`, { redirect: "manual" });
         expect(response.status).toBe(302);
@@ -201,35 +209,29 @@ describe("production Effect HTTP routes", () => {
     mkdirSync(path.join(staticDir, "assets"), { recursive: true });
     writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
     writeFileSync(path.join(staticDir, "assets", "app.js"), "globalThis.synara = true;");
-    await withEffectServer(
-      makeConfig({ staticDir }),
-      staticAndDevEffectRouteLayer,
-      async (origin) => {
-        const asset = await fetch(`${origin}/assets/app.js`);
-        expect(asset.status).toBe(200);
-        await expect(asset.text()).resolves.toContain("globalThis.synara");
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      const asset = await fetch(`${origin}/assets/app.js`);
+      expect(asset.status).toBe(200);
+      await expect(asset.text()).resolves.toContain("globalThis.synara");
 
-        const fallback = await fetch(`${origin}/chat/thread-id`);
-        expect(fallback.status).toBe(200);
-        expect(fallback.headers.get("content-type")).toContain("text/html");
-        await expect(fallback.text()).resolves.toContain("Synara shell");
-      },
-    );
+      const fallback = await fetch(`${origin}/chat/thread-id`);
+      expect(fallback.status).toBe(200);
+      expect(fallback.headers.get("content-type")).toContain("text/html");
+      await expect(fallback.text()).resolves.toContain("Synara shell");
+    });
   });
 
   it("uses the deployed favicon and editor-icon routes before static fallback", async () => {
-    await withEffectServer(makeConfig(), projectFaviconEffectRouteLayer, async (origin) => {
+    await withEffectServer(makeConfig(), { kind: "favicon" }, async (origin) => {
       const fallback = await fetch(`${origin}/api/project-favicon?cwd=/missing`);
       expect(fallback.status).toBe(200);
       expect(fallback.headers.get("content-type")).toContain("image/svg+xml");
 
-      const noFallback = await fetch(
-        `${origin}/api/project-favicon?cwd=/missing&fallback=none`,
-      );
+      const noFallback = await fetch(`${origin}/api/project-favicon?cwd=/missing&fallback=none`);
       expect(noFallback.status).toBe(204);
     });
 
-    await withEffectServer(makeConfig(), editorIconEffectRouteLayer, async (origin) => {
+    await withEffectServer(makeConfig(), { kind: "editor-icon" }, async (origin) => {
       const response = await fetch(`${origin}/api/editor-icon`);
       expect(response.status).toBe(400);
       await expect(response.text()).resolves.toBe("Missing id parameter");

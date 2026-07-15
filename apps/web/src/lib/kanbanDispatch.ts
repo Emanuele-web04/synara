@@ -269,7 +269,10 @@ async function dispatchKanbanDraftThreadOnce(
         api,
       );
       if (promotion === "unavailable") {
-        await turnAttachmentsPromise.then((staged) => staged.cleanup(), () => undefined);
+        await turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
         kanbanUi.clearOptimisticDispatch(threadId);
         return { kind: "unavailable" };
       }
@@ -307,7 +310,10 @@ async function dispatchKanbanDraftThreadOnce(
       }),
     );
   } catch (error) {
-    await turnAttachmentsPromise.then((staged) => staged.cleanup(), () => undefined);
+    await turnAttachmentsPromise.then(
+      (staged) => staged.cleanup(),
+      () => undefined,
+    );
     kanbanUi.clearOptimisticDispatch(threadId);
     return {
       kind: "error",

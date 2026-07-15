@@ -123,8 +123,9 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = Schema.decodeSync(ServerS
 export const ServerSettingsView = ServerSettings;
 export type ServerSettingsView = typeof ServerSettingsView.Type;
 
-export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView =
-  Schema.decodeSync(ServerSettingsView)({});
+export const DEFAULT_SERVER_SETTINGS_VIEW: ServerSettingsView = Schema.decodeSync(
+  ServerSettingsView,
+)({});
 
 const ModelSelectionPatch = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),

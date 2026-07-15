@@ -113,7 +113,8 @@ export class ServerSettingsService extends ServiceMap.Service<
             })),
           ),
           updateSettings,
-          updateSettingsView: (patch) => updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
+          updateSettingsView: (patch) =>
+            updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
           get streamChanges() {
             return Stream.fromPubSub(changesPubSub).pipe(Stream.map(resolveTextGenerationProvider));
           },
@@ -178,9 +179,7 @@ const EXTERNAL_SERVER_PROVIDERS = ["kilo", "opencode"] as const;
 function readLegacyProviderPasswords(raw: string): ReadonlyMap<ExternalProviderServer, string> {
   try {
     const parsed = JSON.parse(raw) as {
-      providers?: Partial<
-        Record<ExternalProviderServer, { readonly serverPassword?: unknown }>
-      >;
+      providers?: Partial<Record<ExternalProviderServer, { readonly serverPassword?: unknown }>>;
     };
     const passwords = new Map<ExternalProviderServer, string>();
     for (const provider of EXTERNAL_SERVER_PROVIDERS) {
@@ -416,41 +415,41 @@ const makeServerSettings = Effect.gen(function* () {
   const getSettings = Ref.get(settingsRef).pipe(Effect.map(resolveTextGenerationProvider));
   const updateSettings = (patch: ServerSettingsPatch) =>
     writeSemaphore.withPermits(1)(
-        Effect.gen(function* () {
-          const disk = yield* loadSettingsFromDisk;
-          const current = disk.settings;
-          for (const provider of EXTERNAL_SERVER_PROVIDERS) {
-            const password = patch.providers?.[provider]?.serverPassword;
-            if (password !== undefined) {
-              yield* providerCredentials.replaceServerPassword(provider, password).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({
-                      settingsPath,
-                      detail: `failed to update ${provider} server password`,
-                      cause,
-                    }),
-                ),
-              );
-            }
+      Effect.gen(function* () {
+        const disk = yield* loadSettingsFromDisk;
+        const current = disk.settings;
+        for (const provider of EXTERNAL_SERVER_PROVIDERS) {
+          const password = patch.providers?.[provider]?.serverPassword;
+          if (password !== undefined) {
+            yield* providerCredentials.replaceServerPassword(provider, password).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: `failed to update ${provider} server password`,
+                    cause,
+                  }),
+              ),
+            );
           }
-          const normalized = yield* normalizeSettings(
-            settingsPath,
-            current,
-            omitProviderPasswords(patch),
-          );
-          const next = yield* withCredentialState(normalized);
-          const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
-          yield* writeSettingsAtomically({
-            revision: nextRevision,
-            migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
-            settings: next,
-          });
-          yield* Ref.set(settingsRef, next);
-          yield* Ref.set(revisionRef, nextRevision);
-          yield* emitChange(next);
-          return resolveTextGenerationProvider(next);
-        }),
+        }
+        const normalized = yield* normalizeSettings(
+          settingsPath,
+          current,
+          omitProviderPasswords(patch),
+        );
+        const next = yield* withCredentialState(normalized);
+        const nextRevision = Math.max(disk.revision, yield* Ref.get(revisionRef)) + 1;
+        yield* writeSettingsAtomically({
+          revision: nextRevision,
+          migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
+          settings: next,
+        });
+        yield* Ref.set(settingsRef, next);
+        yield* Ref.set(revisionRef, nextRevision);
+        yield* emitChange(next);
+        return resolveTextGenerationProvider(next);
+      }),
     );
 
   return {

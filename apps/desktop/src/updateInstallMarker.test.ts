@@ -159,9 +159,7 @@ describe("updateInstallMarker", () => {
     const filePath = createMarkerPath();
     writeInstallMarker(filePath, marker());
 
-    expect(
-      markInstallHandoffSync(filePath, { attemptId: "attempt-2", artifact }),
-    ).toBeNull();
+    expect(markInstallHandoffSync(filePath, { attemptId: "attempt-2", artifact })).toBeNull();
     expect(
       markInstallHandoffSync(filePath, {
         attemptId: "attempt-1",

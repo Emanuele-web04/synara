@@ -6,10 +6,7 @@ import { createEffectServer, ServerLifecycleError } from "./effectServer";
 
 function failFastConfig(
   overrides: Partial<
-    Pick<
-      ServerConfigShape,
-      "host" | "authToken" | "devUrl" | "publicUrl" | "allowInsecureRemote"
-    >
+    Pick<ServerConfigShape, "host" | "authToken" | "devUrl" | "publicUrl" | "allowInsecureRemote">
   >,
 ): ServerConfigShape {
   return {

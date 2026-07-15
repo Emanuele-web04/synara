@@ -507,9 +507,7 @@ describe("buildCodexProcessEnv", () => {
       platform: "darwin",
     });
 
-    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe(
-      "/tmp/codex-browser-use/synara.sock",
-    );
+    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe("/tmp/codex-browser-use/synara.sock");
   });
 
   it("resolves the browser-use pipe path from desktop env aliases", () => {
@@ -2343,10 +2341,7 @@ describe("respondToRequest", () => {
 
     await (
       manager as unknown as {
-        handleServerRequest: (
-          context: unknown,
-          request: Record<string, unknown>,
-        ) => Promise<void>;
+        handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
       }
     ).handleServerRequest(context, {
       jsonrpc: "2.0",
@@ -2809,10 +2804,7 @@ describe("collab child conversation routing", () => {
 
     await (
       manager as unknown as {
-        handleServerRequest: (
-          context: unknown,
-          request: Record<string, unknown>,
-        ) => Promise<void>;
+        handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
       }
     ).handleServerRequest(context, {
       id: 42,

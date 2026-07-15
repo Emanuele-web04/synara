@@ -1,8 +1,4 @@
-import {
-  ApprovalRequestId,
-  CommandId,
-  type OrchestrationEvent,
-} from "@synara/contracts";
+import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -123,9 +119,7 @@ function finalizeTurnStateFromSessionStatus(
 ): ProjectionTurn["state"] {
   if (status === "error" || status === "interrupted") return status;
   if (status === "starting" || status === "running") return "running";
-  return existingState === "error" || existingState === "interrupted"
-    ? existingState
-    : "completed";
+  return existingState === "error" || existingState === "interrupted" ? existingState : "completed";
 }
 
 function payloadRecord(payload: unknown): Record<string, unknown> | undefined {
@@ -321,7 +315,9 @@ function retainProjectionMessagesAfterRevert(
   return messages.filter((message) => retainedMessageIds.has(message.messageId));
 }
 
-function retainTurnScopedProjectionRowsAfterRevert<Row extends { readonly turnId: string | null }>(
+function retainTurnScopedProjectionRowsAfterRevert<
+  Row extends { readonly turnId: ProjectionTurn["turnId"] },
+>(
   rows: ReadonlyArray<Row>,
   turns: ReadonlyArray<ProjectionTurn>,
   turnCount: number,
@@ -358,10 +354,7 @@ function rollbackProjectionMessagesFromMessage(
 
 function retainTurnScopedProjectionRowsAfterConversationRollback<
   Row extends { readonly turnId: string | null },
->(
-  rows: ReadonlyArray<Row>,
-  removedTurnIds: ReadonlySet<string>,
-): ReadonlyArray<Row> {
+>(rows: ReadonlyArray<Row>, removedTurnIds: ReadonlySet<string>): ReadonlyArray<Row> {
   if (removedTurnIds.size === 0) return rows;
   return rows.filter((row) => row.turnId === null || !removedTurnIds.has(row.turnId));
 }
@@ -413,25 +406,23 @@ const runAttachmentSideEffects = Effect.fn(function* (sideEffects: AttachmentSid
       : undefined;
   };
 
-  yield* Effect.forEach(
-    sideEffects.deletedThreadIds,
-    (threadId) =>
-      Effect.gen(function* () {
-        const threadSegment = toSafeThreadAttachmentSegment(threadId);
-        if (!threadSegment) {
-          yield* Effect.logWarning("skipping attachment cleanup for unsafe thread id", {
-            threadId,
-          });
-          return;
-        }
-
-        yield* Effect.forEach(attachmentRootEntries, (entry) => {
-          const relativePath = resolveThreadAttachmentEntry(threadSegment, entry);
-          return relativePath
-            ? fileSystem.remove(path.join(attachmentsRootDir, relativePath), { force: true })
-            : Effect.void;
+  yield* Effect.forEach(sideEffects.deletedThreadIds, (threadId) =>
+    Effect.gen(function* () {
+      const threadSegment = toSafeThreadAttachmentSegment(threadId);
+      if (!threadSegment) {
+        yield* Effect.logWarning("skipping attachment cleanup for unsafe thread id", {
+          threadId,
         });
-      }),
+        return;
+      }
+
+      yield* Effect.forEach(attachmentRootEntries, (entry) => {
+        const relativePath = resolveThreadAttachmentEntry(threadSegment, entry);
+        return relativePath
+          ? fileSystem.remove(path.join(attachmentsRootDir, relativePath), { force: true })
+          : Effect.void;
+      });
+    }),
   );
 
   yield* Effect.forEach(
@@ -717,8 +708,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...(event.payload.modelSelection !== undefined &&
-              (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
-                canAdoptFirstTurnProvider)
+            (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
+              canAdoptFirstTurnProvider)
               ? { modelSelection: event.payload.modelSelection }
               : {}),
             runtimeMode: event.payload.runtimeMode,
@@ -887,7 +878,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             isStreaming: event.payload.streaming,
             source: event.payload.source,
             sequence: Option.isSome(existingMessage)
-              ? existingMessage.value.sequence ?? event.sequence
+              ? (existingMessage.value.sequence ?? event.sequence)
               : event.sequence,
             createdAt:
               (Option.isSome(existingMessage) ? existingMessage.value.createdAt : null) ??
@@ -935,10 +926,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
           });
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert);
-          if (
-            event.type === "thread.reverted" ||
-            event.payload.skipAttachmentPrune !== true
-          ) {
+          if (event.type === "thread.reverted" || event.payload.skipAttachmentPrune !== true) {
             attachmentSideEffects.prunedThreadRelativePaths.set(
               event.payload.threadId,
               collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
@@ -1357,26 +1345,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
-          yield* Effect.forEach(
-            keptTurns,
-            (turn) =>
-              turn.turnId === null
-                ? event.type === "thread.reverted" ||
-                  turn.pendingMessageId === null ||
-                  turn.state !== "pending" ||
-                  turn.checkpointTurnCount !== null
-                  ? Effect.void
-                  : projectionTurnRepository.replacePendingTurnStart({
-                      threadId: turn.threadId,
-                      messageId: turn.pendingMessageId,
-                      sourceProposedPlanThreadId: turn.sourceProposedPlanThreadId,
-                      sourceProposedPlanId: turn.sourceProposedPlanId,
-                      requestedAt: turn.requestedAt,
-                    })
-                : projectionTurnRepository.upsertByTurnId({
-                    ...turn,
-                    turnId: turn.turnId,
-                  }),
+          yield* Effect.forEach(keptTurns, (turn) =>
+            turn.turnId === null
+              ? event.type === "thread.reverted" ||
+                turn.pendingMessageId === null ||
+                turn.state !== "pending" ||
+                turn.checkpointTurnCount !== null
+                ? Effect.void
+                : projectionTurnRepository.replacePendingTurnStart({
+                    threadId: turn.threadId,
+                    messageId: turn.pendingMessageId,
+                    sourceProposedPlanThreadId: turn.sourceProposedPlanThreadId,
+                    sourceProposedPlanId: turn.sourceProposedPlanId,
+                    requestedAt: turn.requestedAt,
+                  })
+              : projectionTurnRepository.upsertByTurnId({
+                  ...turn,
+                  turnId: turn.turnId,
+                }),
           );
           return;
         }
@@ -1440,7 +1426,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             interactionKind,
             requestId,
           });
-          const lifecycleGeneration = payloadNonEmptyString(activity.payload, "lifecycleGeneration");
+          const lifecycleGeneration = payloadNonEmptyString(
+            activity.payload,
+            "lifecycleGeneration",
+          );
           let nextRow: Parameters<typeof projectionPendingInteractionRepository.upsert>[0];
           if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
             if (
@@ -1451,9 +1440,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               return;
             }
             const resolvedDecisionRaw =
-              interactionKind === "approval"
-                ? payloadRecord(activity.payload)?.decision
-                : null;
+              interactionKind === "approval" ? payloadRecord(activity.payload)?.decision : null;
             nextRow = {
               interactionKind,
               requestId,
@@ -1494,7 +1481,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ) {
               return;
             }
-            const responseCommandIdValue = payloadNonEmptyString(activity.payload, "responseCommandId");
+            const responseCommandIdValue = payloadNonEmptyString(
+              activity.payload,
+              "responseCommandId",
+            );
             const responseCommandId = responseCommandIdValue
               ? CommandId.makeUnsafe(responseCommandIdValue)
               : null;
@@ -1512,7 +1502,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               resolvedAt: null,
             };
           } else {
-            if (activity.kind !== "approval.requested" && activity.kind !== "user-input.requested") {
+            if (
+              activity.kind !== "approval.requested" &&
+              activity.kind !== "user-input.requested"
+            ) {
               return;
             }
             if (
@@ -1568,16 +1561,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          if (yield* projectionPendingInteractionRepository.claimResponse({
-            threadId: event.payload.threadId,
-            interactionKind,
-            requestId: event.payload.requestId,
-            lifecycleGeneration: event.payload.lifecycleGeneration ?? null,
-            responseCommandId: event.commandId,
-            decision:
-              event.type === "thread.approval-response-requested" ? event.payload.decision : null,
-            requestedAt: event.payload.createdAt,
-          })) {
+          if (
+            yield* projectionPendingInteractionRepository.claimResponse({
+              threadId: event.payload.threadId,
+              interactionKind,
+              requestId: event.payload.requestId,
+              lifecycleGeneration: event.payload.lifecycleGeneration ?? null,
+              responseCommandId: event.commandId,
+              decision:
+                event.type === "thread.approval-response-requested" ? event.payload.decision : null,
+              requestedAt: event.payload.createdAt,
+            })
+          ) {
             yield* updatePendingInteractionShellCount({
               threadId: event.payload.threadId,
               interactionKind,
@@ -1693,21 +1688,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       };
 
       yield* sql.withTransaction(
-        Effect.forEach(
-          selectedProjectors,
-          (projector) =>
-            projector.apply(event, attachmentSideEffects).pipe(
-              Effect.flatMap(() => {
-                if (projector.name === phaseCursor) {
-                  return Effect.void;
-                }
-                return projectionStateRepository.upsert({
-                  projector: projector.name,
-                  lastAppliedSequence: event.sequence,
-                  updatedAt: event.occurredAt,
-                });
-              }),
-            ),
+        Effect.forEach(selectedProjectors, (projector) =>
+          projector.apply(event, attachmentSideEffects).pipe(
+            Effect.flatMap(() => {
+              if (projector.name === phaseCursor) {
+                return Effect.void;
+              }
+              return projectionStateRepository.upsert({
+                projector: projector.name,
+                lastAppliedSequence: event.sequence,
+                updatedAt: event.occurredAt,
+              });
+            }),
+          ),
         ).pipe(
           Effect.flatMap(() =>
             phaseCursor === undefined
@@ -1716,7 +1709,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   projector: phaseCursor,
                   lastAppliedSequence: event.sequence,
                   updatedAt: event.occurredAt,
-              }),
+                }),
           ),
           Effect.flatMap(() =>
             Effect.gen(function* () {
@@ -1727,14 +1720,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   requestedAt: event.occurredAt,
                 });
               }
-              for (const [threadId, relativePaths] of
-                attachmentSideEffects.prunedThreadRelativePaths.entries()) {
+              for (const [
+                threadId,
+                relativePaths,
+              ] of attachmentSideEffects.prunedThreadRelativePaths.entries()) {
                 yield* managedAttachments.markUnreferencedClaimedForCleanup({
                   ownerThreadId: threadId,
                   retainedAttachmentIds: [...relativePaths]
                     .map(parseAttachmentIdFromRelativePath)
-                    .filter((attachmentId): attachmentId is string =>
-                      attachmentId?.startsWith("att_v2_") === true,
+                    .filter(
+                      (attachmentId): attachmentId is string =>
+                        attachmentId?.startsWith("att_v2_") === true,
                     ),
                   reason: "projection-pruned",
                   requestedAt: event.occurredAt,
@@ -1811,14 +1807,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     // Align existing cursors before replay so a long-lived process does not rescan that backlog
     // on its next restart. Missing cursors still replay from the beginning for upgrade safety.
     yield* sql.withTransaction(
-      Effect.forEach(
-        laggingProjectors,
-        (projector) =>
-          projectionStateRepository.upsert({
-            projector: projector.name,
-            lastAppliedSequence: hotState.lastAppliedSequence,
-            updatedAt: hotState.updatedAt,
-          }),
+      Effect.forEach(laggingProjectors, (projector) =>
+        projectionStateRepository.upsert({
+          projector: projector.name,
+          lastAppliedSequence: hotState.lastAppliedSequence,
+          updatedAt: hotState.updatedAt,
+        }),
       ),
     );
   });
@@ -1871,14 +1865,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
   const advanceSnapshotProjectorStates = (event: OrchestrationEvent) =>
     sql.withTransaction(
-      Effect.forEach(
-        PROJECT_METADATA_SNAPSHOT_PROJECTORS,
-        (projector) =>
-          projectionStateRepository.upsert({
-            projector,
-            lastAppliedSequence: event.sequence,
-            updatedAt: event.occurredAt,
-          }),
+      Effect.forEach(PROJECT_METADATA_SNAPSHOT_PROJECTORS, (projector) =>
+        projectionStateRepository.upsert({
+          projector,
+          lastAppliedSequence: event.sequence,
+          updatedAt: event.occurredAt,
+        }),
       ),
     );
 
@@ -1938,9 +1930,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = Effect.gen(function* () {
     yield* fastForwardHotProjectorCursors;
     const highWaterSequence = yield* eventStore.getHighWaterSequence();
-    yield* Effect.forEach(
-      projectors,
-      (projector) => bootstrapProjector(projector, highWaterSequence),
+    yield* Effect.forEach(projectors, (projector) =>
+      bootstrapProjector(projector, highWaterSequence),
     );
     yield* initializeHotProjectionCursor;
   }).pipe(

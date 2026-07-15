@@ -120,10 +120,7 @@ export function ensurePrivateFileSync(
 
   const targetMode = options.executable ? PRIVATE_EXECUTABLE_FILE_MODE : PRIVATE_FILE_MODE;
   const flags =
-    fs.constants.O_WRONLY |
-    fs.constants.O_CREAT |
-    fs.constants.O_APPEND |
-    fs.constants.O_NOFOLLOW;
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW;
   const descriptor = withPathContext("open without following symlinks", filePath, () =>
     fs.openSync(filePath, flags, targetMode),
   );
@@ -191,7 +188,9 @@ export function repairPrivateTreeSync(
       return;
     }
     if (stat.isDirectory()) {
-      withPathContext("set mode on", entryPath, () => fs.chmodSync(entryPath, PRIVATE_DIRECTORY_MODE));
+      withPathContext("set mode on", entryPath, () =>
+        fs.chmodSync(entryPath, PRIVATE_DIRECTORY_MODE),
+      );
       const entries = withPathContext("read", entryPath, () => fs.readdirSync(entryPath));
       for (const entry of entries) {
         visit(path.join(entryPath, entry));

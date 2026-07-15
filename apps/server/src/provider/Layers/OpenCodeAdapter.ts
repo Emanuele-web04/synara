@@ -4298,7 +4298,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             Effect.gen(function* () {
               const serverUrl = input.serverUrl?.trim();
               const serverPassword = options?.resolveServerPassword
-                ? yield* options.resolveServerPassword(provider)
+                ? yield* options.resolveServerPassword(provider).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderAdapterRequestError({
+                          provider,
+                          method: cause.operation,
+                          detail: cause.issue,
+                          cause,
+                        }),
+                    ),
+                  )
                 : undefined;
               const server = yield* openCodeRuntime
                 .connectToOpenCodeServer({

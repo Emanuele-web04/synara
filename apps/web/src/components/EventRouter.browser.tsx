@@ -295,9 +295,7 @@ async function mountApp(options?: {
           return;
         }
         const expectedThreadId = options?.waitForThreadId ?? THREAD_ID;
-        expect(useStore.getState().threads.some((thread) => thread.id === expectedThreadId)).toBe(
-          true,
-        );
+        expect(useStore.getState().threadIds?.includes(expectedThreadId)).toBe(true);
       },
       { timeout: 8_000, interval: 16 },
     );
@@ -388,7 +386,6 @@ describe("EventRouter scoped orchestration sync", () => {
     });
     useStore.setState({
       projects: [],
-      threads: [],
       threadIds: [],
       threadShellById: {},
       threadSessionById: {},
@@ -1020,9 +1017,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
       await vi.waitFor(
         () => {
-          expect(useStore.getState().threads.some((thread) => thread.id === draftThreadId)).toBe(
-            true,
-          );
+          expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,

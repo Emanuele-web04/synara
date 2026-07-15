@@ -207,8 +207,7 @@ export class CodexJsonlWriter {
   close(cause?: unknown): void {
     if (this.closed) return;
     this.closed = true;
-    const error =
-      cause instanceof Error ? cause : this.closedError(this.queuedBytes, cause);
+    const error = cause instanceof Error ? cause : this.closedError(this.queuedBytes, cause);
     this.activeAbort?.abort(error);
     for (const pending of this.pending.splice(0)) pending.reject(error);
     this.queuedBytes = 0;
@@ -251,11 +250,7 @@ export class CodexJsonlWriter {
   }
 }
 
-function writeWithDrain(
-  writable: Writable,
-  frame: Buffer,
-  signal: AbortSignal,
-): Promise<void> {
+function writeWithDrain(writable: Writable, frame: Buffer, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let callbackComplete = false;
     let drainComplete = true;

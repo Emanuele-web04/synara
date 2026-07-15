@@ -6,10 +6,7 @@ import {
   requireNoPendingMigrationRecovery,
   runWithPreMigrationBackup,
 } from "../MigrationBackup.ts";
-import {
-  ensurePrivateFileSync,
-  repairPrivateFile,
-} from "../../privatePathPermissions.ts";
+import { ensurePrivateFileSync, repairPrivateFile } from "../../privatePathPermissions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   acquireDatabaseLifecycleLock,
@@ -53,24 +50,24 @@ const repairSqliteFilePermissions = (dbPath: string) =>
     }
   });
 
-const makeSetup = (dbPath?: string) => Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`PRAGMA journal_mode = WAL;`;
-    yield* sql`PRAGMA foreign_keys = ON;`;
-    const migrations = dbPath
-      ? runWithPreMigrationBackup(dbPath, runMigrations())
-      : runMigrations();
-    yield* dbPath
-      ? migrations.pipe(Effect.ensuring(repairSqliteFilePermissions(dbPath)))
-      : migrations;
-  }),
-);
+const makeSetup = (dbPath?: string) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL;`;
+      yield* sql`PRAGMA foreign_keys = ON;`;
+      const migrations = dbPath
+        ? runWithPreMigrationBackup(dbPath, runMigrations())
+        : runMigrations();
+      yield* dbPath
+        ? migrations.pipe(Effect.ensuring(repairSqliteFilePermissions(dbPath)))
+        : migrations;
+    }),
+  );
 
 export const makeSqlitePersistenceLive = (dbPath: string) =>
-  Effect.acquireRelease(
-    acquireDatabaseLifecycleLock(dbPath),
-    releaseDatabaseLifecycleLock,
+  Effect.acquireRelease(acquireDatabaseLifecycleLock(dbPath), (lock) =>
+    releaseDatabaseLifecycleLock(lock).pipe(Effect.orDie),
   ).pipe(
     Effect.flatMap(() =>
       Effect.gen(function* () {

@@ -191,13 +191,10 @@ export class BrowserUsePipeServer {
     cleanupPipePath(this.pipePath);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
-      this.server.listen(
-        { path: this.pipePath, readableAll: false, writableAll: false },
-        () => {
-          this.server.off("error", reject);
-          resolve();
-        },
-      );
+      this.server.listen({ path: this.pipePath, readableAll: false, writableAll: false }, () => {
+        this.server.off("error", reject);
+        resolve();
+      });
     });
     FS.chmodSync(this.pipePath, 0o600);
     this.started = true;
@@ -257,9 +254,7 @@ export class BrowserUsePipeServer {
   private handleSocketData(socket: Net.Socket, chunk: Buffer): void {
     const client = this.clientBySocket.get(socket);
     if (!client) return;
-    const decoded = decodeBrowserUseFrames(
-      Buffer.concat([client.pending, chunk]),
-    );
+    const decoded = decodeBrowserUseFrames(Buffer.concat([client.pending, chunk]));
     if (!decoded) {
       socket.destroy();
       return;
@@ -294,12 +289,12 @@ export class BrowserUsePipeServer {
       this.writeToClient(client, { jsonrpc: "2.0", id: request.id, result });
     } catch (error) {
       this.writeToClient(client, {
-          jsonrpc: "2.0",
-          id: request.id,
-          error: {
-            code: 1,
-            message: error instanceof Error ? error.message : String(error),
-          },
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          code: 1,
+          message: error instanceof Error ? error.message : String(error),
+        },
       });
     }
   }
@@ -507,11 +502,11 @@ export class BrowserUsePipeServer {
           jsonrpc: "2.0",
           method: "onCDPEvent",
           params: {
-          source: {
-            tabId: tracked.id,
-          },
-          method: event.method,
-          ...(event.params !== undefined ? { params: event.params } : {}),
+            source: {
+              tabId: tracked.id,
+            },
+            method: event.method,
+            ...(event.params !== undefined ? { params: event.params } : {}),
           },
         });
       },

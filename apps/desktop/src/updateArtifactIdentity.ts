@@ -74,9 +74,7 @@ export async function fingerprintUpdateArtifact(filePath: string): Promise<Updat
       !pathEntryAfter.isFile() ||
       pathEntryAfter.isSymbolicLink() ||
       pathEntryAfter.dev !== openedAfter.dev ||
-      (pathEntryAfter.ino !== 0 &&
-        openedAfter.ino !== 0 &&
-        pathEntryAfter.ino !== openedAfter.ino)
+      (pathEntryAfter.ino !== 0 && openedAfter.ino !== 0 && pathEntryAfter.ino !== openedAfter.ino)
     ) {
       throw new Error("Downloaded update payload changed while it was fingerprinted.");
     }

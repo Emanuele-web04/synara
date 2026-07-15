@@ -70,12 +70,12 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           },
     serve: Effect.fnUntraced(function* (httpApp, middleware) {
       const serveScope = yield* Effect.scope;
-      const handler = yield* (NodeHttpServer.makeHandler(httpApp, {
+      const handler = yield* NodeHttpServer.makeHandler(httpApp, {
         middleware: middleware as any,
         scope: serveScope,
       }) as Effect.Effect<
         (nodeRequest: http.IncomingMessage, nodeResponse: http.ServerResponse) => void
-      >);
+      >;
       const upgradeHandler = yield* NodeHttpServer.makeUpgradeHandler(
         Effect.succeed(webSocketServer),
         httpApp,

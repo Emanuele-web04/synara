@@ -52,9 +52,7 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
       // umask-filtered mode cannot follow a pre-existing final symlink.
       await fs.chmod(missingDirectory, PRIVATE_DIRECTORY_MODE);
     } else if (supportsPosixPermissions() && (stat.mode & 0o022) !== 0) {
-      throw new Error(
-        `Atomic write parent directory is group/other writable: ${missingDirectory}`,
-      );
+      throw new Error(`Atomic write parent directory is group/other writable: ${missingDirectory}`);
     }
     await syncDirectoryEntry(path.dirname(missingDirectory));
   }
@@ -75,11 +73,7 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
   }
 }
 
-function assertSameRegularFile(
-  descriptorStat: Stats,
-  pathStat: Stats,
-  tempPath: string,
-): void {
+function assertSameRegularFile(descriptorStat: Stats, pathStat: Stats, tempPath: string): void {
   if (!descriptorStat.isFile() || !pathStat.isFile() || pathStat.isSymbolicLink()) {
     throw new Error(`Atomic write temporary path is not a regular file: ${tempPath}`);
   }

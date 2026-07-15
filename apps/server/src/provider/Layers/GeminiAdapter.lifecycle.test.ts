@@ -2,10 +2,7 @@ import { EventId, ThreadId } from "@synara/contracts";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  makeGeminiRuntimeEventBase,
-  teardownGeminiChildProcess,
-} from "./GeminiAdapter.ts";
+import { makeGeminiRuntimeEventBase, teardownGeminiChildProcess } from "./GeminiAdapter.ts";
 
 describe("GeminiAdapter lifecycle generation", () => {
   it("stamps canonical runtime events from the immutable session context", () => {

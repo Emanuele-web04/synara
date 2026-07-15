@@ -56,9 +56,9 @@ describe("database lifecycle lock", () => {
       expect(parentEntries.some((entry) => entry.includes(".lifecycle-lock.acquiring."))).toBe(
         false,
       );
-      await expect(
-        fs.readFile(path.join(first.lockPath, "owner.json"), "utf8"),
-      ).resolves.toContain(first.owner.token);
+      await expect(fs.readFile(path.join(first.lockPath, "owner.json"), "utf8")).resolves.toContain(
+        first.owner.token,
+      );
       const forged = { ...first, owner: { ...first.owner, token: randomUUID() } };
       await expect(Effect.runPromise(releaseDatabaseLifecycleLock(forged))).rejects.toBeInstanceOf(
         DatabaseLifecycleLockedError,

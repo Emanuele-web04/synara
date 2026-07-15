@@ -29,11 +29,7 @@ export const WS_SERVER_CAPABILITIES = [
   "rpc.typed-errors",
 ] as const;
 
-export const WsCompatibilityAction = Schema.Literals([
-  "reload",
-  "update-client",
-  "update-server",
-]);
+export const WsCompatibilityAction = Schema.Literals(["reload", "update-client", "update-server"]);
 export type WsCompatibilityAction = typeof WsCompatibilityAction.Type;
 
 export const WsBootstrapNegotiateInput = Schema.Struct({

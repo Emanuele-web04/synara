@@ -85,20 +85,18 @@ describe("composerSend attachment builders", () => {
 
   it("uploads binary files outside RPC and returns persisted attachment ids", async () => {
     const imageFile = new File(["png"], "screen.png", { type: "image/png" });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            type: "image",
-            id: "thread-1-11111111-1111-4111-8111-111111111111",
-            name: "screen.png",
-            mimeType: "image/png",
-            sizeBytes: imageFile.size,
-          }),
-          { status: 201, headers: { "Content-Type": "application/json" } },
-        ),
-      );
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "image",
+          id: "thread-1-11111111-1111-4111-8111-111111111111",
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: imageFile.size,
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const attachments = await buildUploadComposerAttachments({
@@ -134,13 +132,16 @@ describe("composerSend attachment builders", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        Response.json({
-          type: "image",
-          id: firstId,
-          name: firstFile.name,
-          mimeType: firstFile.type,
-          sizeBytes: firstFile.size,
-        }, { status: 201 }),
+        Response.json(
+          {
+            type: "image",
+            id: firstId,
+            name: firstFile.name,
+            mimeType: firstFile.type,
+            sizeBytes: firstFile.size,
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(Response.json({ error: "Second upload failed." }, { status: 507 }))
       .mockResolvedValueOnce(Response.json({ cancelled: true }, { status: 200 }));
@@ -191,13 +192,16 @@ describe("composerSend attachment builders", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        Response.json({
-          type: "image",
-          id: "thread-1-11111111-1111-4111-8111-111111111111",
-          name: firstFile.name,
-          mimeType: firstFile.type,
-          sizeBytes: firstFile.size,
-        }, { status: 201 }),
+        Response.json(
+          {
+            type: "image",
+            id: "thread-1-11111111-1111-4111-8111-111111111111",
+            name: firstFile.name,
+            mimeType: firstFile.type,
+            sizeBytes: firstFile.size,
+          },
+          { status: 201 },
+        ),
       )
       .mockResolvedValueOnce(Response.json({ error: "Original upload failure." }, { status: 500 }))
       .mockRejectedValueOnce(new Error("Cancellation transport failed."));
@@ -245,13 +249,16 @@ describe("composerSend attachment builders", () => {
     const fetchMock = vi.fn<typeof fetch>();
     for (const [index, file] of files.entries()) {
       fetchMock.mockResolvedValueOnce(
-        Response.json({
-          type: "image",
-          id: ids[index],
-          name: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-        }, { status: 201 }),
+        Response.json(
+          {
+            type: "image",
+            id: ids[index],
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+          },
+          { status: 201 },
+        ),
       );
     }
     fetchMock
@@ -289,13 +296,16 @@ describe("composerSend attachment builders", () => {
   it("commits successful dispatches so later cleanup does not cancel", async () => {
     const imageFile = new File(["png"], "screen.png", { type: "image/png" });
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      Response.json({
-        type: "image",
-        id: "thread-1-11111111-1111-4111-8111-111111111111",
-        name: imageFile.name,
-        mimeType: imageFile.type,
-        sizeBytes: imageFile.size,
-      }, { status: 201 }),
+      Response.json(
+        {
+          type: "image",
+          id: "thread-1-11111111-1111-4111-8111-111111111111",
+          name: imageFile.name,
+          mimeType: imageFile.type,
+          sizeBytes: imageFile.size,
+        },
+        { status: 201 },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     const staged = await stageUploadComposerAttachments({

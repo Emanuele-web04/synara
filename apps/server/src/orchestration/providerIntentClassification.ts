@@ -39,9 +39,8 @@ export const isProviderIntentEventType = (
 ): eventType is ProviderIntentEvent["type"] =>
   PROVIDER_INTENT_EVENT_TYPES.has(eventType as ProviderIntentEvent["type"]);
 
-export const isProviderIntentEvent = (
-  event: OrchestrationEvent,
-): event is ProviderIntentEvent => isProviderIntentEventType(event.type);
+export const isProviderIntentEvent = (event: OrchestrationEvent): event is ProviderIntentEvent =>
+  isProviderIntentEventType(event.type);
 
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.created";

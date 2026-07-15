@@ -5,10 +5,7 @@
 import { Effect, Layer, ServiceMap } from "effect";
 
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
-import {
-  ServerSecretStore,
-  type SecretStoreError,
-} from "./auth/Services/ServerSecretStore";
+import { ServerSecretStore, type SecretStoreError } from "./auth/Services/ServerSecretStore";
 
 export type ExternalProviderServer = "kilo" | "opencode";
 
@@ -38,6 +35,14 @@ export const resolveProviderServerPassword = (provider: ExternalProviderServer) 
     const credentials = yield* ProviderCredentials;
     return (yield* credentials.getServerPassword(provider)) ?? undefined;
   }).pipe(Effect.orDie);
+
+export const makeProviderServerPasswordResolver =
+  (credentials: ProviderCredentialsShape) =>
+  (provider: ExternalProviderServer): Effect.Effect<string | undefined> =>
+    credentials.getServerPassword(provider).pipe(
+      Effect.map((password) => password ?? undefined),
+      Effect.orDie,
+    );
 
 const makeProviderCredentials = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore;

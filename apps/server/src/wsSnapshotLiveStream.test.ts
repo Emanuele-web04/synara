@@ -20,9 +20,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
           return yield* makeCursorSafeSnapshotLiveStream({
             subscribeLive: PubSub.subscribe(live).pipe(
               Effect.tap(() => Effect.sync(() => steps.push("attached"))),
-              Effect.map((subscription) =>
-                Stream.fromEffectRepeat(PubSub.take(subscription)),
-              ),
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
             ),
             snapshot: PubSub.publish(live, replayed).pipe(
               Effect.tap(() => Effect.sync(() => steps.push("snapshot"))),
@@ -52,13 +50,9 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
           const newerLive = event(3);
           return yield* makeCursorSafeSnapshotLiveStream({
             subscribeLive: PubSub.subscribe(live).pipe(
-              Effect.map((subscription) =>
-                Stream.fromEffectRepeat(PubSub.take(subscription)),
-              ),
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
             ),
-            snapshot: PubSub.publish(live, replayed).pipe(
-              Effect.as({ snapshotSequence: 1 }),
-            ),
+            snapshot: PubSub.publish(live, replayed).pipe(Effect.as({ snapshotSequence: 1 })),
             snapshotSequence: (snapshot) => snapshot.snapshotSequence,
             getHighWaterSequence: Effect.succeed(2),
             replay: () =>
@@ -85,9 +79,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
         subscribeLive: Effect.succeed(Stream.empty),
         snapshot: Effect.succeed({ snapshotSequence: 1 }),
         snapshotSequence: (snapshot) => snapshot.snapshotSequence,
-        getHighWaterSequence: Effect.succeed(
-          ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 2,
-        ),
+        getHighWaterSequence: Effect.succeed(ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT + 2),
         replay: () => {
           replayStarted = true;
           return Stream.empty;

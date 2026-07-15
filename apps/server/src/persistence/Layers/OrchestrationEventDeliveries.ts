@@ -50,11 +50,12 @@ const makeRepository = Effect.gen(function* () {
         AND event_sequence = ${eventSequence}
     `;
 
-  const getConsumerState: OrchestrationEventDeliveryRepositoryShape["getConsumerState"] =
-    (consumerName) =>
-      getConsumerStateRow(consumerName).pipe(
-        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.getConsumerState")),
-      );
+  const getConsumerState: OrchestrationEventDeliveryRepositoryShape["getConsumerState"] = (
+    consumerName,
+  ) =>
+    getConsumerStateRow(consumerName).pipe(
+      Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.getConsumerState")),
+    );
 
   const getDelivery: OrchestrationEventDeliveryRepositoryShape["getDelivery"] = (input) =>
     getDeliveryRow(input.consumerName, input.eventSequence).pipe(
@@ -63,9 +64,10 @@ const makeRepository = Effect.gen(function* () {
     );
 
   const claim: OrchestrationEventDeliveryRepositoryShape["claim"] = (input) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        yield* sql`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
           INSERT INTO orchestration_event_deliveries (
             consumer_name, event_sequence, thread_id, state,
             claim_owner, claimed_at, claim_expires_at,
@@ -85,13 +87,14 @@ const makeRepository = Effect.gen(function* () {
             updated_at = excluded.updated_at
           WHERE orchestration_event_deliveries.state = 'retry'
         `;
-        const rows = yield* getDeliveryRow(input.consumerName, input.eventSequence);
-        const delivery = rows[0];
-        return delivery?.state === "inflight" && delivery.claimOwner === input.claimOwner
-          ? Option.some(delivery)
-          : Option.none();
-      }),
-    ).pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.claim")));
+          const rows = yield* getDeliveryRow(input.consumerName, input.eventSequence);
+          const delivery = rows[0];
+          return delivery?.state === "inflight" && delivery.claimOwner === input.claimOwner
+            ? Option.some(delivery)
+            : Option.none();
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.claim")));
 
   const markRetryable: OrchestrationEventDeliveryRepositoryShape["markRetryable"] = (input) =>
     sql<{ readonly eventSequence: number }>`
@@ -112,9 +115,10 @@ const makeRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.markRetryable")),
     );
 
-  const markTerminalFailure: OrchestrationEventDeliveryRepositoryShape["markTerminalFailure"] =
-    (input) =>
-      sql<{ readonly eventSequence: number }>`
+  const markTerminalFailure: OrchestrationEventDeliveryRepositoryShape["markTerminalFailure"] = (
+    input,
+  ) =>
+    sql<{ readonly eventSequence: number }>`
         UPDATE orchestration_event_deliveries
         SET state = ${input.state},
             claim_owner = NULL,
@@ -128,9 +132,9 @@ const makeRepository = Effect.gen(function* () {
           AND claim_owner = ${input.expectedClaimOwner}
         RETURNING event_sequence AS "eventSequence"
       `.pipe(
-        Effect.map((rows) => rows.length === 1),
-        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.markTerminalFailure")),
-      );
+      Effect.map((rows) => rows.length === 1),
+      Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.markTerminalFailure")),
+    );
 
   const requeueExpired: OrchestrationEventDeliveryRepositoryShape["requeueExpired"] = (input) =>
     sql<{ readonly eventSequence: number }>`
@@ -153,9 +157,10 @@ const makeRepository = Effect.gen(function* () {
     );
 
   const advanceCursor: OrchestrationEventDeliveryRepositoryShape["advanceCursor"] = (input) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const nextRows = yield* sql<{ readonly nextSequence: number | null }>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const nextRows = yield* sql<{ readonly nextSequence: number | null }>`
           SELECT MIN(sequence) AS "nextSequence"
           FROM orchestration_events
           WHERE sequence > (
@@ -164,24 +169,26 @@ const makeRepository = Effect.gen(function* () {
             WHERE consumer_name = ${input.consumerName}
           )
         `;
-        if (nextRows[0]?.nextSequence !== input.eventSequence) {
-          return false;
-        }
-        const advanced = yield* sql<{ readonly consumerName: string }>`
+          if (nextRows[0]?.nextSequence !== input.eventSequence) {
+            return false;
+          }
+          const advanced = yield* sql<{ readonly consumerName: string }>`
           UPDATE orchestration_consumer_state
           SET last_acked_sequence = ${input.eventSequence},
               updated_at = ${input.updatedAt}
           WHERE consumer_name = ${input.consumerName}
           RETURNING consumer_name AS "consumerName"
         `;
-        return advanced.length === 1;
-      }),
-    ).pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.advanceCursor")));
+          return advanced.length === 1;
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.advanceCursor")));
 
   const complete: OrchestrationEventDeliveryRepositoryShape["complete"] = (input) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const completed = yield* sql<{ readonly eventSequence: number }>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const completed = yield* sql<{ readonly eventSequence: number }>`
           UPDATE orchestration_event_deliveries
           SET state = 'succeeded',
               claim_owner = NULL,
@@ -195,10 +202,10 @@ const makeRepository = Effect.gen(function* () {
             AND claim_owner = ${input.claimOwner}
           RETURNING event_sequence AS "eventSequence"
         `;
-        if (completed.length === 0) {
-          return false;
-        }
-        const nextRows = yield* sql<{ readonly nextSequence: number | null }>`
+          if (completed.length === 0) {
+            return false;
+          }
+          const nextRows = yield* sql<{ readonly nextSequence: number | null }>`
           SELECT MIN(sequence) AS "nextSequence"
           FROM orchestration_events
           WHERE sequence > (
@@ -207,17 +214,18 @@ const makeRepository = Effect.gen(function* () {
             WHERE consumer_name = ${input.consumerName}
           )
         `;
-        if (nextRows[0]?.nextSequence === input.eventSequence) {
-          yield* sql`
+          if (nextRows[0]?.nextSequence === input.eventSequence) {
+            yield* sql`
             UPDATE orchestration_consumer_state
             SET last_acked_sequence = ${input.eventSequence},
                 updated_at = ${input.completedAt}
             WHERE consumer_name = ${input.consumerName}
           `;
-        }
-        return true;
-      }),
-    ).pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.complete")));
+          }
+          return true;
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.complete")));
 
   const firstBlockingDelivery: OrchestrationEventDeliveryRepositoryShape["firstBlockingDelivery"] =
     (consumerName) =>
@@ -230,9 +238,7 @@ const makeRepository = Effect.gen(function* () {
         LIMIT 1
       `.pipe(
         Effect.map((rows) => Option.fromNullishOr(rows[0])),
-        Effect.mapError(
-          toPersistenceSqlError("OrchestrationEventDelivery.firstBlockingDelivery"),
-        ),
+        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.firstBlockingDelivery")),
       );
 
   const firstBlockingDeliveryForThread: OrchestrationEventDeliveryRepositoryShape["firstBlockingDeliveryForThread"] =
@@ -248,9 +254,7 @@ const makeRepository = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => Option.fromNullishOr(rows[0])),
         Effect.mapError(
-          toPersistenceSqlError(
-            "OrchestrationEventDelivery.firstBlockingDeliveryForThread",
-          ),
+          toPersistenceSqlError("OrchestrationEventDelivery.firstBlockingDeliveryForThread"),
         ),
       );
 
@@ -291,9 +295,7 @@ const makeRepository = Effect.gen(function* () {
         ORDER BY d.event_sequence ASC
         LIMIT ${input.limit}
       `.pipe(
-        Effect.mapError(
-          toPersistenceSqlError("OrchestrationEventDelivery.listBlockingDeliveries"),
-        ),
+        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.listBlockingDeliveries")),
       );
     };
 
@@ -324,11 +326,12 @@ const makeRepository = Effect.gen(function* () {
       );
 
   const reconcile: OrchestrationEventDeliveryRepositoryShape["reconcile"] = (input) =>
-    sql.withTransaction(
-      Effect.gen(function* () {
-        const candidates = yield* sql<{
-          readonly state: "dead" | "uncertain";
-        }>`
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const candidates = yield* sql<{
+            readonly state: "dead" | "uncertain";
+          }>`
           SELECT state
           FROM orchestration_event_deliveries
           WHERE consumer_name = ${input.consumerName}
@@ -336,9 +339,9 @@ const makeRepository = Effect.gen(function* () {
             AND thread_id = ${input.threadId}
             AND state = ${input.expectedState}
         `;
-        if (candidates.length !== 1) return Option.none<OrchestrationEventDelivery>();
+          if (candidates.length !== 1) return Option.none<OrchestrationEventDelivery>();
 
-        yield* sql`
+          yield* sql`
           INSERT INTO provider_delivery_reconciliations (
             reconciliation_id, consumer_name, event_sequence, thread_id,
             previous_state, outcome, reconciled_by, note, reconciled_at
@@ -349,7 +352,7 @@ const makeRepository = Effect.gen(function* () {
           )
         `;
 
-        yield* sql`
+          yield* sql`
           UPDATE orchestration_event_deliveries
           SET state = ${input.outcome === "safe_retry" ? "retry" : "succeeded"},
               claim_owner = NULL,
@@ -362,10 +365,11 @@ const makeRepository = Effect.gen(function* () {
             AND thread_id = ${input.threadId}
             AND state = ${input.expectedState}
         `;
-        const rows = yield* getDeliveryRow(input.consumerName, input.eventSequence);
-        return Option.fromNullishOr(rows[0]);
-      }),
-    ).pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.reconcile")));
+          const rows = yield* getDeliveryRow(input.consumerName, input.eventSequence);
+          return Option.fromNullishOr(rows[0]);
+        }),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.reconcile")));
 
   return {
     getConsumerState,

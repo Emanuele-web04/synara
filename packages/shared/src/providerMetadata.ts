@@ -7,12 +7,10 @@ export interface ProviderDescriptor {
   readonly kind: ProviderKind;
   readonly displayName: string;
   readonly available: boolean;
-  readonly usage:
-    | {
-        readonly signInCommand: string;
-        readonly learnMoreHref: string;
-      }
-    | null;
+  readonly usage: {
+    readonly signInCommand: string;
+    readonly learnMoreHref: string;
+  } | null;
 }
 
 export const PROVIDER_DESCRIPTORS = [

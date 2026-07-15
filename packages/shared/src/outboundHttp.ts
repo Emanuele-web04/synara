@@ -14,7 +14,7 @@ import {
   assertPublicIpAddress,
   normalizeOutboundOrigin,
   stripOutboundSensitiveHeaders,
-} from "./outboundHttpPolicy.ts";
+} from "./outboundHttpPolicy";
 
 export type OutboundHttpErrorCode =
   | "aborted"
@@ -30,7 +30,7 @@ export type OutboundHttpErrorCode =
 
 export class OutboundHttpError extends Error {
   readonly code: OutboundHttpErrorCode;
-  readonly cause?: unknown;
+  override readonly cause?: unknown;
 
   constructor(code: OutboundHttpErrorCode, message: string, cause?: unknown) {
     super(message);
@@ -56,7 +56,7 @@ export interface OutboundHttpRequest {
   readonly policy: OutboundHttpPolicy;
   readonly url: string | URL;
   readonly method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  readonly headers?: HeadersInit;
+  readonly headers?: ConstructorParameters<typeof Headers>[0];
   readonly body?: string | Uint8Array;
   readonly signal?: AbortSignal;
 }
@@ -118,9 +118,7 @@ export function encodeOutboundMultipart(
   for (const part of parts) {
     const disposition = [
       `form-data; name="${quoteMultipartToken(part.name, "field name")}"`,
-      ...(part.filename
-        ? [`filename="${quoteMultipartToken(part.filename, "filename")}"`]
-        : []),
+      ...(part.filename ? [`filename="${quoteMultipartToken(part.filename, "filename")}"`] : []),
     ].join("; ");
     push(
       encoder.encode(
@@ -308,11 +306,7 @@ async function requestHop(input: {
   readonly requirePublicAddress: boolean;
   readonly signal: AbortSignal;
 }): Promise<OutboundHttpResponse> {
-  const pinned = await resolvePinnedAddress(
-    input.url,
-    input.requirePublicAddress,
-    input.signal,
-  );
+  const pinned = await resolvePinnedAddress(input.url, input.requirePublicAddress, input.signal);
 
   return await new Promise<OutboundHttpResponse>((resolve, reject) => {
     let settled = false;

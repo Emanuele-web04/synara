@@ -24,10 +24,7 @@ export interface PendingThreadRequestIds {
 
 export type PendingThreadRequestKind = "approval" | "user-input";
 
-export function pendingRequestInstanceKey(
-  requestId: string,
-  lifecycleGeneration?: string,
-): string {
+export function pendingRequestInstanceKey(requestId: string, lifecycleGeneration?: string): string {
   return `${requestId}\u0000${lifecycleGeneration ?? "legacy"}`;
 }
 

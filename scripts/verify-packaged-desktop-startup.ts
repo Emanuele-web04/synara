@@ -80,9 +80,7 @@ function runCommand(command: string, args: ReadonlyArray<string>, cwd?: string):
     throw new Error(`${command} could not start: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed with exit ${result.status ?? "unknown"}.`,
-    );
+    throw new Error(`${command} ${args.join(" ")} failed with exit ${result.status ?? "unknown"}.`);
   }
 }
 
@@ -320,13 +318,15 @@ export async function verifyPackagedDesktopStartup(
       windowsHide: true,
     });
 
-    let exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    let launchError: Error | null = null;
+    const childOutcome: {
+      exited: { code: number | null; signal: NodeJS.Signals | null } | null;
+      launchError: Error | null;
+    } = { exited: null, launchError: null };
     child.once("exit", (code, signal) => {
-      exited = { code, signal };
+      childOutcome.exited = { code, signal };
     });
     child.once("error", (error) => {
-      launchError = error;
+      childOutcome.launchError = error;
     });
     child.stdout?.resume();
     child.stderr?.resume();
@@ -339,12 +339,12 @@ export async function verifyPackagedDesktopStartup(
         );
         return;
       }
-      if (launchError) {
-        throw new Error(`Packaged app could not start: ${launchError.message}`);
+      if (childOutcome.launchError) {
+        throw new Error(`Packaged app could not start: ${childOutcome.launchError.message}`);
       }
-      if (exited) {
+      if (childOutcome.exited) {
         throw new Error(
-          `Packaged app exited before startup proof (code=${exited.code ?? "null"}, signal=${exited.signal ?? "null"}).`,
+          `Packaged app exited before startup proof (code=${childOutcome.exited.code ?? "null"}, signal=${childOutcome.exited.signal ?? "null"}).`,
         );
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));

@@ -2553,9 +2553,9 @@ describe("store read model sync", () => {
       }),
     );
 
-    expect(threadsOf(next).find((thread) => thread.id === threadId)?.createBranchFlowCompleted).toBe(
-      true,
-    );
+    expect(
+      threadsOf(next).find((thread) => thread.id === threadId)?.createBranchFlowCompleted,
+    ).toBe(true);
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
   });
 
@@ -2755,7 +2755,9 @@ describe("store read model sync", () => {
     expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
       40, 41,
     ]);
-    expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([40, 41]);
+    expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
+      40, 41,
+    ]);
   });
 
   it("keeps batched activity timestamps equivalent when a generic duplicate is discarded", () => {
@@ -3222,7 +3224,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:07:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
@@ -3267,7 +3269,7 @@ describe("store read model sync", () => {
           deletedAt: "2026-02-27T00:06:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(threadsOf(next)).toHaveLength(0);
@@ -3464,7 +3466,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:03:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
@@ -3503,7 +3505,7 @@ describe("store read model sync", () => {
           },
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById[threadId]?.session).toMatchObject({
@@ -3545,7 +3547,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:07:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");

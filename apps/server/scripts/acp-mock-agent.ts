@@ -60,7 +60,7 @@ process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
 
-function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+function configOptions(): Array<AcpSchema.SessionConfigOption> {
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
       {
@@ -191,7 +191,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   ];
 }
 
-const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
+const availableModes: Array<AcpSchema.SessionMode> = [
   {
     id: "ask",
     name: "Ask",
@@ -223,9 +223,7 @@ function runEffect<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
 function makeClient(context: OfficialAcp.AgentContext) {
   return {
     sessionUpdate: (notification: AcpSchema.SessionNotification) =>
-      Effect.promise(() =>
-        context.notify(OfficialAcp.methods.client.session.update, notification),
-      ),
+      Effect.promise(() => context.notify(OfficialAcp.methods.client.session.update, notification)),
     requestPermission: (request: AcpSchema.RequestPermissionRequest) =>
       Effect.promise(() =>
         context.request(OfficialAcp.methods.client.session.requestPermission, request),
@@ -332,24 +330,24 @@ app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
-      modes: modeState(),
-      configOptions: configOptions(),
+  modes: modeState(),
+  configOptions: configOptions(),
 }));
 
 app.onRequest(OfficialAcp.methods.agent.session.fork, () => ({
-      sessionId: "mock-session-fork-1",
-      modes: modeState(),
-      configOptions: configOptions(),
+  sessionId: "mock-session-fork-1",
+  modes: modeState(),
+  configOptions: configOptions(),
 }));
 
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
   if (failSetConfigOption) {
     throw OfficialAcp.RequestError.invalidParams(
-      "Mock invalid params for session/set_config_option",
       {
         method: "session/set_config_option",
         params: request,
       },
+      "Mock invalid params for session/set_config_option",
     );
   }
   return runEffect(
@@ -382,7 +380,7 @@ app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: requ
 });
 
 app.onNotification(OfficialAcp.methods.agent.session.cancel, ({ params: { sessionId } }) => {
-      cancelledSessions.add(String(sessionId ?? "mock-session-1"));
+  cancelledSessions.add(String(sessionId ?? "mock-session-1"));
 });
 
 app.onRequest(OfficialAcp.methods.agent.session.prompt, ({ client: context, params: request }) => {
@@ -744,12 +742,12 @@ app.onRequest(
       return runEffect(
         makeClient(context)
           .sessionUpdate({
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "current_mode_update",
-            currentModeId,
-          },
-        })
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "current_mode_update",
+              currentModeId,
+            },
+          })
           .pipe(Effect.as({})),
       );
     }

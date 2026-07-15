@@ -16,15 +16,13 @@
     "dev": "tsdown src/schema.ts src/errors.ts --format esm,cjs --dts --watch --clean",
     "build": "tsdown src/schema.ts src/errors.ts --format esm,cjs --dts --clean",
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
-    "generate": "bun run scripts/generate.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
-    "@effect/openapi-generator": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:"
   }

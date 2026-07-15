@@ -122,9 +122,7 @@ describe("SessionCredentialServiceLive", () => {
           () => sessions.issueWebSocketToken(issued.sessionId),
         );
 
-        const capacityError = yield* Effect.flip(
-          sessions.issueWebSocketToken(issued.sessionId),
-        );
+        const capacityError = yield* Effect.flip(sessions.issueWebSocketToken(issued.sessionId));
         expect(capacityError).toBeInstanceOf(SessionCapacityError);
         if (capacityError instanceof SessionCapacityError) {
           expect(capacityError.scope).toBe("websocket-tickets");
@@ -186,9 +184,7 @@ describe("SessionCredentialServiceLive", () => {
         yield* Effect.sleep(Duration.millis(50));
         expect(yield* Ref.get(startedCount)).toBe(MAX_AUTHENTICATED_CONNECTIONS_PER_SESSION);
         const completed = attempts.map((fiber) => fiber.pollUnsafe());
-        const rejected = completed.filter(
-          (result) => result?._tag === "Failure",
-        );
+        const rejected = completed.filter((result) => result?._tag === "Failure");
         expect(rejected).toHaveLength(4);
 
         const independent = yield* makeBlockingConnection;
@@ -280,10 +276,7 @@ describe("SessionCredentialServiceLive", () => {
           sessions.runAuthenticatedConnection(firstRevokedSession.sessionId, firstRevoked.effect),
         );
         yield* Effect.forkChild(
-          sessions.runAuthenticatedConnection(
-            secondRevokedSession.sessionId,
-            secondRevoked.effect,
-          ),
+          sessions.runAuthenticatedConnection(secondRevokedSession.sessionId, secondRevoked.effect),
         );
         yield* Deferred.await(current.started);
         yield* Deferred.await(firstRevoked.started);

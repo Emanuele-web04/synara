@@ -1645,7 +1645,9 @@ function normalizeThreadFromReadModel(
     previous?.pendingInteractions &&
     deepEqualJson(previous.pendingInteractions, incomingPendingInteractions ?? [])
       ? previous.pendingInteractions
-      : incomingPendingInteractions;
+      : incomingPendingInteractions === undefined
+        ? undefined
+        : [...incomingPendingInteractions];
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const resolvedLatestUserMessageAt =
@@ -2105,8 +2107,7 @@ function markInteractionResponding(
     return {
       ...interaction,
       status: "responding" as const,
-      decision:
-        event.type === "thread.approval-response-requested" ? event.payload.decision : null,
+      decision: event.type === "thread.approval-response-requested" ? event.payload.decision : null,
       responseCommandId: event.commandId,
       responseRequestedAt: event.payload.createdAt,
       resolvedAt: null,
@@ -2161,7 +2162,7 @@ function reconcilePendingInteractionsFromActivity(
     if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
       return thread.pendingInteractions;
     }
-    const settlementStatus =
+    const settlementStatus: OrchestrationPendingInteraction["status"] =
       payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
     let changed = false;
     const next = existing.map((interaction) => {
@@ -2542,10 +2543,7 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
 // Drop only the detail projection owned by a thread subscription. Shell,
 // session, turn, and sidebar state remain available for navigation and live
 // status while the potentially large transcript/activity payload is released.
-export function evictThreadDetailFromClientState(
-  state: AppState,
-  threadId: ThreadId,
-): AppState {
+export function evictThreadDetailFromClientState(state: AppState, threadId: ThreadId): AppState {
   const detailRecords = [
     state.messageIdsByThreadId,
     state.messageByThreadId,
@@ -3041,13 +3039,11 @@ function deriveThreadStateSignals(
   return {
     latestUserMessageAt: metadata.latestUserMessageAt,
     hasPendingApprovals:
-      actionableInteractions?.some(
-        (interaction) => interaction.interactionKind === "approval",
-      ) ?? metadata.hasPendingApprovals,
+      actionableInteractions?.some((interaction) => interaction.interactionKind === "approval") ??
+      metadata.hasPendingApprovals,
     hasPendingUserInput:
-      actionableInteractions?.some(
-        (interaction) => interaction.interactionKind === "userInput",
-      ) ?? metadata.hasPendingUserInput,
+      actionableInteractions?.some((interaction) => interaction.interactionKind === "userInput") ??
+      metadata.hasPendingUserInput,
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
   };
 }

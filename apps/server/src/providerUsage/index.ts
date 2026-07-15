@@ -13,10 +13,7 @@ import type {
 import { Effect } from "effect";
 
 import { ServerConfig } from "../config";
-import {
-  buildProviderChildEnvironment,
-  type ProviderChildKind,
-} from "../providerChildEnvironment";
+import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
 import { errorSnapshot } from "./parse";
 import { PROVIDER_USAGE_FETCHERS } from "./registry";

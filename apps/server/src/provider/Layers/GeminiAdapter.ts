@@ -2035,7 +2035,14 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   const buildPromptBlocks = Effect.fn("buildPromptBlocks")(function* (
     input: ProviderSendTurnInput,
   ) {
-    const blocks: Array<Record<string, unknown>> = [];
+    const blocks: Array<
+      | { readonly type: "text"; readonly text: string }
+      | {
+          readonly type: "image";
+          readonly mimeType: string;
+          readonly data: string;
+        }
+    > = [];
 
     const planPromptText = trimToUndefined(
       withProviderPlanModePrompt({
@@ -2600,7 +2607,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
           removeFromSessions: true,
         }),
       { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.ensuring(Queue.shutdown(runtimeEventQueue))),
+    ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
   );
 
   return {

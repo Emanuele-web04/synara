@@ -147,20 +147,13 @@ import {
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
-import {
-  registerBrowserIpcHandlers,
-  sendBrowserCopyLink,
-  sendBrowserState,
-} from "./browserIpc";
+import { registerBrowserIpcHandlers, sendBrowserCopyLink, sendBrowserState } from "./browserIpc";
 import {
   BrowserUsePipeServer,
   SYNARA_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_PATH,
 } from "./browserUsePipeServer";
-import {
-  normalizeDesktopWsUrl,
-  resolveDesktopWsUrlFromEnv,
-} from "./desktopWsBridge";
+import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import {
   repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
@@ -783,10 +776,7 @@ function armInstallWatchdog(): void {
     // Polling was stopped before the install attempt; resume it so background
     // update checks keep running after this recovery.
     scheduleUpdatePoll();
-    const consecutiveFailures = recordInstallMarkerFailure(
-      new Date().toISOString(),
-      failedHandoff,
-    );
+    const consecutiveFailures = recordInstallMarkerFailure(new Date().toISOString(), failedHandoff);
     setUpdateState({
       ...reduceDesktopUpdateStateOnInstallFailure(
         updateState,
@@ -879,22 +869,15 @@ function resolveEmbeddedCommitHash(): string | null {
   }
 }
 
+declare const __SYNARA_WINDOWS_UPDATER_PUBLISHER__: string;
+
 function resolveEmbeddedWindowsPublisherSubjects(): string[] {
   if (!app.isPackaged || process.platform !== "win32") {
     return [];
   }
 
-  try {
-    const raw = FS.readFileSync(Path.join(resolveAppRoot(), "package.json"), "utf8");
-    const parsed = JSON.parse(raw) as { synaraWindowsPublisherSubject?: unknown };
-    const subject =
-      typeof parsed.synaraWindowsPublisherSubject === "string"
-        ? parsed.synaraWindowsPublisherSubject.trim()
-        : "";
-    return subject ? [subject] : [];
-  } catch {
-    return [];
-  }
+  const subject = __SYNARA_WINDOWS_UPDATER_PUBLISHER__.trim();
+  return subject ? [subject] : [];
 }
 
 function resolveAboutCommitHash(): string | null {
@@ -2341,7 +2324,7 @@ async function downloadAvailableUpdate(): Promise<{
     }
     return {
       accepted: true,
-      completed: downloadedUpdateArtifact !== null && updateState.status === "downloaded",
+      completed: downloadedUpdateArtifact !== null,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -3501,7 +3484,9 @@ function configureMediaPermissions(): void {
           return;
         }
 
-        void systemPreferences.askForMediaAccess("microphone").then(callback, () => callback(false));
+        void systemPreferences
+          .askForMediaAccess("microphone")
+          .then(callback, () => callback(false));
         return;
       }
 

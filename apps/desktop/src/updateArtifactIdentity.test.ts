@@ -58,7 +58,11 @@ describe("update artifact identity", () => {
 
   it("rejects empty artifact identities", () => {
     expect(
-      isUpdateArtifactIdentity({ path: Path.resolve("empty.zip"), size: 0, sha512: "a".repeat(128) }),
+      isUpdateArtifactIdentity({
+        path: Path.resolve("empty.zip"),
+        size: 0,
+        sha512: "a".repeat(128),
+      }),
     ).toBe(false);
   });
 });

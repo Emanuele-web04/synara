@@ -346,13 +346,7 @@ it.layer(testLayer)("server CLI command", (it) => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(
         runCli(
-          [
-            "--host",
-            "0.0.0.0",
-            "--auth-token",
-            "remote-secret",
-            "--no-allow-insecure-remote",
-          ],
+          ["--host", "0.0.0.0", "--auth-token", "remote-secret", "--no-allow-insecure-remote"],
           {
             SYNARA_ALLOW_INSECURE_REMOTE: "true",
             SYNARA_NO_BROWSER: "true",
@@ -392,7 +386,10 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(resolvedConfig?.publicUrl?.origin, "https://synara.example.test");
       assert.equal(openBrowser.mock.calls.length, 1);
-      assert.match(openBrowser.mock.calls[0]?.[0] ?? "", /^https:\/\/synara\.example\.test\/pair#token=/);
+      assert.match(
+        openBrowser.mock.calls[0]?.[0] ?? "",
+        /^https:\/\/synara\.example\.test\/pair#token=/,
+      );
     }),
   );
 
@@ -456,14 +453,7 @@ it.layer(testLayer)("server CLI command", (it) => {
     Effect.gen(function* () {
       for (const publicUrl of ["http://synara.example.test", "https://synara.example.test/app"]) {
         const error = yield* Effect.flip(
-          runCli([
-            "--host",
-            "0.0.0.0",
-            "--auth-token",
-            "remote-secret",
-            "--public-url",
-            publicUrl,
-          ]),
+          runCli(["--host", "0.0.0.0", "--auth-token", "remote-secret", "--public-url", publicUrl]),
         );
         assert.match(String(error), /must be an HTTPS root origin/);
       }
@@ -507,7 +497,10 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(start.mock.calls.length, 0);
       assert.equal(resolvedConfig, null);
-      assert.match(String(error), /Remote server binds cannot be combined with VITE_DEV_SERVER_URL/);
+      assert.match(
+        String(error),
+        /Remote server binds cannot be combined with VITE_DEV_SERVER_URL/,
+      );
     }),
   );
 

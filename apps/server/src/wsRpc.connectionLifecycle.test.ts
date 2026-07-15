@@ -19,10 +19,7 @@ import {
   type SessionCredentialServiceShape,
 } from "./auth/Services/SessionCredentialService";
 import { ServerConfig } from "./config";
-import {
-  makeBoundedNodeHttpServer,
-  MAX_WEBSOCKET_MESSAGE_BYTES,
-} from "./nodeHttpServer";
+import { makeBoundedNodeHttpServer, MAX_WEBSOCKET_MESSAGE_BYTES } from "./nodeHttpServer";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { makeWebsocketRpcRouteLayer } from "./wsRpc";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
@@ -120,10 +117,8 @@ function sendFragment(
   options: { readonly fin: boolean },
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    socket.send(
-      data,
-      { binary: false, compress: false, fin: options.fin },
-      (error) => (error ? reject(error) : resolve()),
+    socket.send(data, { binary: false, compress: false, fin: options.fin }, (error) =>
+      error ? reject(error) : resolve(),
     );
   });
 }
@@ -131,7 +126,10 @@ function sendFragment(
 function waitForClose(socket: WebSocket, timeoutMs = 2_000): Promise<void> {
   if (socket.readyState === WebSocket.CLOSED) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for socket close")), timeoutMs);
+    const timeout = setTimeout(
+      () => reject(new Error("Timed out waiting for socket close")),
+      timeoutMs,
+    );
     socket.once("close", () => {
       clearTimeout(timeout);
       resolve();
@@ -144,7 +142,10 @@ function ping(socket: WebSocket, timeoutMs = 2_000): Promise<void> {
     return Promise.reject(new Error("Socket is not open"));
   }
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for RPC response")), timeoutMs);
+    const timeout = setTimeout(
+      () => reject(new Error("Timed out waiting for RPC response")),
+      timeoutMs,
+    );
     const onMessage = (data: RawData) => {
       const frame = JSON.parse(data.toString()) as Record<string, unknown>;
       if (frame._tag !== "Pong") return;
@@ -195,11 +196,13 @@ async function startTestServer(): Promise<RunningTestServer> {
           );
         },
         logoutSession: (sessionId) =>
-          sessions.revoke(sessionId).pipe(
-            Effect.mapError(
-              (cause) => new AuthError({ message: "Failed to log out session.", cause }),
+          sessions
+            .revoke(sessionId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new AuthError({ message: "Failed to log out session.", cause }),
+              ),
             ),
-          ),
       } as ServerAuthShape;
     }),
   ).pipe(Layer.provide(sessionsLayer));
@@ -325,10 +328,7 @@ function featureSocketUrl(server: RunningTestServer, token: string): string {
   return `${server.origin}/ws?${searchParams.toString()}`;
 }
 
-async function waitForObserved(
-  predicate: () => boolean,
-  timeoutMs = 2_000,
-): Promise<void> {
+async function waitForObserved(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for observed server state");
@@ -341,7 +341,9 @@ describe("websocket RPC payload admission", () => {
     const server = await startTestServer();
     try {
       const issued = await Effect.runPromise(server.sessions.issue());
-      const websocket = await Effect.runPromise(server.sessions.issueWebSocketToken(issued.sessionId));
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
 
       await expect(
         connect(`${server.origin}/ws?wsToken=${encodeURIComponent(websocket.token)}`),
@@ -407,9 +409,7 @@ describe("websocket RPC payload admission", () => {
       });
 
       await expect(close).resolves.toMatchObject({ code: 1009 });
-      await waitForObserved(
-        () => server.transportFinalizers.count >= finalizersBefore + 1,
-      );
+      await waitForObserved(() => server.transportFinalizers.count >= finalizersBefore + 1);
       expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
 
       const recovery = await connectSession(server);
@@ -431,12 +431,8 @@ describe("websocket RPC payload admission", () => {
       const connected = await connectSession(server);
       const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "105");
       const splitAt = Math.floor(frame.length / 2);
-      expect(Buffer.byteLength(frame.slice(0, splitAt))).toBeLessThan(
-        MAX_WEBSOCKET_MESSAGE_BYTES,
-      );
-      expect(Buffer.byteLength(frame.slice(splitAt))).toBeLessThan(
-        MAX_WEBSOCKET_MESSAGE_BYTES,
-      );
+      expect(Buffer.byteLength(frame.slice(0, splitAt))).toBeLessThan(MAX_WEBSOCKET_MESSAGE_BYTES);
+      expect(Buffer.byteLength(frame.slice(splitAt))).toBeLessThan(MAX_WEBSOCKET_MESSAGE_BYTES);
 
       await sendFragment(connected.socket, frame.slice(0, splitAt), { fin: false });
       await new Promise((resolve) => setImmediate(resolve));
@@ -448,9 +444,7 @@ describe("websocket RPC payload admission", () => {
       void sendFragment(connected.socket, frame.slice(splitAt), { fin: true }).catch(() => {});
 
       await expect(close).resolves.toMatchObject({ code: 1009 });
-      await waitForObserved(
-        () => server.transportFinalizers.count >= finalizersBefore + 1,
-      );
+      await waitForObserved(() => server.transportFinalizers.count >= finalizersBefore + 1);
       expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
     } finally {
       await server.close();
@@ -497,9 +491,9 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       const connected = await connectSession(server);
       await expect(ping(connected.socket)).resolves.toBeUndefined();
 
-      await expect(
-        connect(featureSocketUrl(server, connected.token)),
-      ).rejects.toMatchObject({ statusCode: 401 });
+      await expect(connect(featureSocketUrl(server, connected.token))).rejects.toMatchObject({
+        statusCode: 401,
+      });
       await expect(ping(connected.socket)).resolves.toBeUndefined();
     } finally {
       await server.close();
@@ -519,9 +513,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       const rejectedTicket = await Effect.runPromise(
         server.sessions.issueWebSocketToken(first.sessionId),
       );
-      await expect(
-        connect(featureSocketUrl(server, rejectedTicket.token)),
-      ).rejects.toMatchObject({
+      await expect(connect(featureSocketUrl(server, rejectedTicket.token))).rejects.toMatchObject({
         statusCode: 429,
         headers: expect.objectContaining({ "retry-after": "1" }),
       });
@@ -561,12 +553,8 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       expect(server.transportFinalizers.count).toBeGreaterThanOrEqual(2);
       await expect(ping(revoked.socket)).rejects.toThrow("not open");
       await expect(ping(survivor.socket)).resolves.toBeUndefined();
-      await expect(
-        connect(featureSocketUrl(server, revoked.token)),
-      ).rejects.toThrow("401");
-      await expect(
-        connect(featureSocketUrl(server, revokedSecond.token)),
-      ).rejects.toThrow("401");
+      await expect(connect(featureSocketUrl(server, revoked.token))).rejects.toThrow("401");
+      await expect(connect(featureSocketUrl(server, revokedSecond.token))).rejects.toThrow("401");
     } finally {
       await server.close();
     }
@@ -583,9 +571,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
 
       expect(expiring.socket.readyState).toBe(WebSocket.CLOSED);
       expect(server.transportFinalizers.count).toBeGreaterThanOrEqual(1);
-      await expect(
-        connect(featureSocketUrl(server, expiring.token)),
-      ).rejects.toThrow("401");
+      await expect(connect(featureSocketUrl(server, expiring.token))).rejects.toThrow("401");
     } finally {
       await server.close();
     }

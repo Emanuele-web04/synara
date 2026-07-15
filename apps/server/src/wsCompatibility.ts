@@ -51,14 +51,8 @@ export function negotiateWsCompatibility(
     );
   }
 
-  const lowestCompatibleRevision = Math.max(
-    input.minRevision,
-    WS_PROTOCOL_MIN_REVISION,
-  );
-  const negotiatedRevision = Math.min(
-    input.maxRevision,
-    WS_PROTOCOL_MAX_REVISION,
-  );
+  const lowestCompatibleRevision = Math.max(input.minRevision, WS_PROTOCOL_MIN_REVISION);
+  const negotiatedRevision = Math.min(input.maxRevision, WS_PROTOCOL_MAX_REVISION);
   if (negotiatedRevision < lowestCompatibleRevision) {
     return Effect.fail(
       incompatibility(
@@ -132,7 +126,9 @@ export function validateWsFeatureCompatibility(
   return null;
 }
 
-export function makeCurrentWsFeatureCompatibilitySearchParams(clientBuild: string): URLSearchParams {
+export function makeCurrentWsFeatureCompatibilitySearchParams(
+  clientBuild: string,
+): URLSearchParams {
   return new URLSearchParams({
     [WS_COMPATIBILITY_QUERY.clientBuild]: clientBuild,
     [WS_COMPATIBILITY_QUERY.protocolEpoch]: String(WS_PROTOCOL_EPOCH),

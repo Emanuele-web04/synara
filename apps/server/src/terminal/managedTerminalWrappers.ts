@@ -412,7 +412,11 @@ export function prepareManagedTerminalWrappers(options: {
   const claudeSettingsPath = path.join(options.rootDir, "claude-settings.json");
   ensurePrivateDirectorySync(codexHomeDir);
   writeFileIfChanged(hookScriptPath, buildNotifyHookScript(), PRIVATE_EXECUTABLE_FILE_MODE);
-  writeFileIfChanged(claudeSettingsPath, buildClaudeSettingsJson(hookScriptPath), PRIVATE_FILE_MODE);
+  writeFileIfChanged(
+    claudeSettingsPath,
+    buildClaudeSettingsJson(hookScriptPath),
+    PRIVATE_FILE_MODE,
+  );
   writeFileIfChanged(
     path.join(codexHomeDir, "hooks.json"),
     buildCodexHooksJson(hookScriptPath),

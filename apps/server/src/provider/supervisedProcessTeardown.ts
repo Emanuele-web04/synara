@@ -20,7 +20,7 @@ export interface SupervisedProcessTeardownInput {
 }
 
 export interface ProcessExitHandle {
-  readonly pid?: number;
+  readonly pid?: number | undefined;
   readonly exitCode: number | null;
   readonly signalCode: NodeJS.Signals | null;
   once(event: "exit", listener: () => void): unknown;
@@ -130,7 +130,9 @@ export async function teardownProviderProcessTree(
   dependencies: Partial<SupervisedProcessTeardownDependencies> = {},
 ): Promise<SupervisedProcessTeardownResult> {
   if (!Number.isInteger(input.rootPid) || input.rootPid <= 0) {
-    throw new TypeError(`Provider process root PID must be a positive integer, got ${input.rootPid}.`);
+    throw new TypeError(
+      `Provider process root PID must be a positive integer, got ${input.rootPid}.`,
+    );
   }
 
   const deps = { ...defaultDependencies, ...dependencies };
@@ -190,9 +192,7 @@ export async function teardownProviderProcessTree(
   // A root can exit while descendants ignore TERM and become reparented. Preserve the captured
   // identities and force only those descendants rather than re-signalling a potentially reused PID.
   signal("SIGKILL", !rootExited);
-  const forced = await waitForExitProof(
-    positiveDuration(input.forceExitMs, DEFAULT_FORCE_EXIT_MS),
-  );
+  const forced = await waitForExitProof(positiveDuration(input.forceExitMs, DEFAULT_FORCE_EXIT_MS));
   if (forced.proven) {
     return { escalated: true, signalErrors };
   }

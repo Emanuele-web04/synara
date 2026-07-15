@@ -8,9 +8,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "./OrchestrationComman
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 
 const layer = it.layer(
-  OrchestrationCommandReceiptRepositoryLive.pipe(
-    Layer.provideMerge(SqlitePersistenceMemory),
-  ),
+  OrchestrationCommandReceiptRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
 );
 
 layer("OrchestrationCommandReceiptRepository", (it) => {

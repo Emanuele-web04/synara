@@ -182,10 +182,7 @@ function replacePendingInteraction<T extends { requestId: ApprovalRequestId }>(
   lifecycleGeneration: string | undefined,
 ): void {
   deletePendingInteraction(openByInstance, pending.requestId, undefined);
-  openByInstance.set(
-    pendingRequestInstanceKey(pending.requestId, lifecycleGeneration),
-    pending,
-  );
+  openByInstance.set(pendingRequestInstanceKey(pending.requestId, lifecycleGeneration), pending);
 }
 
 function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>(
@@ -477,13 +474,17 @@ export function derivePendingApprovals(
     const lifecycleGeneration = activityLifecycleGeneration(payload);
 
     if (activity.kind === "approval.requested" && requestId && requestKind) {
-      replacePendingInteraction(openByInstance, {
-        requestId,
-        ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
-        requestKind,
-        createdAt: activity.createdAt,
-        ...(detail ? { detail } : {}),
-      }, lifecycleGeneration);
+      replacePendingInteraction(
+        openByInstance,
+        {
+          requestId,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+          requestKind,
+          createdAt: activity.createdAt,
+          ...(detail ? { detail } : {}),
+        },
+        lifecycleGeneration,
+      );
       continue;
     }
 
@@ -580,12 +581,16 @@ export function derivePendingUserInputs(
       if (!questions) {
         continue;
       }
-      replacePendingInteraction(openByInstance, {
-        requestId,
-        ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
-        createdAt: activity.createdAt,
-        questions,
-      }, lifecycleGeneration);
+      replacePendingInteraction(
+        openByInstance,
+        {
+          requestId,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+          createdAt: activity.createdAt,
+          questions,
+        },
+        lifecycleGeneration,
+      );
       continue;
     }
 

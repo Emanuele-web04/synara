@@ -36,7 +36,9 @@ afterEach(() => {
 
 describe("transcribeVoiceWithChatGptSession", () => {
   it("uses the ChatGPT transcription backend", async () => {
-    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue(outboundJson({ text: "hello" }));
+    const request = vi
+      .spyOn(outboundHttp, "request")
+      .mockResolvedValue(outboundJson({ text: "hello" }));
 
     await transcribeVoiceWithChatGptSession({
       request: baseRequest,

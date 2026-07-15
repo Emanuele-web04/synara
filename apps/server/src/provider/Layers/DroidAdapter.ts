@@ -1319,7 +1319,7 @@ export function makeDroidAdapter(
           turnId,
           idleMs,
         });
-        yield* offerRuntimeEvent(input.lifecycleGeneration, {
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,

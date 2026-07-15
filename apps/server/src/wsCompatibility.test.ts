@@ -54,9 +54,7 @@ describe("WebSocket compatibility bootstrap", () => {
       retryable: false,
     });
     expect(
-      validateWsFeatureCompatibility(
-        makeCurrentWsFeatureCompatibilitySearchParams("test-client"),
-      ),
+      validateWsFeatureCompatibility(makeCurrentWsFeatureCompatibilitySearchParams("test-client")),
     ).toBeNull();
   });
 

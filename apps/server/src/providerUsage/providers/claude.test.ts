@@ -35,9 +35,9 @@ function stubOutboundFetch(
 ): void {
   vi.spyOn(outboundHttp, "request").mockImplementation(async (input) => {
     const response = await fetchMock(input.url, {
-      method: input.method,
+      ...(input.method === undefined ? {} : { method: input.method }),
       headers: input.headers,
-      ...(input.body === undefined ? {} : { body: input.body as BodyInit }),
+      ...(input.body === undefined ? {} : { body: input.body }),
     });
     return {
       status: response.status,

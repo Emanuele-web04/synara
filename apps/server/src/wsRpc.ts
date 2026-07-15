@@ -45,7 +45,7 @@ import {
   Stream,
 } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { RpcMiddleware, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
@@ -114,10 +114,7 @@ import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { makeWsStreamAdmission } from "./wsStreamAdmission";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
-import {
-  negotiateWsCompatibility,
-  validateWsFeatureCompatibility,
-} from "./wsCompatibility";
+import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
 import {
   requiresWebSocketAuthentication,
   shouldRejectUntrustedRequestOrigin,
@@ -145,10 +142,15 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
   makeWsRequestAdmission.pipe(
     Effect.map(
-      (admission) => (effect, options) =>
-        options.rpc.stream
-          ? effect
-          : admission.guard(options.clientId, options.rpc._tag, effect),
+      (admission) =>
+        ((effect, options) =>
+          RpcSchema.isStreamSchema(options.rpc.successSchema)
+            ? effect
+            : admission.guard(
+                options.clientId,
+                options.rpc._tag,
+                effect,
+              )) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>,
     ),
   ),
 );
@@ -362,17 +364,16 @@ const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
 // before the live-UI buffer so the sliding window only holds events that can
 // actually project to a shell update.
 function isShellRelevantEvent(event: OrchestrationEvent): boolean {
-  return event.type === "project.created" ||
+  return (
+    event.type === "project.created" ||
     event.type === "project.meta-updated" ||
     event.type === "project.deleted" ||
     event.type === "thread.deleted" ||
-    (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event));
+    (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event))
+  );
 }
 
-function isThreadDetailEventFor(
-  threadId: ThreadId,
-  event: OrchestrationEvent,
-): boolean {
+function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
   return (
     event.aggregateKind === "thread" &&
     event.aggregateId === threadId &&
@@ -1119,11 +1120,11 @@ const makeWsRpcHandlersLayer = () =>
                   }),
                 ),
               ),
-              snapshot: projectionReadModelQuery.getShellSnapshot().pipe(
-                Effect.mapError((cause) =>
-                  toWsRpcError(cause, "Failed to load shell snapshot"),
+              snapshot: projectionReadModelQuery
+                .getShellSnapshot()
+                .pipe(
+                  Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
                 ),
-              ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
               replay: (fromSequenceExclusive, throughSequenceInclusive) =>
@@ -1190,9 +1191,7 @@ const makeWsRpcHandlersLayer = () =>
                       }),
                   }),
                 ),
-                Effect.mapError((cause) =>
-                  toWsRpcError(cause, "Failed to load thread snapshot"),
-                ),
+                Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
               snapshotSequence: (snapshot) => snapshot.snapshotSequence,
               getHighWaterSequence: getOrchestrationHighWaterSequence,
@@ -1360,8 +1359,7 @@ const makeWsRpcHandlersLayer = () =>
                 }),
               ).pipe(
                 Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
                   onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
                 }),
               ),
@@ -1629,7 +1627,10 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createWorktree(input))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.createWorktree(input)),
+            ),
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
@@ -1642,7 +1643,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.gitRemoveWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.removeWorktree(input))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.removeWorktree(input)),
+            ),
             "Failed to remove worktree",
           ),
         [WS_METHODS.gitCreateBranch]: (input) =>
@@ -1688,9 +1692,7 @@ const makeWsRpcHandlersLayer = () =>
             refreshGitStatusAfter(
               input.cwd,
               git.withMutation(input.cwd, git.stageFiles(input.cwd, input.paths)),
-            ).pipe(
-              Effect.as({ ok: true }),
-            ),
+            ).pipe(Effect.as({ ok: true })),
             "Failed to stage files",
           ),
         [WS_METHODS.gitUnstageFiles]: (input) =>
@@ -1698,9 +1700,7 @@ const makeWsRpcHandlersLayer = () =>
             refreshGitStatusAfter(
               input.cwd,
               git.withMutation(input.cwd, git.unstageFiles(input.cwd, input.paths)),
-            ).pipe(
-              Effect.as({ ok: true }),
-            ),
+            ).pipe(Effect.as({ ok: true })),
             "Failed to unstage files",
           ),
         [WS_METHODS.gitHandoffThread]: (input) =>
@@ -1731,9 +1731,7 @@ const makeWsRpcHandlersLayer = () =>
                           ),
                         ),
                       ),
-                    ).pipe(
-                      Effect.tap((gitResult) => recordGitHandoffResult(commandId, gitResult)),
-                    );
+                    ).pipe(Effect.tap((gitResult) => recordGitHandoffResult(commandId, gitResult)));
               yield* dispatchOrchestrationCommand(
                 gitHandoffMetadataCommand({ commandId, threadId }, result),
               );
@@ -2004,9 +2002,7 @@ const makeWsRpcHandlersLayer = () =>
                   ),
                 ),
               ),
-            ).pipe(
-              Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed")),
-            ),
+            ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed"))),
           ),
         [WS_METHODS.subscribeServerProviderStatuses]: (_, { clientId }) =>
           streamAdmission.guard(
@@ -2126,9 +2122,7 @@ const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(AdmittedWsFea
   // JSON keeps the wire format symmetric with any web build. A serialization
   // mismatch on this single multiplexed socket is a hard connect failure, and the
   // desktop/dev setup routinely runs server and web on independently-built copies.
-}).pipe(
-  Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))),
-);
+}).pipe(Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))));
 
 const makeBootstrapWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsBootstrapRpcGroup, {
   spanPrefix: "ws.bootstrap",
@@ -2153,11 +2147,12 @@ function trustedWebSocketRequestUrl(
   config: ServerConfigShape,
 ): URL | null {
   const url = HttpServerRequest.toURL(request);
-  return url && !shouldRejectUntrustedRequestOrigin({
-    rawOrigin: request.headers.origin,
-    requestOrigin: url.origin,
-    config,
-  })
+  return url &&
+    !shouldRejectUntrustedRequestOrigin({
+      rawOrigin: request.headers.origin,
+      requestOrigin: url.origin,
+      config,
+    })
     ? url
     : null;
 }

@@ -101,9 +101,7 @@ async function readOwner(lockPath: string): Promise<DatabaseLifecycleLockOwner> 
     !Number.isSafeInteger(owner.pid) ||
     owner.pid! <= 0 ||
     typeof owner.token !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      owner.token,
-    ) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(owner.token) ||
     typeof owner.createdAt !== "string"
   ) {
     throw new Error("lock owner metadata is invalid");
@@ -392,10 +390,7 @@ export const acquireDatabaseLifecycleLock = (dbPath: string) =>
 export const releaseDatabaseLifecycleLock = (lock: DatabaseLifecycleLock) =>
   attemptPromise(() => release(lock));
 
-export const withDatabaseLifecycleLock = <A, E, R>(
-  dbPath: string,
-  use: Effect.Effect<A, E, R>,
-) =>
+export const withDatabaseLifecycleLock = <A, E, R>(dbPath: string, use: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     acquireDatabaseLifecycleLock(dbPath),
     () => use,

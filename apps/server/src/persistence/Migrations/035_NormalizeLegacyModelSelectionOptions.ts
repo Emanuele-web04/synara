@@ -73,7 +73,10 @@ export default Effect.gen(function* () {
 
   let projectCursor: string | null = null;
   while (true) {
-    const projectRows = yield* sql<{
+    const projectRows: ReadonlyArray<{
+      readonly projectId: string;
+      readonly defaultModelSelection: string | null;
+    }> = yield* sql<{
       readonly projectId: string;
       readonly defaultModelSelection: string | null;
     }>`
@@ -103,7 +106,10 @@ export default Effect.gen(function* () {
 
   let threadCursor: string | null = null;
   while (true) {
-    const threadRows = yield* sql<{
+    const threadRows: ReadonlyArray<{
+      readonly threadId: string;
+      readonly modelSelection: string;
+    }> = yield* sql<{
       readonly threadId: string;
       readonly modelSelection: string;
     }>`

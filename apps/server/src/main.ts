@@ -169,9 +169,9 @@ const ServerConfigLive = (input: CliInput) =>
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
       const configuredPublicUrl = Option.getOrUndefined(input.publicUrl) ?? env.publicUrl;
       const publicUrl = configuredPublicUrl
-        ? normalizeHttpsPublicOrigin(configuredPublicUrl)
+        ? (normalizeHttpsPublicOrigin(configuredPublicUrl) ?? undefined)
         : undefined;
-      if (configuredPublicUrl && !publicUrl) {
+      if (configuredPublicUrl && publicUrl === undefined) {
         return yield* new StartupError({
           message:
             "SYNARA_PUBLIC_URL/--public-url must be an HTTPS root origin without credentials, path, query, or fragment (for example https://synara.example.com).",
@@ -335,17 +335,18 @@ const makeServerProgram = (input: CliInput) =>
         ? `http://${formatHostForUrl(config.host)}:${config.port}`
         : localUrl;
     const pairingBaseUrl = config.publicUrl?.origin ?? bindUrl;
-    const startupPairingUrl = config.publicUrl || !isLoopbackHost(config.host)
-      ? yield* serverAuth.issueStartupPairingUrl(pairingBaseUrl).pipe(
-          Effect.mapError(
-            (cause) =>
-              new StartupError({
-                message: "Failed to create the remote-access startup pairing link.",
-                cause,
-              }),
-          ),
-        )
-      : undefined;
+    const startupPairingUrl =
+      config.publicUrl || !isLoopbackHost(config.host)
+        ? yield* serverAuth.issueStartupPairingUrl(pairingBaseUrl).pipe(
+            Effect.mapError(
+              (cause) =>
+                new StartupError({
+                  message: "Failed to create the remote-access startup pairing link.",
+                  cause,
+                }),
+            ),
+          )
+        : undefined;
 
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -463,12 +464,9 @@ const authTokenFlag = Flag.string("auth-token").pipe(
   Flag.withAlias("token"),
   Flag.optional,
 );
-const autoBootstrapProjectFromCwdFlag = optionalBooleanFlag(
-  "auto-bootstrap-project-from-cwd",
-  {
-    description: "Create a project for the current working directory on startup when missing.",
-  },
-);
+const autoBootstrapProjectFromCwdFlag = optionalBooleanFlag("auto-bootstrap-project-from-cwd", {
+  description: "Create a project for the current working directory on startup when missing.",
+});
 const logProviderEventsFlag = optionalBooleanFlag("log-provider-events", {
   description:
     "Emit native/canonical provider NDJSON logs for debugging (equivalent to SYNARA_LOG_PROVIDER_EVENTS).",

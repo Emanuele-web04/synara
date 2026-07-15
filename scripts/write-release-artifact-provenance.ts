@@ -70,7 +70,8 @@ function parseArgs(argv: ReadonlyArray<string>): CliOptions {
     "--expected-windows-subject-dn",
   ]);
   for (const name of values.keys()) {
-    if (!knownArguments.has(name)) throw new Error(`Unknown artifact provenance argument: ${name}.`);
+    if (!knownArguments.has(name))
+      throw new Error(`Unknown artifact provenance argument: ${name}.`);
   }
 
   const expectedMacTeamId = values.get("--expected-mac-team-id") || undefined;

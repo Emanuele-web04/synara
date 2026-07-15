@@ -115,8 +115,7 @@ export const makeServerAuth = Effect.gen(function* () {
     const credentialSource = bearerToken ? "bearer" : "cookie";
     return authenticateToken(bearerToken ?? cookieToken!).pipe(
       Effect.map(
-        (session) =>
-          ({ ...session, credentialSource }) satisfies AuthenticatedHttpSession,
+        (session) => ({ ...session, credentialSource }) satisfies AuthenticatedHttpSession,
       ),
     );
   };

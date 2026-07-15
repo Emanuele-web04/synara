@@ -39,16 +39,16 @@ lines**.
 
 ### Bottom-line status
 
-| Area | Current status | Reviewer interpretation |
-| --- | --- | --- |
-| Architecture workstreams | Recorded as code-complete | Broad changes exist and require subsystem review |
-| ACP production wire | Cut over to official SDK | Correct strategic direction; inspect resource bounds carefully |
-| Legacy ACP wire | Deleted in local working tree | Strong consolidation win; currently uncommitted |
-| Hotspot pruning | Implemented incrementally | Net-negative runtime work, with focused evidence recorded |
-| ACP benchmarks | Implemented and run | Useful synthetic evidence, not an end-to-end app benchmark |
+| Area                         | Current status                               | Reviewer interpretation                                           |
+| ---------------------------- | -------------------------------------------- | ----------------------------------------------------------------- |
+| Architecture workstreams     | Recorded as code-complete                    | Broad changes exist and require subsystem review                  |
+| ACP production wire          | Cut over to official SDK                     | Correct strategic direction; inspect resource bounds carefully    |
+| Legacy ACP wire              | Deleted in local working tree                | Strong consolidation win; currently uncommitted                   |
+| Hotspot pruning              | Implemented incrementally                    | Net-negative runtime work, with focused evidence recorded         |
+| ACP benchmarks               | Implemented and run                          | Useful synthetic evidence, not an end-to-end app benchmark        |
 | Full repository verification | Not performed after the latest local changes | `fmt`, `lint`, and `typecheck` remain mandatory before completion |
-| Browser verification | Partially blocked | Existing welcome fixture lacks `protocolEpoch` |
-| Release readiness | Not established | This is a review handoff, not a release sign-off |
+| Browser verification         | Partially blocked                            | Existing welcome fixture lacks `protocolEpoch`                    |
+| Release readiness            | Not established                              | This is a review handoff, not a release sign-off                  |
 
 ---
 
@@ -58,11 +58,11 @@ Reviewers must not treat the remote branch and the local working tree as the sam
 
 ### Committed branch: `5056e395e..9780ff8bb`
 
-| Commit | Summary | Size |
-| --- | --- | ---: |
-| `0e5f6af9c` | Refactor Synara orchestration and web UI flow | 387 files, +43,323 / -9,299 |
-| `9780ff8bb` | Consolidate desktop IPC channel constants | 14 files, +287 / -240 |
-| **Committed total** | Two commits after `v0.5.2` | **394 files, +43,571 / -9,500; net +34,071** |
+| Commit              | Summary                                       |                                         Size |
+| ------------------- | --------------------------------------------- | -------------------------------------------: |
+| `0e5f6af9c`         | Refactor Synara orchestration and web UI flow |                  387 files, +43,323 / -9,299 |
+| `9780ff8bb`         | Consolidate desktop IPC channel constants     |                        14 files, +287 / -240 |
+| **Committed total** | Two commits after `v0.5.2`                    | **394 files, +43,571 / -9,500; net +34,071** |
 
 ### Current tracked working-tree changes: `HEAD..working tree`
 
@@ -73,13 +73,13 @@ Reviewers must not treat the remote branch and the local working tree as the sam
 
 ### Current untracked review artifacts
 
-| Path | Purpose | Approximate lines |
-| --- | --- | ---: |
-| `apps/server/scripts/acp-wire-benchmark.ts` | Shared Effect-vs-official benchmark runner | 414 |
-| `apps/server/scripts/compare-acp-wire-benchmarks.ts` | Result comparison generator | 88 |
-| `apps/web/src/test/browserHarness.ts` | Shared browser-test fixture helper | 35 |
-| `benchmarks/acp-wire/*.json` | Four recorded benchmark comparisons | 720 |
-| **Total** | Untracked files are excluded from normal `git diff --stat` | **1,257** |
+| Path                                                 | Purpose                                                    | Approximate lines |
+| ---------------------------------------------------- | ---------------------------------------------------------- | ----------------: |
+| `apps/server/scripts/acp-wire-benchmark.ts`          | Shared Effect-vs-official benchmark runner                 |               414 |
+| `apps/server/scripts/compare-acp-wire-benchmarks.ts` | Result comparison generator                                |                88 |
+| `apps/web/src/test/browserHarness.ts`                | Shared browser-test fixture helper                         |                35 |
+| `benchmarks/acp-wire/*.json`                         | Four recorded benchmark comparisons                        |               720 |
+| **Total**                                            | Untracked files are excluded from normal `git diff --stat` |         **1,257** |
 
 ### Complete tracked diff against the baseline
 
@@ -99,14 +99,14 @@ reliability architecture. That is why additions exceeded deletions.
 
 Approximate classification of the current tracked diff:
 
-| Category | Files | Added | Deleted | Net | What it means |
-| --- | ---: | ---: | ---: | ---: | --- |
-| Tests and fixtures | 128 | 16,827 | 2,962 | **+13,865** | The largest source of growth; recovery and concurrency invariants gained tests |
-| Runtime and contracts | 236 | 20,233 | 10,379 | **+9,854** | New durable owners, admission paths, lifecycle rules, and shared contracts |
-| Documentation | 3 | 2,603 | 0 | **+2,603** | Audit/controller/handoff documentation |
-| Migrations and recovery | 21 | 1,628 | 66 | **+1,562** | Durable delivery, identity, attachments, and Git recovery |
-| Tooling, CI, and scripts | 17 | 1,952 | 383 | **+1,569** | Release validation and operational tooling |
-| Generated files | 1 | 298 | 298 | **0** | Regenerated schema output |
+| Category                 | Files |  Added | Deleted |         Net | What it means                                                                  |
+| ------------------------ | ----: | -----: | ------: | ----------: | ------------------------------------------------------------------------------ |
+| Tests and fixtures       |   128 | 16,827 |   2,962 | **+13,865** | The largest source of growth; recovery and concurrency invariants gained tests |
+| Runtime and contracts    |   236 | 20,233 |  10,379 |  **+9,854** | New durable owners, admission paths, lifecycle rules, and shared contracts     |
+| Documentation            |     3 |  2,603 |       0 |  **+2,603** | Audit/controller/handoff documentation                                         |
+| Migrations and recovery  |    21 |  1,628 |      66 |  **+1,562** | Durable delivery, identity, attachments, and Git recovery                      |
+| Tooling, CI, and scripts |    17 |  1,952 |     383 |  **+1,569** | Release validation and operational tooling                                     |
+| Generated files          |     1 |    298 |     298 |       **0** | Regenerated schema output                                                      |
 
 This means “+29k LOC” does **not** mean the chat UI now executes 29,000 more lines for every message.
 Much of the increase is tests, documentation, migrations, recovery handling, and explicit failure
@@ -188,35 +188,35 @@ The table below explains what each workstream was trying to fix and what a revie
 
 ### P0 — trust and security boundaries
 
-| Workstream | Why it was needed | Main change | Result to verify |
-| --- | --- | --- | --- |
+| Workstream                           | Why it was needed                                                                        | Main change                                                    | Result to verify                                                                        |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `P0-REL-01` Release/update authority | Release artifacts and updater decisions could derive authority from inconsistent sources | Exact-source provenance and fail-closed updater/release checks | A release must only trust the expected repository, tag, platform, and artifact identity |
-| `P0-SEC-01` Provider credentials | Credentials and child-process capabilities were spread across callers | Server-only credential owner and minimized child environment | Browser/client code cannot become a second secrets authority |
-| `P0-SEC-02` Outbound HTTP | Credential-bearing calls needed pinned destinations and policy | Shared outbound HTTP policy/owner | Redirects or caller-controlled URLs cannot exfiltrate credentials |
+| `P0-SEC-01` Provider credentials     | Credentials and child-process capabilities were spread across callers                    | Server-only credential owner and minimized child environment   | Browser/client code cannot become a second secrets authority                            |
+| `P0-SEC-02` Outbound HTTP            | Credential-bearing calls needed pinned destinations and policy                           | Shared outbound HTTP policy/owner                              | Redirects or caller-controlled URLs cannot exfiltrate credentials                       |
 
 ### P1 — durable correctness and lifecycle
 
-| Workstream | Why it was needed | Main change | Result to verify |
-| --- | --- | --- | --- |
-| `P1-PERSIST-01` Persistence | Migration, projection, SQLite lifecycle, and recovery had overlapping responsibilities | Database lifecycle lock, migration backup/recovery, consolidated projection ownership | Failed migrations recover predictably and only one DB lifecycle owner mutates state |
-| `P1-DELIVERY-01` Durable delivery | Accepted provider intent/output could be lost or duplicated across crashes | Durable command delivery, runtime events, queued promotions, terminal evidence | Restart resumes/reconciles accepted work without silent replay or loss |
-| `P1-IDENTITY-01` Durable identity | Command/message/interaction identity was not sufficiently scoped | Thread/lifecycle-scoped identities and fingerprints | Replayed events cannot collide across threads or provider generations |
-| `P1-PROVIDER-01` Provider lifecycle | Session, turn, teardown, and process ownership was duplicated | One per-thread provider lifecycle owner and supervised teardown | Overlapping sends/restarts/cancellation cannot create competing live sessions |
-| `P1-RUNTIME-01` Runtime pipelines | Queues and shutdown paths could be unbounded or unordered | Bounded workers/pipelines and staged shutdown | Slow consumers and shutdown do not leak work or reorder terminal events |
-| `P1-TRANSPORT-01` WebSocket transport | Snapshot/live boundaries and request admission needed exact cursors and limits | Compatibility negotiation, request/stream admission, snapshot-live cursor | Reconnect does not miss or duplicate orchestration events |
-| `P1-FILE-01` Attachments | Upload, ownership, cleanup, and process-loss behavior were split | Managed attachment store, principal, cleanup, migration | Only the owning thread/process may access files; cleanup is crash-safe |
-| `P1-DESKTOP-SEC-01` Desktop boundary | Browser-control pipe, IPC, schemes, and partitions needed explicit authority | Private pipe leases, bounded clients/output, fail-closed Windows behavior, centralized IPC constants | A stale renderer/tab/lease cannot control a newer desktop generation |
-| `P1-SETTINGS-01` Settings | Disk state, browser state, and provider launch state could diverge | Revisioned server-owned settings commits, quarantine, atomic write | Provider launch always sees the committed server state |
-| `P1-AUTO-01` Automation | Scheduling, iteration reservation, result settlement, and recovery were duplicated | Revision-fenced automation saga and bounded keyset recovery | A crash cannot run the same scheduled iteration twice |
-| `P1-GIT-01` Git handoff | Mutating RPCs, worktree setup, status parsing, and restart behavior needed one coordinator | Canonical repository mutation coordinator plus durable Git handoff journal | Destructive or interrupted mutations fail closed and completed results replay idempotently |
+| Workstream                            | Why it was needed                                                                          | Main change                                                                                          | Result to verify                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `P1-PERSIST-01` Persistence           | Migration, projection, SQLite lifecycle, and recovery had overlapping responsibilities     | Database lifecycle lock, migration backup/recovery, consolidated projection ownership                | Failed migrations recover predictably and only one DB lifecycle owner mutates state        |
+| `P1-DELIVERY-01` Durable delivery     | Accepted provider intent/output could be lost or duplicated across crashes                 | Durable command delivery, runtime events, queued promotions, terminal evidence                       | Restart resumes/reconciles accepted work without silent replay or loss                     |
+| `P1-IDENTITY-01` Durable identity     | Command/message/interaction identity was not sufficiently scoped                           | Thread/lifecycle-scoped identities and fingerprints                                                  | Replayed events cannot collide across threads or provider generations                      |
+| `P1-PROVIDER-01` Provider lifecycle   | Session, turn, teardown, and process ownership was duplicated                              | One per-thread provider lifecycle owner and supervised teardown                                      | Overlapping sends/restarts/cancellation cannot create competing live sessions              |
+| `P1-RUNTIME-01` Runtime pipelines     | Queues and shutdown paths could be unbounded or unordered                                  | Bounded workers/pipelines and staged shutdown                                                        | Slow consumers and shutdown do not leak work or reorder terminal events                    |
+| `P1-TRANSPORT-01` WebSocket transport | Snapshot/live boundaries and request admission needed exact cursors and limits             | Compatibility negotiation, request/stream admission, snapshot-live cursor                            | Reconnect does not miss or duplicate orchestration events                                  |
+| `P1-FILE-01` Attachments              | Upload, ownership, cleanup, and process-loss behavior were split                           | Managed attachment store, principal, cleanup, migration                                              | Only the owning thread/process may access files; cleanup is crash-safe                     |
+| `P1-DESKTOP-SEC-01` Desktop boundary  | Browser-control pipe, IPC, schemes, and partitions needed explicit authority               | Private pipe leases, bounded clients/output, fail-closed Windows behavior, centralized IPC constants | A stale renderer/tab/lease cannot control a newer desktop generation                       |
+| `P1-SETTINGS-01` Settings             | Disk state, browser state, and provider launch state could diverge                         | Revisioned server-owned settings commits, quarantine, atomic write                                   | Provider launch always sees the committed server state                                     |
+| `P1-AUTO-01` Automation               | Scheduling, iteration reservation, result settlement, and recovery were duplicated         | Revision-fenced automation saga and bounded keyset recovery                                          | A crash cannot run the same scheduled iteration twice                                      |
+| `P1-GIT-01` Git handoff               | Mutating RPCs, worktree setup, status parsing, and restart behavior needed one coordinator | Canonical repository mutation coordinator plus durable Git handoff journal                           | Destructive or interrupted mutations fail closed and completed results replay idempotently |
 
 ### P2 — protocol and frontend consolidation
 
-| Workstream | Why it was needed | Main change | Result to verify |
-| --- | --- | --- | --- |
-| `P2-ACP-01` ACP foundation | Synara maintained a custom wire stack beside the official SDK | Official SDK owns all production ACP wire behavior; custom wire deleted | Grok, Droid, and Cursor have one wire implementation and no fallback |
-| `P2-WEB-STATE-01` Web state | Thread data had normalized and derived/legacy owners that required synchronization | Normalized slices became the runtime authority | Chat/thread updates cannot diverge between duplicate stores |
-| `P2-PROVIDER-META-01` Provider metadata | Ordering, labels, discovery, health, usage, and settings visibility were duplicated | Shared exhaustive provider descriptor and revision-aware health | Every provider surface uses consistent identity and presentation rules |
+| Workstream                              | Why it was needed                                                                   | Main change                                                             | Result to verify                                                       |
+| --------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `P2-ACP-01` ACP foundation              | Synara maintained a custom wire stack beside the official SDK                       | Official SDK owns all production ACP wire behavior; custom wire deleted | Grok, Droid, and Cursor have one wire implementation and no fallback   |
+| `P2-WEB-STATE-01` Web state             | Thread data had normalized and derived/legacy owners that required synchronization  | Normalized slices became the runtime authority                          | Chat/thread updates cannot diverge between duplicate stores            |
+| `P2-PROVIDER-META-01` Provider metadata | Ordering, labels, discovery, health, usage, and settings visibility were duplicated | Shared exhaustive provider descriptor and revision-aware health         | Every provider surface uses consistent identity and presentation rules |
 
 ---
 
@@ -302,17 +302,17 @@ lifecycle.
 
 This is not “remove Effect from ACP.” It is a division of responsibility:
 
-| Responsibility | Owner after the change |
-| --- | --- |
-| ACP schemas and protocol validation | Official SDK |
-| NDJSON framing and encoding | Official SDK |
-| JSON-RPC request correlation and cancellation | Official SDK |
-| Client handler dispatch | Official SDK |
-| Provider process supervision | Synara/Effect |
-| Queue and resource limits | Synara/Effect |
-| Session/product policy | Synara/Effect |
-| Normalized Synara events | Synara/Effect |
-| Error translation into Synara domain errors | Thin local adapter |
+| Responsibility                                | Owner after the change |
+| --------------------------------------------- | ---------------------- |
+| ACP schemas and protocol validation           | Official SDK           |
+| NDJSON framing and encoding                   | Official SDK           |
+| JSON-RPC request correlation and cancellation | Official SDK           |
+| Client handler dispatch                       | Official SDK           |
+| Provider process supervision                  | Synara/Effect          |
+| Queue and resource limits                     | Synara/Effect          |
+| Session/product policy                        | Synara/Effect          |
+| Normalized Synara events                      | Synara/Effect          |
+| Error translation into Synara domain errors   | Thin local adapter     |
 
 ### Why this choice was made
 
@@ -396,22 +396,22 @@ official SDK relative to Effect ACP.
 
 ### Throughput and latency
 
-| Scenario | Effect ACP | Official SDK | Throughput change | p50 change | p95 change | Interpretation |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Sequential 256 B requests | 69,132 ops/s | 155,289 ops/s | **+124.6%** | **-55.5%** | **-39.6%** | Official SDK is clearly faster for small request/response traffic |
-| Sequential 64 KiB requests | 33,278 ops/s | 38,776 ops/s | **+16.5%** | **-14.2%** | +18.2% | Median improves, tail latency regresses slightly |
-| Concurrent 32× 256 B requests, isolated | 77,706 ops/s | 163,361 ops/s | **+110.2%** | **-52.4%** | **-19.4%** | Official SDK handles small concurrent requests much faster |
-| 256 B notifications | 180,836 ops/s | 198,403 ops/s | **+9.7%** | **-8.9%** | +111.1% | Median improves, but this run shows substantial tail jitter |
-| 64 KiB notifications, isolated | 54,950 ops/s | 28,232 ops/s | **-48.6%** | +94.6% | +183.4% | Effect ACP is much faster for very large one-way messages |
-| Slow peer, 1 ms, 256 B | 635 ops/s | 670 ops/s | **+5.5%** | **-5.2%** | **-18.1%** | Official SDK is slightly smoother under downstream pressure |
+| Scenario                                |    Effect ACP |  Official SDK | Throughput change | p50 change | p95 change | Interpretation                                                    |
+| --------------------------------------- | ------------: | ------------: | ----------------: | ---------: | ---------: | ----------------------------------------------------------------- |
+| Sequential 256 B requests               |  69,132 ops/s | 155,289 ops/s |       **+124.6%** | **-55.5%** | **-39.6%** | Official SDK is clearly faster for small request/response traffic |
+| Sequential 64 KiB requests              |  33,278 ops/s |  38,776 ops/s |        **+16.5%** | **-14.2%** |     +18.2% | Median improves, tail latency regresses slightly                  |
+| Concurrent 32× 256 B requests, isolated |  77,706 ops/s | 163,361 ops/s |       **+110.2%** | **-52.4%** | **-19.4%** | Official SDK handles small concurrent requests much faster        |
+| 256 B notifications                     | 180,836 ops/s | 198,403 ops/s |         **+9.7%** |  **-8.9%** |    +111.1% | Median improves, but this run shows substantial tail jitter       |
+| 64 KiB notifications, isolated          |  54,950 ops/s |  28,232 ops/s |        **-48.6%** |     +94.6% |    +183.4% | Effect ACP is much faster for very large one-way messages         |
+| Slow peer, 1 ms, 256 B                  |     635 ops/s |     670 ops/s |         **+5.5%** |  **-5.2%** | **-18.1%** | Official SDK is slightly smoother under downstream pressure       |
 
 ### Memory observations from isolated scenarios
 
-| Scenario | Effect peak RSS | Official peak RSS | Official change | Interpretation |
-| --- | ---: | ---: | ---: | --- |
-| Concurrent 32× small requests | 225.6 MiB | 784.8 MiB | **+247.8%** | Official throughput win came with a large memory high-water mark |
-| 64 KiB notifications | 881.6 MiB | 463.0 MiB | **-47.5%** | Official SDK was slower but retained substantially less memory |
-| Slow peer, small notifications | 143.3 MiB | 94.4 MiB | **-34.1%** | Official SDK behaved better in this slow-consumer case |
+| Scenario                       | Effect peak RSS | Official peak RSS | Official change | Interpretation                                                   |
+| ------------------------------ | --------------: | ----------------: | --------------: | ---------------------------------------------------------------- |
+| Concurrent 32× small requests  |       225.6 MiB |         784.8 MiB |     **+247.8%** | Official throughput win came with a large memory high-water mark |
+| 64 KiB notifications           |       881.6 MiB |         463.0 MiB |      **-47.5%** | Official SDK was slower but retained substantially less memory   |
+| Slow peer, small notifications |       143.3 MiB |          94.4 MiB |      **-34.1%** | Official SDK behaved better in this slow-consumer case           |
 
 ### What the benchmark supports
 

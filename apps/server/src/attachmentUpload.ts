@@ -62,10 +62,9 @@ export function persistAttachmentUpload(input: {
       catch: (cause) => new Error("Failed to secure persisted attachment.", { cause }),
     }).pipe(
       Effect.catch((error) =>
-        input.fileSystem.remove(attachmentPath, { force: true }).pipe(
-          Effect.ignore,
-          Effect.andThen(Effect.fail(error)),
-        ),
+        input.fileSystem
+          .remove(attachmentPath, { force: true })
+          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
       ),
     );
     return attachment;
@@ -89,9 +88,9 @@ export function validatePersistedAttachmentReference(input: {
       attachment: input.attachment,
     });
     if (!attachmentPath) return yield* Effect.fail(new Error("Attachment reference is invalid."));
-    const info = yield* input.fileSystem.stat(attachmentPath).pipe(
-      Effect.mapError(() => new Error("Uploaded attachment could not be found.")),
-    );
+    const info = yield* input.fileSystem
+      .stat(attachmentPath)
+      .pipe(Effect.mapError(() => new Error("Uploaded attachment could not be found.")));
     if (info.type !== "File" || Number(info.size) !== input.attachment.sizeBytes) {
       return yield* Effect.fail(new Error("Uploaded attachment metadata does not match its file."));
     }

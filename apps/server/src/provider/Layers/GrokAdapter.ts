@@ -23,11 +23,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
-import {
-  decodeOutboundJson,
-  decodeOutboundText,
-  outboundHttp,
-} from "@synara/shared/outboundHttp";
+import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
 import {
   Cause,
   DateTime,
@@ -1546,7 +1542,7 @@ export function makeGrokAdapter(
           turnId,
           idleMs,
         });
-        yield* offerRuntimeEvent(input.lifecycleGeneration, {
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,

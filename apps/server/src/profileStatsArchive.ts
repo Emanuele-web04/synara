@@ -375,9 +375,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     archivedAt: null,
   });
 
-  const hasThreadPurgeFence: ProfileStatsArchiveShape["hasThreadPurgeFence"] = ({
-    threadId,
-  }) =>
+  const hasThreadPurgeFence: ProfileStatsArchiveShape["hasThreadPurgeFence"] = ({ threadId }) =>
     Effect.gen(function* () {
       const durableRows = yield* sql<{ readonly fenced: number }>`
         SELECT CASE WHEN

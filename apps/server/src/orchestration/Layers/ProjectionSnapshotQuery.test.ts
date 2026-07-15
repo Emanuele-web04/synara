@@ -1,4 +1,13 @@
-import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  CheckpointRef,
+  CommandId,
+  EventId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -849,13 +858,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const expectedPendingInteractions = [
         {
           interactionKind: "userInput" as const,
-          requestId: "request-retryable",
+          requestId: ApprovalRequestId.makeUnsafe("request-retryable"),
           threadId,
           turnId: null,
           lifecycleGeneration: "generation-current",
           status: "retryable" as const,
           decision: null,
-          responseCommandId: "command-response",
+          responseCommandId: CommandId.makeUnsafe("command-response"),
           responseRequestedAt: "2026-07-14T12:11:00.000Z",
           createdAt: "2026-07-14T12:10:30.000Z",
           resolvedAt: null,
@@ -870,10 +879,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         Option.isSome(detail) ? detail.value.messages.map((message) => message.id) : [],
         [asMessageId("message-causal-first"), asMessageId("message-causal-second")],
       );
-      assert.deepStrictEqual(
-        snapshot.threads[0]?.pendingInteractions,
-        expectedPendingInteractions,
-      );
+      assert.deepStrictEqual(snapshot.threads[0]?.pendingInteractions, expectedPendingInteractions);
       assert.deepStrictEqual(
         Option.isSome(detail) ? detail.value.pendingInteractions : [],
         expectedPendingInteractions,

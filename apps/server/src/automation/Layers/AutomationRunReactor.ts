@@ -1,8 +1,5 @@
 import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
-import {
-  makeDrainableWorker,
-  startDrainableWorkerProducers,
-} from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Stream } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";

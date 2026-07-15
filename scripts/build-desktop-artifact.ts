@@ -156,7 +156,9 @@ function resolveGitCommitHash(repoRoot: string): string | undefined {
 }
 
 function resolveLockfileSha256(repoRoot: string): string {
-  return createHash("sha256").update(readFileSync(join(repoRoot, "bun.lock"))).digest("hex");
+  return createHash("sha256")
+    .update(readFileSync(join(repoRoot, "bun.lock")))
+    .digest("hex");
 }
 
 function resolvePythonForNodeGyp(): string | undefined {
@@ -822,10 +824,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       message: `Expected a 64-character lockfile SHA-256, got '${options.lockfileSha256}'.`,
     });
   }
-  if (
-    options.lockfileSha256 &&
-    resolvedLockfileSha256 !== options.lockfileSha256.toLowerCase()
-  ) {
+  if (options.lockfileSha256 && resolvedLockfileSha256 !== options.lockfileSha256.toLowerCase()) {
     return yield* new BuildScriptError({
       message: `Release lockfile digest mismatch: expected ${options.lockfileSha256}, got ${resolvedLockfileSha256}.`,
     });

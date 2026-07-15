@@ -4,14 +4,9 @@
 
 import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
 
-import {
-  encodeOutboundMultipart,
-  outboundHttp,
-  type OutboundHttpResponse,
-} from "./outboundHttp.ts";
+import { encodeOutboundMultipart, outboundHttp, type OutboundHttpResponse } from "./outboundHttp";
 
-export const CHATGPT_VOICE_TRANSCRIPTION_URL =
-  "https://chatgpt.com/backend-api/transcribe";
+export const CHATGPT_VOICE_TRANSCRIPTION_URL = "https://chatgpt.com/backend-api/transcribe";
 
 const MAX_MULTIPART_BYTES = SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES + 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;

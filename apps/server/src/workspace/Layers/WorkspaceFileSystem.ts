@@ -57,10 +57,7 @@ async function writeFileStringAtomically(
     const noFollow = process.platform === "win32" ? 0 : NodeFsConstants.O_NOFOLLOW;
     handle = await NodeFs.open(
       temporaryPath,
-      NodeFsConstants.O_WRONLY |
-        NodeFsConstants.O_CREAT |
-        NodeFsConstants.O_EXCL |
-        noFollow,
+      NodeFsConstants.O_WRONLY | NodeFsConstants.O_CREAT | NodeFsConstants.O_EXCL | noFollow,
       mode,
     );
     const realTemporaryPath = await resolveRealPathWithinRoot(realRoot, temporaryPath);

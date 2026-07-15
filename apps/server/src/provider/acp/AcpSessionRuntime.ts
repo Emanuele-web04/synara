@@ -123,10 +123,7 @@ export interface AcpSessionRuntimeShape {
     AcpHandler<EffectAcpSchema.ReadTextFileRequest, EffectAcpSchema.ReadTextFileResponse>
   >;
   readonly handleWriteTextFile: AcpHandlerRegistration<
-    AcpHandler<
-      EffectAcpSchema.WriteTextFileRequest,
-      EffectAcpSchema.WriteTextFileResponse | void
-    >
+    AcpHandler<EffectAcpSchema.WriteTextFileRequest, EffectAcpSchema.WriteTextFileResponse | void>
   >;
   readonly handleCreateTerminal: AcpHandlerRegistration<
     AcpHandler<EffectAcpSchema.CreateTerminalRequest, EffectAcpSchema.CreateTerminalResponse>
@@ -260,22 +257,59 @@ function officialSdkError(error: unknown): EffectAcpErrors.AcpError {
       });
 }
 
+function toOfficialMcpServers(
+  servers: ReadonlyArray<EffectAcpSchema.McpServer> | undefined,
+): Array<OfficialAcp.McpServer> {
+  return (servers ?? []).map((server) => {
+    if ("type" in server) {
+      return {
+        ...server,
+        headers: server.headers.map((header) => ({ ...header })),
+      };
+    }
+    return {
+      ...server,
+      args: [...server.args],
+      env: server.env.map((entry) => ({ ...entry })),
+    };
+  });
+}
+
+function toOfficialContentBlocks(
+  blocks: ReadonlyArray<EffectAcpSchema.ContentBlock>,
+): Array<OfficialAcp.ContentBlock> {
+  return blocks.map((block) => {
+    const { annotations: sourceAnnotations, ...content } = block;
+    const annotations = sourceAnnotations
+      ? (() => {
+          const { audience, ...rest } = sourceAnnotations;
+          return {
+            ...rest,
+            ...(audience === undefined
+              ? {}
+              : { audience: audience === null ? null : [...audience] }),
+          };
+        })()
+      : sourceAnnotations;
+    return {
+      ...content,
+      ...(annotations === undefined ? {} : { annotations }),
+    };
+  });
+}
+
 const makeOfficialSdkClient = Effect.fnUntraced(function* (
   child: ChildProcessSpawner.ChildProcessHandle,
   runtimeScope: Scope.Scope,
   protocolLogging?: AcpSessionRuntimeOptions["protocolLogging"],
 ) {
-  type RequestPermissionHandler = Parameters<
-    AcpSessionRuntimeShape["handleRequestPermission"]
-  >[0];
+  type RequestPermissionHandler = Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
   type ElicitationHandler = Parameters<AcpSessionRuntimeShape["handleElicitation"]>[0];
   type ReadTextFileHandler = Parameters<AcpSessionRuntimeShape["handleReadTextFile"]>[0];
   type WriteTextFileHandler = Parameters<AcpSessionRuntimeShape["handleWriteTextFile"]>[0];
   type CreateTerminalHandler = Parameters<AcpSessionRuntimeShape["handleCreateTerminal"]>[0];
   type TerminalOutputHandler = Parameters<AcpSessionRuntimeShape["handleTerminalOutput"]>[0];
-  type TerminalWaitHandler = Parameters<
-    AcpSessionRuntimeShape["handleTerminalWaitForExit"]
-  >[0];
+  type TerminalWaitHandler = Parameters<AcpSessionRuntimeShape["handleTerminalWaitForExit"]>[0];
   type TerminalKillHandler = Parameters<AcpSessionRuntimeShape["handleTerminalKill"]>[0];
   type TerminalReleaseHandler = Parameters<AcpSessionRuntimeShape["handleTerminalRelease"]>[0];
   type SessionUpdateHandler = Parameters<AcpSessionRuntimeShape["handleSessionUpdate"]>[0];
@@ -305,10 +339,12 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     ) {
       return Effect.void;
     }
-    return protocolLogging.logger?.({ direction, stage, payload }) ?? Effect.void;
+    const logger = protocolLogging?.logger;
+    return logger?.({ direction, stage, payload }) ?? Effect.void;
   };
   let sessionUpdateTail = Promise.resolve();
-  const dispatchSessionUpdate = (params: EffectAcpSchema.SessionNotification) => {
+  const dispatchSessionUpdate = (officialParams: OfficialAcp.SessionNotification) => {
+    const params = Schema.decodeUnknownSync(EffectAcpSchema.SessionNotification)(officialParams);
     const delivery = sessionUpdateTail.then(() =>
       Effect.runPromise(logProtocol("incoming", "decoded", params)).then(() =>
         Promise.all(sessionUpdateHandlers.map((handler) => runHandler(handler(params)))).then(
@@ -398,9 +434,14 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     .onRequest(OfficialAcp.methods.client.terminal.release, ({ params }) =>
       requireHandler("terminal/release", terminalRelease, params),
     )
-    .onRequest(OfficialAcp.methods.client.elicitation.create, ({ params }) =>
-      requireHandler("elicitation/create", elicitation, params),
-    )
+    .onRequest(OfficialAcp.methods.client.elicitation.create, async ({ params }) => {
+      const response = await requireHandler("elicitation/create", elicitation, params);
+      return {
+        ...response,
+        ...response.action,
+        action: response.action.action,
+      };
+    })
     .onNotification(OfficialAcp.methods.client.session.update, ({ params }) =>
       dispatchSessionUpdate(params),
     )
@@ -416,16 +457,37 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     thunk: (signal: AbortSignal) => Promise<A>,
   ): Effect.Effect<A, EffectAcpErrors.AcpError> =>
     Effect.tryPromise({ try: thunk, catch: officialSdkError });
-  const request = <A>(method: string, payload: unknown) =>
+  const request = <Method extends OfficialAcp.AgentRequestMethod>(
+    method: Method,
+    payload: OfficialAcp.AgentRequestParamsByMethod[Method],
+  ): Effect.Effect<OfficialAcp.AgentRequestResponsesByMethod[Method], EffectAcpErrors.AcpError> =>
     logProtocol("outgoing", "decoded", { method, payload }).pipe(
       Effect.andThen(
         fromPromise((signal) =>
-          getConnection().agent.request<A>(method, payload, { cancellationSignal: signal }),
+          getConnection().agent.request(method, payload, { cancellationSignal: signal }),
         ),
       ),
       Effect.tap((result) => logProtocol("incoming", "decoded", { method, result })),
     );
-  const notify = (method: string, payload: unknown) =>
+  const requestCustom = <A>(method: string, payload: unknown) =>
+    logProtocol("outgoing", "decoded", { method, payload }).pipe(
+      Effect.andThen(
+        fromPromise((signal) =>
+          getConnection().agent.request<A, unknown>(method, payload, {
+            cancellationSignal: signal,
+          }),
+        ),
+      ),
+      Effect.tap((result) => logProtocol("incoming", "decoded", { method, result })),
+    );
+  const notifyStandard = <Method extends OfficialAcp.AgentNotificationMethod>(
+    method: Method,
+    payload: OfficialAcp.AgentNotificationParamsByMethod[Method],
+  ) =>
+    logProtocol("outgoing", "decoded", { method, payload }).pipe(
+      Effect.andThen(fromPromise(() => getConnection().agent.notify(method, payload))),
+    );
+  const notifyCustom = (method: string, payload: unknown) =>
     logProtocol("outgoing", "decoded", { method, payload }).pipe(
       Effect.andThen(fromPromise(() => getConnection().agent.notify(method, payload))),
     );
@@ -433,47 +495,81 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   const client = {
     raw: {
       notifications: Stream.empty,
-      request,
-      notify,
+      request: requestCustom,
+      notify: notifyCustom,
     },
     agent: {
-      initialize: (payload) => request(OfficialAcp.methods.agent.initialize, payload),
-      authenticate: (payload) => request(OfficialAcp.methods.agent.authenticate, payload),
-      logout: (payload) => request(OfficialAcp.methods.agent.logout, payload),
-      createSession: (payload) => request(OfficialAcp.methods.agent.session.new, payload),
-      loadSession: (payload) =>
-        request(OfficialAcp.methods.agent.session.load, payload).pipe(
-          Effect.map((response) => response ?? {}),
-        ),
-      listSessions: (payload) => request(OfficialAcp.methods.agent.session.list, payload),
-      forkSession: (payload) => request(OfficialAcp.methods.agent.session.fork, payload),
-      resumeSession: (payload) => request(OfficialAcp.methods.agent.session.resume, payload),
-      closeSession: (payload) =>
+      initialize: (payload: EffectAcpSchema.InitializeRequest) =>
+        request(OfficialAcp.methods.agent.initialize, payload),
+      authenticate: (payload: EffectAcpSchema.AuthenticateRequest) =>
+        request(OfficialAcp.methods.agent.authenticate, payload),
+      logout: (payload: EffectAcpSchema.LogoutRequest) =>
+        request(OfficialAcp.methods.agent.logout, payload),
+      createSession: (payload: EffectAcpSchema.NewSessionRequest) =>
+        request(OfficialAcp.methods.agent.session.new, {
+          ...payload,
+          mcpServers: toOfficialMcpServers(payload.mcpServers),
+        }),
+      loadSession: (payload: EffectAcpSchema.LoadSessionRequest) =>
+        request(OfficialAcp.methods.agent.session.load, {
+          ...payload,
+          mcpServers: toOfficialMcpServers(payload.mcpServers),
+        }).pipe(Effect.map((response) => response ?? {})),
+      listSessions: (payload: EffectAcpSchema.ListSessionsRequest) =>
+        request(OfficialAcp.methods.agent.session.list, payload),
+      forkSession: (payload: EffectAcpSchema.ForkSessionRequest) =>
+        request(OfficialAcp.methods.agent.session.fork, {
+          ...payload,
+          mcpServers: toOfficialMcpServers(payload.mcpServers),
+        }),
+      resumeSession: (payload: EffectAcpSchema.ResumeSessionRequest) =>
+        request(OfficialAcp.methods.agent.session.resume, {
+          ...payload,
+          mcpServers: toOfficialMcpServers(payload.mcpServers),
+        }),
+      closeSession: (payload: EffectAcpSchema.CloseSessionRequest) =>
         request(OfficialAcp.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
         ),
-      setSessionModel: (payload) => request("session/set_model", payload),
-      setSessionConfigOption: (payload) =>
+      setSessionModel: (payload: EffectAcpSchema.SetSessionModelRequest) =>
+        requestCustom<EffectAcpSchema.SetSessionModelResponse>("session/set_model", payload),
+      setSessionConfigOption: (payload: EffectAcpSchema.SetSessionConfigOptionRequest) =>
         request(OfficialAcp.methods.agent.session.setConfigOption, payload),
-      prompt: (payload) =>
-        request(OfficialAcp.methods.agent.session.prompt, payload).pipe(
-          Effect.tap(() => fromPromise(awaitSessionUpdateDrain)),
-        ),
-      cancel: (payload) => notify(OfficialAcp.methods.agent.session.cancel, payload),
+      prompt: (payload: EffectAcpSchema.PromptRequest) =>
+        request(OfficialAcp.methods.agent.session.prompt, {
+          ...payload,
+          prompt: toOfficialContentBlocks(payload.prompt),
+        }).pipe(Effect.tap(() => fromPromise(awaitSessionUpdateDrain))),
+      cancel: (payload: EffectAcpSchema.CancelNotification) =>
+        notifyStandard(OfficialAcp.methods.agent.session.cancel, payload),
     },
-    handleRequestPermission: (handler) => register(() => void (requestPermission = handler)),
-    handleElicitation: (handler) => register(() => void (elicitation = handler)),
-    handleReadTextFile: (handler) => register(() => void (readTextFile = handler)),
-    handleWriteTextFile: (handler) => register(() => void (writeTextFile = handler)),
-    handleCreateTerminal: (handler) => register(() => void (createTerminal = handler)),
-    handleTerminalOutput: (handler) => register(() => void (terminalOutput = handler)),
-    handleTerminalWaitForExit: (handler) => register(() => void (terminalWait = handler)),
-    handleTerminalKill: (handler) => register(() => void (terminalKill = handler)),
-    handleTerminalRelease: (handler) => register(() => void (terminalRelease = handler)),
-    handleSessionUpdate: (handler) => register(() => void sessionUpdateHandlers.push(handler)),
-    handleElicitationComplete: (handler) =>
+    handleRequestPermission: (handler: RequestPermissionHandler) =>
+      register(() => void (requestPermission = handler)),
+    handleElicitation: (handler: ElicitationHandler) =>
+      register(() => void (elicitation = handler)),
+    handleReadTextFile: (handler: ReadTextFileHandler) =>
+      register(() => void (readTextFile = handler)),
+    handleWriteTextFile: (handler: WriteTextFileHandler) =>
+      register(() => void (writeTextFile = handler)),
+    handleCreateTerminal: (handler: CreateTerminalHandler) =>
+      register(() => void (createTerminal = handler)),
+    handleTerminalOutput: (handler: TerminalOutputHandler) =>
+      register(() => void (terminalOutput = handler)),
+    handleTerminalWaitForExit: (handler: TerminalWaitHandler) =>
+      register(() => void (terminalWait = handler)),
+    handleTerminalKill: (handler: TerminalKillHandler) =>
+      register(() => void (terminalKill = handler)),
+    handleTerminalRelease: (handler: TerminalReleaseHandler) =>
+      register(() => void (terminalRelease = handler)),
+    handleSessionUpdate: (handler: SessionUpdateHandler) =>
+      register(() => void sessionUpdateHandlers.push(handler)),
+    handleElicitationComplete: (handler: ElicitationCompleteHandler) =>
       register(() => void elicitationCompleteHandlers.push(handler)),
-    handleExtRequest: (method, codec, handler) =>
+    handleExtRequest: <A, I>(
+      method: string,
+      codec: Schema.Codec<A, I>,
+      handler: AcpHandler<A, unknown>,
+    ) =>
       register(() => {
         clientApp.onRequest(
           method,
@@ -481,7 +577,11 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
           ({ params }) => runHandler(handler(params)),
         );
       }),
-    handleExtNotification: (method, codec, handler) =>
+    handleExtNotification: <A, I>(
+      method: string,
+      codec: Schema.Codec<A, I>,
+      handler: AcpHandler<A, void>,
+    ) =>
       register(() => {
         clientApp.onNotification(
           method,
@@ -612,9 +712,7 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    yield* Effect.addFinalizer(() =>
-      teardownAcpChildProcess(child, options.teardownProcessTree),
-    );
+    yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
 
     const acp = yield* makeOfficialSdkClient(child, runtimeScope, options.protocolLogging);
 
@@ -910,26 +1008,24 @@ const makeAcpSessionRuntime = (
               "ACP agent cannot reopen the requested session because it advertises neither session/resume nor session/load.",
           });
         }
-        const resumed = yield* (
-          supportsResume
-            ? runLoggedRequest(
-                "session/resume",
-                resumePayload,
-                acp.agent.resumeSession(resumePayload),
-              )
-            : (() => {
-                const loadPayload = {
-                  sessionId: options.resumeSessionId,
-                  cwd: options.cwd,
-                  mcpServers: [],
-                } satisfies EffectAcpSchema.LoadSessionRequest;
-                return runLoggedRequest(
-                  "session/load",
-                  loadPayload,
-                  acp.agent.loadSession(loadPayload),
-                );
-              })()
-        );
+        const resumed = yield* supportsResume
+          ? runLoggedRequest(
+              "session/resume",
+              resumePayload,
+              acp.agent.resumeSession(resumePayload),
+            )
+          : (() => {
+              const loadPayload = {
+                sessionId: options.resumeSessionId,
+                cwd: options.cwd,
+                mcpServers: [],
+              } satisfies EffectAcpSchema.LoadSessionRequest;
+              return runLoggedRequest(
+                "session/load",
+                loadPayload,
+                acp.agent.loadSession(loadPayload),
+              );
+            })();
         // Resume/load failure is terminal. Retrying as session/new would create a second
         // conversation and make delivery outcome ambiguous.
         sessionId = options.resumeSessionId;

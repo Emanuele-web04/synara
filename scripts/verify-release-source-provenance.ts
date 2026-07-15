@@ -45,7 +45,9 @@ if (gitStatus.status !== 0) {
   throw new Error(`Unable to inspect release worktree: ${gitStatus.stderr.trim() || "git failed"}`);
 }
 if (gitStatus.stdout.trim().length > 0) {
-  throw new Error("Release source worktree is not clean; provenance must name committed bytes only.");
+  throw new Error(
+    "Release source worktree is not clean; provenance must name committed bytes only.",
+  );
 }
 
 for (const relativePath of releasePackageFiles) {

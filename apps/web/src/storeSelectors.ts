@@ -205,7 +205,7 @@ export function createSidebarThreadSummariesSelector(): (
 
     previousThreadIds = threadIds;
     previousSummaryById = state.sidebarThreadSummaryById;
-    previousSummaries = threadIds.flatMap((threadId) => {
+    previousSummaries = (threadIds ?? []).flatMap((threadId) => {
       const summary = state.sidebarThreadSummaryById[threadId];
       return summary ? [summary] : [];
     });

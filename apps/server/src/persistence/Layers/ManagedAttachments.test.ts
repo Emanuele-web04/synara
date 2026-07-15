@@ -30,9 +30,7 @@ const limits = {
 
 const layer = it.layer(
   Layer.mergeAll(
-    makeManagedAttachmentRepositoryLive(limits).pipe(
-      Layer.provideMerge(SqlitePersistenceMemory),
-    ),
+    makeManagedAttachmentRepositoryLive(limits).pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -43,14 +41,16 @@ const resetSchema = Effect.gen(function* () {
   yield* sql`DELETE FROM managed_attachment_blobs`;
 });
 
-const reserveInput = (overrides: Partial<{
-  attachmentId: string;
-  ownerThreadId: string;
-  ownerKind: string;
-  ownerId: string;
-  reservedBytes: number;
-  relativePath: string;
-}> = {}) => ({
+const reserveInput = (
+  overrides: Partial<{
+    attachmentId: string;
+    ownerThreadId: string;
+    ownerKind: string;
+    ownerId: string;
+    reservedBytes: number;
+    relativePath: string;
+  }> = {},
+) => ({
   attachmentId: overrides.attachmentId ?? "attachment-1",
   ownerThreadId: overrides.ownerThreadId ?? "thread-1",
   ownerKind: overrides.ownerKind ?? "principal",
@@ -129,10 +129,18 @@ layer("ManagedAttachmentRepository", (it) => {
       const results = yield* Effect.all(
         [
           repository.reserve(
-            reserveInput({ attachmentId: "quota-a", relativePath: "attachments/quota-a", reservedBytes: 6 }),
+            reserveInput({
+              attachmentId: "quota-a",
+              relativePath: "attachments/quota-a",
+              reservedBytes: 6,
+            }),
           ),
           repository.reserve(
-            reserveInput({ attachmentId: "quota-b", relativePath: "attachments/quota-b", reservedBytes: 6 }),
+            reserveInput({
+              attachmentId: "quota-b",
+              relativePath: "attachments/quota-b",
+              reservedBytes: 6,
+            }),
           ),
         ],
         { concurrency: "unbounded" },
@@ -146,62 +154,72 @@ layer("ManagedAttachmentRepository", (it) => {
     }),
   );
 
-  it.effect("never partially claims a mixed invalid set and rolls claims back with an outer transaction", () =>
-    Effect.gen(function* () {
-      yield* resetSchema;
-      const repository = yield* ManagedAttachmentRepository;
-      const sql = yield* SqlClient.SqlClient;
-      yield* reserveAndStage(repository, { attachmentId: "claim-a", relativePath: "attachments/claim-a" });
-      yield* reserveAndStage(repository, {
-        attachmentId: "claim-b",
-        ownerId: "principal-2",
-        relativePath: "attachments/claim-b",
-      });
+  it.effect(
+    "never partially claims a mixed invalid set and rolls claims back with an outer transaction",
+    () =>
+      Effect.gen(function* () {
+        yield* resetSchema;
+        const repository = yield* ManagedAttachmentRepository;
+        const sql = yield* SqlClient.SqlClient;
+        yield* reserveAndStage(repository, {
+          attachmentId: "claim-a",
+          relativePath: "attachments/claim-a",
+        });
+        yield* reserveAndStage(repository, {
+          attachmentId: "claim-b",
+          ownerId: "principal-2",
+          relativePath: "attachments/claim-b",
+        });
 
-      const mixed = yield* repository.claimForAcceptedTurn({
-        attachmentIds: ["claim-a", "claim-b"],
-        ownerThreadId: "thread-1",
-        ownerKind: "principal",
-        ownerId: "principal-1",
-        commandId: "command-1",
-        messageId: "message-1",
-        now: "2026-07-14T10:02:00.000Z",
-      });
-      assert.deepStrictEqual(mixed, { status: "rejected", reason: "owner-mismatch" });
+        const mixed = yield* repository.claimForAcceptedTurn({
+          attachmentIds: ["claim-a", "claim-b"],
+          ownerThreadId: "thread-1",
+          ownerKind: "principal",
+          ownerId: "principal-1",
+          commandId: "command-1",
+          messageId: "message-1",
+          now: "2026-07-14T10:02:00.000Z",
+        });
+        assert.deepStrictEqual(mixed, { status: "rejected", reason: "owner-mismatch" });
 
-      const statesAfterMixed = yield* sql<{ readonly state: string }>`
+        const statesAfterMixed = yield* sql<{ readonly state: string }>`
         SELECT state FROM managed_attachment_blobs WHERE attachment_id = 'claim-a'
       `;
-      assert.strictEqual(statesAfterMixed[0]?.state, "staged");
+        assert.strictEqual(statesAfterMixed[0]?.state, "staged");
 
-      yield* sql.withTransaction(
-        Effect.gen(function* () {
-          const claimed = yield* repository.claimForAcceptedTurn({
-            attachmentIds: ["claim-a"],
-            ownerThreadId: "thread-1",
-            ownerKind: "principal",
-            ownerId: "principal-1",
-            commandId: "command-rollback",
-            messageId: "message-rollback",
-            now: "2026-07-14T10:03:00.000Z",
-          });
-          assert.strictEqual(claimed.status, "claimed");
-          return yield* Effect.fail("force rollback");
-        }),
-      ).pipe(Effect.catchCause(() => Effect.void));
+        yield* sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const claimed = yield* repository.claimForAcceptedTurn({
+                attachmentIds: ["claim-a"],
+                ownerThreadId: "thread-1",
+                ownerKind: "principal",
+                ownerId: "principal-1",
+                commandId: "command-rollback",
+                messageId: "message-rollback",
+                now: "2026-07-14T10:03:00.000Z",
+              });
+              assert.strictEqual(claimed.status, "claimed");
+              return yield* Effect.fail("force rollback");
+            }),
+          )
+          .pipe(Effect.catchCause(() => Effect.void));
 
-      const statesAfterRollback = yield* sql<{ readonly state: string }>`
+        const statesAfterRollback = yield* sql<{ readonly state: string }>`
         SELECT state FROM managed_attachment_blobs WHERE attachment_id = 'claim-a'
       `;
-      assert.strictEqual(statesAfterRollback[0]?.state, "staged");
-    }),
+        assert.strictEqual(statesAfterRollback[0]?.state, "staged");
+      }),
   );
 
   it.effect("makes same-command claims idempotent and rejects mismatched reuse", () =>
     Effect.gen(function* () {
       yield* resetSchema;
       const repository = yield* ManagedAttachmentRepository;
-      yield* reserveAndStage(repository, { attachmentId: "idem", relativePath: "attachments/idem" });
+      yield* reserveAndStage(repository, {
+        attachmentId: "idem",
+        relativePath: "attachments/idem",
+      });
       const claim = {
         attachmentIds: ["idem"],
         ownerThreadId: "thread-1",
@@ -254,10 +272,17 @@ layer("ManagedAttachmentRepository", (it) => {
         "2026-07-14T10:00:02.000Z",
       );
       yield* repository.reserve(
-        reserveInput({ attachmentId: "abandoned-upload", relativePath: "attachments/abandoned-upload" }),
+        reserveInput({
+          attachmentId: "abandoned-upload",
+          relativePath: "attachments/abandoned-upload",
+        }),
       );
       yield* repository.reserve(
-        reserveInput({ attachmentId: "fresh-upload", relativePath: "attachments/fresh-upload", reservedBytes: 2 }),
+        reserveInput({
+          attachmentId: "fresh-upload",
+          relativePath: "attachments/fresh-upload",
+          reservedBytes: 2,
+        }),
       );
       const sql = yield* SqlClient.SqlClient;
       yield* sql`
@@ -302,7 +327,10 @@ layer("ManagedAttachmentRepository", (it) => {
     Effect.gen(function* () {
       yield* resetSchema;
       const repository = yield* ManagedAttachmentRepository;
-      yield* reserveAndStage(repository, { attachmentId: "cancel", relativePath: "attachments/cancel" });
+      yield* reserveAndStage(repository, {
+        attachmentId: "cancel",
+        relativePath: "attachments/cancel",
+      });
 
       assert.deepStrictEqual(
         yield* repository.cancelStaged({
@@ -335,7 +363,10 @@ layer("ManagedAttachmentRepository", (it) => {
         { status: "cancelled" },
       );
 
-      yield* reserveAndStage(repository, { attachmentId: "committed", relativePath: "attachments/committed" });
+      yield* reserveAndStage(repository, {
+        attachmentId: "committed",
+        relativePath: "attachments/committed",
+      });
       yield* repository.claimForAcceptedTurn({
         attachmentIds: ["committed"],
         ownerThreadId: "thread-1",
@@ -363,7 +394,10 @@ layer("ManagedAttachmentRepository", (it) => {
       yield* resetSchema;
       const repository = yield* ManagedAttachmentRepository;
       const sql = yield* SqlClient.SqlClient;
-      yield* reserveAndStage(repository, { attachmentId: "cleanup", relativePath: "attachments/cleanup" });
+      yield* reserveAndStage(repository, {
+        attachmentId: "cleanup",
+        relativePath: "attachments/cleanup",
+      });
       yield* reserveAndStage(repository, {
         attachmentId: "cleanup-other",
         ownerThreadId: "thread-2",
@@ -475,10 +509,7 @@ layer("ManagedAttachmentRepository", (it) => {
         leaseExpiresAt: "2026-07-14T10:06:00.000Z",
         limit: 1,
       });
-      assert.strictEqual(
-        leased[0]?.attemptCount,
-        MANAGED_ATTACHMENT_CLEANUP_MAX_ATTEMPTS - 1,
-      );
+      assert.strictEqual(leased[0]?.attemptCount, MANAGED_ATTACHMENT_CLEANUP_MAX_ATTEMPTS - 1);
       assert.isTrue(
         yield* repository.retryCleanup({
           attachmentId: "poisoned-cleanup",
@@ -725,9 +756,7 @@ layer("ManagedAttachmentRepository", (it) => {
         FROM managed_attachment_blobs
         ORDER BY attachment_id
       `;
-      const stateByAttachmentId = new Map(
-        states.map((row) => [row.attachmentId, row.state]),
-      );
+      const stateByAttachmentId = new Map(states.map((row) => [row.attachmentId, row.state]));
       assert.strictEqual(stateByAttachmentId.get(committedReservation.attachmentId), "claimed");
       assert.strictEqual(stateByAttachmentId.get(preRenameId), "deleted");
       assert.strictEqual(stateByAttachmentId.get(postRenameId), "deleted");
@@ -742,12 +771,8 @@ layer("ManagedAttachmentRepository", (it) => {
         principalStagingBytes: 0,
         principalStagingCount: 0,
       });
-      assert.isTrue(
-        fs.existsSync(path.join(attachmentsDir, committedReservation.relativePath)),
-      );
-      assert.isFalse(
-        fs.existsSync(path.join(attachmentsDir, ".staging", `${preRenameId}.part`)),
-      );
+      assert.isTrue(fs.existsSync(path.join(attachmentsDir, committedReservation.relativePath)));
+      assert.isFalse(fs.existsSync(path.join(attachmentsDir, ".staging", `${preRenameId}.part`)));
       assert.isFalse(fs.existsSync(path.join(attachmentsDir, postRenameRelativePath)));
     }).pipe(
       Effect.ensuring(

@@ -100,11 +100,14 @@ function verifyCanonicalIdentity(): void {
   if (serverPackage.name !== "@synara/cli") {
     throw new Error(`Expected CLI package @synara/cli, got ${serverPackage.name ?? "<missing>"}.`);
   }
-  if (
-    Object.keys(serverPackage.bin ?? {}).length !== 1 ||
-    serverPackage.bin?.synara !== "dist/index.mjs"
-  ) {
-    throw new Error("Expected the CLI to expose only the synara binary.");
+  const expectedBinaries = {
+    synara: "dist/index.mjs",
+    "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
+  };
+  if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
+    throw new Error(
+      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
+    );
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
     throw new Error(`Unexpected production bundle ID: ${SYNARA_PRODUCTION_BUNDLE_ID}.`);

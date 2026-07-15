@@ -86,9 +86,7 @@ function withoutResumeCursor(session: ProviderSession): ProviderSession {
 }
 
 function asRuntimePayloadRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function makeFakeCodexAdapter(
@@ -98,22 +96,23 @@ function makeFakeCodexAdapter(
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
-      const now = new Date().toISOString();
-      const session: ProviderSession = {
-        provider,
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? { opaque: `resume-${String(input.threadId)}` },
-        cwd: input.cwd ?? process.cwd(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(session.threadId, session);
-      return session;
-    }),
+  const startSession = vi.fn(
+    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
+      Effect.sync(() => {
+        const now = new Date().toISOString();
+        const session: ProviderSession = {
+          provider,
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: input.resumeCursor ?? { opaque: `resume-${String(input.threadId)}` },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        sessions.set(session.threadId, session);
+        return session;
+      }),
   );
 
   const sendTurn = vi.fn(
@@ -137,9 +136,7 @@ function makeFakeCodexAdapter(
   );
 
   const steerTurn = vi.fn(
-    (
-      input: ProviderSteerTurnInput,
-    ): Effect.Effect<ProviderTurnStartResult, ProviderAdapterError> =>
+    (input: ProviderSteerTurnInput): Effect.Effect<ProviderTurnStartResult, ProviderAdapterError> =>
       Effect.succeed({
         threadId: input.threadId,
         turnId: TurnId.makeUnsafe(`steer-${String(input.threadId)}`),
@@ -365,15 +362,13 @@ function makeProviderServiceLayer(
                 ? Effect.succeed(pi.adapter)
                 : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
-      Effect.succeed(
-        [
-          "codex",
-          "claudeAgent",
-          "gemini",
-          ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
-          ...(providers?.includePi === true ? (["pi"] as const) : []),
-        ] as const,
-      ),
+      Effect.succeed([
+        "codex",
+        "claudeAgent",
+        "gemini",
+        ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
+        ...(providers?.includePi === true ? (["pi"] as const) : []),
+      ] as const),
   };
 
   const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
@@ -724,10 +719,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           issue: `Cannot respond to stale request 'user-input-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
         }),
       );
-      assert.equal(
-        routing.codex.respondToUserInput.mock.calls.length,
-        userInputResponseCallCount,
-      );
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, userInputResponseCallCount);
 
       yield* routing.codex.waitForRuntimeSubscribers();
       routing.codex.emit({
@@ -740,9 +732,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         payload: { reason: "late old-runtime exit" },
       });
       yield* sleep(25);
-      const bindingAfterStaleEvent = Option.getOrUndefined(
-        yield* directory.getBinding(threadId),
-      );
+      const bindingAfterStaleEvent = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.equal(bindingAfterStaleEvent?.lifecycleGeneration, secondGeneration);
       assert.equal(bindingAfterStaleEvent?.status, "running");
 
@@ -833,7 +823,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         routing.claude.listSessions(),
       ]);
       assert.equal(binding?.provider, "claudeAgent");
-      assert.equal(codexSessions.some((session) => session.threadId === threadId), false);
+      assert.equal(
+        codexSessions.some((session) => session.threadId === threadId),
+        false,
+      );
       assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
 
       yield* provider.stopSession({ threadId });
@@ -878,12 +871,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       )?.[0];
       assert.equal(restoredBinding?.provider, "codex");
       assert.equal(restoredBinding?.status, "running");
-      assert.equal(
-        restoredBinding?.lifecycleGeneration,
-        originalBinding?.lifecycleGeneration,
-      );
+      assert.equal(restoredBinding?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
       assert.equal(codexSessions.filter((session) => session.threadId === threadId).length, 1);
-      assert.equal(claudeSessions.some((session) => session.threadId === threadId), false);
+      assert.equal(
+        claudeSessions.some((session) => session.threadId === threadId),
+        false,
+      );
       assert.deepEqual(restoreCall?.resumeCursor, initial.resumeCursor);
       assert.equal(restoreCall?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
 
@@ -951,7 +944,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ([input]) => input.threadId === threadId,
       )?.[0];
       assert.equal(binding?.provider, "claudeAgent");
-      assert.equal(codexSessions.some((session) => session.threadId === threadId), false);
+      assert.equal(
+        codexSessions.some((session) => session.threadId === threadId),
+        false,
+      );
       assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
       assert.deepEqual(recoveryCall?.resumeCursor, initial.resumeCursor);
 
@@ -1552,15 +1548,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
       routing.codex.sendTurn
-        .mockImplementationOnce(
-          () =>
-            Effect.promise(
-              () =>
-                new Promise<ProviderTurnStartResult>((resolve) => {
-                  olderDispatchStarted = true;
-                  releaseOlderDispatch = resolve;
-                }),
-            ),
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                olderDispatchStarted = true;
+                releaseOlderDispatch = resolve;
+              }),
+          ),
         )
         .mockImplementationOnce((input) =>
           Effect.succeed({
@@ -1630,14 +1625,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
       routing.codex.sendTurn
-        .mockImplementationOnce(
-          () =>
-            Effect.promise(
-              () =>
-                new Promise<ProviderTurnStartResult>((resolve) => {
-                  releaseOlder = resolve;
-                }),
-            ),
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                releaseOlder = resolve;
+              }),
+          ),
         )
         .mockImplementationOnce((input) =>
           Effect.succeed({
@@ -1683,14 +1677,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
       routing.codex.sendTurn
-        .mockImplementationOnce(
-          () =>
-            Effect.promise(
-              () =>
-                new Promise<ProviderTurnStartResult>((resolve) => {
-                  releaseOlder = resolve;
-                }),
-            ),
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                releaseOlder = resolve;
+              }),
+          ),
         )
         .mockImplementationOnce(() =>
           Effect.promise(
@@ -1851,15 +1844,14 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
         modelSelection: initialModelSelection,
       });
-      routing.codex.steerTurn.mockImplementationOnce(
-        () =>
-          Effect.promise(
-            () =>
-              new Promise<ProviderTurnStartResult>((resolve) => {
-                steerStarted = true;
-                releaseSteer = resolve;
-              }),
-          ),
+      routing.codex.steerTurn.mockImplementationOnce(() =>
+        Effect.promise(
+          () =>
+            new Promise<ProviderTurnStartResult>((resolve) => {
+              steerStarted = true;
+              releaseSteer = resolve;
+            }),
+        ),
       );
       routing.codex.startReview.mockImplementationOnce((input) =>
         Effect.succeed({
@@ -2545,10 +2537,7 @@ piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it)
             "Cannot respond to request 'pi-user-input-without-generation' without its provider lifecycle generation.",
         }),
       );
-      assert.equal(
-        piInteractionRouting.pi.respondToUserInput.mock.calls.length,
-        responseCallCount,
-      );
+      assert.equal(piInteractionRouting.pi.respondToUserInput.mock.calls.length, responseCallCount);
 
       yield* provider.respondToUserInput({
         threadId,
@@ -2646,49 +2635,47 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
-  it.effect(
-    "ignores an unscoped terminal event while overlapping turns are outstanding",
-    () =>
-      Effect.gen(function* () {
-        const provider = yield* ProviderService;
-        const directory = yield* ProviderSessionDirectory;
-        const threadId = asThreadId("thread-idle-ambiguous-terminal");
-        const firstTurnId = asTurnId("turn-ambiguous-first");
-        const secondTurnId = asTurnId("turn-ambiguous-second");
+  it.effect("ignores an unscoped terminal event while overlapping turns are outstanding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-ambiguous-terminal");
+      const firstTurnId = asTurnId("turn-ambiguous-first");
+      const secondTurnId = asTurnId("turn-ambiguous-second");
 
-        yield* provider.startSession(threadId, {
-          provider: "codex",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        idleCleanup.codex.sendTurn
-          .mockImplementationOnce((input) =>
-            Effect.succeed({ threadId: input.threadId, turnId: firstTurnId }),
-          )
-          .mockImplementationOnce((input) =>
-            Effect.succeed({ threadId: input.threadId, turnId: secondTurnId }),
-          );
-        yield* provider.sendTurn({ threadId, input: "first", attachments: [] });
-        yield* provider.sendTurn({ threadId, input: "second", attachments: [] });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: firstTurnId }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: secondTurnId }),
+        );
+      yield* provider.sendTurn({ threadId, input: "first", attachments: [] });
+      yield* provider.sendTurn({ threadId, input: "second", attachments: [] });
 
-        idleCleanup.codex.stopSession.mockClear();
-        yield* idleCleanup.codex.waitForRuntimeSubscribers();
-        idleCleanup.codex.emit({
-          type: "turn.aborted",
-          eventId: asEventId("runtime-ambiguous-terminal"),
-          provider: "codex",
-          createdAt: "2026-02-27T00:04:00.000Z",
-          threadId,
-          payload: { state: "interrupted" },
-        });
-        yield* sleep(150);
+      idleCleanup.codex.stopSession.mockClear();
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("runtime-ambiguous-terminal"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        payload: { state: "interrupted" },
+      });
+      yield* sleep(150);
 
-        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        const payload = binding?.runtimePayload as Record<string, unknown>;
-        assert.equal(binding?.status, "running");
-        assert.equal(payload.activeTurnId, secondTurnId);
-        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
-      }),
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(binding?.status, "running");
+      assert.equal(payload.activeTurnId, secondTurnId);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+    }),
   );
 
   it.effect(

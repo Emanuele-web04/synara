@@ -40,9 +40,7 @@ export interface DrainableWorker<A> {
   readonly enqueue: (item: A) => Effect.Effect<boolean>;
 
   /** Admit work immediately or fail with an explicit overload/lifecycle reason. */
-  readonly tryEnqueue: (
-    item: A,
-  ) => Effect.Effect<void, DrainableWorkerAdmissionError>;
+  readonly tryEnqueue: (item: A) => Effect.Effect<void, DrainableWorkerAdmissionError>;
 
   /** Stop accepting new work without interrupting already accepted items. */
   readonly quiesce: Effect.Effect<void>;
@@ -129,8 +127,7 @@ export const makeDrainableWorker = <A, E, R>(
             ...current,
             outstanding,
             idle: current.outstanding === 0 ? nextIdle : current.idle,
-            slotAvailable:
-              outstanding === capacity ? nextSlotAvailable : current.slotAvailable,
+            slotAvailable: outstanding === capacity ? nextSlotAvailable : current.slotAvailable,
           },
         ];
       });
@@ -142,9 +139,7 @@ export const makeDrainableWorker = <A, E, R>(
         {
           idle: remaining === 0 ? current.idle : null,
           slotAvailable:
-            current.outstanding === capacity && remaining < capacity
-              ? current.slotAvailable
-              : null,
+            current.outstanding === capacity && remaining < capacity ? current.slotAvailable : null,
         },
         {
           ...current,
@@ -247,29 +242,32 @@ export const makeDrainableWorker = <A, E, R>(
       ),
     );
 
-    const drain = Ref.get(state).pipe(
-      Effect.flatMap(({ idle }) => Deferred.await(idle)),
-    );
+    const drain = Ref.get(state).pipe(Effect.flatMap(({ idle }) => Deferred.await(idle)));
 
     const stop = Effect.uninterruptible(
       quiesce.pipe(
         Effect.andThen(
-          Ref.update(state, (current) =>
-            current.phase === "stopped"
-              ? current
-              : {
-                  ...current,
-                  phase: "draining",
-                },
+          Ref.update(
+            state,
+            (current): WorkerState =>
+              current.phase === "stopped"
+                ? current
+                : {
+                    ...current,
+                    phase: "draining",
+                  },
           ),
         ),
         Effect.andThen(drain),
         Effect.andThen(Queue.shutdown(queue).pipe(Effect.asVoid)),
         Effect.andThen(
-          Ref.update(state, (current) => ({
-            ...current,
-            phase: "stopped",
-          })),
+          Ref.update(
+            state,
+            (current): WorkerState => ({
+              ...current,
+              phase: "stopped",
+            }),
+          ),
         ),
       ),
     );

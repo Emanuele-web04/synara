@@ -18,8 +18,14 @@ interface EngineResult {
   }>;
 }
 
+export {};
+
 function argument(name: string): string {
-  const value = process.argv.find((item) => item.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
+  const value = process.argv
+    .find((item) => item.startsWith(`--${name}=`))
+    ?.split("=")
+    .slice(1)
+    .join("=");
   if (!value) throw new Error(`Missing --${name}=...`);
   return value;
 }

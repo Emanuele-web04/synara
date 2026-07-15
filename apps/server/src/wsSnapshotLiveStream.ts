@@ -12,11 +12,7 @@ export type SnapshotLiveStreamItem<Snapshot> =
  * replay the exact gap, then continue with strictly newer live events.
  */
 export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
-  readonly subscribeLive: Effect.Effect<
-    Stream.Stream<OrchestrationEvent, E>,
-    never,
-    Scope.Scope
-  >;
+  readonly subscribeLive: Effect.Effect<Stream.Stream<OrchestrationEvent, E>, never, Scope.Scope>;
   readonly snapshot: Effect.Effect<Snapshot, E>;
   readonly snapshotSequence: (snapshot: Snapshot) => number;
   readonly getHighWaterSequence: Effect.Effect<number, E>;
@@ -45,22 +41,15 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         });
       }
 
-      const replay = input
-        .replay(snapshotSequence, highWaterSequence)
-        .pipe(
-          Stream.filter(
-            (event) =>
-              event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
-          ),
-          Stream.map(
-            (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
-          ),
-        );
+      const replay = input.replay(snapshotSequence, highWaterSequence).pipe(
+        Stream.filter(
+          (event) => event.sequence > snapshotSequence && event.sequence <= highWaterSequence,
+        ),
+        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
+      );
       const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
         Stream.filter((event) => event.sequence > highWaterSequence),
-        Stream.map(
-          (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
-        ),
+        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
       );
 
       return Stream.concat(

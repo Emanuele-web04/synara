@@ -164,9 +164,7 @@ async function makeEffectAdapter(effectRoot: string): Promise<BenchmarkAdapter> 
     import(resolveDependency("effect/Queue")),
     import(resolveDependency("effect/Scope")),
     import(pathToFileURL(path.join(effectRoot, "packages/effect-acp/src/protocol.ts")).href),
-    import(
-      pathToFileURL(path.join(effectRoot, "packages/effect-acp/src/_internal/stdio.ts")).href
-    ),
+    import(pathToFileURL(path.join(effectRoot, "packages/effect-acp/src/_internal/stdio.ts")).href),
   ]);
   const scope = await Effect.runPromise(Scope.make());
   const provideScope = (effect: unknown) => Effect.provideService(effect, Scope.Scope, scope);
@@ -190,9 +188,7 @@ async function makeEffectAdapter(effectRoot: string): Promise<BenchmarkAdapter> 
         if (peerDelayMs > 0) await sleep(peerDelayMs);
         const message: unknown = JSON.parse(line);
         if (isRequest(message)) {
-          await Effect.runPromise(
-            Queue.offer(memory.input, encoder.encode(makeResponse(message))),
-          );
+          await Effect.runPromise(Queue.offer(memory.input, encoder.encode(makeResponse(message))));
         }
       }
     }
@@ -297,19 +293,16 @@ async function run(): Promise<void> {
       await adapter.request({ ...payload, sequence: index });
     }
   };
-  const concurrent = (
-    operations: number,
-    concurrency: number,
-    payload: Record<string, unknown>,
-  ) => async () => {
-    for (let offset = 0; offset < operations; offset += concurrency) {
-      await Promise.all(
-        Array.from({ length: Math.min(concurrency, operations - offset) }, (_, index) =>
-          adapter.request({ ...payload, sequence: offset + index }),
-        ),
-      );
-    }
-  };
+  const concurrent =
+    (operations: number, concurrency: number, payload: Record<string, unknown>) => async () => {
+      for (let offset = 0; offset < operations; offset += concurrency) {
+        await Promise.all(
+          Array.from({ length: Math.min(concurrency, operations - offset) }, (_, index) =>
+            adapter.request({ ...payload, sequence: offset + index }),
+          ),
+        );
+      }
+    };
   const notifications = (operations: number, payload: Record<string, unknown>) => async () => {
     for (let index = 0; index < operations; index += 1) {
       await adapter.notify({ ...payload, sequence: index });

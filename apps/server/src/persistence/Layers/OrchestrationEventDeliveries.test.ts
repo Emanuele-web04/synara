@@ -125,7 +125,10 @@ layer("OrchestrationEventDeliveryRepository", (it) => {
       const deliveryColumns = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('orchestration_event_deliveries')
       `;
-      assert.notInclude(deliveryColumns.map((row) => row.name), "payload_json");
+      assert.notInclude(
+        deliveryColumns.map((row) => row.name),
+        "payload_json",
+      );
 
       const staleCompletion = yield* repository.complete({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
@@ -226,9 +229,7 @@ layer("OrchestrationEventDeliveryRepository", (it) => {
         error: "bounded retry budget exhausted",
         updatedAt: now,
       });
-      const blocker = yield* repository.firstBlockingDelivery(
-        PROVIDER_COMMAND_REACTOR_CONSUMER,
-      );
+      const blocker = yield* repository.firstBlockingDelivery(PROVIDER_COMMAND_REACTOR_CONSUMER);
       assert.strictEqual(blocker.pipe(Option.getOrThrow).state, "dead");
       assert.strictEqual(blocker.pipe(Option.getOrThrow).threadId, "thread-expired");
       const threadBlocker = yield* repository.firstBlockingDeliveryForThread({

@@ -57,7 +57,11 @@ import {
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
-import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterValidationError,
+  ProviderServiceError,
+} from "../../provider/Errors.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
   TextGeneration,
@@ -125,9 +129,7 @@ type ProviderAttemptOutcome =
   | { readonly _tag: "safe_retry"; readonly detail: string }
   | { readonly _tag: "uncertain"; readonly detail: string };
 
-function classifyProviderAttemptOutcome(
-  exit: Exit.Exit<void, unknown>,
-): ProviderAttemptOutcome {
+function classifyProviderAttemptOutcome(exit: Exit.Exit<void, unknown>): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
   const failure = Cause.findErrorOption(exit.cause);
@@ -334,9 +336,7 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(true),
   });
   const deliverySourceLock = yield* Semaphore.make(1);
-  let reconcileDeliveryRuntime:
-    | ProviderCommandReactorShape["reconcileDelivery"]
-    | undefined;
+  let reconcileDeliveryRuntime: ProviderCommandReactorShape["reconcileDelivery"] | undefined;
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -509,15 +509,9 @@ const make = Effect.gen(function* () {
         payload: {
           detail: input.detail,
           ...(input.requestId ? { requestId: input.requestId } : {}),
-          ...(input.lifecycleGeneration
-            ? { lifecycleGeneration: input.lifecycleGeneration }
-            : {}),
-          ...(input.responseCommandId
-            ? { responseCommandId: input.responseCommandId }
-            : {}),
-          ...(input.settlementStatus
-            ? { settlementStatus: input.settlementStatus }
-            : {}),
+          ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
+          ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
+          ...(input.settlementStatus ? { settlementStatus: input.settlementStatus } : {}),
         },
         turnId: input.turnId,
         createdAt: input.createdAt,
@@ -801,20 +795,20 @@ const make = Effect.gen(function* () {
       requestedModelSelection !== undefined &&
       requestedModelSelection.provider !== threadProvider
     ) {
-      return yield* new ProviderAdapterRequestError({
+      return yield* new ProviderAdapterValidationError({
         provider: threadProvider,
-        method: "thread.turn.start",
-        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        operation: "thread.turn.start",
+        issue: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settingsSnapshot = yield* serverSettings.getSnapshot;
     if (!settingsSnapshot.settings.providers[preferredProvider].enabled) {
-      return yield* new ProviderAdapterRequestError({
+      return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
-        method: "thread.turn.start",
-        detail: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
+        operation: "thread.turn.start",
+        issue: `Provider '${preferredProvider}' is disabled in server settings revision ${settingsSnapshot.revision}.`,
       });
     }
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(
@@ -826,10 +820,10 @@ const make = Effect.gen(function* () {
       worktreePath: thread.worktreePath,
     });
     if (workspaceState === "worktree-pending") {
-      return yield* new ProviderAdapterRequestError({
+      return yield* new ProviderAdapterValidationError({
         provider: threadProvider,
-        method: "thread.turn.start",
-        detail: `Thread '${threadId}' targets a worktree that has not been created yet.`,
+        operation: "thread.turn.start",
+        issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
     const providerSessionOptions = {
@@ -1092,10 +1086,10 @@ const make = Effect.gen(function* () {
       hasSidechatBootstrapContent &&
       sidechatBootstrapAvailableChars === 0
     ) {
-      return yield* new ProviderAdapterRequestError({
+      return yield* new ProviderAdapterValidationError({
         provider: selectedProvider as ProviderKind,
-        method: "thread.turn.start",
-        detail:
+        operation: "thread.turn.start",
+        issue:
           "The latest message is too long to include the sidechat context required by this provider session. Shorten the message and retry.",
       });
     }
@@ -1120,10 +1114,10 @@ const make = Effect.gen(function* () {
       priorTranscriptBootstrapAvailableChars === 0 &&
       hasPriorTranscriptBootstrapContent
     ) {
-      return yield* new ProviderAdapterRequestError({
+      return yield* new ProviderAdapterValidationError({
         provider: selectedProvider as ProviderKind,
-        method: "thread.turn.start",
-        detail:
+        operation: "thread.turn.start",
+        issue:
           "The latest message is too long to include the transcript context required by the restarted provider session. Shorten the message and retry.",
       });
     }
@@ -1818,9 +1812,7 @@ const make = Effect.gen(function* () {
       }
       const promotion = claimed.value;
       yield* Effect.gen(function* () {
-        const sourceEvent = yield* readOrchestrationEventAtSequence(
-          promotion.queuedEventSequence,
-        );
+        const sourceEvent = yield* readOrchestrationEventAtSequence(promotion.queuedEventSequence);
         if (
           sourceEvent === undefined ||
           (sourceEvent.type !== "thread.turn-queued" &&
@@ -1874,11 +1866,13 @@ const make = Effect.gen(function* () {
         }
       }).pipe(
         Effect.onError(() =>
-          queuedTurnPromotions.releaseClaim({
-            queuedEventSequence: promotion.queuedEventSequence,
-            claimOwner: queuedTurnPromotionOwner,
-            updatedAt: new Date().toISOString(),
-          }),
+          queuedTurnPromotions
+            .releaseClaim({
+              queuedEventSequence: promotion.queuedEventSequence,
+              claimOwner: queuedTurnPromotionOwner,
+              updatedAt: new Date().toISOString(),
+            })
+            .pipe(Effect.ignore),
         ),
       );
     } finally {
@@ -1892,14 +1886,12 @@ const make = Effect.gen(function* () {
   });
 
   const recoverQueuedTurnPromotions = Effect.gen(function* () {
-    yield* Effect.forEach(
-      yield* queuedTurnPromotions.listPendingThreadIds,
-      (threadId) =>
-        hasLiveProviderTurn(ThreadId.makeUnsafe(threadId)).pipe(
-          Effect.flatMap((isRunning) =>
-            isRunning ? Effect.void : drainQueuedTurnsForThread(ThreadId.makeUnsafe(threadId)),
-          ),
+    yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (threadId) =>
+      hasLiveProviderTurn(ThreadId.makeUnsafe(threadId)).pipe(
+        Effect.flatMap((isRunning) =>
+          isRunning ? Effect.void : drainQueuedTurnsForThread(ThreadId.makeUnsafe(threadId)),
         ),
+      ),
     );
   });
 
@@ -1979,9 +1971,7 @@ const make = Effect.gen(function* () {
   const claimInteractionResponse = Effect.fnUntraced(function* (input: {
     readonly event: InteractionResponseEvent;
     readonly interactionKind: "approval" | "userInput";
-    readonly decision: Parameters<
-      typeof pendingInteractions.claimResponse
-    >[0]["decision"];
+    readonly decision: Parameters<typeof pendingInteractions.claimResponse>[0]["decision"];
   }) {
     const { event } = input;
     if (event.commandId === null) return null;
@@ -2538,8 +2528,8 @@ const make = Effect.gen(function* () {
       PROVIDER_COMMAND_REACTOR_CONSUMER,
     );
     if (Option.isNone(consumerState)) {
-      return yield* Effect.dieMessage(
-        `Missing durable consumer state for ${PROVIDER_COMMAND_REACTOR_CONSUMER}`,
+      return yield* Effect.die(
+        new Error(`Missing durable consumer state for ${PROVIDER_COMMAND_REACTOR_CONSUMER}`),
       );
     }
 
@@ -2548,9 +2538,7 @@ const make = Effect.gen(function* () {
     const quarantinedThreads = new Set<string>();
 
     const refreshCursor = Effect.gen(function* () {
-      const state = yield* deliveryRepository.getConsumerState(
-        PROVIDER_COMMAND_REACTOR_CONSUMER,
-      );
+      const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
       if (Option.isSome(state)) cursor = state.value.lastAckedSequence;
     });
 
@@ -2568,8 +2556,8 @@ const make = Effect.gen(function* () {
       if (yield* advanceCursor(event)) return;
       yield* refreshCursor;
       if (cursor < event.sequence) {
-        return yield* Effect.dieMessage(
-          `Provider command cursor could not advance through event ${event.sequence}`,
+        return yield* Effect.die(
+          new Error(`Provider command cursor could not advance through event ${event.sequence}`),
         );
       }
     });
@@ -2591,6 +2579,13 @@ const make = Effect.gen(function* () {
       readonly state: "dead" | "uncertain";
       readonly detail: string;
     }) {
+      yield* Effect.logError("provider command delivery entered terminal failure", {
+        eventType: input.event.type,
+        eventSequence: input.event.sequence,
+        threadId: input.event.payload.threadId,
+        state: input.state,
+        detail: input.detail,
+      });
       const settled = yield* deliveryRepository.markTerminalFailure({
         consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
         eventSequence: input.event.sequence,
@@ -2600,17 +2595,17 @@ const make = Effect.gen(function* () {
         updatedAt: new Date().toISOString(),
       });
       if (!settled) {
-        return yield* Effect.dieMessage(
-          `Provider command delivery ${input.event.sequence} lost terminal settlement ownership`,
+        return yield* Effect.die(
+          new Error(
+            `Provider command delivery ${input.event.sequence} lost terminal settlement ownership`,
+          ),
         );
       }
       quarantinedThreads.add(input.event.payload.threadId);
       yield* requireCursorAdvance(input.event);
     });
 
-    const skipQuarantinedSideEffect = Effect.fnUntraced(function* (
-      event: ProviderIntentEvent,
-    ) {
+    const skipQuarantinedSideEffect = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       if (
         !isProviderSideEffectIntent(event) ||
         !(yield* isThreadQuarantined(event.payload.threadId))
@@ -2626,9 +2621,7 @@ const make = Effect.gen(function* () {
       return true;
     });
 
-    const processClaimedProviderIntent = Effect.fnUntraced(function* (
-      event: ProviderIntentEvent,
-    ) {
+    const processClaimedProviderIntent = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       const threadId = event.payload.threadId;
       if (yield* skipQuarantinedSideEffect(event)) return;
 
@@ -2671,8 +2664,10 @@ const make = Effect.gen(function* () {
             error: "Replay-safe provider command claim expired before settlement.",
           });
           if (!requeued) {
-            return yield* Effect.dieMessage(
-              `Replay-safe provider command delivery ${event.sequence} could not be requeued`,
+            return yield* Effect.die(
+              new Error(
+                `Replay-safe provider command delivery ${event.sequence} could not be requeued`,
+              ),
             );
           }
         }
@@ -2689,8 +2684,8 @@ const make = Effect.gen(function* () {
           claimExpiresAt: new Date(Date.now() + PROVIDER_COMMAND_CLAIM_LEASE_MS).toISOString(),
         });
         if (Option.isNone(claimed)) {
-          return yield* Effect.dieMessage(
-            `Provider command delivery ${event.sequence} could not be claimed`,
+          return yield* Effect.die(
+            new Error(`Provider command delivery ${event.sequence} could not be claimed`),
           );
         }
 
@@ -2701,7 +2696,16 @@ const make = Effect.gen(function* () {
         const outcome = classifyProviderAttemptOutcome(workerExit);
 
         switch (outcome._tag) {
-          case "accepted": {
+          case "accepted":
+          case "rejected": {
+            if (outcome._tag === "rejected") {
+              yield* Effect.logWarning("provider command was rejected before acceptance", {
+                eventType: event.type,
+                eventSequence: event.sequence,
+                threadId,
+                detail: outcome.detail,
+              });
+            }
             const completed = yield* deliveryRepository.complete({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
               eventSequence: event.sequence,
@@ -2709,8 +2713,8 @@ const make = Effect.gen(function* () {
               completedAt: new Date().toISOString(),
             });
             if (!completed) {
-              return yield* Effect.dieMessage(
-                `Provider command delivery ${event.sequence} lost settlement ownership`,
+              return yield* Effect.die(
+                new Error(`Provider command delivery ${event.sequence} lost settlement ownership`),
               );
             }
             yield* refreshCursor;
@@ -2734,19 +2738,18 @@ const make = Effect.gen(function* () {
               updatedAt: new Date().toISOString(),
             });
             if (!retryable) {
-              return yield* Effect.dieMessage(
-                `Provider command delivery ${event.sequence} lost retry ownership`,
+              return yield* Effect.die(
+                new Error(`Provider command delivery ${event.sequence} lost retry ownership`),
               );
             }
             yield* Effect.sleep(PROVIDER_COMMAND_SAFE_RETRY_DELAY);
             break;
           }
-          case "rejected":
           case "uncertain":
             yield* settleTerminalFailure({
               event,
               claimOwner,
-              state: outcome._tag === "rejected" ? "dead" : "uncertain",
+              state: "uncertain",
               detail: outcome.detail,
             });
             return;
@@ -2782,8 +2785,10 @@ const make = Effect.gen(function* () {
         event.sequence !== eventSequence ||
         !isProviderIntentEvent(event)
       ) {
-        return yield* Effect.dieMessage(
-          `Provider delivery ${eventSequence} has no matching provider-intent source event`,
+        return yield* Effect.die(
+          new Error(
+            `Provider delivery ${eventSequence} has no matching provider-intent source event`,
+          ),
         );
       }
       return event;
@@ -2819,8 +2824,10 @@ const make = Effect.gen(function* () {
       quarantinedThreads.delete(input.threadId);
       const event = yield* readProviderIntentEvent(input.eventSequence);
       if (!isClaimedProviderIntent(event)) {
-        return yield* Effect.dieMessage(
-          `Provider delivery ${input.eventSequence} does not own a claimed provider intent`,
+        return yield* Effect.die(
+          new Error(
+            `Provider delivery ${input.eventSequence} does not own a claimed provider intent`,
+          ),
         );
       }
       yield* processClaimedProviderIntent(event);
@@ -2838,49 +2845,53 @@ const make = Effect.gen(function* () {
     });
 
     reconcileDeliveryRuntime = (input) =>
-      deliverySourceLock.withPermits(1)(
-        Effect.gen(function* () {
-          const reconciledAt = new Date().toISOString();
-          const reconciled = yield* deliveryRepository.reconcile({
-            reconciliationId: crypto.randomUUID(),
-            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-            eventSequence: input.eventSequence,
-            threadId: input.threadId,
-            expectedState: input.expectedState,
-            outcome: input.outcome,
-            reconciledBy: input.reconciledBy,
-            ...(input.note === undefined ? {} : { note: input.note }),
-            reconciledAt,
-          });
-          if (Option.isNone(reconciled)) return null;
-
-          if (input.outcome === "safe_retry") {
-            yield* resumeRetryableDelivery(input);
-          } else {
-            quarantinedThreads.delete(input.threadId);
-            yield* replayQuarantinedThreadSideEffects({
+      Effect.scoped(
+        deliverySourceLock.withPermits(1)(
+          Effect.gen(function* () {
+            const reconciledAt = new Date().toISOString();
+            const reconciled = yield* deliveryRepository.reconcile({
+              reconciliationId: crypto.randomUUID(),
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: input.eventSequence,
               threadId: input.threadId,
-              afterSequence: input.eventSequence,
+              expectedState: input.expectedState,
+              outcome: input.outcome,
+              reconciledBy: input.reconciledBy,
+              ...(input.note === undefined ? {} : { note: input.note }),
+              reconciledAt,
             });
-          }
+            if (Option.isNone(reconciled)) return null;
 
-          const finalDelivery = yield* deliveryRepository.getDelivery({
-            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-            eventSequence: input.eventSequence,
-          });
-          if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
-            return yield* Effect.dieMessage(
-              `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
-            );
-          }
-          return {
-            eventSequence: input.eventSequence,
-            threadId: input.threadId,
-            outcome: input.outcome,
-            state: finalDelivery.value.state,
-            reconciledAt,
-          };
-        }),
+            if (input.outcome === "safe_retry") {
+              yield* resumeRetryableDelivery(input);
+            } else {
+              quarantinedThreads.delete(input.threadId);
+              yield* replayQuarantinedThreadSideEffects({
+                threadId: input.threadId,
+                afterSequence: input.eventSequence,
+              });
+            }
+
+            const finalDelivery = yield* deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: input.eventSequence,
+            });
+            if (Option.isNone(finalDelivery) || finalDelivery.value.state === "inflight") {
+              return yield* Effect.die(
+                new Error(
+                  `Provider delivery ${input.eventSequence} did not reach a reconciled state`,
+                ),
+              );
+            }
+            return {
+              eventSequence: input.eventSequence,
+              threadId: input.threadId,
+              outcome: input.outcome,
+              state: finalDelivery.value.state,
+              reconciledAt,
+            };
+          }),
+        ),
       );
 
     const retryableDeliveries = yield* deliveryRepository.listRetryableDeliveries(
@@ -2920,6 +2931,7 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.forkScoped),
       ]).pipe(Effect.asVoid),
     ),
+    Effect.orDie,
   );
 
   const drain: ProviderCommandReactorShape["drain"] = Effect.gen(function* () {
@@ -2928,15 +2940,12 @@ const make = Effect.gen(function* () {
       const consumerState = yield* deliveryRepository.getConsumerState(
         PROVIDER_COMMAND_REACTOR_CONSUMER,
       );
-      if (
-        Option.isSome(consumerState) &&
-        consumerState.value.lastAckedSequence >= targetSequence
-      ) {
+      if (Option.isSome(consumerState) && consumerState.value.lastAckedSequence >= targetSequence) {
         return;
       }
       yield* Effect.sleep(Duration.millis(5));
     }
-  });
+  }).pipe(Effect.orDie);
 
   const listBlockingDeliveries: ProviderCommandReactorShape["listBlockingDeliveries"] = (input) =>
     deliveryRepository.listBlockingDeliveries({

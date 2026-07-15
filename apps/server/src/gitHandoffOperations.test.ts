@@ -40,40 +40,42 @@ const result = {
 };
 
 layer("Git handoff operation recovery", (it) => {
-  it.effect("replays durable Git results without running Git again and fences incomplete work", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`DELETE FROM git_handoff_operations`;
+  it.effect(
+    "replays durable Git results without running Git again and fences incomplete work",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DELETE FROM git_handoff_operations`;
 
-      assert.deepStrictEqual(yield* beginGitHandoff(input), { phase: "new" });
-      yield* recordGitHandoffResult(input.commandId, result);
-      assert.deepStrictEqual(yield* beginGitHandoff(input), {
-        phase: "git_applied",
-        result,
-      });
+        assert.deepStrictEqual(yield* beginGitHandoff(input), { phase: "new" });
+        yield* recordGitHandoffResult(input.commandId, result);
+        assert.deepStrictEqual(yield* beginGitHandoff(input), {
+          phase: "git_applied",
+          result,
+        });
 
-      const dispatched: unknown[] = [];
-      yield* recoverGitHandoffOperations((command) =>
-        Effect.sync(() => {
-          dispatched.push(command);
-        }),
-      );
-      assert.lengthOf(dispatched, 1);
-      assert.deepInclude(dispatched[0] as object, {
-        type: "thread.meta.update",
-        commandId: input.commandId,
-        threadId: input.threadId,
-        worktreePath: result.worktreePath,
-      });
-      assert.deepStrictEqual(yield* beginGitHandoff(input), { phase: "completed", result });
+        const dispatched: unknown[] = [];
+        yield* recoverGitHandoffOperations((command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+          }),
+        );
+        assert.lengthOf(dispatched, 1);
+        assert.deepInclude(dispatched[0] as object, {
+          type: "thread.meta.update",
+          commandId: input.commandId,
+          threadId: input.threadId,
+          worktreePath: result.worktreePath,
+        });
+        assert.deepStrictEqual(yield* beginGitHandoff(input), { phase: "completed", result });
 
-      const interruptedInput = {
-        ...input,
-        commandId: CommandId.makeUnsafe("git-handoff-interrupted-command"),
-      };
-      assert.deepStrictEqual(yield* beginGitHandoff(interruptedInput), { phase: "new" });
-      yield* recoverGitHandoffOperations(() => Effect.void);
-      assert.deepStrictEqual(yield* beginGitHandoff(interruptedInput), { phase: "uncertain" });
-    }),
+        const interruptedInput = {
+          ...input,
+          commandId: CommandId.makeUnsafe("git-handoff-interrupted-command"),
+        };
+        assert.deepStrictEqual(yield* beginGitHandoff(interruptedInput), { phase: "new" });
+        yield* recoverGitHandoffOperations(() => Effect.void);
+        assert.deepStrictEqual(yield* beginGitHandoff(interruptedInput), { phase: "uncertain" });
+      }),
   );
 });

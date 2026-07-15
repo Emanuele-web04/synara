@@ -729,9 +729,7 @@ function SettingsRouteView() {
     grok: Boolean(settings.grokBinaryPath),
     droid: Boolean(settings.droidBinaryPath),
     kilo: Boolean(
-      settings.kiloBinaryPath ||
-        settings.kiloServerUrl ||
-        settings.kiloServerPasswordConfigured,
+      settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPasswordConfigured,
     ),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
@@ -3469,9 +3467,11 @@ function SettingsRouteView() {
                                     )
                                   }
                                   placeholder={
-                                    (providerSettings.serverPasswordKey === "kiloServerPassword"
-                                      ? kiloServerPasswordConfigured
-                                      : openCodeServerPasswordConfigured)
+                                    (
+                                      providerSettings.serverPasswordKey === "kiloServerPassword"
+                                        ? kiloServerPasswordConfigured
+                                        : openCodeServerPasswordConfigured
+                                    )
                                       ? "Configured — enter a replacement or leave blank"
                                       : providerSettings.serverPasswordPlaceholder
                                   }

@@ -1,4 +1,5 @@
 import type {
+  ChatAttachment,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
@@ -22,10 +23,7 @@ import {
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import {
-  toPersistenceSqlError,
-  type PersistenceSqlError,
-} from "../../persistence/Errors.ts";
+import { toPersistenceSqlError, type PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import {
   OrchestrationCommandReceiptRepository,
@@ -54,6 +52,7 @@ import {
   ORCHESTRATION_COMMAND_CONTROL_RESERVE,
   ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
   ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
+  type OrchestrationCommandAdmissionDecision,
   tryAdmitOrchestrationCommand,
   usesReservedCommandAdmission,
 } from "../orchestrationAdmission.ts";
@@ -137,9 +136,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   let commandReadModel = createEmptyReadModel(new Date().toISOString());
 
-  const commandQueue = yield* Queue.bounded<CommandEnvelope>(
-    ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
-  );
+  const commandQueue = yield* Queue.bounded<CommandEnvelope>(ORCHESTRATION_COMMAND_QUEUE_CAPACITY);
   const eventPubSub = yield* PubSub.bounded<OrchestrationEvent>(
     ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
   );
@@ -206,10 +203,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const validateAcceptedAttachmentRetry = (
     command: OrchestrationCommand,
     principal: ManagedAttachmentPrincipal,
-  ): Effect.Effect<
-    void,
-    OrchestrationCommandPreviouslyRejectedError | PersistenceSqlError
-  > =>
+  ): Effect.Effect<void, OrchestrationCommandPreviouslyRejectedError | PersistenceSqlError> =>
     Effect.gen(function* () {
       if (command.type !== "thread.turn.start") return;
       const requestedIds = command.message.attachments
@@ -233,7 +227,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       if (!exactIdentity) {
         return yield* new OrchestrationCommandPreviouslyRejectedError({
           commandId: command.commandId,
-          detail: "The command ID was already accepted with a different managed attachment set or owner.",
+          detail:
+            "The command ID was already accepted with a different managed attachment set or owner.",
         });
       }
     });
@@ -569,10 +564,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return;
         }
         if (existingReceipt.value.status === "accepted") {
-          yield* validateAcceptedAttachmentRetry(
-            envelope.command,
-            envelope.attachmentPrincipal,
-          );
+          yield* validateAcceptedAttachmentRetry(envelope.command, envelope.attachmentPrincipal);
           yield* Deferred.succeed(envelope.result, {
             sequence: existingReceipt.value.resultSequence,
           });
@@ -588,51 +580,61 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return;
       }
 
-      const command =
-        envelope.command.type === "thread.turn.start"
-          ? yield* Effect.gen(function* () {
-              const attachments = yield* Effect.forEach(
-                envelope.command.message.attachments,
-                (attachment) => {
-                  if (attachment.type === "assistant-selection") return Effect.succeed(attachment);
-                  return managedAttachments
-                    .findServerOwned({
-                      attachmentId: attachment.id,
-                      ownerThreadId: envelope.command.threadId,
-                      ownerKind: envelope.attachmentPrincipal.ownerKind,
-                      ownerId: envelope.attachmentPrincipal.ownerId,
-                      now: new Date().toISOString(),
-                    })
-                    .pipe(
-                      Effect.flatMap((found) =>
-                        Option.match(found, {
-                          onNone: () =>
-                            Effect.fail(
-                              new OrchestrationCommandInvariantError({
-                                commandType: envelope.command.type,
-                                detail: `Managed attachment ${attachment.id} is unavailable, expired, or owned by another session/thread.`,
-                              }),
-                            ),
-                          onSome: (blob) =>
-                            Effect.succeed({
-                              type: blob.kind as "image" | "file",
-                              id: blob.attachmentId,
-                              name: blob.originalName,
-                              mimeType: blob.mimeType,
-                              sizeBytes: blob.sizeBytes!,
-                            }),
+      let command: OrchestrationCommand = envelope.command;
+      if (command.type === "thread.turn.start") {
+        const startCommand = command;
+        const attachments = yield* Effect.forEach(
+          startCommand.message.attachments,
+          (attachment) => {
+            if (attachment.type === "assistant-selection") {
+              return Effect.succeed<ChatAttachment>(attachment);
+            }
+            return managedAttachments
+              .findServerOwned({
+                attachmentId: attachment.id,
+                ownerThreadId: startCommand.threadId,
+                ownerKind: envelope.attachmentPrincipal.ownerKind,
+                ownerId: envelope.attachmentPrincipal.ownerId,
+                now: new Date().toISOString(),
+              })
+              .pipe(
+                Effect.flatMap((found) =>
+                  Option.match(found, {
+                    onNone: () =>
+                      Effect.fail(
+                        new OrchestrationCommandInvariantError({
+                          commandType: startCommand.type,
+                          detail: `Managed attachment ${attachment.id} is unavailable, expired, or owned by another session/thread.`,
                         }),
                       ),
-                    );
-                },
-                { concurrency: 1 },
+                    onSome: (blob) => {
+                      if (blob.kind !== "image" && blob.kind !== "file") {
+                        return Effect.fail(
+                          new OrchestrationCommandInvariantError({
+                            commandType: startCommand.type,
+                            detail: `Managed attachment ${attachment.id} has unsupported kind '${blob.kind}'.`,
+                          }),
+                        );
+                      }
+                      return Effect.succeed<ChatAttachment>({
+                        type: blob.kind,
+                        id: blob.attachmentId,
+                        name: blob.originalName,
+                        mimeType: blob.mimeType,
+                        sizeBytes: blob.sizeBytes!,
+                      });
+                    },
+                  }),
+                ),
               );
-              return {
-                ...envelope.command,
-                message: { ...envelope.command.message, attachments },
-              } satisfies OrchestrationCommand;
-            })
-          : envelope.command;
+          },
+          { concurrency: 1 },
+        );
+        command = {
+          ...startCommand,
+          message: { ...startCommand.message, attachments },
+        };
+      }
 
       const deciderReadModel = yield* buildDeciderReadModel(command);
       const eventBase = yield* decideOrchestrationCommand({
@@ -938,19 +940,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   );
   const workerFiber = yield* Effect.forkScoped(worker);
 
-  const drain: OrchestrationEngineShape["drain"] = Effect.suspend(function awaitIdle() {
-    return Ref.get(engineAdmissionState).pipe(
-      Effect.flatMap((current) => Deferred.await(current.idle)),
-      Effect.andThen(Ref.get(engineAdmissionState)),
-      Effect.flatMap((current) =>
-        current.outstanding === 0 ? Effect.void : Effect.suspend(awaitIdle),
-      ),
-    );
-  });
+  const drain: OrchestrationEngineShape["drain"] = Effect.suspend(
+    function awaitIdle(): Effect.Effect<void> {
+      return Ref.get(engineAdmissionState).pipe(
+        Effect.flatMap((current) => Deferred.await(current.idle)),
+        Effect.andThen(Ref.get(engineAdmissionState)),
+        Effect.flatMap((current) =>
+          current.outstanding === 0 ? Effect.void : Effect.suspend(awaitIdle),
+        ),
+      );
+    },
+  );
 
   const quiesce: OrchestrationEngineShape["quiesce"] = Ref.update(
     engineAdmissionState,
-    (current) =>
+    (current): EngineAdmissionState =>
       current.phase === "running"
         ? {
             ...current,
@@ -960,22 +964,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   );
 
   const stop: OrchestrationEngineShape["stop"] = Effect.uninterruptible(
-    Ref.update(engineAdmissionState, (current) =>
-      current.phase === "stopped"
-        ? current
-        : {
-            ...current,
-            phase: "draining",
-          },
+    Ref.update(
+      engineAdmissionState,
+      (current): EngineAdmissionState =>
+        current.phase === "stopped"
+          ? current
+          : {
+              ...current,
+              phase: "draining",
+            },
     ).pipe(
       Effect.andThen(Queue.interrupt(commandQueue).pipe(Effect.asVoid)),
       Effect.andThen(Fiber.await(workerFiber).pipe(Effect.asVoid)),
       Effect.andThen(drain),
       Effect.andThen(
-        Ref.update(engineAdmissionState, (current) => ({
-          ...current,
-          phase: "stopped",
-        })),
+        Ref.update(
+          engineAdmissionState,
+          (current): EngineAdmissionState => ({
+            ...current,
+            phase: "stopped",
+          }),
+        ),
       ),
     ),
   );
@@ -1000,10 +1009,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       throughSequenceInclusive,
     );
   const getEventHighWaterSequence = eventStore.getHighWaterSequence();
-  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
-    PubSub.subscribe(eventPubSub).pipe(
-      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
-    );
+  const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] = PubSub.subscribe(
+    eventPubSub,
+  ).pipe(Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))));
 
   // Compatibility bridge for older tests and out-of-tree callers. Production
   // code should use ProjectionSnapshotQuery directly instead of depending on
@@ -1018,38 +1026,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const executionState = yield* Ref.make<CommandExecutionState>("queued");
       const envelope: CommandEnvelope = {
         command,
-        attachmentPrincipal:
-          context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+        attachmentPrincipal: context?.attachmentPrincipal ?? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
         result,
         executionState,
         deadlineAtMs: Date.now() + ORCHESTRATION_DISPATCH_TIMEOUT_MS,
       };
       const nextIdle = yield* Deferred.make<void>();
-      const admission = yield* Ref.modify(engineAdmissionState, (current) => {
-        if (
-          current.phase === "draining" ||
-          current.phase === "stopped" ||
-          (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
-        ) {
-          return [{ accepted: false, reason: "stopped" as const }, current] as const;
-        }
-        const decision = tryAdmitOrchestrationCommand({
-          queue: commandQueue,
-          envelope,
-          commandType: command.type,
-        });
-        if (!decision.accepted) {
-          return [decision, current] as const;
-        }
-        return [
-          decision,
-          {
-            ...current,
-            outstanding: current.outstanding + 1,
-            idle: current.outstanding === 0 ? nextIdle : current.idle,
-          },
-        ] as const;
-      });
+      const admission = yield* Ref.modify(
+        engineAdmissionState,
+        (current): readonly [OrchestrationCommandAdmissionDecision, EngineAdmissionState] => {
+          if (
+            current.phase === "draining" ||
+            current.phase === "stopped" ||
+            (current.phase === "quiescing" && !usesReservedCommandAdmission(command.type))
+          ) {
+            return [{ accepted: false, reason: "stopped" as const }, current] as const;
+          }
+          const decision = tryAdmitOrchestrationCommand({
+            queue: commandQueue,
+            envelope,
+            commandType: command.type,
+          });
+          if (!decision.accepted) {
+            return [decision, current] as const;
+          }
+          return [
+            decision,
+            {
+              ...current,
+              outstanding: current.outstanding + 1,
+              idle: current.outstanding === 0 ? nextIdle : current.idle,
+            },
+          ] as const;
+        },
+      );
       if (!admission.accepted) {
         return yield* new OrchestrationCommandAdmissionError({
           commandId: command.commandId,
@@ -1216,8 +1226,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                     new OrchestrationCommandInternalError({
                       commandId: "repair-local-state",
                       commandType: ORCHESTRATION_WS_METHODS.repairState,
-                      detail:
-                        "Failed to rebuild local projections from the saved event history.",
+                      detail: "Failed to rebuild local projections from the saved event history.",
                     }),
                 ),
               ),

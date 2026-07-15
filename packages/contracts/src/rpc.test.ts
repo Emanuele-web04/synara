@@ -18,9 +18,9 @@ describe("WS RPC contracts", () => {
     expect(
       WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers),
     ).toBe(true);
-    expect(
-      WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery),
-    ).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery)).toBe(
+      true,
+    );
   });
 
   it("uses a schema-backed transport error", () => {

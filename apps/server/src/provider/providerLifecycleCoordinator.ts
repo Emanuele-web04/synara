@@ -26,10 +26,7 @@ export interface ProviderLifecycleCoordinator {
 
 /** Serializes provider lifecycle mutations per thread and gives each mutation a unique epoch. */
 export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator {
-  const locks = new Map<
-    ThreadId,
-    { readonly semaphore: Semaphore.Semaphore; users: number }
-  >();
+  const locks = new Map<ThreadId, { readonly semaphore: Semaphore.Semaphore; users: number }>();
   const currentGenerations = new Map<ThreadId, string>();
 
   const withThreadLock = <A, E, R>(
@@ -66,7 +63,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
         const generation = randomUUID();
         const previousGeneration = currentGenerations.get(threadId);
         currentGenerations.set(threadId, generation);
-        let ownedGeneration = generation;
+        let ownedGeneration: string = generation;
         const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
         return operation({
           generation,

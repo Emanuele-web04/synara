@@ -48,8 +48,8 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.deepStrictEqual(
         rows.map((row) => [row.messageId, row.sequence]),
         [
-          ["accepted-first", 10],
-          ["accepted-second-with-older-clock", 11],
+          [MessageId.makeUnsafe("accepted-first"), 10],
+          [MessageId.makeUnsafe("accepted-second-with-older-clock"), 11],
         ],
       );
       assert.strictEqual(

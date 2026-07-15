@@ -1374,7 +1374,7 @@ export const makeGitManager = Effect.gen(function* () {
 
   // Resolve the patch server-side so large repository data never makes a client→RPC round trip.
   const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
-    const patch = yield* readWorkingTreeDiff({ cwd: input.cwd, scope: input.scope });
+    const { patch } = yield* readWorkingTreeDiff({ cwd: input.cwd, scope: input.scope });
     if (patch.length === 0) {
       return yield* gitManagerError("summarizeDiff", "Cannot summarize an empty diff.");
     }

@@ -14,10 +14,7 @@ export {
   migrationRecoveryMarkerPath,
 } from "@synara/shared/migrationRecovery";
 
-import {
-  ensurePrivateDirectorySync,
-  repairPrivateFile,
-} from "../privatePathPermissions.ts";
+import { ensurePrivateDirectorySync, repairPrivateFile } from "../privatePathPermissions.ts";
 import { withDatabaseLifecycleLock } from "./DatabaseLifecycleLock.ts";
 import { migrationEntries } from "./Migrations.ts";
 
@@ -175,13 +172,15 @@ async function removeStaleRegularFiles(
   });
   const cutoff = Date.now() - STALE_RECOVERY_ARTIFACT_AGE_MS;
   await Promise.all(
-    entries.filter((entry) => entry.isFile() && matches(entry.name)).map(async (entry) => {
-      const artifactPath = path.join(directory, entry.name);
-      const stat = await fs.lstat(artifactPath);
-      if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) {
-        await fs.unlink(artifactPath);
-      }
-    }),
+    entries
+      .filter((entry) => entry.isFile() && matches(entry.name))
+      .map(async (entry) => {
+        const artifactPath = path.join(directory, entry.name);
+        const stat = await fs.lstat(artifactPath);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) {
+          await fs.unlink(artifactPath);
+        }
+      }),
   );
 }
 
@@ -255,8 +254,7 @@ export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACK
       }),
     );
     backups.sort(
-      (left, right) =>
-        right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name),
+      (left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name),
     );
     await Promise.all(
       backups
@@ -494,10 +492,7 @@ async function readRegularFileNoFollow(filePath: string): Promise<string> {
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error(`Path is not a regular file: ${filePath}`);
-    if (
-      process.platform !== "win32" &&
-      (stat.dev !== pathStat.dev || stat.ino !== pathStat.ino)
-    ) {
+    if (process.platform !== "win32" && (stat.dev !== pathStat.dev || stat.ino !== pathStat.ino)) {
       throw new Error(`Path identity changed while it was opened: ${filePath}`);
     }
     return await handle.readFile("utf8");
@@ -569,11 +564,7 @@ export const requireNoPendingMigrationRecovery = (dbPath: string) =>
       );
     }
     if (marker) {
-      throw new MigrationRecoveryRequiredError(
-        dbPath,
-        marker.markerPath,
-        marker.backupPath,
-      );
+      throw new MigrationRecoveryRequiredError(dbPath, marker.markerPath, marker.backupPath);
     }
   });
 

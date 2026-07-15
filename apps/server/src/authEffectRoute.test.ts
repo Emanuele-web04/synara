@@ -107,7 +107,9 @@ async function withAuthEffectServer(
   config: ServerConfigShape,
   serverAuth: ServerAuthShape,
   run: (origin: string) => Promise<void>,
-  routeLayer = authEffectRouteLayer,
+  routeLayer:
+    | typeof authEffectRouteLayer
+    | typeof binaryUploadEffectRouteLayer = authEffectRouteLayer,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -122,9 +124,7 @@ async function withAuthEffectServer(
             getByProvider: () => Effect.die("voice adapter not used in this test"),
             listProviders: () => Effect.succeed([]),
           }),
-          ManagedAttachmentRepositoryLive.pipe(
-            Layer.provideMerge(SqlitePersistenceMemory),
-          ),
+          ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
         scope,
@@ -140,8 +140,11 @@ async function withAuthEffectServer(
             },
             { port: 0, host: "127.0.0.1" },
           );
-          const httpApp = yield* HttpRouter.toHttpEffect(routeLayer);
-          yield* httpServer.serve(httpApp);
+          if (routeLayer === authEffectRouteLayer) {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(authEffectRouteLayer));
+          } else {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(binaryUploadEffectRouteLayer));
+          }
         }).pipe(Effect.provideServices(services)),
         scope,
       ),
@@ -154,7 +157,7 @@ async function withAuthEffectServer(
   }
 }
 
-const mutationRoutes = [
+const mutationRoutes: ReadonlyArray<{ readonly path: string; readonly body?: unknown }> = [
   { path: "/api/auth/ws-token" },
   { path: "/api/auth/pairing-token" },
   { path: "/api/auth/pairing-links/revoke", body: { id: "pairing-id" } },
@@ -258,7 +261,7 @@ describe("authEffectRouteLayer", () => {
           const response = await fetch(
             `${serverOrigin}${route.path}`,
             mutationRequest({
-              origin,
+              ...(origin === undefined ? {} : { origin }),
               credential: "cookie",
               ...(route.body === undefined ? {} : { body: route.body }),
             }),
@@ -315,7 +318,8 @@ describe("authEffectRouteLayer", () => {
       publicUrl: new URL("https://synara.example.test/"),
     } as ServerConfigShape;
     await withAuthEffectServer(config, makeServerAuth(sideEffects), async (serverOrigin) => {
-      const response = await fetch(`${serverOrigin}/api/auth/logout`,
+      const response = await fetch(
+        `${serverOrigin}/api/auth/logout`,
         mutationRequest({
           origin: "https://synara.example.test",
           credential: "cookie",
@@ -399,9 +403,7 @@ describe("binaryUploadEffectRouteLayer", () => {
             readonly id?: unknown;
           };
           expect(bearerResponse.status, JSON.stringify(bearerPayload)).toBe(201);
-          expect(bearerPayload).toEqual(
-            expect.objectContaining({ type: "image", sizeBytes: 1 }),
-          );
+          expect(bearerPayload).toEqual(expect.objectContaining({ type: "image", sizeBytes: 1 }));
           expect(
             fs
               .readdirSync(path.join(attachmentsDir, "objects"), { recursive: true })

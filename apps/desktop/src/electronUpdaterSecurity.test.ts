@@ -45,9 +45,9 @@ describe("electronUpdaterSecurity", () => {
         [" CN=Synara, O=Acme Tools ", "CN=Only", ""],
       ),
     ).toEqual(["CN=Synara, O=Acme Tools"]);
-    expect(
-      resolveWindowsUpdatePublisherNames(["CN=Feed Controlled, O=Unexpected"], null),
-    ).toEqual(["CN=Feed Controlled, O=Unexpected"]);
+    expect(resolveWindowsUpdatePublisherNames(["CN=Feed Controlled, O=Unexpected"], null)).toEqual([
+      "CN=Feed Controlled, O=Unexpected",
+    ]);
   });
 
   it("validates a matching full distinguished name with shell-free execFile options", async () => {
@@ -234,7 +234,9 @@ describe("electronUpdaterSecurity", () => {
 
   it("fails closed before invoking the verifier when the packaged publisher pin is absent", async () => {
     const updater = {
-      verifyUpdateCodeSignature: vi.fn(async () => "old verifier"),
+      verifyUpdateCodeSignature: vi.fn(
+        async (_publisherNames: string[], _updateFile: string) => "old verifier",
+      ),
     };
 
     hardenElectronUpdater({ BaseUpdater: class {} }, updater, "win32", []);

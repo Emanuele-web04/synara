@@ -1,7 +1,4 @@
-import {
-  encodeOutboundMultipart,
-  OutboundHttpError,
-} from "@synara/shared/outboundHttp";
+import { encodeOutboundMultipart, OutboundHttpError } from "@synara/shared/outboundHttp";
 import {
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
@@ -26,12 +23,9 @@ describe("outbound HTTP policy", () => {
     expect(isPublicIpAddress(address)).toBe(false);
   });
 
-  it.each(["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"])(
-    "admits public address %s",
-    (address) => {
-      expect(isPublicIpAddress(address)).toBe(true);
-    },
-  );
+  it.each(["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"])("admits public address %s", (address) => {
+    expect(isPublicIpAddress(address)).toBe(true);
+  });
 
   it("pins requests to an exact HTTPS origin", () => {
     expect(
@@ -58,9 +52,9 @@ describe("outbound HTTP policy", () => {
     expect(() =>
       assertJsonWithinLimits({ a: { b: { c: true } } }, { maxDepth: 2, maxNodes: 20 }),
     ).toThrowError(/depth limit/u);
-    expect(() =>
-      assertJsonWithinLimits([1, 2, 3], { maxDepth: 2, maxNodes: 3 }),
-    ).toThrowError(/node limit/u);
+    expect(() => assertJsonWithinLimits([1, 2, 3], { maxDepth: 2, maxNodes: 3 })).toThrowError(
+      /node limit/u,
+    );
   });
 
   it("encodes multipart bodies under an explicit byte budget", () => {

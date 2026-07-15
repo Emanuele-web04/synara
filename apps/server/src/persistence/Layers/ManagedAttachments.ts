@@ -162,17 +162,16 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
         Effect.mapError(toPersistenceSqlError("ManagedAttachment.findClaimedById")),
       );
 
-    const findClaimedForCommand: ManagedAttachmentRepositoryShape["findClaimedForCommand"] =
-      (input) =>
-        sql<ManagedAttachmentBlob>`
+    const findClaimedForCommand: ManagedAttachmentRepositoryShape["findClaimedForCommand"] = (
+      input,
+    ) =>
+      sql<ManagedAttachmentBlob>`
           SELECT ${blobColumns(sql)}
           FROM managed_attachment_blobs
           WHERE claim_command_id = ${input.commandId}
             AND state = 'claimed'
           ORDER BY attachment_id ASC
-        `.pipe(
-          Effect.mapError(toPersistenceSqlError("ManagedAttachment.findClaimedForCommand")),
-        );
+        `.pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.findClaimedForCommand")));
 
     const classifyClaimRejection = (
       input: Parameters<ManagedAttachmentRepositoryShape["claimForAcceptedTurn"]>[0],
@@ -208,15 +207,16 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
         return { status: "rejected", reason: "already-claimed" } as const;
       });
 
-    const claimForAcceptedTurn: ManagedAttachmentRepositoryShape["claimForAcceptedTurn"] =
-      (input) => {
-        if (input.attachmentIds.length === 0) {
-          return Effect.succeed({ status: "claimed", attachments: [] });
-        }
-        if (new Set(input.attachmentIds).size !== input.attachmentIds.length) {
-          return Effect.succeed({ status: "rejected", reason: "duplicate-id" });
-        }
-        return sql<ManagedAttachmentBlob>`
+    const claimForAcceptedTurn: ManagedAttachmentRepositoryShape["claimForAcceptedTurn"] = (
+      input,
+    ) => {
+      if (input.attachmentIds.length === 0) {
+        return Effect.succeed({ status: "claimed", attachments: [] });
+      }
+      if (new Set(input.attachmentIds).size !== input.attachmentIds.length) {
+        return Effect.succeed({ status: "rejected", reason: "duplicate-id" });
+      }
+      return sql<ManagedAttachmentBlob>`
           UPDATE managed_attachment_blobs
           SET state = 'claimed',
               claim_command_id = ${input.commandId},
@@ -232,7 +232,6 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
               (state = 'staged' AND staging_expires_at > ${input.now})
               OR (
                 state = 'claimed'
-                AND claim_command_id = ${input.commandId}
                 AND claim_message_id = ${input.messageId}
               )
             )
@@ -247,21 +246,20 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
                   (eligible.state = 'staged' AND eligible.staging_expires_at > ${input.now})
                   OR (
                     eligible.state = 'claimed'
-                    AND eligible.claim_command_id = ${input.commandId}
                     AND eligible.claim_message_id = ${input.messageId}
                   )
                 )
             ) = ${input.attachmentIds.length}
           RETURNING ${blobColumns(sql)}
         `.pipe(
-          Effect.flatMap((rows) =>
-            rows.length === input.attachmentIds.length
-              ? Effect.succeed({ status: "claimed" as const, attachments: rows })
-              : classifyClaimRejection(input),
-          ),
-          Effect.mapError(toPersistenceSqlError("ManagedAttachment.claimForAcceptedTurn")),
-        );
-      };
+        Effect.flatMap((rows) =>
+          rows.length === input.attachmentIds.length
+            ? Effect.succeed({ status: "claimed" as const, attachments: rows })
+            : classifyClaimRejection(input),
+        ),
+        Effect.mapError(toPersistenceSqlError("ManagedAttachment.claimForAcceptedTurn")),
+      );
+    };
 
     const enqueueCleanupRows = (input: {
       readonly attachmentIds: ReadonlyArray<string>;
@@ -282,24 +280,25 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
       `;
 
     const cancelStaged: ManagedAttachmentRepositoryShape["cancelStaged"] = (input) =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          const rows = yield* sql<ManagedAttachmentBlob>`
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const rows = yield* sql<ManagedAttachmentBlob>`
             SELECT ${blobColumns(sql)}
             FROM managed_attachment_blobs
             WHERE attachment_id = ${input.attachmentId}
               AND owner_kind = ${input.ownerKind}
               AND owner_id = ${input.ownerId}
           `;
-          const attachment = rows[0];
-          if (!attachment) return { status: "not-found" as const };
-          if (attachment.state === "claimed") {
-            return { status: "already-claimed" as const };
-          }
-          if (attachment.state === "deleting" || attachment.state === "deleted") {
-            return { status: "cancelled" as const };
-          }
-          const updated = yield* sql<{ readonly attachmentId: string }>`
+            const attachment = rows[0];
+            if (!attachment) return { status: "not-found" as const };
+            if (attachment.state === "claimed") {
+              return { status: "already-claimed" as const };
+            }
+            if (attachment.state === "deleting" || attachment.state === "deleted") {
+              return { status: "cancelled" as const };
+            }
+            const updated = yield* sql<{ readonly attachmentId: string }>`
             UPDATE managed_attachment_blobs
             SET state = 'deleting',
                 delete_reason = ${input.reason},
@@ -311,15 +310,16 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
               AND state IN ('uploading', 'staged')
             RETURNING attachment_id AS "attachmentId"
           `;
-          if (updated.length === 0) return { status: "not-found" as const };
-          yield* enqueueCleanupRows({
-            attachmentIds: [input.attachmentId],
-            reason: input.reason,
-            requestedAt: input.requestedAt,
-          });
-          return { status: "cancelled" as const };
-        }),
-      ).pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.cancelStaged")));
+            if (updated.length === 0) return { status: "not-found" as const };
+            yield* enqueueCleanupRows({
+              attachmentIds: [input.attachmentId],
+              reason: input.reason,
+              requestedAt: input.requestedAt,
+            });
+            return { status: "cancelled" as const };
+          }),
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.cancelStaged")));
 
     const markCleanupByIds: ManagedAttachmentRepositoryShape["markCleanupByIds"] = (input) => {
       if (input.attachmentIds.length === 0) return Effect.succeed([]);
@@ -367,8 +367,9 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
       (input) => {
         const retainedAttachmentIds = [...new Set(input.retainedAttachmentIds)];
         return Effect.gen(function* () {
-          const rows = retainedAttachmentIds.length === 0
-            ? yield* sql<{ readonly attachmentId: string }>`
+          const rows =
+            retainedAttachmentIds.length === 0
+              ? yield* sql<{ readonly attachmentId: string }>`
                 UPDATE managed_attachment_blobs
                 SET state = 'deleting',
                     delete_reason = COALESCE(delete_reason, ${input.reason}),
@@ -378,7 +379,7 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
                   AND state = 'claimed'
                 RETURNING attachment_id AS "attachmentId"
               `
-            : yield* sql<{ readonly attachmentId: string }>`
+              : yield* sql<{ readonly attachmentId: string }>`
                 UPDATE managed_attachment_blobs
                 SET state = 'deleting',
                     delete_reason = COALESCE(delete_reason, ${input.reason}),
@@ -401,10 +402,12 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
         );
       };
 
-    const markExpiredForCleanup: ManagedAttachmentRepositoryShape["markExpiredForCleanup"] =
-      (input) => {
-        if (input.limit <= 0) return Effect.succeed([]);
-        return sql.withTransaction(
+    const markExpiredForCleanup: ManagedAttachmentRepositoryShape["markExpiredForCleanup"] = (
+      input,
+    ) => {
+      if (input.limit <= 0) return Effect.succeed([]);
+      return sql
+        .withTransaction(
           Effect.gen(function* () {
             const rows = yield* sql<{ readonly attachmentId: string }>`
               UPDATE managed_attachment_blobs
@@ -432,10 +435,9 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
             }
             return attachmentIds;
           }),
-        ).pipe(
-          Effect.mapError(toPersistenceSqlError("ManagedAttachment.markExpiredForCleanup")),
-        );
-      };
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.markExpiredForCleanup")));
+    };
 
     const leaseCleanup: ManagedAttachmentRepositoryShape["leaseCleanup"] = (input) => {
       if (input.limit <= 0) return Effect.succeed([]);
@@ -536,9 +538,10 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
       );
 
     const completeCleanup: ManagedAttachmentRepositoryShape["completeCleanup"] = (input) =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          const completed = yield* sql<{ readonly attachmentId: string }>`
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const completed = yield* sql<{ readonly attachmentId: string }>`
             UPDATE managed_attachment_blobs
             SET state = 'deleted',
                 deleted_at = ${input.completedAt},
@@ -553,15 +556,16 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
               )
             RETURNING attachment_id AS "attachmentId"
           `;
-          if (completed.length === 0) return false;
-          yield* sql`
+            if (completed.length === 0) return false;
+            yield* sql`
             DELETE FROM managed_attachment_cleanup_jobs
             WHERE attachment_id = ${input.attachmentId}
               AND lease_owner = ${input.expectedLeaseOwner}
           `;
-          return true;
-        }),
-      ).pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.completeCleanup")));
+            return true;
+          }),
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ManagedAttachment.completeCleanup")));
 
     const getUsage: ManagedAttachmentRepositoryShape["getUsage"] = (input) =>
       sql<ManagedAttachmentUsage>`
@@ -585,13 +589,14 @@ const makeRepository = (limits: ManagedAttachmentLimits) =>
             THEN 1 ELSE 0 END) AS "principalStagingCount"
         FROM managed_attachment_blobs
       `.pipe(
-        Effect.map((rows) =>
-          rows[0] ?? {
-            homeBytes: 0,
-            homeCount: 0,
-            principalStagingBytes: 0,
-            principalStagingCount: 0,
-          },
+        Effect.map(
+          (rows) =>
+            rows[0] ?? {
+              homeBytes: 0,
+              homeCount: 0,
+              principalStagingBytes: 0,
+              principalStagingCount: 0,
+            },
         ),
         Effect.mapError(toPersistenceSqlError("ManagedAttachment.getUsage")),
       );

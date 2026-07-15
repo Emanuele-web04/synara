@@ -56,9 +56,7 @@ function commandIntent(command: Command): Record<string, unknown> {
   };
 }
 
-export function fingerprintOrchestrationCommand(
-  command: Command,
-): OrchestrationCommandFingerprint {
+export function fingerprintOrchestrationCommand(command: Command): OrchestrationCommandFingerprint {
   const canonical = JSON.stringify(
     canonicalizeJson({
       version: ORCHESTRATION_COMMAND_FINGERPRINT_VERSION,

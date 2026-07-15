@@ -9,6 +9,7 @@
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
+import type { ThreadId } from "@synara/contracts";
 import type {
   ProviderBlockingDeliveryEvidence,
   ProviderDeliveryReconciliationOutcome,
@@ -16,7 +17,7 @@ import type {
 
 export interface ProviderDeliveryReconciliationResult {
   readonly eventSequence: number;
-  readonly threadId: string;
+  readonly threadId: ThreadId;
   readonly outcome: ProviderDeliveryReconciliationOutcome;
   readonly state: "retry" | "succeeded" | "dead" | "uncertain";
   readonly reconciledAt: string;
@@ -50,7 +51,7 @@ export interface ProviderCommandReactorShape {
 
   readonly reconcileDelivery: (input: {
     readonly eventSequence: number;
-    readonly threadId: string;
+    readonly threadId: ThreadId;
     readonly expectedState: "dead" | "uncertain";
     readonly outcome: ProviderDeliveryReconciliationOutcome;
     readonly reconciledBy: string;

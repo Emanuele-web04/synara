@@ -3209,7 +3209,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const handleStreamExit = (
       context: ClaudeSessionContext,
       exit: Exit.Exit<void, Error>,
-    ): Effect.Effect<void> =>
+    ): Effect.Effect<void, ProviderAdapterProcessError> =>
       Effect.gen(function* () {
         if (context.stopped) {
           return;
@@ -3919,80 +3919,80 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           };
           installationContext = context;
           yield* Effect.gen(function* () {
-              yield* Ref.set(contextRef, context);
-              sessions.set(threadId, context);
+            yield* Ref.set(contextRef, context);
+            sessions.set(threadId, context);
 
-              const sessionStartedStamp = yield* makeEventStamp();
-              yield* offerRuntimeEvent(context, {
-                type: "session.started",
-                eventId: sessionStartedStamp.eventId,
-                provider: PROVIDER,
-                createdAt: sessionStartedStamp.createdAt,
-                threadId,
-                payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
-                providerRefs: {},
-              });
-
-              const configuredStamp = yield* makeEventStamp();
-              yield* offerRuntimeEvent(context, {
-                type: "session.configured",
-                eventId: configuredStamp.eventId,
-                provider: PROVIDER,
-                createdAt: configuredStamp.createdAt,
-                threadId,
-                payload: {
-                  config: {
-                    ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-                    ...(apiModelId ? { apiModelId } : {}),
-                    ...(requestedAutoCompactWindow
-                      ? { autoCompactWindow: requestedAutoCompactWindow }
-                      : {}),
-                    ...(input.cwd ? { cwd: input.cwd } : {}),
-                    ...(effectiveEffort ? { effort: effectiveEffort } : {}),
-                    ...(permissionMode ? { permissionMode } : {}),
-                    ...(providerOptions?.maxThinkingTokens !== undefined
-                      ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
-                      : {}),
-                    ...(fastMode ? { fastMode: true } : {}),
-                    ...(ultracode ? { ultracode: true } : {}),
-                  },
-                },
-                providerRefs: {},
-              });
-
-              const readyStamp = yield* makeEventStamp();
-              yield* offerRuntimeEvent(context, {
-                type: "session.state.changed",
-                eventId: readyStamp.eventId,
-                provider: PROVIDER,
-                createdAt: readyStamp.createdAt,
-                threadId,
-                payload: {
-                  state: "ready",
-                },
-                providerRefs: {},
-              });
-
-              if (context.currentAutoCompactWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
-                context.emittedContextUsageWarnings.add("one-million-window");
-                yield* emitRuntimeWarning(
-                  context,
-                  "Claude's auto-compact budget is set to the model's 1M limit for this thread. Long conversations can consume usage limits much faster; switch Auto-compact to 200k unless the larger working context is intentional.",
-                );
-              }
-
-              const streamFiber = Effect.runFork(runSdkStream(context));
-              context.streamFiber = streamFiber;
-              streamFiber.addObserver((exit) => {
-                if (context.stopped) {
-                  return;
-                }
-                if (context.streamFiber === streamFiber) {
-                  context.streamFiber = undefined;
-                }
-                Effect.runFork(handleStreamExit(context, exit));
-              });
+            const sessionStartedStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent(context, {
+              type: "session.started",
+              eventId: sessionStartedStamp.eventId,
+              provider: PROVIDER,
+              createdAt: sessionStartedStamp.createdAt,
+              threadId,
+              payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
+              providerRefs: {},
             });
+
+            const configuredStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent(context, {
+              type: "session.configured",
+              eventId: configuredStamp.eventId,
+              provider: PROVIDER,
+              createdAt: configuredStamp.createdAt,
+              threadId,
+              payload: {
+                config: {
+                  ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+                  ...(apiModelId ? { apiModelId } : {}),
+                  ...(requestedAutoCompactWindow
+                    ? { autoCompactWindow: requestedAutoCompactWindow }
+                    : {}),
+                  ...(input.cwd ? { cwd: input.cwd } : {}),
+                  ...(effectiveEffort ? { effort: effectiveEffort } : {}),
+                  ...(permissionMode ? { permissionMode } : {}),
+                  ...(providerOptions?.maxThinkingTokens !== undefined
+                    ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
+                    : {}),
+                  ...(fastMode ? { fastMode: true } : {}),
+                  ...(ultracode ? { ultracode: true } : {}),
+                },
+              },
+              providerRefs: {},
+            });
+
+            const readyStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent(context, {
+              type: "session.state.changed",
+              eventId: readyStamp.eventId,
+              provider: PROVIDER,
+              createdAt: readyStamp.createdAt,
+              threadId,
+              payload: {
+                state: "ready",
+              },
+              providerRefs: {},
+            });
+
+            if (context.currentAutoCompactWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"]) {
+              context.emittedContextUsageWarnings.add("one-million-window");
+              yield* emitRuntimeWarning(
+                context,
+                "Claude's auto-compact budget is set to the model's 1M limit for this thread. Long conversations can consume usage limits much faster; switch Auto-compact to 200k unless the larger working context is intentional.",
+              );
+            }
+
+            const streamFiber = Effect.runFork(runSdkStream(context));
+            context.streamFiber = streamFiber;
+            streamFiber.addObserver((exit) => {
+              if (context.stopped) {
+                return;
+              }
+              if (context.streamFiber === streamFiber) {
+                context.streamFiber = undefined;
+              }
+              Effect.runFork(handleStreamExit(context, exit));
+            });
+          });
 
           installationComplete = true;
           return {
@@ -4005,7 +4005,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 return Effect.void;
               }
               if (installationContext !== undefined) {
-                return stopSessionInternal(installationContext, { emitExitEvent: false });
+                return stopSessionInternal(installationContext, {
+                  emitExitEvent: false,
+                }).pipe(Effect.ignore);
               }
               return Effect.gen(function* () {
                 yield* Queue.shutdown(promptQueue);
@@ -4018,7 +4020,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 }
                 yield* teardownClaudeProcess(threadId, processOwner);
               });
-            }),
+            }).pipe(Effect.ignore),
           ),
         );
       });
@@ -4406,7 +4408,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             emitExitEvent: false,
           }),
         { discard: true },
-      ).pipe(Effect.tap(() => Queue.shutdown(runtimeEventQueue))),
+      ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
     );
 
     const composerCapabilities: ProviderComposerCapabilities = {

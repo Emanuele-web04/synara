@@ -37,7 +37,9 @@ function mode(filePath: string): number {
 }
 
 function derivePaths(baseDir: string) {
-  return Effect.runSync(deriveServerPaths(baseDir, undefined).pipe(Effect.provide(NodeServices.layer)));
+  return Effect.runSync(
+    deriveServerPaths(baseDir, undefined).pipe(Effect.provide(NodeServices.layer)),
+  );
 }
 
 afterEach(() => {

@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { migrationEntries, runMigrations } from "./Migrations.ts";
+import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
 
@@ -115,7 +116,7 @@ layer("reconcileMigrationLineage", (it) => {
 
       const rowsBefore = yield* trackerRows(sql);
       const error = yield* Effect.flip(runMigrations());
-      assert.strictEqual(error._tag, "MigrationSchemaTooNewError");
+      assert.instanceOf(error, MigrationSchemaTooNewError);
       assert.strictEqual(error.databaseMigrationId, futureId);
       assert.strictEqual(error.latestSupportedMigrationId, futureId - 1);
 
@@ -151,14 +152,16 @@ layer("reconcileMigrationLineage", (it) => {
 
 const providerDeliveryCutoverLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-providerDeliveryCutoverLayer("registered DurableProviderCommandDelivery cutover migration", (it) => {
-  it.effect("initializes at the event high-water mark when cutover explicitly runs", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 53 });
-      const now = new Date().toISOString();
+providerDeliveryCutoverLayer(
+  "registered DurableProviderCommandDelivery cutover migration",
+  (it) => {
+    it.effect("initializes at the event high-water mark when cutover explicitly runs", () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 53 });
+        const now = new Date().toISOString();
 
-      const inserted = yield* sql<{ readonly sequence: number }>`
+        const inserted = yield* sql<{ readonly sequence: number }>`
         INSERT INTO orchestration_events (
           event_id, aggregate_kind, stream_id, stream_version, event_type,
           occurred_at, command_id, causation_event_id, correlation_id,
@@ -171,24 +174,25 @@ providerDeliveryCutoverLayer("registered DurableProviderCommandDelivery cutover 
         RETURNING sequence
       `;
 
-      yield* DurableProviderCommandDeliveryMigration;
-      const rows = yield* sql<{ readonly lastAckedSequence: number }>`
+        yield* DurableProviderCommandDeliveryMigration;
+        const rows = yield* sql<{ readonly lastAckedSequence: number }>`
         SELECT last_acked_sequence AS "lastAckedSequence"
         FROM orchestration_consumer_state
         WHERE consumer_name = 'provider-command-reactor.v1'
       `;
-      assert.strictEqual(rows[0]?.lastAckedSequence, inserted[0]?.sequence);
+        assert.strictEqual(rows[0]?.lastAckedSequence, inserted[0]?.sequence);
 
-      yield* DurableProviderCommandDeliveryMigration;
-      const idempotentRows = yield* sql<{ readonly count: number }>`
+        yield* DurableProviderCommandDeliveryMigration;
+        const idempotentRows = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
         FROM orchestration_consumer_state
         WHERE consumer_name = 'provider-command-reactor.v1'
       `;
-      assert.strictEqual(idempotentRows[0]?.count, 1);
-    }),
-  );
-});
+        assert.strictEqual(idempotentRows[0]?.count, 1);
+      }),
+    );
+  },
+);
 
 const managedAttachmentsFreshLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -286,14 +290,16 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
 const managedAttachmentsConstraintsLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it) => {
-  it.effect("enforces lifecycle, immutable metadata, cleanup ownership, and indexed quota scans", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      const now = "2026-07-14T00:00:00.000Z";
-      const expiry = "2026-07-15T00:00:00.000Z";
+  it.effect(
+    "enforces lifecycle, immutable metadata, cleanup ownership, and indexed quota scans",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const now = "2026-07-14T00:00:00.000Z";
+        const expiry = "2026-07-15T00:00:00.000Z";
 
-      yield* sql`
+        yield* sql`
         INSERT INTO managed_attachment_blobs (
           attachment_id, owner_thread_id, owner_kind, owner_id, kind,
           original_name, mime_type, reserved_bytes, size_bytes, sha256,
@@ -308,7 +314,7 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
         )
       `;
 
-      yield* sql`
+        yield* sql`
         UPDATE managed_attachment_blobs
         SET
           size_bytes = 5,
@@ -317,7 +323,7 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
           updated_at = ${now}
         WHERE attachment_id = 'att-v2-one'
       `;
-      yield* sql`
+        yield* sql`
         UPDATE managed_attachment_blobs
         SET
           state = 'claimed',
@@ -327,7 +333,7 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
           updated_at = ${now}
         WHERE attachment_id = 'att-v2-one'
       `;
-      yield* sql`
+        yield* sql`
         UPDATE managed_attachment_blobs
         SET
           state = 'deleting',
@@ -336,7 +342,7 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
           updated_at = ${now}
         WHERE attachment_id = 'att-v2-one'
       `;
-      yield* sql`
+        yield* sql`
         INSERT INTO managed_attachment_cleanup_jobs (
           attachment_id, reason, attempt_count, next_attempt_at,
           lease_owner, lease_expires_at, last_error, created_at, updated_at
@@ -345,21 +351,21 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
         )
       `;
 
-      const invalidState = yield* Effect.flip(sql`
+        const invalidState = yield* Effect.flip(sql`
         UPDATE managed_attachment_blobs
         SET state = 'staged', updated_at = ${now}
         WHERE attachment_id = 'att-v2-one'
       `);
-      assert.isDefined(invalidState);
+        assert.isDefined(invalidState);
 
-      const mutatedOwner = yield* Effect.flip(sql`
+        const mutatedOwner = yield* Effect.flip(sql`
         UPDATE managed_attachment_blobs
         SET owner_thread_id = 'different-thread'
         WHERE attachment_id = 'att-v2-one'
       `);
-      assert.isDefined(mutatedOwner);
+        assert.isDefined(mutatedOwner);
 
-      const duplicatePath = yield* Effect.flip(sql`
+        const duplicatePath = yield* Effect.flip(sql`
         INSERT INTO managed_attachment_blobs (
           attachment_id, owner_thread_id, owner_kind, owner_id, kind,
           original_name, mime_type, reserved_bytes, relative_path, state,
@@ -370,43 +376,49 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
           'uploading', ${expiry}, ${now}, ${now}
         )
       `);
-      assert.isDefined(duplicatePath);
+        assert.isDefined(duplicatePath);
 
-      const missingBlobJob = yield* Effect.flip(sql`
+        const missingBlobJob = yield* Effect.flip(sql`
         INSERT INTO managed_attachment_cleanup_jobs (
           attachment_id, reason, attempt_count, next_attempt_at,
           created_at, updated_at
         ) VALUES ('missing', 'gc', 0, ${now}, ${now}, ${now})
       `);
-      assert.isDefined(missingBlobJob);
+        assert.isDefined(missingBlobJob);
 
-      const quota = yield* sql<{ readonly reservedBytes: number; readonly reservedCount: number }>`
+        const quota = yield* sql<{
+          readonly reservedBytes: number;
+          readonly reservedCount: number;
+        }>`
         SELECT
           COALESCE(SUM(reserved_bytes), 0) AS "reservedBytes",
           COUNT(*) AS "reservedCount"
         FROM managed_attachment_blobs
         WHERE state <> 'deleted'
       `;
-      assert.deepStrictEqual(quota[0], { reservedBytes: 1024, reservedCount: 1 });
+        assert.deepStrictEqual(quota[0], { reservedBytes: 1024, reservedCount: 1 });
 
-      const blobIndexes = yield* sql<{ readonly name: string }>`
+        const blobIndexes = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_index_list('managed_attachment_blobs')
       `;
-      assert.includeMembers(
-        blobIndexes.map((row) => row.name),
-        [
-          "idx_managed_attachment_blobs_state_expiry",
-          "idx_managed_attachment_blobs_state_reserved",
-          "idx_managed_attachment_blobs_owner_thread",
-          "idx_managed_attachment_blobs_owner_principal",
-          "idx_managed_attachment_blobs_claim",
-        ],
-      );
-      const cleanupIndexes = yield* sql<{ readonly name: string }>`
+        assert.includeMembers(
+          blobIndexes.map((row) => row.name),
+          [
+            "idx_managed_attachment_blobs_state_expiry",
+            "idx_managed_attachment_blobs_state_reserved",
+            "idx_managed_attachment_blobs_owner_thread",
+            "idx_managed_attachment_blobs_owner_principal",
+            "idx_managed_attachment_blobs_claim",
+          ],
+        );
+        const cleanupIndexes = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_index_list('managed_attachment_cleanup_jobs')
       `;
-      assert.include(cleanupIndexes.map((row) => row.name), "idx_managed_attachment_cleanup_jobs_due");
-    }),
+        assert.include(
+          cleanupIndexes.map((row) => row.name),
+          "idx_managed_attachment_cleanup_jobs_due",
+        );
+      }),
   );
 });
 

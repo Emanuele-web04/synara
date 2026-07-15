@@ -62,10 +62,11 @@ const makeObservedEventStoreLayer = (readCursors: Array<number>) =>
     }),
   ).pipe(Layer.provide(OrchestrationEventStoreLive));
 
-const makeAppendAndProject = (
-  eventStore: OrchestrationEventStoreShape,
-  projectionPipeline: OrchestrationProjectionPipelineShape,
-) =>
+const makeAppendAndProject =
+  (
+    eventStore: OrchestrationEventStoreShape,
+    projectionPipeline: OrchestrationProjectionPipelineShape,
+  ) =>
   (event: Parameters<OrchestrationEventStoreShape["append"]>[0]) =>
     eventStore
       .append(event)
@@ -309,91 +310,91 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   );
 });
 
-it.layer(
-  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-identity-scope-")),
-)("OrchestrationProjectionPipeline", (it) => {
-  it.effect("keeps reused provider message ids thread-scoped through replay", () =>
-    Effect.gen(function* () {
-      const eventStore = yield* OrchestrationEventStore;
-      const projectionPipeline = yield* OrchestrationProjectionPipeline;
-      const sql = yield* SqlClient.SqlClient;
-      const messageId = MessageId.makeUnsafe("shared-provider-message-id");
-      const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-a");
-      const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-b");
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-message-identity-scope-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("keeps reused provider message ids thread-scoped through replay", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const messageId = MessageId.makeUnsafe("shared-provider-message-id");
+        const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-a");
+        const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-message-b");
 
-      const appendMessage = (input: {
-        readonly eventId: string;
-        readonly commandId: string;
-        readonly threadId: ThreadId;
-        readonly text: string;
-        readonly streaming: boolean;
-        readonly attachmentId?: string;
-        readonly occurredAt: string;
-      }) =>
-        eventStore.append({
-          type: "thread.message-sent",
-          eventId: EventId.makeUnsafe(input.eventId),
-          aggregateKind: "thread",
-          aggregateId: input.threadId,
-          occurredAt: input.occurredAt,
-          commandId: CommandId.makeUnsafe(input.commandId),
-          causationEventId: null,
-          correlationId: CorrelationId.makeUnsafe(input.commandId),
-          metadata: {},
-          payload: {
-            threadId: input.threadId,
-            messageId,
-            role: "assistant" as const,
-            text: input.text,
-            ...(input.attachmentId
-              ? {
-                  attachments: [
-                    {
-                      type: "file" as const,
-                      id: input.attachmentId,
-                      name: `${input.attachmentId}.txt`,
-                      mimeType: "text/plain",
-                      sizeBytes: 1,
-                    },
-                  ],
-                }
-              : {}),
-            turnId: null,
-            streaming: input.streaming,
-            createdAt: input.occurredAt,
-            updatedAt: input.occurredAt,
-          },
+        const appendMessage = (input: {
+          readonly eventId: string;
+          readonly commandId: string;
+          readonly threadId: ThreadId;
+          readonly text: string;
+          readonly streaming: boolean;
+          readonly attachmentId?: string;
+          readonly occurredAt: string;
+        }) =>
+          eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.makeUnsafe(input.eventId),
+            aggregateKind: "thread",
+            aggregateId: input.threadId,
+            occurredAt: input.occurredAt,
+            commandId: CommandId.makeUnsafe(input.commandId),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(input.commandId),
+            metadata: {},
+            payload: {
+              threadId: input.threadId,
+              messageId,
+              role: "assistant" as const,
+              text: input.text,
+              ...(input.attachmentId
+                ? {
+                    attachments: [
+                      {
+                        type: "file" as const,
+                        id: input.attachmentId,
+                        name: `${input.attachmentId}.txt`,
+                        mimeType: "text/plain",
+                        sizeBytes: 1,
+                      },
+                    ],
+                  }
+                : {}),
+              turnId: null,
+              streaming: input.streaming,
+              createdAt: input.occurredAt,
+              updatedAt: input.occurredAt,
+            },
+          });
+
+        yield* appendMessage({
+          eventId: "evt-shared-provider-message-a-1",
+          commandId: "cmd-shared-provider-message-a-1",
+          threadId: firstThreadId,
+          text: "first",
+          streaming: false,
+          attachmentId: "attachment-shared-provider-a",
+          occurredAt: "2026-07-14T11:00:00.000Z",
+        });
+        yield* appendMessage({
+          eventId: "evt-shared-provider-message-b-1",
+          commandId: "cmd-shared-provider-message-b-1",
+          threadId: secondThreadId,
+          text: "second",
+          streaming: false,
+          attachmentId: "attachment-shared-provider-b",
+          occurredAt: "2026-07-14T11:00:01.000Z",
+        });
+        yield* appendMessage({
+          eventId: "evt-shared-provider-message-a-2",
+          commandId: "cmd-shared-provider-message-a-2",
+          threadId: firstThreadId,
+          text: " thread",
+          streaming: true,
+          occurredAt: "2026-07-14T11:00:02.000Z",
         });
 
-      yield* appendMessage({
-        eventId: "evt-shared-provider-message-a-1",
-        commandId: "cmd-shared-provider-message-a-1",
-        threadId: firstThreadId,
-        text: "first",
-        streaming: false,
-        attachmentId: "attachment-shared-provider-a",
-        occurredAt: "2026-07-14T11:00:00.000Z",
-      });
-      yield* appendMessage({
-        eventId: "evt-shared-provider-message-b-1",
-        commandId: "cmd-shared-provider-message-b-1",
-        threadId: secondThreadId,
-        text: "second",
-        streaming: false,
-        attachmentId: "attachment-shared-provider-b",
-        occurredAt: "2026-07-14T11:00:01.000Z",
-      });
-      yield* appendMessage({
-        eventId: "evt-shared-provider-message-a-2",
-        commandId: "cmd-shared-provider-message-a-2",
-        threadId: firstThreadId,
-        text: " thread",
-        streaming: true,
-        occurredAt: "2026-07-14T11:00:02.000Z",
-      });
-
-      const readRows = () =>
-        sql<{ readonly threadId: string; readonly text: string; readonly attachments: string }>`
+        const readRows = () =>
+          sql<{ readonly threadId: string; readonly text: string; readonly attachments: string }>`
           SELECT
             thread_id AS "threadId",
             text,
@@ -402,210 +403,211 @@ it.layer(
           WHERE message_id = ${messageId}
           ORDER BY thread_id ASC
         `;
-      const expectedRows = [
-        {
-          threadId: firstThreadId,
-          text: "first thread",
-          attachments: JSON.stringify([
-            {
-              type: "file",
-              id: "attachment-shared-provider-a",
-              name: "attachment-shared-provider-a.txt",
-              mimeType: "text/plain",
-              sizeBytes: 1,
-            },
-          ]),
-        },
-        {
-          threadId: secondThreadId,
-          text: "second",
-          attachments: JSON.stringify([
-            {
-              type: "file",
-              id: "attachment-shared-provider-b",
-              name: "attachment-shared-provider-b.txt",
-              mimeType: "text/plain",
-              sizeBytes: 1,
-            },
-          ]),
-        },
-      ];
+        const expectedRows = [
+          {
+            threadId: firstThreadId,
+            text: "first thread",
+            attachments: JSON.stringify([
+              {
+                type: "file",
+                id: "attachment-shared-provider-a",
+                name: "attachment-shared-provider-a.txt",
+                mimeType: "text/plain",
+                sizeBytes: 1,
+              },
+            ]),
+          },
+          {
+            threadId: secondThreadId,
+            text: "second",
+            attachments: JSON.stringify([
+              {
+                type: "file",
+                id: "attachment-shared-provider-b",
+                name: "attachment-shared-provider-b.txt",
+                mimeType: "text/plain",
+                sizeBytes: 1,
+              },
+            ]),
+          },
+        ];
 
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRows(), expectedRows);
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRows(), expectedRows);
 
-      yield* sql`DELETE FROM projection_thread_messages`;
-      yield* sql`
+        yield* sql`DELETE FROM projection_thread_messages`;
+        yield* sql`
         DELETE FROM projection_state
         WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}
       `;
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRows(), expectedRows);
-    }),
-  );
-});
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRows(), expectedRows);
+      }),
+    );
+  },
+);
 
-it.layer(
-  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-identity-scope-")),
-)("OrchestrationProjectionPipeline", (it) => {
-  it.effect("keeps reused provider request ids thread-scoped through replay", () =>
-    Effect.gen(function* () {
-      const eventStore = yield* OrchestrationEventStore;
-      const projectionPipeline = yield* OrchestrationProjectionPipeline;
-      const sql = yield* SqlClient.SqlClient;
-      const requestId = ApprovalRequestId.makeUnsafe("shared-provider-request-id");
-      const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-a");
-      const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-b");
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-approval-identity-scope-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("keeps reused provider request ids thread-scoped through replay", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const requestId = ApprovalRequestId.makeUnsafe("shared-provider-request-id");
+        const firstThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-a");
+        const secondThreadId = ThreadId.makeUnsafe("thread-shared-provider-request-b");
 
-      const appendRequest = (input: {
-        readonly eventId: string;
-        readonly commandId: string;
-        readonly activityId: string;
-        readonly threadId: ThreadId;
-        readonly occurredAt: string;
-      }) =>
-        eventStore.append({
-          type: "thread.activity-appended",
-          eventId: EventId.makeUnsafe(input.eventId),
+        const appendRequest = (input: {
+          readonly eventId: string;
+          readonly commandId: string;
+          readonly activityId: string;
+          readonly threadId: ThreadId;
+          readonly occurredAt: string;
+        }) =>
+          eventStore.append({
+            type: "thread.activity-appended",
+            eventId: EventId.makeUnsafe(input.eventId),
+            aggregateKind: "thread",
+            aggregateId: input.threadId,
+            occurredAt: input.occurredAt,
+            commandId: CommandId.makeUnsafe(input.commandId),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(input.commandId),
+            metadata: {},
+            payload: {
+              threadId: input.threadId,
+              activity: {
+                id: EventId.makeUnsafe(input.activityId),
+                tone: "approval" as const,
+                kind: "approval.requested" as const,
+                summary: "Approval requested",
+                payload: { requestId, requestKind: "command" },
+                turnId: null,
+                createdAt: input.occurredAt,
+              },
+            },
+          });
+
+        yield* appendRequest({
+          eventId: "evt-shared-provider-request-a",
+          commandId: "cmd-shared-provider-request-a",
+          activityId: "activity-shared-provider-request-a",
+          threadId: firstThreadId,
+          occurredAt: "2026-07-14T12:30:00.000Z",
+        });
+        yield* appendRequest({
+          eventId: "evt-shared-provider-request-b",
+          commandId: "cmd-shared-provider-request-b",
+          activityId: "activity-shared-provider-request-b",
+          threadId: secondThreadId,
+          occurredAt: "2026-07-14T12:30:01.000Z",
+        });
+        yield* eventStore.append({
+          type: "thread.approval-response-requested",
+          eventId: EventId.makeUnsafe("evt-shared-provider-request-a-response"),
           aggregateKind: "thread",
-          aggregateId: input.threadId,
-          occurredAt: input.occurredAt,
-          commandId: CommandId.makeUnsafe(input.commandId),
+          aggregateId: firstThreadId,
+          occurredAt: "2026-07-14T12:30:02.000Z",
+          commandId: CommandId.makeUnsafe("cmd-shared-provider-request-a-response"),
           causationEventId: null,
-          correlationId: CorrelationId.makeUnsafe(input.commandId),
+          correlationId: CorrelationId.makeUnsafe("cmd-shared-provider-request-a-response"),
           metadata: {},
           payload: {
-            threadId: input.threadId,
-            activity: {
-              id: EventId.makeUnsafe(input.activityId),
-              tone: "approval" as const,
-              kind: "approval.requested" as const,
-              summary: "Approval requested",
-              payload: { requestId, requestKind: "command" },
-              turnId: null,
-              createdAt: input.occurredAt,
-            },
+            threadId: firstThreadId,
+            requestId,
+            decision: "accept",
+            createdAt: "2026-07-14T12:30:02.000Z",
           },
         });
 
-      yield* appendRequest({
-        eventId: "evt-shared-provider-request-a",
-        commandId: "cmd-shared-provider-request-a",
-        activityId: "activity-shared-provider-request-a",
-        threadId: firstThreadId,
-        occurredAt: "2026-07-14T12:30:00.000Z",
-      });
-      yield* appendRequest({
-        eventId: "evt-shared-provider-request-b",
-        commandId: "cmd-shared-provider-request-b",
-        activityId: "activity-shared-provider-request-b",
-        threadId: secondThreadId,
-        occurredAt: "2026-07-14T12:30:01.000Z",
-      });
-      yield* eventStore.append({
-        type: "thread.approval-response-requested",
-        eventId: EventId.makeUnsafe("evt-shared-provider-request-a-response"),
-        aggregateKind: "thread",
-        aggregateId: firstThreadId,
-        occurredAt: "2026-07-14T12:30:02.000Z",
-        commandId: CommandId.makeUnsafe("cmd-shared-provider-request-a-response"),
-        causationEventId: null,
-        correlationId: CorrelationId.makeUnsafe("cmd-shared-provider-request-a-response"),
-        metadata: {},
-        payload: {
-          threadId: firstThreadId,
-          requestId,
-          decision: "accept",
-          createdAt: "2026-07-14T12:30:02.000Z",
-        },
-      });
-
-      const readRows = () =>
-        sql<{
-          readonly threadId: string;
-          readonly status: string;
-          readonly decision: string | null;
-        }>`
+        const readRows = () =>
+          sql<{
+            readonly threadId: string;
+            readonly status: string;
+            readonly decision: string | null;
+          }>`
           SELECT thread_id AS "threadId", status, decision
           FROM projection_pending_interactions
           WHERE interaction_kind = 'approval' AND request_id = ${requestId}
           ORDER BY thread_id ASC
         `;
-      const expectedRows = [
-        { threadId: firstThreadId, status: "responding", decision: "accept" },
-        { threadId: secondThreadId, status: "pending", decision: null },
-      ];
+        const expectedRows = [
+          { threadId: firstThreadId, status: "responding", decision: "accept" },
+          { threadId: secondThreadId, status: "pending", decision: null },
+        ];
 
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRows(), expectedRows);
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRows(), expectedRows);
 
-      yield* sql`DELETE FROM projection_pending_interactions`;
-      yield* sql`
+        yield* sql`DELETE FROM projection_pending_interactions`;
+        yield* sql`
         DELETE FROM projection_state
         WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.pendingInteractions}
       `;
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRows(), expectedRows);
-    }),
-  );
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRows(), expectedRows);
+      }),
+    );
 
-  it.effect("does not let an older provider generation settle a reused request id", () =>
-    Effect.gen(function* () {
-      const eventStore = yield* OrchestrationEventStore;
-      const projectionPipeline = yield* OrchestrationProjectionPipeline;
-      const sql = yield* SqlClient.SqlClient;
-      const threadId = ThreadId.makeUnsafe("thread-reused-request-generation");
-      const requestId = ApprovalRequestId.makeUnsafe("reused-provider-request");
+    it.effect("does not let an older provider generation settle a reused request id", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("thread-reused-request-generation");
+        const requestId = ApprovalRequestId.makeUnsafe("reused-provider-request");
 
-      const appendRequest = (generation: string, suffix: string, occurredAt: string) =>
-        eventStore.append({
-          type: "thread.activity-appended",
-          eventId: EventId.makeUnsafe(`evt-request-${suffix}`),
-          aggregateKind: "thread",
-          aggregateId: threadId,
-          occurredAt,
-          commandId: CommandId.makeUnsafe(`cmd-request-${suffix}`),
-          causationEventId: null,
-          correlationId: CorrelationId.makeUnsafe(`cmd-request-${suffix}`),
-          metadata: {},
-          payload: {
-            threadId,
-            activity: {
-              id: EventId.makeUnsafe(`activity-request-${suffix}`),
-              tone: "approval" as const,
-              kind: "approval.requested" as const,
-              summary: "Approval requested",
-              payload: { requestId, requestKind: "command", lifecycleGeneration: generation },
-              turnId: null,
+        const appendRequest = (generation: string, suffix: string, occurredAt: string) =>
+          eventStore.append({
+            type: "thread.activity-appended",
+            eventId: EventId.makeUnsafe(`evt-request-${suffix}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt,
+            commandId: CommandId.makeUnsafe(`cmd-request-${suffix}`),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(`cmd-request-${suffix}`),
+            metadata: {},
+            payload: {
+              threadId,
+              activity: {
+                id: EventId.makeUnsafe(`activity-request-${suffix}`),
+                tone: "approval" as const,
+                kind: "approval.requested" as const,
+                summary: "Approval requested",
+                payload: { requestId, requestKind: "command", lifecycleGeneration: generation },
+                turnId: null,
+                createdAt: occurredAt,
+              },
+            },
+          });
+        const appendResponse = (generation: string, suffix: string, occurredAt: string) =>
+          eventStore.append({
+            type: "thread.approval-response-requested",
+            eventId: EventId.makeUnsafe(`evt-response-${suffix}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt,
+            commandId: CommandId.makeUnsafe(`cmd-response-${suffix}`),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(`cmd-response-${suffix}`),
+            metadata: {},
+            payload: {
+              threadId,
+              requestId,
+              lifecycleGeneration: generation,
+              decision: "accept" as const,
               createdAt: occurredAt,
             },
-          },
-        });
-      const appendResponse = (generation: string, suffix: string, occurredAt: string) =>
-        eventStore.append({
-          type: "thread.approval-response-requested",
-          eventId: EventId.makeUnsafe(`evt-response-${suffix}`),
-          aggregateKind: "thread",
-          aggregateId: threadId,
-          occurredAt,
-          commandId: CommandId.makeUnsafe(`cmd-response-${suffix}`),
-          causationEventId: null,
-          correlationId: CorrelationId.makeUnsafe(`cmd-response-${suffix}`),
-          metadata: {},
-          payload: {
-            threadId,
-            requestId,
-            lifecycleGeneration: generation,
-            decision: "accept" as const,
-            createdAt: occurredAt,
-          },
-        });
-      const readRow = () =>
-        sql<{
-          readonly lifecycleGeneration: string | null;
-          readonly status: string;
-          readonly decision: string | null;
-        }>`
+          });
+        const readRow = () =>
+          sql<{
+            readonly lifecycleGeneration: string | null;
+            readonly status: string;
+            readonly decision: string | null;
+          }>`
           SELECT
             lifecycle_generation AS "lifecycleGeneration",
             status,
@@ -616,55 +618,56 @@ it.layer(
             AND request_id = ${requestId}
         `;
 
-      yield* appendRequest("generation-a", "a", "2026-07-14T13:00:00.000Z");
-      yield* projectionPipeline.bootstrap;
-      yield* appendRequest("generation-b", "b", "2026-07-14T13:00:01.000Z");
-      yield* appendResponse("generation-a", "stale-a", "2026-07-14T13:00:02.000Z");
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRow(), [
-        { lifecycleGeneration: "generation-b", status: "pending", decision: null },
-      ]);
+        yield* appendRequest("generation-a", "a", "2026-07-14T13:00:00.000Z");
+        yield* projectionPipeline.bootstrap;
+        yield* appendRequest("generation-b", "b", "2026-07-14T13:00:01.000Z");
+        yield* appendResponse("generation-a", "stale-a", "2026-07-14T13:00:02.000Z");
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRow(), [
+          { lifecycleGeneration: "generation-b", status: "pending", decision: null },
+        ]);
 
-      yield* appendResponse("generation-b", "current-b", "2026-07-14T13:00:03.000Z");
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRow(), [
-        { lifecycleGeneration: "generation-b", status: "responding", decision: "accept" },
-      ]);
+        yield* appendResponse("generation-b", "current-b", "2026-07-14T13:00:03.000Z");
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRow(), [
+          { lifecycleGeneration: "generation-b", status: "responding", decision: "accept" },
+        ]);
 
-      yield* eventStore.append({
-        type: "thread.activity-appended",
-        eventId: EventId.makeUnsafe("evt-response-confirmed-b"),
-        aggregateKind: "thread",
-        aggregateId: threadId,
-        occurredAt: "2026-07-14T13:00:04.000Z",
-        commandId: CommandId.makeUnsafe("cmd-response-confirmed-b"),
-        causationEventId: null,
-        correlationId: CorrelationId.makeUnsafe("cmd-response-confirmed-b"),
-        metadata: { requestId },
-        payload: {
-          threadId,
-          activity: {
-            id: EventId.makeUnsafe("activity-response-confirmed-b"),
-            tone: "approval",
-            kind: "approval.resolved",
-            summary: "Approval resolved",
-            payload: {
-              requestId,
-              lifecycleGeneration: "generation-b",
-              decision: "accept",
+        yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe("evt-response-confirmed-b"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-14T13:00:04.000Z",
+          commandId: CommandId.makeUnsafe("cmd-response-confirmed-b"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-response-confirmed-b"),
+          metadata: { requestId },
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe("activity-response-confirmed-b"),
+              tone: "approval",
+              kind: "approval.resolved",
+              summary: "Approval resolved",
+              payload: {
+                requestId,
+                lifecycleGeneration: "generation-b",
+                decision: "accept",
+              },
+              turnId: null,
+              createdAt: "2026-07-14T13:00:04.000Z",
             },
-            turnId: null,
-            createdAt: "2026-07-14T13:00:04.000Z",
           },
-        },
-      });
-      yield* projectionPipeline.bootstrap;
-      assert.deepEqual(yield* readRow(), [
-        { lifecycleGeneration: "generation-b", status: "confirmed", decision: "accept" },
-      ]);
-    }),
-  );
-});
+        });
+        yield* projectionPipeline.bootstrap;
+        assert.deepEqual(yield* readRow(), [
+          { lifecycleGeneration: "generation-b", status: "confirmed", decision: "accept" },
+        ]);
+      }),
+    );
+  },
+);
 
 it.effect("fast-forwards lagging hot projector cursors before restart replay", () =>
   Effect.gen(function* () {
@@ -801,9 +804,7 @@ it.effect("drains 2,501 file-backed events to a captured high-water fence", () =
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
     const persistenceLayer = makeSqlitePersistenceLive(dbPath);
-    const eventStoreLayer = OrchestrationEventStoreLive.pipe(
-      Layer.provideMerge(persistenceLayer),
-    );
+    const eventStoreLayer = OrchestrationEventStoreLive.pipe(Layer.provideMerge(persistenceLayer));
     const projectId = ProjectId.makeUnsafe("project-bootstrap-paged");
     const occurredAt = "2026-07-14T01:00:00.000Z";
 
@@ -2089,49 +2090,43 @@ it.layer(
         ],
       ] as const) {
         assert.strictEqual(
-          (
-            yield* managedAttachments.reserve({
-              attachmentId,
-              ownerThreadId: threadId,
-              ownerKind: "principal",
-              ownerId: "principal-managed-coexist",
-              kind: "file",
-              originalName: `${attachmentId}.txt`,
-              mimeType: "text/plain",
-              reservedBytes: 5,
-              relativePath,
-              now,
-            })
-          ).status,
+          (yield* managedAttachments.reserve({
+            attachmentId,
+            ownerThreadId: threadId,
+            ownerKind: "principal",
+            ownerId: "principal-managed-coexist",
+            kind: "file",
+            originalName: `${attachmentId}.txt`,
+            mimeType: "text/plain",
+            reservedBytes: 5,
+            relativePath,
+            now,
+          })).status,
           "reserved",
         );
         assert.strictEqual(
-          (
-            yield* managedAttachments.finalizeStaged({
-              attachmentId,
-              ownerThreadId: threadId,
-              ownerKind: "principal",
-              ownerId: "principal-managed-coexist",
-              sizeBytes: 5,
-              sha256: "b".repeat(64),
-              stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-              now,
-            })
-          ).status,
+          (yield* managedAttachments.finalizeStaged({
+            attachmentId,
+            ownerThreadId: threadId,
+            ownerKind: "principal",
+            ownerId: "principal-managed-coexist",
+            sizeBytes: 5,
+            sha256: "b".repeat(64),
+            stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+            now,
+          })).status,
           "staged",
         );
         assert.strictEqual(
-          (
-            yield* managedAttachments.claimForAcceptedTurn({
-              attachmentIds: [attachmentId],
-              ownerThreadId: threadId,
-              ownerKind: "principal",
-              ownerId: "principal-managed-coexist",
-              commandId,
-              messageId,
-              now,
-            })
-          ).status,
+          (yield* managedAttachments.claimForAcceptedTurn({
+            attachmentIds: [attachmentId],
+            ownerThreadId: threadId,
+            ownerKind: "principal",
+            ownerId: "principal-managed-coexist",
+            commandId,
+            messageId,
+            now,
+          })).status,
           "claimed",
         );
       }
@@ -3779,10 +3774,8 @@ it.layer(
       const threadId = ThreadId.makeUnsafe("thread-managed-rebuild");
       const retainedAttachmentId = "att_v2_11111111111111111111111111111111";
       const prunedAttachmentId = "att_v2_22222222222222222222222222222222";
-      const retainedLegacyId =
-        "thread-managed-rebuild-11111111-1111-4111-8111-111111111111";
-      const prunedLegacyId =
-        "thread-managed-rebuild-22222222-2222-4222-8222-222222222222";
+      const retainedLegacyId = "thread-managed-rebuild-11111111-1111-4111-8111-111111111111";
+      const prunedLegacyId = "thread-managed-rebuild-22222222-2222-4222-8222-222222222222";
       const retainedMessageId = MessageId.makeUnsafe("message-managed-retained");
       const prunedMessageId = MessageId.makeUnsafe("message-managed-pruned");
       const createdAt = "2020-07-14T14:00:00.000Z";
@@ -3906,10 +3899,7 @@ it.layer(
         attachmentsDir,
         `objects/11/${retainedAttachmentId}.txt`,
       );
-      const prunedManagedPath = path.join(
-        attachmentsDir,
-        `objects/22/${prunedAttachmentId}.txt`,
-      );
+      const prunedManagedPath = path.join(attachmentsDir, `objects/22/${prunedAttachmentId}.txt`);
       const retainedLegacyPath = path.join(attachmentsDir, `${retainedLegacyId}.txt`);
       const prunedLegacyPath = path.join(attachmentsDir, `${prunedLegacyId}.txt`);
       for (const filePath of [

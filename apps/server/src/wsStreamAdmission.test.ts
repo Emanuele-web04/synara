@@ -71,9 +71,7 @@ describe("WsStreamAdmission", () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission;
       const first = yield* admission.acquire(1, { key: "server.settings" });
-      const duplicate = yield* admission
-        .acquire(1, { key: "server.settings" })
-        .pipe(Effect.flip);
+      const duplicate = yield* admission.acquire(1, { key: "server.settings" }).pipe(Effect.flip);
       const otherClient = yield* admission.acquire(2, { key: "server.settings" });
 
       expect(duplicate.code).toBe("STREAM_DUPLICATE_SUBSCRIPTION");
@@ -117,20 +115,16 @@ describe("WsStreamAdmission", () => {
 
       expect(rejected.code).toBe("THREAD_STREAM_CAPACITY_EXCEEDED");
       expect(rejected.retryable).toBe(true);
-      expect((yield* admission.snapshot).active).toBe(
-        MAX_THREAD_STREAMS_PER_RPC_CLIENT + 1,
-      );
+      expect((yield* admission.snapshot).active).toBe(MAX_THREAD_STREAMS_PER_RPC_CLIENT + 1);
 
       yield* admission.release(threadLeases[0]!);
       const replacement = yield* admission.acquire(7, {
         key: "orchestration.thread:replacement",
         threadId: "replacement",
       });
-      yield* Effect.forEach(
-        [singleton, replacement, ...threadLeases.slice(1)],
-        admission.release,
-        { discard: true },
-      );
+      yield* Effect.forEach([singleton, replacement, ...threadLeases.slice(1)], admission.release, {
+        discard: true,
+      });
       expect(yield* admission.snapshot).toMatchObject({ clients: 0, active: 0 });
     }).pipe(Effect.runPromise);
   });

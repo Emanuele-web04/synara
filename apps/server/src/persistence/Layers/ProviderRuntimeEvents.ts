@@ -39,15 +39,16 @@ const make = Effect.gen(function* () {
           issue: `Provider runtime event exceeds ${PROVIDER_RUNTIME_EVENT_MAX_BYTES} bytes.`,
         });
       }
-      const rows = yield* sql.withTransaction(
-        Effect.gen(function* () {
-          const existing = yield* sql<unknown>`
+      const rows = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const existing = yield* sql<Record<string, unknown>>`
             SELECT sequence, event_json AS "eventJson"
             FROM provider_runtime_events
             WHERE event_id = ${event.eventId}
           `;
-          if (existing.length > 0) return existing;
-          return yield* sql<unknown>`
+            if (existing.length > 0) return existing;
+            return yield* sql<Record<string, unknown>>`
             INSERT INTO provider_runtime_events (
               event_id, thread_id, turn_id, lifecycle_generation, event_type,
               event_json, persisted_at
@@ -58,8 +59,9 @@ const make = Effect.gen(function* () {
             )
             RETURNING sequence, event_json AS "eventJson"
           `;
-        }),
-      ).pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.append")));
+          }),
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.append")));
       const row = yield* decodeStoredRow(rows[0]).pipe(
         Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.row")),
       );
@@ -83,7 +85,7 @@ const make = Effect.gen(function* () {
   const readAfter: ProviderRuntimeEventRepositoryShape["readAfter"] = (input) => {
     const limit = Math.max(1, Math.min(1_000, Math.floor(input.limit)));
     return Effect.gen(function* () {
-      const rows = yield* sql<unknown>`
+      const rows = yield* sql<Record<string, unknown>>`
         SELECT sequence, event_json AS "eventJson"
         FROM provider_runtime_events
         WHERE sequence > ${input.sequenceExclusive}
@@ -116,7 +118,7 @@ const make = Effect.gen(function* () {
     (input) => {
       const limit = Math.max(1, Math.min(1_000, Math.floor(input.limit)));
       return Effect.gen(function* () {
-        const rows = yield* sql<unknown>`
+        const rows = yield* sql<Record<string, unknown>>`
           SELECT event.sequence, event.event_json AS "eventJson"
           FROM provider_runtime_events AS event
           INNER JOIN provider_runtime_open_turns AS open_turn
@@ -155,33 +157,36 @@ const make = Effect.gen(function* () {
       });
     };
 
-  const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] =
-    (consumerName) =>
-      sql<{ readonly lastAckedSequence: number }>`
+  const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] = (
+    consumerName,
+  ) =>
+    sql<{ readonly lastAckedSequence: number }>`
         SELECT last_acked_sequence AS "lastAckedSequence"
         FROM provider_runtime_event_consumers
         WHERE consumer_name = ${consumerName}
       `.pipe(
-        Effect.flatMap((rows) =>
-          rows[0] === undefined
-            ? Effect.fail(
-                new PersistenceDecodeError({
-                  operation: "ProviderRuntimeEvent.getConsumerCursor",
-                  issue: `Consumer '${consumerName}' is not registered.`,
-                }),
-              )
-            : Effect.succeed(rows[0].lastAckedSequence),
-        ),
-        Effect.mapError((error) =>
-          error instanceof PersistenceDecodeError
-            ? error
-            : toPersistenceSqlError("ProviderRuntimeEvent.getConsumerCursor")(error),
-        ),
-      );
+      Effect.flatMap((rows) =>
+        rows[0] === undefined
+          ? Effect.fail(
+              new PersistenceDecodeError({
+                operation: "ProviderRuntimeEvent.getConsumerCursor",
+                issue: `Consumer '${consumerName}' is not registered.`,
+              }),
+            )
+          : Effect.succeed(rows[0].lastAckedSequence),
+      ),
+      Effect.mapError((error) =>
+        error instanceof PersistenceDecodeError
+          ? error
+          : toPersistenceSqlError("ProviderRuntimeEvent.getConsumerCursor")(error),
+      ),
+    );
 
-  const advanceConsumerCursor: ProviderRuntimeEventRepositoryShape["advanceConsumerCursor"] =
-    (input) =>
-      sql.withTransaction(
+  const advanceConsumerCursor: ProviderRuntimeEventRepositoryShape["advanceConsumerCursor"] = (
+    input,
+  ) =>
+    sql
+      .withTransaction(
         Effect.gen(function* () {
           const consumerRows = yield* sql<{ readonly lastAckedSequence: number }>`
             SELECT last_acked_sequence AS "lastAckedSequence"
@@ -285,9 +290,8 @@ const make = Effect.gen(function* () {
           `;
           return true;
         }),
-      ).pipe(
-        Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")),
-      );
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")));
 
   return {
     append,

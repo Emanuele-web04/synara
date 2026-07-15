@@ -87,7 +87,9 @@ const BooleanEnvConfig = Config.all({
 
 export const readDevRunnerBooleanEnvironment = (environment: NodeJS.ProcessEnv) => {
   const definedEnvironment = Object.fromEntries(
-    Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    Object.entries(environment).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
   );
   return BooleanEnvConfig.parse(ConfigProvider.fromEnv({ env: definedEnvironment })).pipe(
     Effect.mapError(
@@ -178,11 +180,7 @@ export function createDevRunnerEnv({
     // portable while adding brackets back only when constructing an IPv6 URL.
     const serverHost = configuredHost.replace(/^\[([^\]]+)\]$/, "$1");
     const clientHost =
-      serverHost === "0.0.0.0"
-        ? "127.0.0.1"
-        : serverHost === "::"
-          ? "::1"
-          : serverHost;
+      serverHost === "0.0.0.0" ? "127.0.0.1" : serverHost === "::" ? "::1" : serverHost;
     const formattedClientHost = clientHost.includes(":")
       ? `[${clientHost.replace(/^\[|\]$/g, "")}]`
       : clientHost;

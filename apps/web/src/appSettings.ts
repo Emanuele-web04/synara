@@ -969,9 +969,7 @@ export function getProviderStartOptions(
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
   const hasOpenCodeStartOptions = Boolean(
-    openCodeBinaryPath ||
-    settings.openCodeExperimentalWebSockets ||
-    settings.openCodeServerUrl,
+    openCodeBinaryPath || settings.openCodeExperimentalWebSockets || settings.openCodeServerUrl,
   );
   const providerOptions: ProviderStartOptions = {
     ...(codexBinaryPath || settings.codexHomePath

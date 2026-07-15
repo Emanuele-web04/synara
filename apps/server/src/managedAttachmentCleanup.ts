@@ -37,9 +37,7 @@ const unlinkIfPresent = (filePath: string) =>
   Effect.tryPromise({
     try: () => fs.unlink(filePath),
     catch: (cause) => cause,
-  }).pipe(
-    Effect.catch((cause) => (isMissingFileError(cause) ? Effect.void : Effect.fail(cause))),
-  );
+  }).pipe(Effect.catch((cause) => (isMissingFileError(cause) ? Effect.void : Effect.fail(cause))));
 
 const cleanupErrorMessage = (cause: unknown) => String(cause).slice(0, 2_000);
 
@@ -52,7 +50,9 @@ export const runManagedAttachmentCleanupBatch = Effect.gen(function* () {
 
   yield* repository.markExpiredForCleanup({
     now,
-    uploadingCutoff: new Date(nowDate.getTime() - MANAGED_ATTACHMENT_WRITING_LEASE_MS).toISOString(),
+    uploadingCutoff: new Date(
+      nowDate.getTime() - MANAGED_ATTACHMENT_WRITING_LEASE_MS,
+    ).toISOString(),
     limit: MANAGED_ATTACHMENT_CLEANUP_BATCH_SIZE,
   });
   const jobs = yield* repository.leaseCleanup({
@@ -139,7 +139,9 @@ export class ManagedAttachmentCleanup extends ServiceMap.Service<
   ManagedAttachmentCleanupShape
 >()("synara/ManagedAttachmentCleanup") {}
 
-const drainCleanupBatches = (runBatch: Effect.Effect<number>) =>
+const drainCleanupBatches = <E, R>(
+  runBatch: Effect.Effect<number, E, R>,
+): Effect.Effect<void, E, R> =>
   Effect.gen(function* () {
     let processed = MANAGED_ATTACHMENT_CLEANUP_BATCH_SIZE;
     while (processed === MANAGED_ATTACHMENT_CLEANUP_BATCH_SIZE) {
@@ -147,9 +149,7 @@ const drainCleanupBatches = (runBatch: Effect.Effect<number>) =>
     }
   });
 
-export const drainManagedAttachmentCleanup = drainCleanupBatches(
-  runManagedAttachmentCleanupBatch,
-);
+export const drainManagedAttachmentCleanup = drainCleanupBatches(runManagedAttachmentCleanupBatch);
 
 export const ManagedAttachmentCleanupLive = Layer.effect(
   ManagedAttachmentCleanup,

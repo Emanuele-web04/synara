@@ -51,8 +51,12 @@ async function createOrchestrationSystem() {
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+  const managedAttachmentRepository = await runtime.runPromise(
+    Effect.service(ManagedAttachmentRepository),
+  );
   return {
     engine,
+    managedAttachmentRepository,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -170,9 +174,9 @@ describe("OrchestrationEngine", () => {
     });
 
     const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));
-    expect(Array.from(events).filter((event) => event.commandId === command.commandId)).toHaveLength(
-      1,
-    );
+    expect(
+      Array.from(events).filter((event) => event.commandId === command.commandId),
+    ).toHaveLength(1);
     await system.dispose();
   });
 
@@ -259,9 +263,7 @@ describe("OrchestrationEngine", () => {
       Stream.runCollect(engine.readEvents(0)).pipe(Effect.map((chunk) => Array.from(chunk))),
     );
     expect(events).toHaveLength(1);
-    expect((await system.run(engine.getReadModel())).projects[0]?.title).toBe(
-      "Original identity",
-    );
+    expect((await system.run(engine.getReadModel())).projects[0]?.title).toBe("Original identity");
     await system.dispose();
   });
 
@@ -301,7 +303,7 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
-    const repository = await system.run(Effect.service(ManagedAttachmentRepository));
+    const repository = system.managedAttachmentRepository;
     const stage = async (attachmentId: string) => {
       const reserved = await system.run(
         repository.reserve({
@@ -370,7 +372,7 @@ describe("OrchestrationEngine", () => {
             ...command,
             message: {
               ...command.message,
-              attachments: [{ ...command.message.attachments[0], id: secondAttachmentId }],
+              attachments: [{ ...command.message.attachments[0]!, id: secondAttachmentId }],
             },
           },
           { attachmentPrincipal: principal },
@@ -378,9 +380,7 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("Command identity collision");
 
-    const claimed = await system.run(
-      repository.findClaimedForCommand({ commandId }),
-    );
+    const claimed = await system.run(repository.findClaimedForCommand({ commandId }));
     expect(claimed.map((attachment) => attachment.attachmentId)).toEqual([firstAttachmentId]);
     await system.dispose();
   });
