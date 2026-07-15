@@ -76,11 +76,30 @@ const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "medium",
 };
 
+const ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "Gemini 3.5 Flash",
+  name: "Gemini 3.5 Flash",
+  supportedReasoningEfforts: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT: ProviderModelDescriptor = {
+  slug: "Claude Sonnet 4.6",
+  name: "Claude Sonnet 4.6",
+  supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
+  defaultReasoningEffort: "thinking",
+};
+
 describe("getComposerProviderState", () => {
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
       provider: "antigravity",
       model: "Gemini 3.5 Flash",
+      runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
       prompt: "",
       modelOptions: { antigravity: { reasoningEffort: "high" } },
     });
@@ -94,8 +113,9 @@ describe("getComposerProviderState", () => {
       getComposerTraitSelection(
         "antigravity",
         "Gemini 3.5 Flash",
-        "",
-        { reasoningEffort: "high" },
+      "",
+      { reasoningEffort: "high" },
+      ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
       ).effortLevels.map((effort) => effort.value),
     ).toEqual(["low", "medium", "high"]);
     expect(
@@ -103,6 +123,7 @@ describe("getComposerProviderState", () => {
         provider: "antigravity",
         threadId: ThreadId.makeUnsafe("thread-antigravity-effort"),
         model: "Gemini 3.5 Flash",
+        runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
         modelOptions: { reasoningEffort: "high" },
         prompt: "",
         onPromptChange: vi.fn(),
@@ -116,6 +137,7 @@ describe("getComposerProviderState", () => {
       "Claude Sonnet 4.6",
       "",
       undefined,
+      ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
     );
 
     expect(selection.effortLevels).toEqual([]);
@@ -124,6 +146,7 @@ describe("getComposerProviderState", () => {
         provider: "antigravity",
         threadId: ThreadId.makeUnsafe("thread-antigravity-single-effort"),
         model: "Claude Sonnet 4.6",
+        runtimeModel: ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
         modelOptions: undefined,
         prompt: "",
         onPromptChange: vi.fn(),

@@ -6,9 +6,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ProviderIcon } from "./ProviderIcon";
+import { ProviderIcon, PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 
 describe("ProviderIcon", () => {
+  it("uses Antigravity branding instead of the Gemini provider icon", () => {
+    expect(PROVIDER_ICON_COMPONENT_BY_PROVIDER.antigravity).not.toBe(
+      PROVIDER_ICON_COMPONENT_BY_PROVIDER.gemini,
+    );
+
+    const markup = renderToStaticMarkup(<ProviderIcon provider="antigravity" />);
+    expect(markup).toContain("data:image/png;base64,");
+  });
+
   it("uses the reversed Central icon for opencode in dark mode", () => {
     const markup = renderToStaticMarkup(
       <ProviderIcon provider="opencode" className="size-4 text-muted-foreground" />,

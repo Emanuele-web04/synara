@@ -887,13 +887,13 @@ export function normalizeGrokModelOptions(
 export function normalizeAntigravityModelOptions(
   model: string | null | undefined,
   modelOptions: AntigravityModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("antigravity", model),
 ): AntigravityModelOptions | undefined {
-  const caps = getModelCapabilities("antigravity", model);
   const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
-  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
+  if (!reasoningEffort || !hasEffortLevel(capabilities, reasoningEffort)) {
     return undefined;
   }
-  if (reasoningEffort === getDefaultEffort(caps)) {
+  if (reasoningEffort === getDefaultEffort(capabilities)) {
     return undefined;
   }
   return { reasoningEffort };

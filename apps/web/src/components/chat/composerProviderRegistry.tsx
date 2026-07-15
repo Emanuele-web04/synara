@@ -195,7 +195,7 @@ function getProviderStateFromCapabilities(
     case "antigravity": {
       const providerOptions = modelOptions?.antigravity;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions);
+      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;
     }
     case "grok": {

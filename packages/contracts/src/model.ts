@@ -634,70 +634,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GEMINI_2_5_CAPABILITIES,
     },
   ],
-  antigravity: [
-    {
-      slug: "Gemini 3.5 Flash",
-      name: "Gemini 3.5 Flash",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium", isDefault: true },
-          { value: "high", label: "High" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "Gemini 3.1 Pro",
-      name: "Gemini 3.1 Pro",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low", isDefault: true },
-          { value: "high", label: "High" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "Claude Sonnet 4.6",
-      name: "Claude Sonnet 4.6",
-      capabilities: {
-        reasoningEffortLevels: [{ value: "thinking", label: "Thinking", isDefault: true }],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "Claude Opus 4.6",
-      name: "Claude Opus 4.6",
-      capabilities: {
-        reasoningEffortLevels: [{ value: "thinking", label: "Thinking", isDefault: true }],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "GPT-OSS 120B",
-      name: "GPT-OSS 120B",
-      capabilities: {
-        reasoningEffortLevels: [{ value: "medium", label: "Medium", isDefault: true }],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-  ],
+  // Antigravity owns its model catalog. The web app populates this provider from
+  // `agy models` so CLI updates appear without a Synara release.
+  antigravity: [],
   grok: [
     {
       slug: "grok-build-0.1",

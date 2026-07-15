@@ -57,6 +57,10 @@ describe("normalizeCustomModelSlugs", () => {
 });
 
 describe("getAppModelOptions", () => {
+  it("does not expose a hardcoded Antigravity model catalog", () => {
+    expect(getAppModelOptions("antigravity", [])).toEqual([]);
+  });
+
   it("appends saved custom models after the built-in options", () => {
     const options = getAppModelOptions("codex", ["custom/internal-model"]);
 

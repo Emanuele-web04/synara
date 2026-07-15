@@ -824,14 +824,37 @@ describe("normalizeGrokModelOptions", () => {
 
 describe("normalizeAntigravityModelOptions", () => {
   it("stores only supported non-default effort overrides", () => {
+    const runtimeCapabilities = {
+      reasoningEffortLevels: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium", isDefault: true as const },
+        { value: "high", label: "High" },
+      ],
+      supportsFastMode: false,
+      supportsThinkingToggle: false,
+      promptInjectedEffortLevels: [],
+      contextWindowOptions: [],
+    };
     expect(
-      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "medium" }),
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "medium" },
+        runtimeCapabilities,
+      ),
     ).toBeUndefined();
     expect(
-      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "ultra" }),
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "ultra" },
+        runtimeCapabilities,
+      ),
     ).toBeUndefined();
     expect(
-      normalizeAntigravityModelOptions("Gemini 3.5 Flash", { reasoningEffort: "high" }),
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "high" },
+        runtimeCapabilities,
+      ),
     ).toEqual({ reasoningEffort: "high" });
   });
 });
