@@ -82,7 +82,6 @@ export class ServerSettingsService extends ServiceMap.Service<
 const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
   "codex",
   "claudeAgent",
-  "gemini",
   "kilo",
   "opencode",
 ];

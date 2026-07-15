@@ -853,8 +853,6 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
     case "antigravity":
       return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
@@ -2046,7 +2044,6 @@ export default function ChatView({
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
       antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
@@ -2080,13 +2077,6 @@ export default function ChatView({
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
-    }),
-  );
-  const geminiModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "gemini",
-      binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
     }),
   );
   const antigravityModelsQuery = useQuery(
@@ -2229,11 +2219,6 @@ export default function ChatView({
         customModelsByProvider.cursor,
         composerModelHintByProvider.cursor,
       ),
-      gemini: getAppModelOptions(
-        "gemini",
-        customModelsByProvider.gemini,
-        composerModelHintByProvider.gemini,
-      ),
       antigravity: getAppModelOptions(
         "antigravity",
         customModelsByProvider.antigravity,
@@ -2273,7 +2258,6 @@ export default function ChatView({
         cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      gemini: geminiModelsQuery.data,
       antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
@@ -2286,7 +2270,6 @@ export default function ChatView({
       "claudeAgent",
       "codex",
       "cursor",
-      "gemini",
       "antigravity",
       "grok",
       "droid",
@@ -2314,7 +2297,6 @@ export default function ChatView({
     customModelsByProvider,
     droidDynamicModelsQuery.data,
     antigravityModelsQuery.data,
-    geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
@@ -2333,7 +2315,6 @@ export default function ChatView({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
-      gemini: geminiModelsQuery.data?.models ?? [],
       antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
@@ -2347,7 +2328,6 @@ export default function ChatView({
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
       antigravityModelsQuery.data?.models,
-      geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
@@ -2358,7 +2338,6 @@ export default function ChatView({
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
-    gemini: geminiModelsQuery,
     antigravity: antigravityModelsQuery,
     grok: grokDynamicModelsQuery,
     droid: droidDynamicModelsQuery,

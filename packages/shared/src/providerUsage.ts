@@ -34,11 +34,6 @@ const PROVIDER_USAGE_META: Partial<Record<ProviderKind, ProviderUsageMeta>> = {
     signInCommand: "cursor-agent login",
     learnMoreHref: "https://cursor.com/dashboard",
   },
-  gemini: {
-    displayName: "Gemini",
-    signInCommand: "gemini",
-    learnMoreHref: "https://ai.google.dev/gemini-api/docs/quota",
-  },
 };
 
 /** Providers, in display order, that expose a live usage source. */
@@ -46,7 +41,6 @@ export const PROVIDER_USAGE_PROVIDERS: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
-  "gemini",
 ];
 
 // Provider ids cross the WebSocket as plain strings (rate-limit event payloads), so the

@@ -12,7 +12,6 @@ describe("threadHandoff", () => {
       "codex",
       "claudeAgent",
       "cursor",
-      "gemini",
       "antigravity",
       "grok",
       "droid",
@@ -37,8 +36,8 @@ describe("threadHandoff", () => {
 
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
-      provider: "gemini",
-      model: "gemini-2.5-pro",
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
     } satisfies ModelSelection;
 
     expect(
@@ -49,13 +48,13 @@ describe("threadHandoff", () => {
             model: "claude-sonnet-4-6",
           },
         },
-        targetProvider: "gemini",
+        targetProvider: "antigravity",
         projectDefaultModelSelection: {
-          provider: "gemini",
-          model: "gemini-3.1-pro-preview",
+          provider: "antigravity",
+          model: "Claude Sonnet 4.6",
         },
         stickyModelSelectionByProvider: {
-          gemini: stickySelection,
+          antigravity: stickySelection,
         },
       }),
     ).toEqual(stickySelection);
@@ -66,8 +65,8 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
+            provider: "antigravity",
+            model: "Gemini 3.5 Flash",
           },
         },
         targetProvider: "codex",

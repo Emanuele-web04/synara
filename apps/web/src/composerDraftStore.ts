@@ -7,8 +7,6 @@ import {
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
   type CursorModelOptions,
-  type GeminiThinkingBudget,
-  type GeminiThinkingLevel,
   GROK_REASONING_EFFORT_OPTIONS,
   type DroidReasoningEffort,
   type GrokReasoningEffort,
@@ -88,7 +86,6 @@ const COMPOSER_PROVIDER_KINDS = [
   "codex",
   "claudeAgent",
   "cursor",
-  "gemini",
   "antigravity",
   "grok",
   "droid",
@@ -1270,6 +1267,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
+  if (value === "gemini") {
+    return "antigravity";
+  }
   return isProviderKind(value) ? value : null;
 }
 
@@ -1325,14 +1325,6 @@ function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
-          : {}),
-      };
-    case "gemini":
-      return {
-        provider,
-        model,
-        ...(options
-          ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
           : {}),
       };
     case "grok":
@@ -1395,10 +1387,6 @@ function normalizeProviderModelOptions(
   const cursorCandidate =
     candidate?.cursor && typeof candidate.cursor === "object"
       ? (candidate.cursor as Record<string, unknown>)
-      : null;
-  const geminiCandidate =
-    candidate?.gemini && typeof candidate.gemini === "object"
-      ? (candidate.gemini as Record<string, unknown>)
       : null;
   const antigravityCandidate =
     candidate?.antigravity && typeof candidate.antigravity === "object"
@@ -1514,29 +1502,6 @@ function normalizeProviderModelOptions(
         }
       : undefined;
 
-  const geminiThinkingLevel: GeminiThinkingLevel | undefined =
-    geminiCandidate?.thinkingLevel === "LOW" || geminiCandidate?.thinkingLevel === "HIGH"
-      ? geminiCandidate.thinkingLevel
-      : undefined;
-  const rawGeminiThinkingBudget =
-    typeof geminiCandidate?.thinkingBudget === "number"
-      ? geminiCandidate.thinkingBudget
-      : typeof geminiCandidate?.thinkingBudget === "string"
-        ? Number(geminiCandidate.thinkingBudget)
-        : undefined;
-  const geminiThinkingBudget: GeminiThinkingBudget | undefined =
-    rawGeminiThinkingBudget === -1 ||
-    rawGeminiThinkingBudget === 0 ||
-    rawGeminiThinkingBudget === 512
-      ? rawGeminiThinkingBudget
-      : undefined;
-  const gemini =
-    geminiThinkingLevel !== undefined || geminiThinkingBudget !== undefined
-      ? {
-          ...(geminiThinkingLevel !== undefined ? { thinkingLevel: geminiThinkingLevel } : {}),
-          ...(geminiThinkingBudget !== undefined ? { thinkingBudget: geminiThinkingBudget } : {}),
-        }
-      : undefined;
   const antigravityReasoningEffort = trimStringOrUndefined(antigravityCandidate?.reasoningEffort);
   const antigravity =
     antigravityReasoningEffort !== undefined
@@ -1586,7 +1551,6 @@ function normalizeProviderModelOptions(
     !codex &&
     !claude &&
     !cursor &&
-    !gemini &&
     !antigravity &&
     !grok &&
     !droid &&
@@ -1600,7 +1564,6 @@ function normalizeProviderModelOptions(
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
-    ...(gemini ? { gemini } : {}),
     ...(antigravity ? { antigravity } : {}),
     ...(grok ? { grok } : {}),
     ...(droid ? { droid } : {}),
@@ -1620,7 +1583,9 @@ function normalizeModelSelection(
   },
 ): ModelSelection | null {
   const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-  const provider = normalizeProviderKind(candidate?.provider ?? legacy?.provider);
+  const rawProvider = candidate?.provider ?? legacy?.provider;
+  const migratedGeminiSelection = rawProvider === "gemini";
+  const provider = normalizeProviderKind(rawProvider);
   if (provider === null) {
     return null;
   }
@@ -1635,20 +1600,24 @@ function normalizeModelSelection(
     antigravityLegacyMatch?.[1] !== undefined &&
     antigravityLegacyEffort !== undefined &&
     ANTIGRAVITY_REASONING_EFFORT_SET.has(antigravityLegacyEffort);
-  const normalizedRawModel = hasLegacyAntigravityEffort
-    ? antigravityLegacyMatch[1]!.trim()
-    : rawModel;
+  const normalizedRawModel = migratedGeminiSelection
+    ? getDefaultModel("antigravity")
+    : hasLegacyAntigravityEffort
+      ? antigravityLegacyMatch[1]!.trim()
+      : rawModel;
   const inferredClaudeAutoCompactWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(normalizedRawModel, provider);
   if (!model) {
     return null;
   }
-  const modelOptions = normalizeProviderModelOptions(
-    candidate?.options ? { [provider]: candidate.options } : legacy?.modelOptions,
-    provider,
-    provider === "codex" ? legacy?.legacyCodex : undefined,
-  );
+  const modelOptions = migratedGeminiSelection
+    ? null
+    : normalizeProviderModelOptions(
+        candidate?.options ? { [provider]: candidate.options } : legacy?.modelOptions,
+        provider,
+        provider === "codex" ? legacy?.legacyCodex : undefined,
+      );
   const options =
     provider === "codex"
       ? modelOptions?.codex
@@ -1660,23 +1629,21 @@ function normalizeModelSelection(
                 modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
             }
           : modelOptions?.claudeAgent
-        : provider === "gemini"
-          ? modelOptions?.gemini
-          : provider === "antigravity"
-            ? modelOptions?.antigravity
-            : provider === "grok"
-              ? modelOptions?.grok
-              : provider === "droid"
-                ? modelOptions?.droid
-                : provider === "kilo"
-                  ? modelOptions?.kilo
-                  : provider === "cursor"
-                    ? modelOptions?.cursor
-                    : provider === "opencode"
-                      ? modelOptions?.opencode
-                      : provider === "pi"
-                        ? modelOptions?.pi
-                        : undefined;
+        : provider === "antigravity"
+          ? modelOptions?.antigravity
+          : provider === "grok"
+            ? modelOptions?.grok
+            : provider === "droid"
+              ? modelOptions?.droid
+              : provider === "kilo"
+                ? modelOptions?.kilo
+                : provider === "cursor"
+                  ? modelOptions?.cursor
+                  : provider === "opencode"
+                    ? modelOptions?.opencode
+                    : provider === "pi"
+                      ? modelOptions?.pi
+                      : undefined;
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {

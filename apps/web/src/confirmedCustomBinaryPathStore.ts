@@ -16,7 +16,6 @@ const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set<ProviderKind>([
   "codex",
   "claudeAgent",
   "cursor",
-  "gemini",
   "antigravity",
   "grok",
   "droid",

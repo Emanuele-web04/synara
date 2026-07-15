@@ -1391,9 +1391,9 @@ describe("deriveWorkLogEntries", () => {
           title: "Ran command",
           data: {
             item: {
-              command: "gemini --version",
+              command: "agy --version",
             },
-            rawOutput: "gemini 1.2.3\n",
+            rawOutput: "agy 1.2.3\n",
           },
         },
       }),
@@ -1403,9 +1403,9 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.toolDetails).toEqual({
       kind: "command",
       title: "Ran",
-      command: "gemini --version",
+      command: "agy --version",
       output: {
-        output: "gemini 1.2.3\n",
+        output: "agy 1.2.3\n",
       },
     });
   });
@@ -3524,7 +3524,6 @@ describe("PROVIDER_OPTIONS", () => {
   it("lists available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
-    const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
     const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
@@ -3534,7 +3533,6 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
-      { value: "gemini", label: "Gemini", available: true },
       { value: "antigravity", label: "Antigravity", available: true },
       { value: "grok", label: "Grok", available: true },
       { value: "droid", label: "Droid", available: true },
@@ -3550,11 +3548,6 @@ describe("PROVIDER_OPTIONS", () => {
     expect(cursor).toEqual({
       value: "cursor",
       label: "Cursor",
-      available: true,
-    });
-    expect(gemini).toEqual({
-      value: "gemini",
-      label: "Gemini",
       available: true,
     });
     expect(grok).toEqual({

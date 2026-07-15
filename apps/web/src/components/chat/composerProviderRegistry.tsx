@@ -14,13 +14,11 @@ import {
 import {
   getDefaultContextWindow,
   getDefaultEffort,
-  getGeminiThinkingSelectionValue,
   hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
@@ -186,12 +184,6 @@ function getProviderStateFromCapabilities(
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
-    case "gemini": {
-      const providerOptions = modelOptions?.gemini;
-      rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
-      normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
-      break;
-    }
     case "antigravity": {
       const providerOptions = modelOptions?.antigravity;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
@@ -292,11 +284,6 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
-  },
-  gemini: {
-    getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
   },
   antigravity: {
     getState: (input) => getProviderStateFromCapabilities(input),

@@ -1,6 +1,5 @@
 import {
   formatModelDisplayName,
-  geminiModelOptionsFromEffortValue,
   humanizeModelSlug,
   normalizeModelSlug,
 } from "@synara/shared/model";
@@ -13,8 +12,6 @@ import type {
   CodexModelSelection,
   CursorModelOptions,
   CursorModelSelection,
-  GeminiModelOptions,
-  GeminiModelSelection,
   DroidModelOptions,
   DroidModelSelection,
   GrokModelOptions,
@@ -295,14 +292,6 @@ export function buildNextProviderOptions(
   if (provider === "cursor") {
     return { ...(modelOptions as CursorModelOptions | undefined), ...patch } as CursorModelOptions;
   }
-  if (provider === "gemini") {
-    return {
-      ...(modelOptions as GeminiModelOptions | undefined),
-      thinkingLevel: undefined,
-      thinkingBudget: undefined,
-      ...patch,
-    } as GeminiModelOptions;
-  }
   if (provider === "antigravity") {
     return {
       ...(modelOptions as AntigravityModelOptions | undefined),
@@ -338,13 +327,6 @@ export function buildProviderOptionPatch(
   optionId: string,
   value: string | boolean,
 ): Record<string, unknown> {
-  if (
-    provider === "gemini" &&
-    typeof value === "string" &&
-    (optionId === "thinkingLevel" || optionId === "thinkingBudget")
-  ) {
-    return geminiModelOptionsFromEffortValue(value) ?? {};
-  }
   return { [optionId]: value };
 }
 
@@ -363,11 +345,6 @@ export function buildModelSelection(
   model: string,
   options?: CursorModelOptions | null | undefined,
 ): CursorModelSelection;
-export function buildModelSelection(
-  provider: "gemini",
-  model: string,
-  options?: GeminiModelOptions | null | undefined,
-): GeminiModelSelection;
 export function buildModelSelection(
   provider: "antigravity",
   model: string,
@@ -439,14 +416,6 @@ export function buildModelSelection(
             provider,
             model,
             options: options as CursorModelOptions,
-          }
-        : { provider, model };
-    case "gemini":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GeminiModelOptions,
           }
         : { provider, model };
     case "grok":

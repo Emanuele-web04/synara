@@ -20,10 +20,6 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto", name: "Auto" },
     { slug: "composer-2", name: "Composer 2" },
   ],
-  gemini: [
-    { slug: "auto-gemini-3", name: "Auto Gemini 3" },
-    { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-  ],
   grok: [
     { slug: "grok-build-0.1", name: "Grok Build 0.1" },
     { slug: "grok-build", name: "Grok 4.3" },

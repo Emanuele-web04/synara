@@ -186,7 +186,6 @@ describe("resolveAppModelSelection", () => {
           codex: ["galapagos-alpha"],
           claudeAgent: [],
           cursor: [],
-          gemini: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -207,7 +206,6 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
-          gemini: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -228,7 +226,6 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
-          gemini: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -249,7 +246,6 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
-          gemini: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -270,7 +266,6 @@ describe("resolveAppModelSelection", () => {
           codex: [],
           claudeAgent: [],
           cursor: [],
-          gemini: [],
           antigravity: [],
           grok: [],
           droid: [],
@@ -387,7 +382,6 @@ describe("normalizeStoredAppSettings", () => {
         claudeBinaryPath: "claude",
         codexBinaryPath: "codex",
         cursorBinaryPath: "cursor-agent",
-        geminiBinaryPath: "gemini",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         droidBinaryPath: "droid",
@@ -402,7 +396,6 @@ describe("normalizeStoredAppSettings", () => {
       claudeBinaryPath: "",
       codexBinaryPath: "",
       cursorBinaryPath: "",
-      geminiBinaryPath: "",
       antigravityBinaryPath: "",
       grokBinaryPath: "",
       droidBinaryPath: "",
@@ -431,7 +424,6 @@ describe("getProviderStartOptions", () => {
         codexHomePath: "/Users/you/.codex",
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
-        geminiBinaryPath: "/usr/local/bin/gemini",
         antigravityBinaryPath: "/usr/local/bin/agy",
         grokBinaryPath: "/usr/local/bin/grok",
         droidBinaryPath: "",
@@ -456,9 +448,6 @@ describe("getProviderStartOptions", () => {
         apiEndpoint: "http://localhost:3000",
         binaryPath: "/usr/local/bin/agent",
       },
-      gemini: {
-        binaryPath: "/usr/local/bin/gemini",
-      },
       antigravity: {
         binaryPath: "/usr/local/bin/agy",
       },
@@ -476,7 +465,6 @@ describe("getProviderStartOptions", () => {
         codexHomePath: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
-        geminiBinaryPath: "",
         antigravityBinaryPath: "",
         grokBinaryPath: "",
         droidBinaryPath: "",
@@ -501,7 +489,6 @@ describe("getProviderStartOptions", () => {
         codexHomePath: "",
         cursorApiEndpoint: "",
         cursorBinaryPath: "cursor-agent",
-        geminiBinaryPath: "gemini",
         antigravityBinaryPath: "agy",
         grokBinaryPath: "grok",
         droidBinaryPath: "droid",
@@ -524,7 +511,6 @@ describe("provider-indexed custom model settings", () => {
     customCodexModels: ["custom/codex-model"],
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
-    customGeminiModels: ["gemini/custom-flash"],
     customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
     customGrokModels: ["grok/custom-fast"],
     customDroidModels: ["claude-opus-4-8-custom"],
@@ -538,7 +524,6 @@ describe("provider-indexed custom model settings", () => {
       "codex",
       "claudeAgent",
       "cursor",
-      "gemini",
       "antigravity",
       "grok",
       "droid",
@@ -558,7 +543,6 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "codex")).toEqual(["custom/codex-model"]);
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
-    expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
@@ -571,7 +555,6 @@ describe("provider-indexed custom model settings", () => {
       customCodexModels: ["default/codex-model"],
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
-      customGeminiModels: ["gemini/default-flash"],
       customAntigravityModels: ["Gemini 3.5 Flash (Experimental)"],
       customGrokModels: ["grok/default-fast"],
       customDroidModels: ["droid/default-model"],
@@ -585,7 +568,6 @@ describe("provider-indexed custom model settings", () => {
       "claude/default-opus",
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
-    expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
     expect(getDefaultCustomModelsForProvider(defaults, "antigravity")).toEqual([
       "Gemini 3.5 Flash (Experimental)",
     ]);
@@ -605,12 +587,6 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for claude", () => {
     expect(patchCustomModels("claudeAgent", ["claude/custom-opus"])).toEqual({
       customClaudeModels: ["claude/custom-opus"],
-    });
-  });
-
-  it("patches custom models for gemini", () => {
-    expect(patchCustomModels("gemini", ["gemini/custom-flash"])).toEqual({
-      customGeminiModels: ["gemini/custom-flash"],
     });
   });
 
@@ -661,7 +637,6 @@ describe("provider-indexed custom model settings", () => {
       codex: ["custom/codex-model"],
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
-      gemini: ["gemini/custom-flash"],
       antigravity: ["Gemini 3.5 Flash (Experimental)"],
       grok: ["grok/custom-fast"],
       droid: ["claude-opus-4-8-custom"],
@@ -682,9 +657,6 @@ describe("provider-indexed custom model settings", () => {
     ).toBe(true);
     expect(
       modelOptionsByProvider.cursor.some((option) => option.slug === "cursor/custom-model"),
-    ).toBe(true);
-    expect(
-      modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
     expect(
       modelOptionsByProvider.antigravity.some(
@@ -710,7 +682,6 @@ describe("provider-indexed custom model settings", () => {
       customCodexModels: ["  custom/codex-model ", "gpt-5.4", "custom/codex-model"],
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
-      customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
       customAntigravityModels: [
         " Gemini 3.5 Flash ",
         "Gemini 3.5 Flash (Experimental)",
@@ -742,17 +713,11 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.claudeAgent.some((option) => option.slug === "claude-sonnet-5"),
     ).toBe(true);
     expect(
-      modelOptionsByProvider.gemini.filter((option) => option.slug === "gemini/custom-flash"),
-    ).toHaveLength(1);
-    expect(
       modelOptionsByProvider.droid.filter((option) => option.slug === "droid/custom-model"),
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.cursor.filter((option) => option.slug === "cursor/custom-model"),
     ).toHaveLength(1);
-    expect(modelOptionsByProvider.gemini.some((option) => option.slug === "auto-gemini-3")).toBe(
-      true,
-    );
     expect(
       modelOptionsByProvider.antigravity.filter(
         (option) => option.slug === "Gemini 3.5 Flash (Experimental)",
@@ -803,7 +768,6 @@ describe("AppSettingsSchema", () => {
       chatFontSizePx: DEFAULT_CHAT_FONT_SIZE_PX,
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
-      geminiBinaryPath: "",
       grokBinaryPath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
@@ -818,7 +782,6 @@ describe("AppSettingsSchema", () => {
       customCodexModels: [],
       customClaudeModels: [],
       customCursorModels: [],
-      customGeminiModels: [],
       customGrokModels: [],
       customDroidModels: [],
       customKiloModels: [],

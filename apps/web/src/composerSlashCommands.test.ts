@@ -230,7 +230,7 @@ describe("composerSlashCommands", () => {
 
   it("keeps app-level /automation available even if a provider exposes a native collision", () => {
     const availableCommands = getAvailableComposerSlashCommands({
-      provider: "gemini",
+      provider: "antigravity",
       supportsFastSlashCommand: false,
       canOfferCompactCommand: false,
       canOfferReviewCommand: true,
@@ -241,7 +241,7 @@ describe("composerSlashCommands", () => {
     });
 
     expect(availableCommands).toContain("automation");
-    expect(shouldHideProviderNativeCommandFromComposerMenu("gemini", "automation")).toBe(true);
+    expect(shouldHideProviderNativeCommandFromComposerMenu("antigravity", "automation")).toBe(true);
   });
 
   it("only exposes the app-level /side and /export commands for claude", () => {
@@ -344,10 +344,10 @@ describe("composerSlashCommands", () => {
     ).not.toContain("compact");
   });
 
-  it("exposes shared app slash commands for gemini", () => {
+  it("exposes shared app slash commands for Antigravity", () => {
     expect(
       getAvailableComposerSlashCommands({
-        provider: "gemini",
+        provider: "antigravity",
         supportsFastSlashCommand: false,
         canOfferCompactCommand: false,
         canOfferReviewCommand: true,

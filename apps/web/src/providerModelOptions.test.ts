@@ -136,16 +136,7 @@ describe("providerModelCostMultiplierLabel", () => {
 });
 
 describe("buildProviderOptionPatch", () => {
-  it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
-    expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
-      thinkingBudget: 512,
-    });
-    expect(buildProviderOptionPatch("gemini", "thinkingLevel", "HIGH")).toEqual({
-      thinkingLevel: "HIGH",
-    });
-  });
-
-  it("passes through non-Gemini option ids unchanged", () => {
+  it("passes through option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
     });

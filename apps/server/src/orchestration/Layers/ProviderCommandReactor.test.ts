@@ -2396,8 +2396,8 @@ describe("ProviderCommandReactor", () => {
   it("uses the configured text generation model for providers without native title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
-        provider: "gemini",
-        model: "auto-gemini-3",
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
       },
     });
     const now = new Date().toISOString();
@@ -2410,7 +2410,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-gemini-generated"),
+        commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity-generated"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         title: "Summarize provider startup failures without Codex",
       }),
@@ -2419,17 +2419,17 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-gemini-generated-title"),
+        commandId: CommandId.makeUnsafe("cmd-turn-start-antigravity-generated-title"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         message: {
-          messageId: asMessageId("user-message-gemini-generated-title-1"),
+          messageId: asMessageId("user-message-antigravity-generated-title-1"),
           role: "user",
           text: "Summarize provider startup failures without Codex",
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -2456,8 +2456,8 @@ describe("ProviderCommandReactor", () => {
   it("uses a local fallback title when configured text generation fails", async () => {
     const harness = await createHarness({
       threadModelSelection: {
-        provider: "gemini",
-        model: "auto-gemini-3",
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
       },
     });
     const now = new Date().toISOString();
@@ -2465,7 +2465,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-title-gemini"),
+        commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         title: "New thread",
       }),
@@ -2474,17 +2474,17 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-gemini-title"),
+        commandId: CommandId.makeUnsafe("cmd-turn-start-antigravity-title"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         message: {
-          messageId: asMessageId("user-message-gemini-title-1"),
+          messageId: asMessageId("user-message-antigravity-title-1"),
           role: "user",
           text: "Summarize provider startup failures without Codex",
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -2576,7 +2576,7 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap-gemini"),
+        commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap-antigravity"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         envMode: "worktree",
         branch: "synara/cb661f0d",
@@ -2599,8 +2599,8 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",

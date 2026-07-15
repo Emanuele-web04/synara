@@ -189,13 +189,6 @@ export function resolvePromptEffortFromModelSelection(
       return modelSelection.options?.effort ?? null;
     case "cursor":
       return modelSelection.options?.reasoningEffort ?? null;
-    case "gemini":
-      return (
-        modelSelection.options?.thinkingLevel ??
-        (modelSelection.options?.thinkingBudget !== undefined
-          ? String(modelSelection.options.thinkingBudget)
-          : null)
-      );
     case "grok":
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;

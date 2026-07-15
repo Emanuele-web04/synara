@@ -603,7 +603,6 @@ async function loadProviderUsageSnapshot(input: {
       });
     case "claudeAgent":
       return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
-    case "gemini":
     default:
       return null;
   }

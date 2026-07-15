@@ -3,13 +3,12 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 
 type ModelProviderKind =
   | "codex"
   | "claudeAgent"
   | "cursor"
-  | "gemini"
   | "antigravity"
   | "grok"
   | "droid"
@@ -63,7 +62,7 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
     return "antigravity";
   }
   if (lowerLabel.includes("gemini") || lowerLabel.includes("google")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
@@ -82,7 +81,6 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "cursor" ||
-    provider === "gemini" ||
     provider === "antigravity" ||
     provider === "grok" ||
     provider === "droid" ||
@@ -91,6 +89,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "pi"
   ) {
     return provider;
+  }
+  if (provider === "gemini") {
+    return "antigravity";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -108,7 +109,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     return "claudeAgent";
   }
   if (lowerModel.includes("gemini")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerModel.includes("grok")) {
     return "grok";
@@ -167,11 +168,16 @@ export function normalizeLegacyModelSelection(input: {
   readonly options: unknown;
 }): Record<string, unknown> {
   const provider = inferLegacyModelProvider(input.provider, input.model);
-  const normalizedOptions = normalizeModelOptions(
-    readLegacyProviderOptions(input.options, provider),
-  );
+  const migratedGeminiSelection = input.provider === "gemini";
+  const normalizedOptions = migratedGeminiSelection
+    ? undefined
+    : normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
   const antigravityModel =
-    provider === "antigravity" ? splitLegacyAntigravityModelLabel(input.model) : null;
+    provider === "antigravity"
+      ? splitLegacyAntigravityModelLabel(
+          migratedGeminiSelection ? DEFAULT_MODEL_BY_PROVIDER.antigravity : input.model,
+        )
+      : null;
   const options =
     antigravityModel?.reasoningEffort &&
     (normalizedOptions === undefined || isRecord(normalizedOptions))
