@@ -64,6 +64,27 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "antigravity",
+        staticOptions: [
+          { slug: "Gemini 3.5 Flash", name: "Gemini 3.5 Flash" },
+          { slug: "Claude Sonnet 4.6", name: "Claude Sonnet 4.6" },
+          { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+        ],
+        dynamicModels: [
+          { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+          { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+        ],
+      }),
+    ).toEqual([
+      { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+      { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+      { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+    ]);
+  });
+
   it("preserves runtime descriptions without inventing them for custom models", () => {
     const options = mergeDynamicModelOptions({
       provider: "droid",

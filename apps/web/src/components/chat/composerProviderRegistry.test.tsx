@@ -110,6 +110,27 @@ describe("getComposerProviderState", () => {
     ).not.toBeNull();
   });
 
+  it("hides Antigravity effort controls when the selected model has only one effort", () => {
+    const selection = getComposerTraitSelection(
+      "antigravity",
+      "Claude Sonnet 4.6",
+      "",
+      undefined,
+    );
+
+    expect(selection.effortLevels).toEqual([]);
+    expect(
+      renderProviderTraitsPicker({
+        provider: "antigravity",
+        threadId: ThreadId.makeUnsafe("thread-antigravity-single-effort"),
+        model: "Claude Sonnet 4.6",
+        modelOptions: undefined,
+        prompt: "",
+        onPromptChange: vi.fn(),
+      }),
+    ).toBeNull();
+  });
+
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
       provider: "codex",

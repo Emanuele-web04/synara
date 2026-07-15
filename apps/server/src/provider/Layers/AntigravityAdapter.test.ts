@@ -75,4 +75,30 @@ GPT-OSS 120B (Medium)
       "Gemini 3.5 Flash (Low)",
     );
   });
+
+  it("discovers future CLI models without requiring a static catalog update", () => {
+    expect(
+      parseAntigravityModelLines(`
+Gemini 4 Pro (Low)
+Gemini 4 Pro (Ultra)
+Claude Sonnet 5 (Thinking)
+`),
+    ).toEqual([
+      {
+        slug: "Gemini 4 Pro",
+        name: "Gemini 4 Pro",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "ultra", label: "Ultra" },
+        ],
+        defaultReasoningEffort: "low",
+      },
+      {
+        slug: "Claude Sonnet 5",
+        name: "Claude Sonnet 5",
+        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
+        defaultReasoningEffort: "thinking",
+      },
+    ]);
+  });
 });
