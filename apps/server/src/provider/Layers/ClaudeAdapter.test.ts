@@ -320,6 +320,11 @@ function autoCompactWindowFromOptions(options: ClaudeQueryOptions | undefined): 
   return settings && typeof settings === "object" ? settings.autoCompactWindow : undefined;
 }
 
+function effortLevelFromOptions(options: ClaudeQueryOptions | undefined): string | undefined {
+  const settings = options?.settings;
+  return settings && typeof settings === "object" ? settings.effortLevel : undefined;
+}
+
 const THREAD_ID = ThreadId.makeUnsafe("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.makeUnsafe("thread-claude-resume");
 
@@ -387,6 +392,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.systemPrompt, {
         type: "preset",
         preset: "claude_code",
+        excludeDynamicSections: true,
         append: [
           "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
           "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
@@ -496,7 +502,8 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.effort, "xhigh");
+      assert.equal(createInput?.options.effort, undefined);
+      assert.equal(effortLevelFromOptions(createInput?.options), "xhigh");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -524,7 +531,8 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.model, "claude-sonnet-5");
       assert.equal(autoCompactWindowFromOptions(createInput?.options), 1_000_000);
-      assert.equal(createInput?.options.effort, "xhigh");
+      assert.equal(createInput?.options.effort, undefined);
+      assert.equal(effortLevelFromOptions(createInput?.options), "xhigh");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -550,7 +558,15 @@ describe("ClaudeAdapterLive", () => {
 
           const createInput = harness.getLastCreateQueryInput();
           assert.equal(createInput?.options.model, "claude-sonnet-5");
-          assert.equal(createInput?.options.effort, effort);
+          // Non-max effort rides in flag settings so it can change live;
+          // `max` has no Settings equivalent and stays a spawn option.
+          if (effort === "max") {
+            assert.equal(createInput?.options.effort, "max");
+            assert.equal(effortLevelFromOptions(createInput?.options), undefined);
+          } else {
+            assert.equal(createInput?.options.effort, undefined);
+            assert.equal(effortLevelFromOptions(createInput?.options), effort);
+          }
         }).pipe(Effect.provide(harness.layer));
       }
     }).pipe(Effect.provideService(Random.Random, makeDeterministicRandomService())),
@@ -575,10 +591,11 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.model, "claude-sonnet-5");
-      assert.equal(createInput?.options.effort, "xhigh");
+      assert.equal(createInput?.options.effort, undefined);
       assert.deepEqual(createInput?.options.settings, {
         autoCompactEnabled: true,
         autoCompactWindow: 200_000,
+        effortLevel: "xhigh",
         ultracode: true,
       });
     }).pipe(
@@ -1699,9 +1716,28 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.interruptCalls.length, 0);
       assert.equal(harness.query.backgroundTasksCalls.length, 0);
 
-      // Without a known task id (task_started not seen yet) fall back to backgrounding.
-      yield* adapter.interruptTurn(session.threadId, undefined, "tool-task-unknown");
-      assert.deepEqual(harness.query.backgroundTasksCalls, ["tool-task-unknown"]);
+      // Without a known task id (task_started not seen yet) the stop is queued —
+      // never backgrounded — and fires the moment task_started maps the tool use.
+      yield* adapter.interruptTurn(session.threadId, undefined, "tool-task-pending");
+      assert.equal(harness.query.backgroundTasksCalls.length, 0);
+      assert.deepEqual(harness.query.stopTaskCalls, ["task-stop-1"]);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-pending-1",
+        tool_use_id: "tool-task-pending",
+        subagent_type: "code-reviewer",
+        description: "Stopped before task_started",
+        session_id: "sdk-session-stop",
+        uuid: "task-started-pending-1",
+      } as unknown as SDKMessage);
+      // Wait for the stream handler to process the mapping and fire the queued stop.
+      for (let i = 0; i < 10_000 && harness.query.stopTaskCalls.length < 2; i += 1) {
+        yield* Effect.yieldNow;
+      }
+      assert.deepEqual(harness.query.stopTaskCalls, ["task-stop-1", "task-pending-1"]);
+      assert.equal(harness.query.backgroundTasksCalls.length, 0);
       assert.equal(harness.query.interruptCalls.length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -5226,6 +5262,140 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
       assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ alwaysThinkingEnabled: true }]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("applies effort, fast mode, and ultracode live instead of restarting", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+          options: { effort: "high" },
+        },
+      });
+      assert.equal(effortLevelFromOptions(harness.getLastCreateQueryInput()?.options), "high");
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+          options: { effort: "ultracode", fastMode: true },
+        },
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+        { effortLevel: "xhigh", ultracode: true, fastMode: true },
+      ]);
+
+      // The same selection on the next turn stays quiet.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "continue",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+          options: { effort: "ultracode", fastMode: true },
+        },
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+        { effortLevel: "xhigh", ultracode: true, fastMode: true },
+      ]);
+
+      // Returning to defaults clears the keys from the flag-settings layer.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "wrap up",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.applyFlagSettingsCalls, [
+        { effortLevel: "xhigh", ultracode: true, fastMode: true },
+        { effortLevel: null, ultracode: null, fastMode: null },
+      ]);
+
+      // No restart happened at any point: the original spawn is the only one.
+      assert.deepEqual(harness.query.setModelCalls, []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("warns once when a turn ingests a large uncached prompt", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      // Synthetic low-cache-ratio result: ~60k of 61k prompt tokens uncached.
+      const uncachedUsage = {
+        input_tokens: 5_000,
+        cache_creation_input_tokens: 55_000,
+        cache_read_input_tokens: 1_000,
+        output_tokens: 10,
+      };
+      for (let i = 0; i < 2; i += 1) {
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-uncached",
+          uuid: `assistant-uncached-${i}`,
+          parent_tool_use_id: null,
+          message: {
+            id: `assistant-message-uncached-${i}`,
+            content: [{ type: "text", text: "working" }],
+            usage: uncachedUsage,
+          },
+        } as unknown as SDKMessage);
+      }
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-uncached",
+        uuid: "result-uncached",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const warningMessages = runtimeEvents.flatMap((event) =>
+        event.type === "runtime.warning" ? [event.payload.message] : [],
+      );
+      // Emitted once per session even though two responses crossed the bar.
+      assert.equal(warningMessages.length, 1);
+      assert.ok(warningMessages[0]?.includes("uncached prompt tokens"));
+      assert.ok(warningMessages[0]?.includes("resume"));
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

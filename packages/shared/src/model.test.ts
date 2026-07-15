@@ -736,13 +736,39 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when the effective effort changes", () => {
+  it("restarts when max effort toggles on", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
         selection("claude-opus-4-8", { effort: "max" }),
       ),
     ).toBe(true);
+  });
+
+  it("restarts when max effort toggles off", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "max" }),
+        selection("claude-opus-4-8", { effort: "high" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not restart for a non-max effort change", () => {
+    // Non-max effort rides in the flag-settings layer (`effortLevel`) and
+    // switches live via applyFlagSettings.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "xhigh" }),
+      ),
+    ).toBe(false);
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "low" }),
+      ),
+    ).toBe(false);
   });
 
   it("treats ultrathink as prompt-injected, not a spawn change", () => {
@@ -756,22 +782,24 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when ultracode toggles", () => {
+  it("does not restart when ultracode toggles", () => {
+    // ultracode is a Settings key (xhigh effortLevel + ultracode) applied live.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "xhigh" }),
         selection("claude-opus-4-8", { effort: "ultracode" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("restarts when fast mode toggles", () => {
+  it("does not restart when fast mode toggles", () => {
+    // fastMode is a Settings key applied live via applyFlagSettings.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
         selection("claude-opus-4-8", { effort: "high", fastMode: true }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not restart when the thinking toggle changes", () => {

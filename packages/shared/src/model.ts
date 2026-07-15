@@ -748,46 +748,27 @@ export function getEffectiveClaudeCodeEffort(
 }
 
 interface ClaudeSpawnProfile {
-  readonly effectiveEffort: ClaudeApiEffort | null;
-  readonly fastMode: boolean;
-  readonly ultracode: boolean;
-}
-
-interface ClaudeRequestedSpawnOptions {
-  readonly effort: string | null;
-  readonly fastMode: boolean;
-}
-
-function claudeRequestedSpawnOptions(
-  selection: Extract<ModelSelection, { provider: "claudeAgent" }>,
-): ClaudeRequestedSpawnOptions {
-  return {
-    effort: trimOrNull(selection.options?.effort ?? null),
-    fastMode: selection.options?.fastMode === true,
-  };
+  readonly maxEffort: boolean;
 }
 
 function sameClaudeRequestedSpawnOptions(
   previous: Extract<ModelSelection, { provider: "claudeAgent" }>,
   next: Extract<ModelSelection, { provider: "claudeAgent" }>,
 ): boolean {
-  const prev = claudeRequestedSpawnOptions(previous);
-  const desired = claudeRequestedSpawnOptions(next);
-  return prev.effort === desired.effort && prev.fastMode === desired.fastMode;
+  return trimOrNull(previous.options?.effort ?? null) === trimOrNull(next.options?.effort ?? null);
 }
 
 // Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only these inputs are fixed at subprocess spawn (query `effort` + `settings`).
-// Model and context window switch in-session via `setModel`; the thinking
-// toggle switches via the live flag-settings control.
+// only `max` effort is fixed at subprocess spawn (the query `effort` option;
+// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
+// plus fastMode/ultracode are Settings keys applied live via the SDK's
+// flag-settings control, and model/context window switch via `setModel`.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
-    effectiveEffort: getEffectiveClaudeCodeEffort(effort),
-    fastMode: selection.options?.fastMode === true && caps.supportsFastMode,
-    ultracode: effort === "ultracode" && hasEffortLevel(caps, "xhigh"),
+    maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
   } satisfies ClaudeSpawnProfile;
 }
 
@@ -795,9 +776,10 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
  * Whether switching from `previous` to `next` requires restarting the Claude
  * subprocess. Restarting resumes via `--resume`, which replays the whole
  * conversation as uncached input tokens, so it must only happen for options
- * fixed at spawn (effort/settings). Model changes use `setModel`, while the
- * auto-compact budget and thinking toggle use the SDK's live flag-settings
- * control.
+ * fixed at spawn — currently only `max` effort, which has no live Settings
+ * equivalent. Model changes use `setModel`; other effort levels, fast mode,
+ * ultracode, the auto-compact budget, and the thinking toggle all use the
+ * SDK's live flag-settings control.
  */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
@@ -817,17 +799,13 @@ export function claudeSelectionRequiresRestart(
   if (previous.model !== next.model && sameClaudeRequestedSpawnOptions(previous, next)) {
     // A model switch is handled by setModel. Do not interpret the new model's
     // different capabilities as a spawn-setting change when the requested
-    // options themselves are unchanged (for example, a stale Haiku `thinking`
-    // override or Opus `fastMode` flag carried into the next selection).
+    // effort itself is unchanged (for example, a `max` effort carried into a
+    // model that does not support it — the CLI downgrades it silently).
     return false;
   }
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
-  return (
-    prev.effectiveEffort !== desired.effectiveEffort ||
-    prev.fastMode !== desired.fastMode ||
-    prev.ultracode !== desired.ultracode
-  );
+  return prev.maxEffort !== desired.maxEffort;
 }
 
 export function normalizeGeminiModelOptions(

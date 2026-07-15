@@ -31,6 +31,7 @@ import {
 import {
   ApprovalRequestId,
   type CanonicalItemType,
+  type ClaudeApiEffort,
   type CanonicalRequestType,
   EventId,
   type ProviderApprovalDecision,
@@ -259,6 +260,9 @@ interface ClaudeSessionContext {
   lastKnownContextWindow: number | undefined;
   currentAutoCompactWindow: number | undefined;
   currentAlwaysThinkingEnabled: boolean | undefined;
+  currentEffort: ClaudeApiEffort | null;
+  currentUltracode: boolean;
+  currentFastMode: boolean;
   lastKnownAutoCompactThreshold: number | undefined;
   contextUsageControlEnabled: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -281,6 +285,9 @@ interface ClaudeSessionContext {
   // Mid-task user messages queued per subagent tool_use_id, drained by the
   // PreToolUse hook on the subagent's next tool call.
   readonly pendingSubagentSteers: Map<string, Array<string>>;
+  // Stop requests that arrived before task_started mapped the tool_use_id to an
+  // SDK task id; fired via query.stopTask the moment the mapping lands.
+  readonly pendingSubagentStops: Set<string>;
   // Live workflow runs (task_type "local_workflow") by task id. The SDK carries no
   // parent-task linkage, so agent tasks that start while exactly one workflow is
   // live get tagged with it (recorded in workflowTaskIdByMemberTaskId); with
@@ -963,6 +970,12 @@ const CLAUDE_SETTING_SOURCES = [
 ] as const satisfies ReadonlyArray<SettingSource>;
 const CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const CLAUDE_CONTEXT_WARNING_RATIO = 0.8;
+// Uncached-ingestion guardrail: a request that pays for a large uncached prompt
+// usually means a fresh session, a restart's resume replay, or a first turn
+// over a large context — the most expensive request shapes for usage limits.
+const CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS = 50_000;
+const CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS = 20_000;
+const CLAUDE_LOW_CACHE_READ_RATIO = 0.2;
 const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
   "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
@@ -1994,6 +2007,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           cachedReadTokens > 0
             ? ` (${formatApproxTokens(cachedReadTokens)} cached reads, ${formatApproxTokens(uncachedTokens)} new/cache-write)`
             : "";
+        const cacheReadRatio = cachedReadTokens / promptTokens;
+        if (
+          (uncachedTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS ||
+            (promptTokens > CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS &&
+              cacheReadRatio < CLAUDE_LOW_CACHE_READ_RATIO)) &&
+          !context.emittedContextUsageWarnings.has("uncached-ingestion")
+        ) {
+          context.emittedContextUsageWarnings.add("uncached-ingestion");
+          yield* emitRuntimeWarning(
+            context,
+            `Claude ingested ${formatApproxTokens(uncachedTokens)} uncached prompt tokens in one request (${Math.round(cacheReadRatio * 100)}% cache reads). This usually means a fresh session, a session restart replaying history via resume, or a first turn over a large context; uncached input consumes usage limits fastest.`,
+          );
+        }
         const contextBudget =
           claudeEffectiveContextBudget(context) ?? CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS;
         if (
@@ -2489,6 +2515,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           lastKnownContextWindow: context.lastKnownContextWindow,
           currentAutoCompactWindow: context.currentAutoCompactWindow,
           currentAlwaysThinkingEnabled: undefined,
+          currentEffort: context.currentEffort,
+          currentUltracode: context.currentUltracode,
+          currentFastMode: context.currentFastMode,
           lastKnownAutoCompactThreshold: context.lastKnownAutoCompactThreshold,
           // Session-level context usage controls answer for the main conversation
           // only; subagent completion must not poll them.
@@ -2502,6 +2531,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           warnedUnhandledSdkKinds: context.warnedUnhandledSdkKinds,
           subagentRuns: new Map(),
           pendingSubagentSteers: new Map(),
+          pendingSubagentStops: new Set(),
           liveWorkflowTaskIds: new Set(),
           workflowTaskIdByMemberTaskId: new Map(),
           workflowRuntimePollers: new Map(),
@@ -3466,6 +3496,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ) {
               const run = ensureSubagentRun(context, message.tool_use_id);
               run.taskId = message.task_id;
+              // A stop that raced the spawn window fires now that the task id exists.
+              if (context.pendingSubagentStops.delete(message.tool_use_id)) {
+                yield* Effect.tryPromise(() => context.query.stopTask(message.task_id)).pipe(
+                  Effect.catch((cause) =>
+                    emitRuntimeError(
+                      context,
+                      `Failed to stop subagent task '${message.task_id}'.`,
+                      cause,
+                    ),
+                  ),
+                );
+              }
             }
             if (message.task_type === "local_workflow") {
               context.liveWorkflowTaskIds.add(message.task_id);
@@ -3578,6 +3620,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (run) {
               context.subagentRuns.delete(run.toolUseId);
               context.pendingSubagentSteers.delete(run.toolUseId);
+              context.pendingSubagentStops.delete(run.toolUseId);
               if (run.context.turnState) {
                 yield* completeTurn(run.context, claudeTaskTurnStatus(message.status));
               }
@@ -3786,8 +3829,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           } else if (isClaudeBenignTerminationCause(exit.cause)) {
             // External SIGTERM/SIGINT: a graceful stop, not a crash. Suspend the turn
             // without an error toast so the session resumes on the next message.
+            // Marker for how often the expensive path fires: the next message on
+            // this thread pays a full resume replay of the conversation.
             yield* Effect.logInfo("claude.session.benign_termination", {
               threadId: context.session.threadId,
+              hadActiveTurn: context.turnState !== undefined,
               detail: messageFromClaudeStreamCause(exit.cause, "Claude runtime terminated."),
             });
             if (context.turnState) {
@@ -3846,6 +3892,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         context.subagentRuns.clear();
         context.pendingSubagentSteers.clear();
+        context.pendingSubagentStops.clear();
 
         for (const taskId of Array.from(context.workflowRuntimePollers.keys())) {
           yield* stopWorkflowRuntimePoller(context, taskId);
@@ -3953,6 +4000,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
         const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
         const pendingSubagentSteers = new Map<string, Array<string>>();
+        const pendingSubagentStops = new Set<string>();
         const inFlightTools = new Map<number, ToolInFlight>();
         const trackedTasks = new Map<string, ClaudeTrackedTask>(
           (resumeState?.trackedTasks ?? []).map((task) => [task.id, task]),
@@ -4322,6 +4370,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? { autoCompactWindow: requestedAutoCompactWindowTokens }
             : {}),
           ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
+          // Non-max effort lives in the flag-settings layer so later selection
+          // changes apply live via applyFlagSettings instead of a restart-and-
+          // resume replay. `max` has no Settings equivalent (effortLevel caps
+          // at xhigh) and stays a spawn-time query option below.
+          ...(effectiveEffort && effectiveEffort !== "max" ? { effortLevel: effectiveEffort } : {}),
           ...(fastMode ? { fastMode: true } : {}),
           ...(ultracode ? { ultracode: true } : {}),
         };
@@ -4339,12 +4392,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             type: "preset",
             preset: "claude_code",
             append: EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND,
+            // Strip per-user dynamic sections (working directory, auto-memory
+            // path) into the first user message so the cached system-prompt
+            // prefix stays static across sessions and users. Tradeoff: that
+            // context steers marginally less authoritatively from a user turn.
+            excludeDynamicSections: true,
           },
           ...(Object.keys(claudeSubagents).length > 0 ? { agents: claudeSubagents } : {}),
-          // Keep the runtime value explicit so Opus 4.7 can pass xhigh through to the SDK.
-          ...(effectiveEffort
-            ? { effort: effectiveEffort as "low" | "medium" | "high" | "xhigh" | "max" }
-            : {}),
+          // Only `max` effort is spawn-fixed; every other level rides in
+          // `settings.effortLevel` so it can change live mid-session.
+          ...(effectiveEffort === "max" ? { effort: "max" as const } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(permissionMode === "bypassPermissions"
             ? { allowDangerouslySkipPermissions: true }
@@ -4466,6 +4523,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ),
             currentAutoCompactWindow: requestedAutoCompactWindowTokens,
             currentAlwaysThinkingEnabled: thinking,
+            currentEffort: effectiveEffort,
+            currentUltracode: ultracode,
+            currentFastMode: fastMode,
             lastKnownAutoCompactThreshold: requestedAutoCompactWindowTokens,
             contextUsageControlEnabled: true,
             lastKnownTokenUsage: undefined,
@@ -4477,6 +4537,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             warnedUnhandledSdkKinds: new Set(),
             subagentRuns: new Map(),
             pendingSubagentSteers,
+            pendingSubagentStops,
             liveWorkflowTaskIds: new Set(),
             workflowTaskIdByMemberTaskId: new Map(),
             workflowRuntimePollers: new Map(),
@@ -4664,6 +4725,48 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.currentAlwaysThinkingEnabled = requestedThinking;
         }
 
+        // Effort, fast mode, and ultracode are Settings keys too, so selection
+        // changes apply live instead of forcing a restart-and-resume replay.
+        // `max` effort has no Settings equivalent; transitions involving it
+        // restart upstream (claudeSelectionRequiresRestart) before this runs.
+        if (modelSelection) {
+          const turnCaps = getModelCapabilities("claudeAgent", modelSelection.model);
+          const requestedEffortOption = trimOrNull(modelSelection.options?.effort ?? null);
+          const validEffort =
+            requestedEffortOption && hasEffortLevel(turnCaps, requestedEffortOption)
+              ? requestedEffortOption
+              : null;
+          const requestedEffort = getEffectiveClaudeCodeEffort(validEffort);
+          const requestedUltracode =
+            validEffort === "ultracode" && hasEffortLevel(turnCaps, "xhigh");
+          const requestedFastMode =
+            modelSelection.options?.fastMode === true && turnCaps.supportsFastMode;
+          const effortChanged =
+            requestedEffort !== context.currentEffort &&
+            requestedEffort !== "max" &&
+            context.currentEffort !== "max";
+          const ultracodeChanged = requestedUltracode !== context.currentUltracode;
+          const fastModeChanged = requestedFastMode !== context.currentFastMode;
+          if (effortChanged || ultracodeChanged || fastModeChanged) {
+            yield* Effect.tryPromise({
+              try: () =>
+                context.query.applyFlagSettings({
+                  ...(effortChanged
+                    ? { effortLevel: requestedEffort as Exclude<ClaudeApiEffort, "max"> | null }
+                    : {}),
+                  ...(ultracodeChanged ? { ultracode: requestedUltracode ? true : null } : {}),
+                  ...(fastModeChanged ? { fastMode: requestedFastMode ? true : null } : {}),
+                }),
+              catch: (cause) => toRequestError(input.threadId, "turn/applyFlagSettings", cause),
+            });
+            if (effortChanged) {
+              context.currentEffort = requestedEffort;
+            }
+            context.currentUltracode = requestedUltracode;
+            context.currentFastMode = requestedFastMode;
+          }
+        }
+
         // Apply interaction mode on every turn so sticky SDK permission state
         // cannot leak plan mode across service/recovery paths that omit it.
         const effectiveInteractionMode = input.interactionMode ?? "default";
@@ -4758,14 +4861,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // A subagent provider thread id targets one Task tool spawn: stop that task
         // instead of interrupting the whole turn. Before task_started maps the tool
-        // use to a task id, backgrounding the tool call is the only available lever.
+        // use to a task id there is nothing to stop yet, so queue the request and
+        // fire it the moment the mapping lands (backgrounding is not stopping).
         if (providerThreadId !== undefined) {
           const taskId = context.subagentRuns.get(providerThreadId)?.taskId;
+          if (taskId === undefined) {
+            context.pendingSubagentStops.add(providerThreadId);
+            return;
+          }
           yield* Effect.tryPromise({
-            try: () =>
-              taskId !== undefined
-                ? context.query.stopTask(taskId)
-                : context.query.backgroundTasks(providerThreadId).then(() => undefined),
+            try: () => context.query.stopTask(taskId),
             catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
           });
           return;

@@ -882,8 +882,9 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadSessionModelSelections.get(threadId);
       // Claude restarts resume via `--resume`, which replays the whole conversation
-      // as uncached input tokens. Only spawn-fixed options (effort/settings) may
-      // force that; model and context-window changes switch in-session via setModel.
+      // as uncached input tokens. Only spawn-fixed options (currently `max` effort)
+      // may force that; model and context-window changes switch in-session via
+      // setModel, and effort/fastMode/ultracode/thinking apply via flag settings.
       // When the dispatch cache has no entry (the session was started by a turn
       // without a selection), compare against the projected thread selection the
       // session was actually spawned from so spawn-fixed changes still restart.
@@ -1317,6 +1318,58 @@ const make = Effect.gen(function* () {
       if (pendingContextBootstrapAttempt) {
         pendingContextBootstrapAttempts.set(input.threadId, pendingContextBootstrapAttempt);
       }
+      const ensureSessionForStaleRetry = ensureSessionForThread(input.threadId, input.createdAt, {
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
+      });
+      const replayWithTranscriptBootstrap = (cause: ProviderServiceError) =>
+        Effect.gen(function* () {
+          // Claude cannot continue from a missing native session; clear the
+          // dead cursor and replay once with Synara transcript context.
+          yield* clearStaleProviderResumeState({
+            threadId: input.threadId,
+            cause,
+          });
+          yield* ensureSessionForStaleRetry;
+
+          const retryBootstrapText =
+            priorTranscriptBootstrapAvailableChars > 0
+              ? buildPriorTranscriptBootstrapText(
+                  thread,
+                  input.messageId,
+                  priorTranscriptBootstrapAvailableChars,
+                )
+              : null;
+          const retryProviderInput = retryBootstrapText
+            ? wrapProviderContext({
+                tag: "thread_context",
+                contextText: retryBootstrapText,
+                messageText: boundaryMessageText,
+                wrapLatestUserMessage: true,
+              })
+            : boundaryMessageText;
+          const retryProviderInputWithSkills = skillInlineText
+            ? `${retryProviderInput}\n\n${skillInlineText}`
+            : retryProviderInput;
+          const retryNormalizedInput = toNonEmptyProviderInput(
+            normalizeSkillMentionTextForProvider({
+              provider: selectedProvider as ProviderKind,
+              messageText: retryProviderInputWithSkills,
+              ...(input.skills !== undefined ? { skills: input.skills } : {}),
+            }),
+          );
+
+          yield* Effect.logWarning(
+            "provider command reactor retrying claude turn after stale resume",
+            {
+              threadId: input.threadId,
+              messageId: input.messageId,
+              bootstrappedPriorTranscript: retryBootstrapText !== null,
+            },
+          );
+          return yield* sendQueuedProviderTurn(retryNormalizedInput);
+        });
       const sentTurn = yield* sendQueuedProviderTurn(normalizedInput).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
@@ -1324,58 +1377,28 @@ const make = Effect.gen(function* () {
               return yield* Effect.fail(error);
             }
 
-            // Claude cannot continue from a missing native session; clear the
-            // dead cursor and replay once with Synara transcript context.
-            yield* clearStaleProviderResumeState({
-              threadId: input.threadId,
-              cause: error,
-            });
-            yield* ensureSessionForThread(input.threadId, input.createdAt, {
-              ...(input.modelSelection !== undefined
-                ? { modelSelection: input.modelSelection }
-                : {}),
-              ...(input.providerOptions !== undefined
-                ? { providerOptions: input.providerOptions }
-                : {}),
-              ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
-            });
-
-            const retryBootstrapText =
-              priorTranscriptBootstrapAvailableChars > 0
-                ? buildPriorTranscriptBootstrapText(
-                    thread,
-                    input.messageId,
-                    priorTranscriptBootstrapAvailableChars,
-                  )
-                : null;
-            const retryProviderInput = retryBootstrapText
-              ? wrapProviderContext({
-                  tag: "thread_context",
-                  contextText: retryBootstrapText,
-                  messageText: boundaryMessageText,
-                  wrapLatestUserMessage: true,
-                })
-              : boundaryMessageText;
-            const retryProviderInputWithSkills = skillInlineText
-              ? `${retryProviderInput}\n\n${skillInlineText}`
-              : retryProviderInput;
-            const retryNormalizedInput = toNonEmptyProviderInput(
-              normalizeSkillMentionTextForProvider({
-                provider: selectedProvider as ProviderKind,
-                messageText: retryProviderInputWithSkills,
-                ...(input.skills !== undefined ? { skills: input.skills } : {}),
-              }),
-            );
-
+            // Stale-resume errors can be transient CLI/session-file races, so
+            // retry the native resume id once before paying the transcript
+            // bootstrap: the persisted cursor survives the stop, and a fresh
+            // spawn resumes from it without replaying Synara-side context.
+            yield* providerService
+              .stopSession({ threadId: input.threadId })
+              .pipe(Effect.catch(() => Effect.void));
+            yield* ensureSessionForStaleRetry;
             yield* Effect.logWarning(
-              "provider command reactor retrying claude turn after stale resume",
+              "provider command reactor retrying claude turn with native resume",
               {
                 threadId: input.threadId,
                 messageId: input.messageId,
-                bootstrappedPriorTranscript: retryBootstrapText !== null,
               },
             );
-            return yield* sendQueuedProviderTurn(retryNormalizedInput);
+            return yield* sendQueuedProviderTurn(normalizedInput).pipe(
+              Effect.catch((retryError) =>
+                isStaleClaudeResumeError(retryError)
+                  ? replayWithTranscriptBootstrap(retryError)
+                  : Effect.fail(retryError),
+              ),
+            );
           }),
         ),
         Effect.onError(() =>
