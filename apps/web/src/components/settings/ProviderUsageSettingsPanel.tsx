@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useAppSettings } from "~/appSettings";
+import { CodexResetCreditCard } from "~/components/settings/CodexResetCreditCard";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
@@ -116,6 +117,9 @@ function ProviderUsageCard({
             {meterRows.length > 0 ? (
               <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}
+            {provider === "codex" && snapshot.rateLimitResetCredits ? (
+              <CodexResetCreditCard snapshot={snapshot} />
+            ) : null}
             {usageLines.length > 0 ? (
               <ProviderUsageLineList
                 className={cn(
@@ -183,7 +187,7 @@ export function ProviderUsageSettingsPanel() {
   });
 
   // Always render a card per supported provider, ordered consistently, even if the batch
-  // omitted one (e.g. a transient server error) — fall back to an "unavailable" placeholder.
+  // omitted one (e.g. a transient server error) - fall back to an "unavailable" placeholder.
   const cards = useMemo(() => {
     const byProvider = new Map<ProviderKind, ServerProviderUsageSnapshot>();
     for (const snapshot of usageQuery.data ?? []) {
@@ -216,7 +220,7 @@ export function ProviderUsageSettingsPanel() {
 
       {showInitialLoading ? (
         <SettingsCard>
-          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
+          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage...</div>
         </SettingsCard>
       ) : (
         <div className="flex flex-col gap-3">
@@ -232,9 +236,9 @@ export function ProviderUsageSettingsPanel() {
       )}
 
       <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-        Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. OAuth providers may refresh short-lived tokens through their official
-        token endpoint; if a provider shows “Not signed in”, re-authenticate with its CLI.
+        Usage is read from each provider CLI or its backend API. Rate-limit resets and similar
+        features use stored credentials from your provider CLI; re-authenticate with the CLI if a
+        provider shows "Not signed in".
       </p>
     </section>
   );

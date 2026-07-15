@@ -2127,7 +2127,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             modelRegistry: registry,
           });
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = getPiDiscoverableModels(services.modelRegistry).map((model) => {
+          // Use getAll() rather than getAvailable() so that models from custom
+          // providers defined in models.json (e.g. ollama, longcat) are surfaced
+          // even when their API key lives in auth.json rather than in the
+          // models.json provider config. The older Pi SDK (pre-0.80) threw a
+          // validation error for keyless custom providers and silently dropped
+          // every custom model; the newer SDK loads them correctly, but
+          // getAvailable() would still hide them if their auth source is not
+          // detected by Pi's hasConfiguredAuth() check.
+          const models = services.modelRegistry.getAll().map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,

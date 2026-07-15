@@ -4,6 +4,7 @@
 // without touching the network, filesystem, or keychain.
 
 import type {
+  CodexRateLimitResetCredits,
   ProviderKind,
   ProviderUsageStatus,
   ServerProviderUsageLimit,
@@ -129,6 +130,7 @@ export interface SnapshotInput {
   usageLines?: ReadonlyArray<ServerProviderUsageLine>;
   planName?: string;
   detail?: string;
+  rateLimitResetCredits?: CodexRateLimitResetCredits;
 }
 
 export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot {
@@ -141,6 +143,7 @@ export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot
     status: input.status,
     ...(input.planName ? { planName: input.planName } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(input.rateLimitResetCredits ? { rateLimitResetCredits: input.rateLimitResetCredits } : {}),
   };
 }
 

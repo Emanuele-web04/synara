@@ -6,7 +6,12 @@
 
 import nodePath from "node:path";
 
-import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
+import type {
+  CodexRateLimitResetCredits,
+  CodexRateLimitResetResult,
+  ServerProviderUsageLimit,
+  ServerProviderUsageLine,
+} from "@synara/contracts";
 
 import { decodeKeychainJson, readJsonFile, readKeychainPassword } from "../credentials";
 import { fetchJson, isAuthFailureStatus } from "../http";
@@ -27,8 +32,19 @@ import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
 const SOURCE = "codex-wham-usage";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CONSUME_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
 type CodexAuth = { kind: "oauth"; accessToken: string; accountId?: string } | { kind: "api-key" };
+
+function codexApiHeaders(auth: Extract<CodexAuth, { kind: "oauth" }>): Record<string, string> {
+  return {
+    Authorization: `Bearer ${auth.accessToken}`,
+    Accept: "application/json",
+    "User-Agent": "Synara",
+    ...(auth.accountId ? { "ChatGPT-Account-Id": auth.accountId } : {}),
+  };
+}
 
 function authFilePaths(ctx: ProviderUsageContext): string[] {
   const paths: string[] = [];
@@ -55,7 +71,7 @@ function readCodexAuthRecord(
   return asString(record.OPENAI_API_KEY) ? "api-key-only" : null;
 }
 
-async function resolveCodexAuth(ctx: ProviderUsageContext): Promise<CodexAuth | null> {
+export async function resolveCodexAuth(ctx: ProviderUsageContext): Promise<CodexAuth | null> {
   let sawApiKeyOnly = false;
 
   for (const path of authFilePaths(ctx)) {
@@ -146,6 +162,12 @@ export function parseCodexUsage(input: {
     usageLines.push({ label: "Credits", value: `${formatUsd(balance)} remaining` });
   }
 
+  // Parse reset credits from backend response (rateLimitResetCredits).
+  // Supports both RPC (camelCase) and backend REST (snake_case) response shapes.
+  const resetCredits = parseResetCredits(
+    root?.rateLimitResetCredits ?? root?.rate_limit_reset_credits,
+  );
+
   const planType = asString(root?.plan_type);
   return buildSnapshot({
     provider: "codex",
@@ -155,7 +177,130 @@ export function parseCodexUsage(input: {
     limits,
     usageLines,
     ...(planType ? { planName: titleCase(planType) } : {}),
+    ...(resetCredits ? { rateLimitResetCredits: resetCredits } : {}),
   });
+}
+
+function parseResetCreditTimestamp(value: number | string | undefined | null): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  // Handle both Unix seconds (< 1e10) and Unix milliseconds (>= 1e10)
+  return value < 1e10 ? value * 1000 : value;
+}
+
+// Parse reset credits. Supports both Codex RPC (camelCase) and backend REST (snake_case)
+// response shapes so we don't silently drop data depending on which transport produced it.
+function parseResetCredits(raw: unknown): CodexRateLimitResetCredits | undefined {
+  const record = asRecord(raw);
+  if (!record) return undefined;
+
+  const availableCount =
+    asFiniteNumber(record.availableCount) ?? asFiniteNumber(record.available_count);
+  if (availableCount === undefined || availableCount <= 0) return undefined;
+
+  const rawCredits = Array.isArray(record.credits) ? record.credits : undefined;
+  const credits = Array.isArray(rawCredits)
+    ? rawCredits
+        .map((c) => {
+          const r = asRecord(c);
+          if (!r) return null;
+          const status = asString(r.status) ?? "unknown";
+          const rawExpiresAt = r.expiresAt ?? r.expires_at;
+          const rawGrantedAt = r.grantedAt ?? r.granted_at;
+          const expiresAtMs = parseResetCreditTimestamp(
+            typeof rawExpiresAt === "string" ? rawExpiresAt : asFiniteNumber(rawExpiresAt),
+          );
+          const grantedAtMs = parseResetCreditTimestamp(
+            typeof rawGrantedAt === "string" ? rawGrantedAt : asFiniteNumber(rawGrantedAt),
+          );
+          return {
+            status,
+            ...(expiresAtMs ? { expiresAt: new Date(expiresAtMs).toISOString() } : {}),
+            ...(grantedAtMs ? { grantedAt: new Date(grantedAtMs).toISOString() } : {}),
+          };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null)
+    : [];
+
+  const rawNextExpires = record.nextExpiresAt ?? record.next_expires_at;
+  const topLevelNextExpiresMs = parseResetCreditTimestamp(
+    typeof rawNextExpires === "string" ? rawNextExpires : asFiniteNumber(rawNextExpires),
+  );
+  const availableExpiries = credits
+    .filter((c) => c.status === "available")
+    .map((c) => c.expiresAt)
+    .filter((e): e is string => !!e)
+    .sort();
+  const nextExpiresAt =
+    topLevelNextExpiresMs !== undefined
+      ? new Date(topLevelNextExpiresMs).toISOString()
+      : availableExpiries[0];
+  const totalEarned =
+    asFiniteNumber(record.totalEarnedCount) ?? asFiniteNumber(record.total_earned_count);
+
+  return {
+    availableCount: Math.floor(availableCount),
+    ...(totalEarned !== undefined ? { totalEarnedCount: Math.floor(totalEarned) } : {}),
+    ...(nextExpiresAt ? { nextExpiresAt } : {}),
+    ...(credits.length > 0 ? { credits } : {}),
+  };
+}
+
+export async function consumeCodexRateLimitResetCredit(input: {
+  auth: CodexAuth;
+  idempotencyKey: string;
+}): Promise<CodexRateLimitResetResult> {
+  if (input.auth.kind !== "oauth") return { outcome: "error" };
+
+  let response: Response;
+  try {
+    response = await fetch(CONSUME_URL, {
+      method: "POST",
+      headers: {
+        ...codexApiHeaders(input.auth),
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "codex-1",
+        originator: "synara",
+      },
+      body: JSON.stringify({ redeem_request_id: input.idempotencyKey }),
+    });
+  } catch {
+    return { outcome: "error" };
+  }
+
+  if (!response.ok) {
+    if (response.status === 400 || response.status === 409) return { outcome: "noCredit" };
+    return { outcome: "error" };
+  }
+
+  const payload = (await response.json()) as { code?: string };
+  if (payload.code === "no_credit" || payload.code === "already_redeemed") {
+    return { outcome: "noCredit" };
+  }
+
+  // Refresh from backend to get updated reset credits
+  try {
+    const usageResult = await fetchJson({
+      url: USAGE_URL,
+      headers: codexApiHeaders(input.auth),
+    });
+    if (usageResult.ok && usageResult.json) {
+      const parsed = parseCodexUsage({
+        json: usageResult.json,
+        headers: Object.fromEntries(usageResult.headers),
+        nowMs: Date.now(),
+      });
+      return { outcome: "consumed", credits: parsed.rateLimitResetCredits };
+    }
+  } catch {
+    // Fall through to return consumed without refreshed credits
+  }
+
+  return { outcome: "consumed" };
 }
 
 export const codexUsageFetcher: ProviderUsageFetcher = {
@@ -177,12 +322,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
     try {
       const result = await fetchJson({
         url: USAGE_URL,
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-          Accept: "application/json",
-          "User-Agent": "Synara",
-          ...(auth.accountId ? { "ChatGPT-Account-Id": auth.accountId } : {}),
-        },
+        headers: codexApiHeaders(auth),
       });
       if (isAuthFailureStatus(result.status)) {
         return needsAuthSnapshot("codex", ctx.nowMs, SOURCE);
@@ -195,11 +335,47 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           `Codex usage request failed (${result.status}).`,
         );
       }
-      return parseCodexUsage({
+      const snapshot = parseCodexUsage({
         json: result.json,
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       });
+
+      // If /wham/usage returned reset credit count but no per-credit details (no expiry),
+      // fetch from the dedicated /wham/rate-limit-reset-credits endpoint which returns the
+      // full credits array with expires_at / granted_at per credit.
+      if (
+        snapshot.rateLimitResetCredits &&
+        snapshot.rateLimitResetCredits.availableCount > 0 &&
+        !snapshot.rateLimitResetCredits.nextExpiresAt
+      ) {
+        try {
+          const creditsResult = await fetchJson({
+            url: RESET_CREDITS_URL,
+            headers: codexApiHeaders(auth),
+          });
+          if (creditsResult.ok) {
+            // The dedicated endpoint returns a flat object:
+            // { available_count, total_earned_count, credits: [{ status, expires_at, granted_at }] }
+            // NOT nested under rate_limit_reset_credits.
+            const supplemental = parseResetCredits(creditsResult.json);
+            if (supplemental && supplemental.nextExpiresAt) {
+              return {
+                ...snapshot,
+                rateLimitResetCredits: {
+                  ...snapshot.rateLimitResetCredits,
+                  ...supplemental,
+                  availableCount: snapshot.rateLimitResetCredits.availableCount,
+                },
+              };
+            }
+          }
+        } catch {
+          // Fall through — use the usage-endpoint snapshot as-is
+        }
+      }
+
+      return snapshot;
     } catch {
       return errorSnapshot("codex", ctx.nowMs, SOURCE, "Could not reach the Codex usage endpoint.");
     }

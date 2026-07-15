@@ -221,6 +221,7 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  skipCodexRateLimitResetConfirm: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
@@ -504,6 +505,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    skipCodexRateLimitResetConfirm: settings.skipCodexRateLimitResetConfirm,
   };
 }
 
@@ -559,6 +561,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       }),
       model,
     };
+  }
+  if (hasOwn(patch, "skipCodexRateLimitResetConfirm")) {
+    serverPatch.skipCodexRateLimitResetConfirm = Boolean(patch.skipCodexRateLimitResetConfirm);
   }
 
   if (

@@ -109,6 +109,8 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
@@ -612,6 +614,9 @@ export interface NativeApi {
     listProviderUsage: (
       input: ServerListProviderUsageInput,
     ) => Promise<ServerListProviderUsageResult>;
+    consumeCodexResetCredit: (
+      input: ServerConsumeCodexResetCreditInput,
+    ) => Promise<ServerConsumeCodexResetCreditResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,

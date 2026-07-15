@@ -130,8 +130,14 @@ import {
   ProjectWriteFileResult,
 } from "./project";
 import {
+  CodexRateLimitResetCredits,
+  CodexRateLimitResetOutcome,
+  CodexRateLimitResetResult,
+  CodexResetCredit,
   ServerConfig,
   ServerConfigStreamEvent,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
@@ -699,6 +705,15 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
   error: WsRpcError,
 });
 
+export const WsServerConsumeCodexResetCreditRpc = Rpc.make(
+  WS_METHODS.serverConsumeCodexResetCredit,
+  {
+    payload: ServerConsumeCodexResetCreditInput,
+    success: ServerConsumeCodexResetCreditResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVoice, {
   payload: ServerVoiceTranscriptionInput,
   success: ServerVoiceTranscriptionResult,
@@ -949,6 +964,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsServerConsumeCodexResetCreditRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,

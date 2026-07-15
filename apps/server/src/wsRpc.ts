@@ -58,6 +58,10 @@ import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
+import {
+  consumeCodexRateLimitResetCredit,
+  resolveCodexAuth,
+} from "./providerUsage/providers/codex";
 import { ProfileStatsQuery } from "./profileStats";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
@@ -969,6 +973,34 @@ export const makeWsRpcLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.serverConsumeCodexResetCredit]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const serverConfig = yield* ServerConfig;
+              const ctx = {
+                homeDir: serverConfig.homeDir,
+                env: process.env,
+                platform: process.platform,
+                nowMs: Date.now(),
+              };
+              const auth = yield* Effect.tryPromise({
+                try: () => resolveCodexAuth(ctx),
+                catch: () => new Error("Failed to resolve Codex auth"),
+              });
+              if (!auth || auth.kind !== "oauth") {
+                return { outcome: "error" };
+              }
+              return yield* Effect.tryPromise({
+                try: () =>
+                  consumeCodexRateLimitResetCredit({
+                    auth,
+                    idempotencyKey: input.idempotencyKey,
+                  }),
+                catch: () => new Error("Failed to consume reset credit"),
+              });
+            }),
+            "Failed to consume Codex reset credit",
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {

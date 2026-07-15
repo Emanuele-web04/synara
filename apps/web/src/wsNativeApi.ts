@@ -644,6 +644,8 @@ export function createWsNativeApi(): NativeApi {
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
       listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
+      consumeCodexResetCredit: (input) =>
+        transport.request(WS_METHODS.serverConsumeCodexResetCredit, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
