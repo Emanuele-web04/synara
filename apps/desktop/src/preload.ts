@@ -92,6 +92,38 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     isSupported: () => ipcRenderer.invoke(IPC.notificationsIsSupported),
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
+  appSnap: {
+    getState: () => ipcRenderer.invoke(IPC.appSnap.getState),
+    setEnabled: (enabled) => ipcRenderer.invoke(IPC.appSnap.setEnabled, enabled),
+    requestPermissions: () => ipcRenderer.invoke(IPC.appSnap.requestPermissions),
+    listPendingCaptures: () => ipcRenderer.invoke(IPC.appSnap.listPendingCaptures),
+    acknowledgeCapture: (captureId) =>
+      ipcRenderer.invoke(IPC.appSnap.acknowledgeCapture, captureId),
+    onCaptured: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, capture: unknown) => {
+        if (typeof capture !== "object" || capture === null) return;
+        listener(capture as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.appSnap.captured, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.appSnap.captured, wrappedListener);
+    },
+    onError: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, error: unknown) => {
+        if (typeof error !== "object" || error === null) return;
+        listener(error as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.appSnap.error, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.appSnap.error, wrappedListener);
+    },
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+        if (typeof state !== "object" || state === null) return;
+        listener(state as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.appSnap.state, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.appSnap.state, wrappedListener);
+    },
+  },
   storageMigration: {
     readSnapshot: () => ipcRenderer.sendSync(IPC.storageMigration.read),
     acknowledgeSnapshot: () => ipcRenderer.invoke(IPC.storageMigration.acknowledge),

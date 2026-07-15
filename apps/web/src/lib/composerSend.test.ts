@@ -1,11 +1,19 @@
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  ComposerImageAttachment,
+  PersistedComposerImageAttachment,
+} from "../composerDraftStore";
+import * as composerImageBlobStore from "./composerImageBlobStore";
 import {
   buildComposerFileAttachmentsFromFiles,
   buildComposerImageAttachmentsFromFiles,
   buildUploadComposerAttachments,
   stageUploadComposerAttachments,
+  effectiveComposerAttachmentCount,
+  findPendingBlobComposerAttachments,
+  hydratePendingBlobComposerAttachments,
 } from "./composerSend";
 
 describe("composerSend attachment builders", () => {
@@ -311,5 +319,176 @@ describe("composerSend attachment builders", () => {
     await staged.cleanup();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("effectiveComposerAttachmentCount", () => {
+  it("returns 0 when the draft is missing", () => {
+    expect(effectiveComposerAttachmentCount(undefined)).toBe(0);
+  });
+
+  it("counts live images, files, and assistant selections", () => {
+    expect(
+      effectiveComposerAttachmentCount({
+        images: [{ id: "image-1" }, { id: "image-2" }],
+        files: [{}],
+        assistantSelections: [{}],
+        persistedAttachments: [],
+      }),
+    ).toBe(4);
+  });
+
+  it("counts a persisted attachment that has not yet hydrated into images", () => {
+    expect(
+      effectiveComposerAttachmentCount({
+        images: [],
+        files: [],
+        assistantSelections: [],
+        persistedAttachments: [{ id: "pending-1" }],
+      }),
+    ).toBe(1);
+  });
+
+  it("does not double-count a persisted attachment already hydrated into images", () => {
+    expect(
+      effectiveComposerAttachmentCount({
+        images: [{ id: "image-1" }],
+        files: [],
+        assistantSelections: [],
+        persistedAttachments: [{ id: "image-1" }],
+      }),
+    ).toBe(1);
+  });
+
+  it("mixes hydrated and pending persisted attachments correctly", () => {
+    expect(
+      effectiveComposerAttachmentCount({
+        images: [{ id: "image-1" }],
+        files: [{}],
+        assistantSelections: [],
+        persistedAttachments: [{ id: "image-1" }, { id: "pending-2" }],
+      }),
+    ).toBe(3);
+  });
+});
+
+function persistedImageAttachment(
+  overrides: Partial<PersistedComposerImageAttachment> = {},
+): PersistedComposerImageAttachment {
+  return {
+    id: "appsnap-1",
+    name: "capture.png",
+    mimeType: "image/png",
+    sizeBytes: 4,
+    blobKey: "thread-1:appsnap-1",
+    ...overrides,
+  };
+}
+
+function composerImageAttachment(
+  overrides: Partial<ComposerImageAttachment> = {},
+): ComposerImageAttachment {
+  const file = new File(["png"], "capture.png", { type: "image/png" });
+  return {
+    type: "image",
+    id: "appsnap-1",
+    name: "capture.png",
+    mimeType: "image/png",
+    sizeBytes: 4,
+    previewUrl: "blob:capture.png",
+    file,
+    ...overrides,
+  };
+}
+
+describe("findPendingBlobComposerAttachments", () => {
+  it("returns blob-backed persisted attachments not yet hydrated into images", () => {
+    const pending = persistedImageAttachment({ id: "pending-1" });
+    const hydrated = persistedImageAttachment({ id: "hydrated-1" });
+
+    const result = findPendingBlobComposerAttachments({
+      persistedAttachments: [pending, hydrated],
+      images: [composerImageAttachment({ id: "hydrated-1" })],
+    });
+
+    expect(result).toEqual([pending]);
+  });
+
+  it("ignores dataUrl-backed persisted attachments (no blobKey)", () => {
+    const inlineAttachment: PersistedComposerImageAttachment = {
+      id: "inline-1",
+      name: "capture.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+      dataUrl: "data:x",
+    };
+
+    const result = findPendingBlobComposerAttachments({
+      persistedAttachments: [inlineAttachment],
+      images: [],
+    });
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe("hydratePendingBlobComposerAttachments", () => {
+  const originalCreateObjectUrl = URL.createObjectURL;
+
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn((file: Blob) => `blob:${(file as File).name}`);
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectUrl;
+    vi.restoreAllMocks();
+  });
+
+  it("reconstructs a ComposerImageAttachment from the stored blob", async () => {
+    const blobFile = new File(["png"], "capture.png", { type: "image/png" });
+    vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(blobFile);
+
+    const result = await hydratePendingBlobComposerAttachments([
+      persistedImageAttachment({
+        source: {
+          kind: "appsnap",
+          captureId: "capture-1",
+          capturedAt: "2026-07-14T00:00:00.000Z",
+          appName: "Notes",
+          windowTitle: null,
+        },
+      }),
+    ]);
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        type: "image",
+        id: "appsnap-1",
+        previewUrl: "blob:capture.png",
+        file: blobFile,
+        source: expect.objectContaining({ kind: "appsnap", captureId: "capture-1" }),
+      }),
+    ]);
+  });
+
+  it("skips an attachment whose blob is missing without throwing", async () => {
+    vi.spyOn(composerImageBlobStore, "readComposerImageBlob").mockResolvedValue(null);
+
+    const result = await hydratePendingBlobComposerAttachments([persistedImageAttachment()]);
+
+    expect(result).toEqual([]);
+  });
+
+  it("skips an attachment whose blob read rejects, without blocking the rest", async () => {
+    vi.spyOn(composerImageBlobStore, "readComposerImageBlob")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(new File(["png"], "ok.png", { type: "image/png" }));
+
+    const result = await hydratePendingBlobComposerAttachments([
+      persistedImageAttachment({ id: "broken" }),
+      persistedImageAttachment({ id: "ok", blobKey: "thread-1:ok" }),
+    ]);
+
+    expect(result).toEqual([expect.objectContaining({ id: "ok" })]);
   });
 });

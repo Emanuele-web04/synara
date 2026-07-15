@@ -24,9 +24,12 @@ export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
+  statuses: ["git", "status"] as const,
+  pullRequests: ["git", "pull-request"] as const,
   githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
+  pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiff: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
@@ -66,10 +69,10 @@ export const gitMutationKeys = {
 export function invalidateGitQueries(queryClient: QueryClient) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: ["git", "github-repository"] as const }),
-    queryClient.invalidateQueries({ queryKey: ["git", "status"] as const }),
+    queryClient.invalidateQueries({ queryKey: gitQueryKeys.statuses }),
     queryClient.invalidateQueries({ queryKey: ["git", "branches"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
-    queryClient.invalidateQueries({ queryKey: ["git", "pull-request"] as const }),
+    queryClient.invalidateQueries({ queryKey: gitQueryKeys.pullRequests }),
   ]);
 }
 
@@ -82,7 +85,7 @@ export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iter
       queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) }),
       queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(cwd) }),
       queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff", cwd] as const }),
-      queryClient.invalidateQueries({ queryKey: ["git", "pull-request", cwd] as const }),
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.pullRequest(cwd) }),
     ]),
   );
 }
@@ -139,7 +142,7 @@ export function gitResolvePullRequestQueryOptions(input: {
   reference: string | null;
 }) {
   return queryOptions({
-    queryKey: ["git", "pull-request", input.cwd, input.reference] as const,
+    queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
@@ -166,7 +169,7 @@ export function gitPullRequestSnapshotQueryOptions(input: {
 }) {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
-    queryKey: ["git", "pull-request", input.cwd, "snapshot", input.reference] as const,
+    queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {

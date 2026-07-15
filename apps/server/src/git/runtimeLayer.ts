@@ -43,6 +43,7 @@ export const GitStatusBroadcasterLayerLive = GitStatusBroadcasterLive.pipe(
 
 export const GitLayerLive = Layer.mergeAll(
   GitCoreLive,
+  GitHubCliLive,
   GitManagerLayerLive,
   GitStatusBroadcasterLayerLive,
 );

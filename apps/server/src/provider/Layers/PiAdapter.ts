@@ -383,6 +383,12 @@ export function getPiSupportedThinkingOptions(
   return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
+export function getPiDiscoverableModels(
+  registry: Pick<ModelRegistry, "getAvailable">,
+): ReadonlyArray<Model<Api>> {
+  return registry.getAvailable();
+}
+
 function parseModelReference(
   modelId: string | null | undefined,
 ): { readonly provider?: string; readonly id: string } | undefined {
@@ -2352,7 +2358,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             modelRegistry: registry,
           });
           const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = services.modelRegistry.getAvailable().map((model) => {
+          const models = getPiDiscoverableModels(services.modelRegistry).map((model) => {
             const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
             return {
               slug: `${model.provider}/${model.id}`,

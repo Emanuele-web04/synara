@@ -92,13 +92,22 @@ describe("estimateTimelineMessageHeight", () => {
     ).toBe(248.5);
   });
 
-  it("caps long user message estimates to the collapsed preview", () => {
+  it("caps long user message estimates to the shared 12-line clamp", () => {
     expect(
       estimateTimelineMessageHeight({
         role: "user",
         text: "a".repeat(56 * 120),
       }),
-    ).toBe(331.5);
+    ).toBe(351);
+  });
+
+  it("clamps messages with more than 12 explicit lines and includes the disclosure", () => {
+    expect(
+      estimateTimelineMessageHeight({
+        role: "user",
+        text: Array.from({ length: 13 }, (_, index) => `line ${index + 1}`).join("\n"),
+      }),
+    ).toBe(351);
   });
 
   it("counts explicit newlines for user message estimates", () => {

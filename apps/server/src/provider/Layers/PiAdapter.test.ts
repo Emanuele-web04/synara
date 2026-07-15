@@ -1,15 +1,20 @@
 // FILE: PiAdapter.test.ts
-// Purpose: Verifies Pi adapter model discovery exposes only SDK-supported thinking levels.
+// Purpose: Verifies Pi adapter model discovery respects auth and SDK-supported thinking levels.
 // Layer: Provider adapter tests
 // Depends on: PiAdapter discovery helpers and Pi model metadata shapes.
 
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  getPiDiscoverableModels,
   getPiSupportedThinkingOptions,
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
@@ -82,6 +87,41 @@ function makePiModel(input: {
     ...(input.thinkingLevelMap !== undefined ? { thinkingLevelMap: input.thinkingLevelMap } : {}),
   };
 }
+
+describe("getPiDiscoverableModels", () => {
+  it("includes custom-provider models authenticated through auth.json semantics", () => {
+    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
+    const modelsPath = path.join(agentDir, "models.json");
+
+    try {
+      writeFileSync(
+        modelsPath,
+        JSON.stringify({
+          providers: {
+            local: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [{ id: "glm-5.2" }],
+            },
+          },
+        }),
+      );
+      const authStorage = AuthStorage.inMemory({
+        local: { type: "api_key", key: "test-key" },
+      });
+      const registry = ModelRegistry.create(authStorage, modelsPath);
+
+      const models = getPiDiscoverableModels(registry);
+
+      expect(models.some((model) => model.provider === "local" && model.id === "glm-5.2")).toBe(
+        true,
+      );
+      expect(models.some((model) => model.provider === "anthropic")).toBe(false);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("getPiSupportedThinkingOptions", () => {
   it("hides thinking controls for non-reasoning models", () => {

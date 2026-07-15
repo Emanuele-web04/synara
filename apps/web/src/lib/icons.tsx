@@ -196,6 +196,11 @@ export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
 export const GitPullRequestIcon = centralIconWrapper("pull-request");
+// Three descending-width lines — the app's one "filter controls" glyph (pull
+// request list filters, and anywhere else that opens a filter popover).
+export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");
+// Two-person glyph for "reviewers"/"people" rows (pull request meta grid).
+export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 export const GlobeIcon = adaptIcon(IconWorld);
 export const WebSearchIcon: LucideIcon = centralIconWrapper("globe");
 export const McpIcon: LucideIcon = (props) => (

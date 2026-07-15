@@ -611,7 +611,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("mb-3");
   });
 
-  it("renders plain user text without preformatted shrink-wrap markup", async () => {
+  it("renders user text as markdown with hard line breaks", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -649,13 +649,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
-      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
-    );
+    expect(markup).toContain("chat-markdown--user");
+    // remark-breaks keeps the user's single newline as a hard break.
+    expect(markup).toContain("tl<br/>\ndr");
     expect(markup).not.toContain("<pre");
   });
 
-  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
+  it("clamps long user messages visually and renders a separate Show more button", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
     const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
@@ -696,7 +696,14 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Show more");
-    expect(markup).not.toContain(hiddenTail);
+    // The full text stays rendered; collapsing is a visual max-height clamp with
+    // a fade mask, so markdown structures are never sliced mid-syntax.
+    expect(markup).toContain(hiddenTail);
+    expect(markup).toContain('data-user-message-clamp="true"');
+    expect(markup).toContain("max-height:");
+    expect(markup).toContain("mask-image:linear-gradient");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toMatch(/aria-controls="[^"]+"/);
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {
@@ -716,7 +723,7 @@ describe("MessagesTimeline", () => {
               id: MessageId.makeUnsafe("message-2"),
               role: "user",
               text: [
-                "yoo what's @terminal-1:1-5 mean",
+                "yoo what's **bold** @terminal-1:1-5 mean",
                 "",
                 "<terminal_context>",
                 "- Terminal 1 lines 1-5:",
@@ -748,6 +755,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
+    expect(markup).toContain("<strong>bold</strong>");
   });
 
   it("renders assistant selection chips from hidden prompt markup when attachments are missing", async () => {

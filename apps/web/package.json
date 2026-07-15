@@ -1,6 +1,6 @@
 {
   "name": "@synara/web",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -57,6 +57,7 @@
     "react-icons": "^5.6.0",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "shadcn": "^4.8.3",

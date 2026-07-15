@@ -162,6 +162,11 @@ import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const BrowserPanel = lazy(() => import("../components/BrowserPanel"));
+const PullRequestDetailPanel = lazy(() =>
+  import("../components/pullRequest/PullRequestDetailPanel").then((module) => ({
+    default: module.PullRequestDetailPanel,
+  })),
+);
 const EditorWorkspaceView = lazy(() =>
   import("../components/EditorWorkspaceView").then((module) => ({
     default: module.EditorWorkspaceView,
@@ -2002,6 +2007,25 @@ function SingleChatSurface(props: {
                 onRequestLive={requestActiveDockPaneLive}
               />
             </Suspense>
+          );
+        case "pullRequest":
+          return pane.pullRequestProjectId &&
+            pane.pullRequestRepository &&
+            pane.pullRequestNumber ? (
+            <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+              <PullRequestDetailPanel
+                key={`${pane.pullRequestProjectId}:${pane.pullRequestRepository}#${pane.pullRequestNumber}`}
+                input={{
+                  projectId: pane.pullRequestProjectId,
+                  repository: pane.pullRequestRepository,
+                  number: pane.pullRequestNumber,
+                }}
+                initialTab={pane.pullRequestInitialTab ?? "summary"}
+                onClose={() => closePane(props.threadId, pane.id)}
+              />
+            </Suspense>
+          ) : (
+            <PanelStateMessage>Select a pull request to open it here.</PanelStateMessage>
           );
         case "diff":
           return (

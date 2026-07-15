@@ -92,4 +92,20 @@ describe("AcpAdapterSupport", () => {
     expect(error._tag).toBe("ProviderAdapterRequestError");
     expect(error.message).toContain("Invalid params");
   });
+
+  it("surfaces provider detail from generic ACP internal errors", () => {
+    const error = mapAcpToAdapterError(
+      "droid",
+      "thread-1" as never,
+      "session/prompt",
+      new EffectAcpErrors.AcpRequestError({
+        code: -32603,
+        errorMessage: "Internal error: Agent error",
+        data: '402 {"title":"Payment Required"}',
+      }),
+    );
+
+    expect(error.message).toContain('402 {"title":"Payment Required"}');
+    expect(error.message).not.toContain("Internal error: Agent error");
+  });
 });
