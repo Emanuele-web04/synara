@@ -2626,13 +2626,15 @@ describe("ProviderCommandReactor", () => {
         event.type === "thread.message-edit-resend-requested",
     );
     expect(editEvent).toBeDefined();
-    const delivery = await Effect.runPromise(
-      harness.deliveryRepository.getDelivery({
-        consumerName: "provider-command-reactor.v1",
-        eventSequence: editEvent!.sequence,
-      }),
-    );
-    expect(delivery.pipe(Option.getOrThrow).state).toBe("uncertain");
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.getDelivery({
+          consumerName: "provider-command-reactor.v1",
+          eventSequence: editEvent!.sequence,
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "uncertain";
+    });
   });
 
   it("clears the edit loading state when edited turn start fails", async () => {
