@@ -3256,7 +3256,7 @@ function SettingsRouteView() {
                             variant="outline"
                             disabled={!canUpdateProvider}
                             title={
-                              updateAdvisory.updateCommand
+                              updateAdvisory?.updateCommand
                                 ? `Run ${updateAdvisory.updateCommand}`
                                 : undefined
                             }

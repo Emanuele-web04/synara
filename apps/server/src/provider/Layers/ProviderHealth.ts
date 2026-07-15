@@ -1679,7 +1679,7 @@ export const checkAntigravityProviderStatus = (
     if (Result.isFailure(versionProbe)) {
       return {
         provider: ANTIGRAVITY_PROVIDER,
-        status: "unavailable",
+        status: "error",
         available: false,
         authStatus: "unknown",
         checkedAt,
@@ -1702,7 +1702,7 @@ export const checkAntigravityProviderStatus = (
     if (version.code !== 0) {
       return {
         provider: ANTIGRAVITY_PROVIDER,
-        status: "unavailable",
+        status: "error",
         available: false,
         authStatus: "unknown",
         checkedAt,

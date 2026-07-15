@@ -258,7 +258,7 @@ function makeNpmGlobalProviderMaintenanceCapabilities(
     updateExecutable: "npm",
     updateArgs: ["install", "-g", `${definition.npmPackageName}@latest`],
     updateLockKey: "npm-global",
-    updatePathPrepend: pathPrepend,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -278,7 +278,7 @@ function makeBunGlobalProviderMaintenanceCapabilities(
     updateExecutable: "bun",
     updateArgs: ["i", "-g", `${definition.npmPackageName}@latest`],
     updateLockKey: "bun-global",
-    updatePathPrepend: pathPrepend,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -298,7 +298,7 @@ function makePnpmGlobalProviderMaintenanceCapabilities(
     updateExecutable: "pnpm",
     updateArgs: ["add", "-g", `${definition.npmPackageName}@latest`],
     updateLockKey: "pnpm-global",
-    updatePathPrepend: pathPrepend,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -323,7 +323,7 @@ function makeHomebrewProviderMaintenanceCapabilities(
         ? ["upgrade", "--cask", definition.homebrew.name]
         : ["upgrade", definition.homebrew.name],
     updateLockKey: "homebrew",
-    updatePathPrepend: pathPrepend,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -363,7 +363,7 @@ function makeNativeProviderMaintenanceCapabilities(
     updateExecutable: executable ?? definition.nativeUpdate.executable,
     updateArgs: definition.nativeUpdate.args(installSource),
     updateLockKey: definition.nativeUpdate.lockKey,
-    updatePathPrepend: pathPrepend,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -505,7 +505,9 @@ export function resolvePackageManagedProviderMaintenance(
         definition,
         installSource,
         executable: binaryPath,
-        pathPrepend: options?.commandDirectory,
+        ...(options?.commandDirectory === undefined
+          ? {}
+          : { pathPrepend: options.commandDirectory }),
       });
     }
   }
@@ -515,7 +517,7 @@ export function resolvePackageManagedProviderMaintenance(
       definition,
       installSource: "unknown",
       executable: binaryPath,
-      pathPrepend: options?.commandDirectory,
+      ...(options?.commandDirectory === undefined ? {} : { pathPrepend: options.commandDirectory }),
     });
   }
 

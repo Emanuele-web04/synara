@@ -456,6 +456,7 @@ export function PluginLibrary() {
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
+      antigravityCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
       droidCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,

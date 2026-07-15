@@ -1680,7 +1680,7 @@ function normalizeModelSelection(
   const normalizedOptions =
     provider === "antigravity" && hasLegacyAntigravityEffort
       ? {
-          reasoningEffort: options?.reasoningEffort ?? antigravityLegacyEffort,
+          reasoningEffort: modelOptions?.antigravity?.reasoningEffort ?? antigravityLegacyEffort,
         }
       : options;
   return makeModelSelection(provider, model, normalizedOptions);

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,14 +64,14 @@ type AntigravitySessionContext = {
   session: ProviderSession;
   readonly binaryPath: string;
   readonly turns: StoredTurn[];
-  activeTurnId?: TurnId;
-  activeProcess?: ChildProcessWithoutNullStreams;
-  activePrompt?: string;
-  eventFile?: string;
-  transcriptPath?: string;
-  conversationId?: string;
-  modelName?: string;
-  modelOptions?: AntigravityModelOptions;
+  activeTurnId?: TurnId | undefined;
+  activeProcess?: ChildProcess | undefined;
+  activePrompt?: string | undefined;
+  eventFile?: string | undefined;
+  transcriptPath?: string | undefined;
+  conversationId?: string | undefined;
+  modelName?: string | undefined;
+  modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
@@ -353,7 +353,9 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     payload,
   });
 
-  const requireSession = (threadId: ThreadId) => {
+  const requireSession = (
+    threadId: ThreadId,
+  ): Effect.Effect<AntigravitySessionContext, ProviderAdapterSessionNotFoundError> => {
     const context = sessions.get(threadId);
     return context
       ? Effect.succeed(context)
@@ -608,7 +610,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         session,
         binaryPath,
         turns: [],
-        conversationId,
+        ...(conversationId ? { conversationId } : {}),
         ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
         ...(conversationId
           ? { transcriptPath: transcriptPathForConversation(conversationId) }
@@ -653,7 +655,8 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         attachmentsDir: serverConfig.attachmentsDir,
         include: "all-files",
       });
-      if (!trim(prompt)) {
+      const normalizedPrompt = trim(prompt);
+      if (!normalizedPrompt) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "turn/start",
@@ -689,7 +692,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           }),
       });
       context.activeTurnId = turnId;
-      context.activePrompt = prompt;
+      context.activePrompt = normalizedPrompt;
       if (modelOptions) {
         context.modelOptions = modelOptions;
       } else {
@@ -716,10 +719,9 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         payload: { model },
       } satisfies ProviderRuntimeEvent);
 
-      const args = [
-        ...(context.conversationId
-          ? ["--conversation", context.conversationId]
-          : ["--new-project"]),
+      const conversationId = context.conversationId;
+      const args: string[] = [
+        ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
         "--dangerously-skip-permissions",
         "--model",
         cliModel,
@@ -728,7 +730,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
         "--print-timeout",
         PRINT_TIMEOUT,
         "-p",
-        prompt,
+        normalizedPrompt,
       ];
       const child = spawn(context.binaryPath, args, {
         cwd: context.session.cwd ?? serverConfig.cwd,
@@ -782,13 +784,13 @@ const makeAntigravityAdapter = Effect.gen(function* () {
               raw: raw("stderr", { code, stderr }),
             } satisfies ProviderRuntimeEvent);
           }
-          context.activeProcess = undefined;
-          context.activeTurnId = undefined;
+          delete context.activeProcess;
+          delete context.activeTurnId;
+          const { activeTurnId: _activeTurnId, ...inactiveSession } = context.session;
           context.session = {
-            ...context.session,
+            ...inactiveSession,
             status: failed ? "error" : "ready",
             ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
-            activeTurnId: undefined,
             updatedAt: new Date().toISOString(),
             ...(failed
               ? { lastError: stderr.trim() || `Antigravity CLI exited with code ${code ?? 1}.` }
@@ -867,10 +869,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       Effect.map((context) => {
         context.turns.splice(Math.max(0, context.turns.length - Math.max(0, numTurns)));
         // Antigravity has no rollback cursor; ProviderService will rebuild local context.
-        context.conversationId = undefined;
-        context.transcriptPath = undefined;
+        delete context.conversationId;
+        delete context.transcriptPath;
         context.processedSteps.clear();
-        context.session = { ...context.session, resumeCursor: undefined };
+        const { resumeCursor: _resumeCursor, ...sessionWithoutResume } = context.session;
+        context.session = sessionWithoutResume;
         return snapshot(context);
       }),
     );
