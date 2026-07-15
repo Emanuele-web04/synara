@@ -40,21 +40,6 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const REFRESH_URL = "https://platform.claude.com/v1/oauth/token";
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
-
-/**
- * Claude Code 2.1+ writes credentials under a scoped keychain service:
- * "Claude Code-credentials-<sha256(configDir).slice(0,8)>".
- * Older versions use the legacy unsuffixed service.
- * We try both, scoped first, so newer installs resolve correctly.
- */
-function claudeKeychainServices(configDir: string | undefined, homeDir: string): string[] {
-  // Claude Code 2.1+ uses a scoped service derived from the config dir.
-  // When CLAUDE_CONFIG_DIR is unset, Claude Code defaults to ~/.claude,
-  // so we compute the scoped hash from that default too.
-  const effectiveConfigDir = configDir ?? nodePath.join(homeDir, ".claude");
-  const hash = createHash("sha256").update(effectiveConfigDir).digest("hex").slice(0, 8);
-  return [`${KEYCHAIN_SERVICE}-${hash}`, KEYCHAIN_SERVICE];
-}
 const SCOPES =
   "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -94,10 +79,9 @@ function readClaudeCreds(record: Record<string, unknown> | null): ClaudeCreds | 
 
 async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<ClaudeCreds[]> {
   const candidates: ClaudeCreds[] = [];
-  const configDir = asString(ctx.env.CLAUDE_CONFIG_DIR);
   const paths: string[] = [];
-  if (configDir) {
-    paths.push(nodePath.join(configDir, ".credentials.json"));
+  if (ctx.env.CLAUDE_CONFIG_DIR) {
+    paths.push(nodePath.join(ctx.env.CLAUDE_CONFIG_DIR, ".credentials.json"));
   }
   paths.push(nodePath.join(ctx.homeDir, ".claude", ".credentials.json"));
 
@@ -109,32 +93,27 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
     }
   }
 
-  // Claude Code 2.1+ stores credentials under a scoped keychain service:
-  // "Claude Code-credentials-<sha256(configDir).slice(0,8)>".
-  // Try the scoped service first, then fall back to the legacy unsuffixed service.
+  // Claude Code may store the same service under the current macOS account; try that before
+  // the legacy service-only lookup so file-less installs still resolve like OpenUsage.
   const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
-  const services = claudeKeychainServices(configDir, ctx.homeDir);
-  for (const service of services) {
-    const raw =
-      keychainAccount !== undefined
-        ? await readKeychainPassword({
-            service,
-            account: keychainAccount,
-            platform: ctx.platform,
-          })
-        : null;
-    const resolved =
-      raw ??
-      (await readKeychainPassword({
-        service,
-        platform: ctx.platform,
-      }));
-    if (resolved) {
-      const creds = readClaudeCreds(asRecord(decodeKeychainJson(resolved)));
-      if (creds) {
-        candidates.push(creds);
-      }
-      break; // stop at first service that yields credentials
+  const keychain =
+    keychainAccount !== undefined
+      ? await readKeychainPassword({
+          service: KEYCHAIN_SERVICE,
+          account: keychainAccount,
+          platform: ctx.platform,
+        })
+      : null;
+  const keychainFallback =
+    keychain ??
+    (await readKeychainPassword({
+      service: KEYCHAIN_SERVICE,
+      platform: ctx.platform,
+    }));
+  if (keychainFallback) {
+    const creds = readClaudeCreds(asRecord(decodeKeychainJson(keychainFallback)));
+    if (creds) {
+      candidates.push(creds);
     }
   }
   return candidates;
