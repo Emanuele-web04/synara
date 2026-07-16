@@ -331,24 +331,32 @@ export function useSpacesController(input: {
     (orderedSpaceIds: ReadonlyArray<SpaceId>, movedSpaceId: SpaceId) => {
       const api = readNativeApi();
       if (!api) return;
-      const previousSpaceIds = spaces.map((space) => space.id);
       reorderSpacesLocally(orderedSpaceIds);
-      void reorderSpaces({ api, movedSpaceId, orderedSpaceIds }).catch((error) => {
-        const currentSpaceIds = useStore.getState().spaces.map((space) => space.id);
-        if (
-          currentSpaceIds.length === orderedSpaceIds.length &&
-          currentSpaceIds.every((spaceId, index) => spaceId === orderedSpaceIds[index])
-        ) {
-          reorderSpacesLocally(previousSpaceIds);
+      void reorderSpaces({ api, movedSpaceId, orderedSpaceIds }).catch(async (error) => {
+        try {
+          // A transport error can arrive after the command committed. Re-read the authoritative
+          // shell instead of blindly rolling back a reorder the server may already have stored.
+          const snapshot = await api.orchestration.getShellSnapshot();
+          useStore.getState().syncServerShellSnapshot(snapshot);
+          const confirmedSpaceIds = snapshot.spaces.map((space) => space.id);
+          if (
+            confirmedSpaceIds.length === orderedSpaceIds.length &&
+            confirmedSpaceIds.every((spaceId, index) => spaceId === orderedSpaceIds[index])
+          ) {
+            return;
+          }
+        } catch {
+          // Keep the optimistic order when authority cannot be reached; the next shell snapshot
+          // will reconcile it without risking a false rollback after a successful commit.
         }
         toastManager.add({
           type: "error",
-          title: "Unable to reorder spaces",
+          title: "Unable to confirm space order",
           description: error instanceof Error ? error.message : "Try again.",
         });
       });
     },
-    [reorderSpacesLocally, spaces],
+    [reorderSpacesLocally],
   );
 
   const handleBulkMoveProjects = useCallback(

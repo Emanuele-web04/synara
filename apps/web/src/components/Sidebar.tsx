@@ -304,6 +304,7 @@ import {
   groupSidebarThreadsByProjectId,
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
+  isProjectsSidebarSurface,
   isLatestPinnedThreadMutation,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
@@ -6299,6 +6300,7 @@ export default function Sidebar() {
         return;
       }
       if (command === "space.previous" || command === "space.next") {
+        if (!isProjectsSidebarSurface({ isOnSettings, isOnStudio, isOnWorkspace })) return;
         event.preventDefault();
         event.stopPropagation();
         const orderedSpaceIds: ReadonlyArray<SpaceId | null> = [
@@ -6380,6 +6382,9 @@ export default function Sidebar() {
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
+    isOnSettings,
+    isOnStudio,
+    isOnWorkspace,
     navigate,
     searchPaletteMode,
     spaces,

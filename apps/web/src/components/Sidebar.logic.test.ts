@@ -21,6 +21,7 @@ import {
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
+  isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -78,6 +79,39 @@ describe("resolvePendingSidebarViewSelection", () => {
 
   it("clears the optimistic segment when the user returns to the active view", () => {
     expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
+
+describe("isProjectsSidebarSurface", () => {
+  it("enables Space shortcuts only where the Space switcher is visible", () => {
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: false,
+        isOnWorkspace: false,
+      }),
+    ).toBe(true);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: true,
+        isOnWorkspace: false,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: false,
+        isOnStudio: false,
+        isOnWorkspace: true,
+      }),
+    ).toBe(false);
+    expect(
+      isProjectsSidebarSurface({
+        isOnSettings: true,
+        isOnStudio: false,
+        isOnWorkspace: false,
+      }),
+    ).toBe(false);
   });
 });
 
