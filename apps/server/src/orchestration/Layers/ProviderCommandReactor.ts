@@ -1215,10 +1215,6 @@ const make = Effect.gen(function* () {
       });
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
-      if ((input.dispatchMode ?? "queue") === "steer") {
-        return;
-      }
-
       const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
         return;
@@ -1274,15 +1270,43 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.onError(() => cancelPendingStudioBaseline));
     } else if (input.dispatchMode === "steer") {
-      yield* providerService.steerTurn({
-        threadId: input.threadId,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-      });
+      yield* providerService
+        .steerTurn({
+          threadId: input.threadId,
+          ...(normalizedInput ? { input: normalizedInput } : {}),
+          ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+          ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              if (yield* hasLiveProviderTurn(input.threadId)) {
+                return yield* Effect.fail(error);
+              }
+
+              // The active turn can settle after the live-state check but before
+              // Codex handles turn/steer. Preserve the submitted message by
+              // starting it as a normal turn once the provider is idle.
+              yield* Effect.logWarning(
+                "provider command reactor falling back after stale steer",
+                {
+                  threadId: input.threadId,
+                  messageId: input.messageId,
+                  error,
+                },
+              );
+              yield* capturePreTurnBaselines;
+              return yield* sendQueuedProviderTurn(normalizedInput).pipe(
+                Effect.onError(() => cancelPendingStudioBaseline),
+              );
+            }),
+          ),
+        );
     } else {
       yield* capturePreTurnBaselines;
       pendingContextBootstrapAttempt =
@@ -1692,13 +1716,14 @@ const make = Effect.gen(function* () {
     }
 
     // The decider routes turn starts from the projected session, which can lag
-    // the runtime: a message dispatched right as another turn begins (e.g. the
-    // gap between a steer interrupt and the steered turn's start) would race a
-    // live provider turn. Codex steers ride the live turn natively; everything
-    // else re-queues and is promoted when the live turn settles.
+    // the runtime in either direction. Only steer Codex when its adapter still
+    // reports a live turn; a stale projected running state must become a normal
+    // turn instead of sending turn/steer to an idle app-server.
     const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
     const isCodexSteer = event.payload.dispatchMode === "steer" && providerName === "codex";
-    if (!isCodexSteer && (yield* hasLiveProviderTurn(event.payload.threadId))) {
+    const hasLiveTurn = yield* hasLiveProviderTurn(event.payload.threadId);
+    const shouldSteerCodex = isCodexSteer && hasLiveTurn;
+    if (!shouldSteerCodex && hasLiveTurn) {
       yield* enqueueQueuedTurnStart(event.payload);
       if (event.payload.dispatchMode === "steer") {
         // Preserve steer semantics: jump the queue (enqueue unshifts steers)
@@ -1711,15 +1736,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Surface the upcoming work immediately: provider session init can take
-    // seconds (e.g. Cursor), and without an early status the thread reads as
-    // idle until the runtime's first event. Mirrors the message-edit-resend
-    // path. Never touches a live session — a steer turn on a running Codex
-    // session must keep its running state and activeTurnId. Keeps the existing
-    // session's runtimeMode: ensureSessionForThread detects mode changes by
-    // comparing against it, and adopting the requested mode here would mask
-    // the restart.
-    if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
+    // Surface upcoming work immediately and repair stale projected lifecycle
+    // state before dispatch. A genuine live Codex steer keeps the current
+    // running state and activeTurnId.
+    if (!hasLiveTurn) {
       yield* setThreadSession({
         threadId: event.payload.threadId,
         session: {
@@ -1763,8 +1783,7 @@ const make = Effect.gen(function* () {
         : {}),
     }).pipe(Effect.forkScoped);
     const immediateDispatchMode =
-      event.payload.dispatchMode === "steer" &&
-      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+      event.payload.dispatchMode === "steer" && !shouldSteerCodex
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
