@@ -8,6 +8,7 @@ import {
   isInspectCommand,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
+  sanitizeSynaraMcpToolPreview,
 } from "./toolCallLabel";
 
 describe("extractWebFetchUrl", () => {
@@ -95,32 +96,39 @@ describe("deriveSynaraMcpToolTitle", () => {
     ] as const;
 
     for (const [toolName, running, completed] of cases) {
-      expect(deriveSynaraMcpToolTitle({ toolName, isRunning: true })).toBe(running);
-      expect(deriveSynaraMcpToolTitle({ toolName, isRunning: false })).toBe(completed);
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "running" })).toBe(running);
+      expect(deriveSynaraMcpToolTitle({ toolName, status: "completed" })).toBe(completed);
     }
+
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "synara_create_threads",
+        status: "failed",
+      }),
+    ).toBe("Synara couldn't create threads");
   });
 
   it("turns provider-specific create-thread identifiers into activity sentences", () => {
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "Synara__synara_create_thread",
-        isRunning: true,
+        status: "running",
       }),
     ).toBe("Synara is creating a thread");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__synara__synara_create_thread",
-        isRunning: false,
+        status: "completed",
       }),
     ).toBe("Synara created a thread");
   });
 
   it("recognizes bare and already-humanized Synara tool names", () => {
-    expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", isRunning: true })).toBe(
+    expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", status: "running" })).toBe(
       "Synara is sending a message",
     );
     expect(
-      deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", isRunning: false }),
+      deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", status: "completed" }),
     ).toBe("Synara listed threads");
   });
 
@@ -128,7 +136,7 @@ describe("deriveSynaraMcpToolTitle", () => {
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__codex_apps__github_fetch_pr",
-        isRunning: true,
+        status: "running",
       }),
     ).toBeNull();
   });
@@ -137,21 +145,44 @@ describe("deriveSynaraMcpToolTitle", () => {
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "mcp__synara__synara_delete_project",
-        isRunning: true,
+        status: "running",
       }),
     ).toBe("Synara is handling delete project");
     expect(
       deriveSynaraMcpToolTitle({
         toolName: "Synara__synara_delete_project",
-        isRunning: false,
+        status: "completed",
       }),
     ).toBe("Synara handled delete project");
     expect(
       deriveSynaraMcpToolTitle({
         title: "Synara is handling delete project",
-        isRunning: true,
+        status: "running",
       }),
     ).toBe("Synara is handling delete project");
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara couldn't handle delete project",
+        status: "failed",
+      }),
+    ).toBe("Synara couldn't handle delete project");
+  });
+
+  it("removes transport identifiers without hiding meaningful Synara details", () => {
+    expect(
+      sanitizeSynaraMcpToolPreview({
+        preview: "Synara__synara_create_threads",
+        heading: "Synara created threads",
+        status: "completed",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeSynaraMcpToolPreview({
+        preview: 'Unexpected key "reasoningEffort" for Claude Agent',
+        heading: "Synara couldn't create threads",
+        status: "failed",
+      }),
+    ).toBe('Unexpected key "reasoningEffort" for Claude Agent');
   });
 });
 

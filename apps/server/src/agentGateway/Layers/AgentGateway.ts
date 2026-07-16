@@ -54,8 +54,10 @@ import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscov
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
+  AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
   type AgentGatewayProviderAvailability,
   AgentGatewayTargetError,
+  agentGatewayTargetOptionGuidance,
   loadAgentGatewayProviderCatalog,
   resolveAgentGatewayTarget,
 } from "../targetResolver.ts";
@@ -110,6 +112,24 @@ const WRITE_TOOL_ANNOTATIONS = {
   destructiveHint: true,
   idempotentHint: false,
   openWorldHint: false,
+} as const;
+
+const MODEL_SELECTION_INPUT_SCHEMA = {
+  type: "object",
+  description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+  properties: {
+    provider: { type: "string", enum: [...PROVIDER_KINDS] },
+    model: {
+      type: "string",
+      description: "Exact model slug from synara_capabilities providers[].models[].slug.",
+    },
+    options: {
+      type: "object",
+      description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+    },
+  },
+  required: ["provider", "model"],
+  additionalProperties: false,
 } as const;
 
 interface ToolContext {
@@ -663,7 +683,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_capabilities",
       description:
-        "List the canonical Synara provider/model targets and gateway limits used to validate thread creation.",
+        `List canonical Synara provider/model targets, exact provider option keys, examples, and gateway limits used to validate thread creation. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: {
         title: "Synara capabilities",
@@ -697,7 +717,17 @@ export const makeAgentGateway = Effect.gen(function* () {
             cwd: project.workspaceRoot,
           }),
         );
+        const targetConstruction = Object.fromEntries(
+          providers.map((provider) => [
+            provider.provider,
+            {
+              modelValueSource: "providers[].models[].slug",
+              ...agentGatewayTargetOptionGuidance(provider),
+            },
+          ]),
+        );
         return mcpToolResultJson({
+          targetConstruction,
           providers,
           limits: {
             maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
@@ -1515,9 +1545,7 @@ export const makeAgentGateway = Effect.gen(function* () {
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
-                  type: "object",
-                  description:
-                    "Canonical ModelSelection from synara_capabilities: provider, model, and provider-specific options.",
+                  ...MODEL_SELECTION_INPUT_SCHEMA,
                 },
                 projectId: { type: "string" },
                 environment: { type: "string", enum: ["local", "worktree"] },
@@ -1560,12 +1588,14 @@ export const makeAgentGateway = Effect.gen(function* () {
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
-            type: "object",
-            description: "Canonical provider/model/options selection from synara_capabilities.",
+            ...MODEL_SELECTION_INPUT_SCHEMA,
           },
           provider: { type: "string", enum: [...PROVIDER_KINDS] },
           model: { type: "string" },
-          options: { type: "object" },
+          options: {
+            type: "object",
+            description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+          },
           projectId: { type: "string" },
           environment: { type: "string", enum: ["local", "worktree"] },
           baseBranch: { type: "string" },

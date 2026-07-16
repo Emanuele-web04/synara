@@ -2587,6 +2587,7 @@ describe("MessagesTimeline", () => {
               itemType: "dynamic_tool_call",
               toolTitle: "Synara__synara_create_thread",
               toolName: "Synara__synara_create_thread",
+              detail: "Synara__synara_create_thread",
               activityKind: "tool.started",
             },
           },
@@ -2615,6 +2616,7 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               itemType: "file_change",
               toolTitle: "mcp__Synara__synara_list_threads",
+              detail: "mcp__Synara__synara_list_threads",
             },
           },
         ]}
@@ -2623,6 +2625,32 @@ describe("MessagesTimeline", () => {
     expect(codexMarkup).toContain('data-tool-icon="synara"');
     expect(codexMarkup).toContain("Synara listed threads");
     expect(codexMarkup).not.toContain("mcp__Synara__synara_list_threads");
+
+    const failedMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-failed",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-failed",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolName: "mcp__synara__synara_create_threads",
+              toolStatus: "failed",
+              detail: "Claude rejected reasoningEffort",
+              activityKind: "tool.completed",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(failedMarkup).toContain("Synara couldn&#x27;t create threads");
+    expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
   it("keeps Synara tool calls and adds a thread creation recap at the end of the turn", async () => {

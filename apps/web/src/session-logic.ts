@@ -24,6 +24,7 @@ import {
   deriveSynaraMcpToolTitle,
   isGenericToolTitle,
   normalizeCompactToolLabel,
+  type SynaraMcpToolStatus,
 } from "./lib/toolCallLabel";
 import {
   deriveWorkLogToolDetails,
@@ -74,6 +75,7 @@ export interface WorkLogEntry {
   toolTitle?: string;
   toolName?: string;
   toolCallId?: string;
+  toolStatus?: SynaraMcpToolStatus;
   toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
@@ -996,6 +998,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const title = extractToolTitle(payload);
   const toolName = extractToolName(payload);
   const toolCallId = extractToolCallId(payload);
+  const toolStatus = deriveToolLifecycleStatus(activity.kind, payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
@@ -1005,6 +1008,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activityKind: activity.kind,
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(toolStatus ? { toolStatus } : {}),
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
@@ -1015,7 +1019,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     }
   }
   const outputDetail = summarizeToolPayloadOutput(payload);
-  if (!entry.detail && outputDetail) {
+  if (outputDetail && (!entry.detail || toolStatus === "failed")) {
     entry.detail = outputDetail;
   }
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
@@ -1077,7 +1081,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       toolName,
       title: commandActionDisplay?.title ?? title,
       fallbackLabel: activity.summary,
-      isRunning: activity.kind !== "tool.completed",
+      status: toolStatus,
     }) ??
     deriveReadableToolTitle({
       title: commandActionDisplay?.title ?? title,
@@ -1121,6 +1125,39 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.collapseCommand = collapseCommand;
   }
   return entry;
+}
+
+function deriveToolLifecycleStatus(
+  activityKind: OrchestrationThreadActivity["kind"],
+  payload: Record<string, unknown> | null,
+): SynaraMcpToolStatus | undefined {
+  if (!isRenderableToolLifecycleActivity(activityKind)) return undefined;
+  if (isFailedToolLifecyclePayload(payload)) return "failed";
+  return activityKind === "tool.completed" ? "completed" : "running";
+}
+
+function isFailedToolLifecyclePayload(payload: Record<string, unknown> | null): boolean {
+  const data = asRecord(payload?.data);
+  const state = asRecord(data?.state);
+  const rawOutput = asRecord(data?.rawOutput);
+  const statuses = [payload?.status, data?.status, state?.status, rawOutput?.status];
+  if (
+    statuses.some(
+      (status) =>
+        typeof status === "string" &&
+        ["error", "failed", "failure"].includes(status.toLowerCase()),
+    )
+  ) {
+    return true;
+  }
+  return [
+    payload?.isError,
+    payload?.is_error,
+    data?.isError,
+    data?.is_error,
+    rawOutput?.isError,
+    rawOutput?.is_error,
+  ].some((flag) => flag === true || flag === 1 || flag === "true");
 }
 
 function summarizeToolPayloadOutput(payload: Record<string, unknown> | null): string | null {
@@ -1384,6 +1421,7 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const toolStatus = next.toolStatus ?? previous.toolStatus;
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const turnId = next.turnId ?? previous.turnId;
   return {
@@ -1404,6 +1442,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(toolStatus ? { toolStatus } : {}),
     ...(toolDetails ? { toolDetails } : {}),
   };
 }

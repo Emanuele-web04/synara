@@ -2502,6 +2502,37 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(3);
   });
 
+  it("preserves a failed Synara MCP result as a failed activity sentence", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "synara-create-threads-failed",
+          kind: "tool.completed",
+          summary: "synara__synara_create_threads",
+          payload: {
+            itemType: "mcp_tool_call",
+            status: "failed",
+            data: {
+              toolCallId: "synara-create-failed",
+              toolName: "mcp__synara__synara_create_threads",
+              rawOutput: {
+                is_error: 1,
+                output: { Error: "Invalid target options\n  at target.options" },
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      toolStatus: "failed",
+      toolTitle: "Synara couldn't create threads",
+      detail: "Invalid target options",
+    });
+  });
+
   it("uses present-tense command headings while the command is still running", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

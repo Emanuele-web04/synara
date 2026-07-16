@@ -111,6 +111,8 @@ import {
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   resolveCommandVisualKind,
+  sanitizeSynaraMcpToolPreview,
+  type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
@@ -644,6 +646,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -651,6 +654,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -658,6 +662,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       threadMarkersByMessageId,
     }),
     [
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -665,6 +670,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -2830,14 +2836,20 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
 // agents surface the bare tool name (synara_*), and Codex reports server/tool
 // pairs that the label humanizer renders as "Synara: ...".
+function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
+  if (workEntry.toolStatus) return workEntry.toolStatus;
+  return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
+    ? "running"
+    : "completed";
+}
+
 function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
   return (
     deriveSynaraMcpToolTitle({
       toolName: workEntry.toolName,
       title: workEntry.toolTitle,
       fallbackLabel: workEntry.label,
-      isRunning:
-        workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed",
+      status: toolWorkEntryStatus(workEntry),
     }) !== null
   );
 }
@@ -2880,7 +2892,7 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
     toolName: workEntry.toolName,
     title: workEntry.toolTitle,
     fallbackLabel: workEntry.label,
-    isRunning: workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed",
+    status: toolWorkEntryStatus(workEntry),
   });
   if (synaraTitle) {
     return synaraTitle;
@@ -3081,7 +3093,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           ? "mcp"
           : undefined;
   const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
+  const rawPreview = workEntryPreview(workEntry);
+  const preview = isSynaraToolRow
+    ? sanitizeSynaraMcpToolPreview({
+        preview: rawPreview,
+        heading,
+        status: toolWorkEntryStatus(workEntry),
+      })
+    : rawPreview;
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : isReasoningUpdateWorkEntry(workEntry) && preview
