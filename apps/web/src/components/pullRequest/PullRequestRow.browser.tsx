@@ -192,7 +192,7 @@ describe("PullRequestRow pin control", () => {
         entry={{
           ...entry,
           projectContexts: [
-            ...entry.projectContexts,
+            ...(entry.projectContexts ?? []),
             {
               projectId: "project-2" as PullRequestListEntry["projectId"],
               projectTitle: "Project Two",
@@ -228,12 +228,7 @@ describe("PullRequestRow pin control", () => {
   it("restores focus by remote identity when aggregate project context changes", async () => {
     const entry = makeEntry(false);
     await render(
-      <PullRequestRow
-        entry={entry}
-        selected={false}
-        onClick={vi.fn()}
-        onTogglePinned={vi.fn()}
-      />,
+      <PullRequestRow entry={entry} selected={false} onClick={vi.fn()} onTogglePinned={vi.fn()} />,
     );
 
     expect(

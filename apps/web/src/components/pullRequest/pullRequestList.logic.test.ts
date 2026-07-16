@@ -17,7 +17,7 @@ function makeActor(login: string): PullRequestActor {
 }
 
 function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry = {
+  const entry: PullRequestListEntry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     repository: "acme/widgets",
@@ -43,9 +43,13 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
   };
   return {
     ...entry,
-    projectContexts:
-      overrides.projectContexts ??
-      [{ projectId: entry.projectId, projectTitle: entry.projectTitle, isPinned: entry.isPinned }],
+    projectContexts: overrides.projectContexts ?? [
+      {
+        projectId: entry.projectId,
+        projectTitle: entry.projectTitle,
+        isPinned: entry.isPinned ?? false,
+      },
+    ],
   };
 }
 

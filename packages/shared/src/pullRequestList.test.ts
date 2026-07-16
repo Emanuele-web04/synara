@@ -8,7 +8,7 @@ import {
 } from "./pullRequestList";
 
 function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  const entry = {
+  const entry: PullRequestListEntry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     repository: "acme/widgets",
@@ -34,9 +34,13 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
   };
   return {
     ...entry,
-    projectContexts:
-      overrides.projectContexts ??
-      [{ projectId: entry.projectId, projectTitle: entry.projectTitle, isPinned: entry.isPinned }],
+    projectContexts: overrides.projectContexts ?? [
+      {
+        projectId: entry.projectId,
+        projectTitle: entry.projectTitle,
+        isPinned: entry.isPinned ?? false,
+      },
+    ],
   };
 }
 
@@ -121,16 +125,8 @@ describe("pull request list coalescing", () => {
       isPinned: true,
     });
     const aggregate = coalescePullRequestListEntries([first, second])[0]!;
-    const firstCleared = updatePullRequestListEntryProjectPin(
-      aggregate,
-      first.projectId,
-      false,
-    );
-    const allCleared = updatePullRequestListEntryProjectPin(
-      firstCleared,
-      second.projectId,
-      false,
-    );
+    const firstCleared = updatePullRequestListEntryProjectPin(aggregate, first.projectId, false);
+    const allCleared = updatePullRequestListEntryProjectPin(firstCleared, second.projectId, false);
 
     expect(firstCleared.isPinned).toBe(true);
     expect(allCleared.isPinned).toBe(false);

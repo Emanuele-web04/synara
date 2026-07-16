@@ -1,16 +1,12 @@
-import type {
-  ProjectId,
-  PullRequestListEntry,
-  PullRequestProjectContext,
-} from "@synara/contracts";
+import type { ProjectId, PullRequestListEntry, PullRequestProjectContext } from "@synara/contracts";
 
 type ProjectAwarePullRequestEntry = Pick<
   PullRequestListEntry,
   "projectId" | "repository" | "number" | "isPinned"
 > & {
-  readonly projectTitle?: string;
-  readonly headBranch?: string;
-  readonly projectContexts?: ReadonlyArray<PullRequestProjectContext>;
+  readonly projectTitle?: string | undefined;
+  readonly headBranch?: string | undefined;
+  readonly projectContexts?: ReadonlyArray<PullRequestProjectContext> | undefined;
 };
 
 /** Remote identity for a pull request. A PR belongs to a GitHub repository, not to each local
@@ -32,7 +28,7 @@ export function pullRequestListProjectContexts(
     {
       projectId: entry.projectId,
       projectTitle: entry.projectTitle ?? String(entry.projectId),
-      isPinned: entry.isPinned,
+      isPinned: entry.isPinned ?? false,
     },
   ];
 }
