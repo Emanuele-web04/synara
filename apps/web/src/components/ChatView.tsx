@@ -2979,8 +2979,13 @@ export default function ChatView({
       pendingAutomationConversation && pendingAutomationConversation.threadId === threadId
         ? pendingAutomationConversation.bubbles
         : [];
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    // Optimistic messages exist only briefly after a send; skip the full-transcript
+    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
+    let pendingMessages = optimisticUserMessages;
+    if (optimisticUserMessages.length > 0) {
+      const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
+      pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    }
     const withPending =
       pendingMessages.length === 0
         ? serverMessagesWithPreviewHandoff
@@ -2996,6 +3001,11 @@ export default function ChatView({
   ]);
   const promptHistory = useMemo(() => {
     const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+    // Optimistic messages exist only briefly after a send; skip the full-transcript
+    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
+    if (optimisticUserMessages.length === 0) {
+      return derivePromptHistoryFromMessages(activeMessages);
+    }
     const activeMessageIds = new Set(activeMessages.map((message) => message.id));
     const pendingOptimisticMessages = optimisticUserMessages.filter(
       (message) => !activeMessageIds.has(message.id),
@@ -5358,6 +5368,11 @@ export default function ChatView({
   useEffect(() => {
     if (!activeThread?.id) return;
     if (activeThread.messages.length === 0) {
+      return;
+    }
+    // No optimistic messages → nothing to reconcile; skip the full-transcript id Set
+    // this effect would otherwise rebuild on every streaming flush.
+    if (optimisticUserMessages.length === 0) {
       return;
     }
     const serverIds = new Set(activeThread.messages.map((message) => message.id));
