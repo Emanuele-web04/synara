@@ -187,6 +187,19 @@ export function providerCommandsQueryOptions(input: {
   });
 }
 
+/**
+ * True only while the first real models fetch is still outstanding.
+ * Background refetches after settle (or after a soft-failed discovery) must not
+ * re-blank the composer model picker (#103).
+ */
+export function isInitialModelDiscoveryPending(query: {
+  readonly isLoading: boolean;
+  readonly isFetching: boolean;
+  readonly isPlaceholderData: boolean;
+}): boolean {
+  return query.isLoading || (query.isFetching && query.isPlaceholderData);
+}
+
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
@@ -203,18 +216,30 @@ export function providerModelsQueryOptions(input: {
       input.agentDir ?? null,
       input.cwd ?? null,
     ),
-    queryFn: async () => {
+    queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
-      return api.provider.listModels({
-        provider: input.provider,
-        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
-        ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
-        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      });
+      try {
+        return await api.provider.listModels({
+          provider: input.provider,
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+          ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+        });
+      } catch {
+        // Soft-fail so one provider (e.g. missing Cursor CLI) cannot reject the
+        // shared query into a permanent "loading/retry" state that blanks the
+        // whole model picker. Callers fall back to static options.
+        return {
+          models: [],
+          source: "error",
+          cached: false,
+        };
+      }
     },
     enabled: input.enabled ?? true,
-    retry: input.provider === "droid" ? 0 : input.provider === "cursor" ? 1 : 3,
+    // Cursor/droid failures are permanent for a session (missing CLI/auth); do not spin.
+    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
     staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,

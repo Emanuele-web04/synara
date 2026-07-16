@@ -16,6 +16,7 @@ import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from ".
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
+  isInitialModelDiscoveryPending,
   providerAgentsQueryOptions,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
@@ -158,53 +159,57 @@ export function useProviderModelCatalog(input: {
 
   const cursorModelDiscoveryEnabled = selectedProvider === "cursor" || discoveryEnabled;
   const hasResolvedCursorModelDiscovery =
-    (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
+    ((cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
       cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
-    (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
+      (cursorDynamicModelsQuery.data.models.length ?? 0) > 0) ||
+    cursorDynamicModelsQuery.data?.source === "error";
   const cursorModelDiscoveryPending =
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
-    (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
   const droidModelDiscoveryEnabled = selectedProvider === "droid";
   const hasResolvedDroidModelDiscovery =
-    droidDynamicModelsQuery.data?.source === "droid-acp" &&
-    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
+    (droidDynamicModelsQuery.data?.source === "droid-acp" &&
+      (droidDynamicModelsQuery.data.models.length ?? 0) > 0) ||
+    droidDynamicModelsQuery.data?.source === "error";
   const droidModelDiscoveryPending =
     droidModelDiscoveryEnabled &&
     !hasResolvedDroidModelDiscovery &&
-    (droidDynamicModelsQuery.isLoading || droidDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(droidDynamicModelsQuery);
   const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
-    (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
+    ((kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
-    (kiloDynamicModelsQuery.data.models.length ?? 0) > 0;
+      (kiloDynamicModelsQuery.data.models.length ?? 0) > 0) ||
+    kiloDynamicModelsQuery.data?.source === "error";
   const kiloModelDiscoveryPending =
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
-    (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(kiloDynamicModelsQuery);
   const openCodeModelDiscoveryEnabled = selectedProvider === "opencode" || discoveryEnabled;
   const hasResolvedOpenCodeModelDiscovery =
-    (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
+    ((openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
       openCodeDynamicModelsQuery.data?.source === "opencode") &&
-    (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
+      (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0) ||
+    openCodeDynamicModelsQuery.data?.source === "error";
   const openCodeModelDiscoveryPending =
     openCodeModelDiscoveryEnabled &&
     !hasResolvedOpenCodeModelDiscovery &&
-    (openCodeDynamicModelsQuery.isLoading || openCodeDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(openCodeDynamicModelsQuery);
   const piModelDiscoveryEnabled = selectedProvider === "pi" || discoveryEnabled;
   const hasResolvedPiModelDiscovery =
-    piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
-    (piDynamicModelsQuery.data.models.length ?? 0) > 0;
+    (piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
+      (piDynamicModelsQuery.data.models.length ?? 0) > 0) ||
+    piDynamicModelsQuery.data?.source === "error";
   const piModelDiscoveryPending =
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
-    (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(piDynamicModelsQuery);
   const antigravityModelDiscoveryPending =
     !(
       antigravityModelsQuery.data?.source === "antigravity.cli" &&
       (antigravityModelsQuery.data.models.length ?? 0) > 0
-    ) &&
-    (antigravityModelsQuery.isLoading || antigravityModelsQuery.isFetching);
+    ) && isInitialModelDiscoveryPending(antigravityModelsQuery);
 
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
