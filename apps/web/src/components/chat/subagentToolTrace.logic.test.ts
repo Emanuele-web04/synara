@@ -67,15 +67,22 @@ describe("deriveSubagentToolTrace", () => {
   });
 
   it("keeps the most recent tool calls in order without overflow", () => {
-    const trace = deriveSubagentToolTrace([toolEntry("t1"), toolEntry("t2")], true);
-    expect(trace?.entries.map((entry) => entry.id)).toEqual(["t1", "t2"]);
+    const trace = deriveSubagentToolTrace([toolEntry("tool-1"), toolEntry("tool-2")], true);
+    expect(trace?.entries.map((entry) => entry.id)).toEqual(["tool-1", "tool-2"]);
     expect(trace?.overflowCount).toBe(0);
   });
 
   it("caps at the recency limit and counts the hidden earlier tool uses", () => {
-    const entries = ["t1", "t2", "t3", "t4", "t5", "t6"].map((id) => toolEntry(id));
+    const entries = ["tool-1", "tool-2", "tool-3", "tool-4", "tool-5", "tool-6"].map((id) =>
+      toolEntry(id),
+    );
     const trace = deriveSubagentToolTrace(entries, true);
-    expect(trace?.entries.map((entry) => entry.id)).toEqual(["t3", "t4", "t5", "t6"]);
+    expect(trace?.entries.map((entry) => entry.id)).toEqual([
+      "tool-3",
+      "tool-4",
+      "tool-5",
+      "tool-6",
+    ]);
     expect(trace?.entries).toHaveLength(SUBAGENT_TOOL_TRACE_MAX_ITEMS);
     expect(trace?.overflowCount).toBe(2);
   });
@@ -85,16 +92,16 @@ describe("deriveSubagentToolTrace", () => {
       [
         toolEntry("reasoning", { toolTitle: "Reasoning" }),
         toolEntry("status-only", { itemType: "command_execution" }),
-        toolEntry("t1", { command: "ls" }),
+        toolEntry("tool-1", { command: "ls" }),
       ],
       true,
     );
-    expect(trace?.entries.map((entry) => entry.id)).toEqual(["t1"]);
+    expect(trace?.entries.map((entry) => entry.id)).toEqual(["tool-1"]);
     expect(trace?.overflowCount).toBe(0);
   });
 
   it("freezes settled subagents by marking the trace not live", () => {
-    const entries = [toolEntry("t1")];
+    const entries = [toolEntry("tool-1")];
     const live = deriveSubagentToolTrace(entries, true);
     const settled = deriveSubagentToolTrace(entries, false);
     expect(live?.isLive).toBe(true);
