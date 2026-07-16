@@ -43,6 +43,10 @@ import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyTextPartForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -63,6 +67,15 @@ import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "gemini" as const;
+
+export const takeGeminiSynaraHarnessPolicyTextPart = (
+  state: SynaraHarnessPolicyDeliveryState,
+  scopedGatewayConnectionAvailable: boolean,
+) =>
+  takeSynaraHarnessPolicyTextPartForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable,
+  });
 const GEMINI_ACP_REQUEST_TIMEOUT_MS = 60_000;
 const GEMINI_ACP_PROMPT_TIMEOUT_MS = 30 * 60_000;
 const GEMINI_TMP_DIR = path.join(os.homedir(), ".gemini", "tmp");
@@ -156,6 +169,8 @@ interface GeminiStoredTurn {
 }
 
 interface GeminiSessionContext {
+  harnessPolicyDelivered?: boolean;
+  gatewaySessionToken: string | undefined;
   session: ProviderSession;
   readonly binaryPath: string;
   readonly child: ChildProcessWithoutNullStreams;
@@ -858,6 +873,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       stopped: false,
       exitEmitted: false,
       lastKnownTokenUsage: undefined,
+      gatewaySessionToken: undefined,
     };
   };
 
@@ -1279,6 +1295,10 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   ): void => {
     context.stopped = true;
     context.exitEmitted = true;
+    if (context.gatewaySessionToken && agentGatewayCredentials) {
+      agentGatewayCredentials.revokeSessionToken(context.gatewaySessionToken);
+      context.gatewaySessionToken = undefined;
+    }
     rejectPendingRequests(context, detail);
     context.pendingApprovals.clear();
     releaseProcessResources(context);
@@ -1301,6 +1321,10 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     }
     context.exitEmitted = true;
     context.stopped = true;
+    if (context.gatewaySessionToken && agentGatewayCredentials) {
+      agentGatewayCredentials.revokeSessionToken(context.gatewaySessionToken);
+      context.gatewaySessionToken = undefined;
+    }
 
     rejectPendingRequests(context, input.detail);
 
@@ -1896,17 +1920,23 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         },
       );
 
-      const mcpServers = agentGatewayCredentials
-        ? buildAcpSynaraMcpServers({
-            connection: agentGatewayCredentials.connectionForThread(context.session.threadId),
-            initializeResult: initializeResponse as {
-              readonly agentCapabilities?: {
-                readonly mcpCapabilities?: { readonly http?: boolean };
-              };
-            },
-            stdioProxy: agentGatewayCredentials.stdioProxy,
-          })
-        : [];
+      const gatewayConnection = agentGatewayCredentials?.connectionForThread(
+        context.session.threadId,
+        PROVIDER,
+      );
+      context.gatewaySessionToken = gatewayConnection?.bearerToken;
+      const mcpServers =
+        gatewayConnection && agentGatewayCredentials
+          ? buildAcpSynaraMcpServers({
+              connection: gatewayConnection,
+              initializeResult: initializeResponse as {
+                readonly agentCapabilities?: {
+                  readonly mcpCapabilities?: { readonly http?: boolean };
+                };
+              },
+              stdioProxy: agentGatewayCredentials.stdioProxy,
+            })
+          : [];
 
       const startResponse = yield* input.resumeSessionId
         ? input.allowResumeFallback !== false
@@ -2254,6 +2284,13 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         issue: "Either input text or at least one attachment is required.",
       });
     }
+    const harnessPolicy = takeGeminiSynaraHarnessPolicyTextPart(
+      context,
+      agentGatewayCredentials !== undefined,
+    );
+    if (harnessPolicy) {
+      prompt.unshift(harnessPolicy);
+    }
 
     const turnId = TurnId.makeUnsafe(crypto.randomUUID());
     context.turnState = {
@@ -2375,6 +2412,10 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     Effect.gen(function* () {
       const context = yield* requireSession(threadId);
       context.stopped = true;
+      if (context.gatewaySessionToken && agentGatewayCredentials) {
+        agentGatewayCredentials.revokeSessionToken(context.gatewaySessionToken);
+        context.gatewaySessionToken = undefined;
+      }
       killChildProcess(context.child);
     });
 

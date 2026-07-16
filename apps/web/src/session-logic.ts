@@ -21,6 +21,7 @@ import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
 import {
   deriveReadableToolTitle,
+  deriveSynaraMcpToolTitle,
   isGenericToolTitle,
   normalizeCompactToolLabel,
 } from "./lib/toolCallLabel";
@@ -79,6 +80,7 @@ export interface WorkLogEntry {
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
+  synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -93,7 +95,23 @@ export interface WorkLogAutomation {
   cadenceLabel: string;
 }
 
-export const WORK_LOG_PRESENTATION_VERSION = 6;
+export interface WorkLogSynaraCreatedThread {
+  threadId: string;
+  title: string;
+  provider: ProviderKind;
+  model: string;
+  environment: "local" | "worktree";
+  status: string;
+}
+
+export interface WorkLogSynaraThreadCreation {
+  operationId: string;
+  requestedCount: number;
+  createdCount: number;
+  threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+}
+
+export const WORK_LOG_PRESENTATION_VERSION = 7;
 
 export interface WorkLogSubagent {
   threadId: string;
@@ -922,6 +940,51 @@ function extractWorkLogAutomation(
   return { id, name, cadenceLabel };
 }
 
+function extractWorkLogSynaraThreadCreation(
+  payload: Record<string, unknown> | null,
+): WorkLogSynaraThreadCreation | null {
+  if (!payload) {
+    return null;
+  }
+  const operationId = asTrimmedString(payload.operationId);
+  const rawThreads = Array.isArray(payload.threads) ? payload.threads : [];
+  if (!operationId || rawThreads.length === 0) {
+    return null;
+  }
+  const threads = rawThreads.flatMap((value): WorkLogSynaraCreatedThread[] => {
+    const thread = asRecord(value);
+    const threadId = asTrimmedString(thread?.threadId);
+    const title = asTrimmedString(thread?.title);
+    const provider = asTrimmedString(thread?.provider);
+    const model = asTrimmedString(thread?.model);
+    const environment = asTrimmedString(thread?.environment);
+    const status = asTrimmedString(thread?.status) ?? "created";
+    const providerKind = PROVIDER_OPTIONS.find((option) => option.value === provider)?.value;
+    if (
+      !threadId ||
+      !title ||
+      !providerKind ||
+      !model ||
+      (environment !== "local" && environment !== "worktree")
+    ) {
+      return [];
+    }
+    return [{ threadId, title, provider: providerKind, model, environment, status }];
+  });
+  if (threads.length === 0) {
+    return null;
+  }
+  const requestedCount =
+    typeof payload.requestedCount === "number" && Number.isInteger(payload.requestedCount)
+      ? payload.requestedCount
+      : threads.length;
+  const createdCount =
+    typeof payload.createdCount === "number" && Number.isInteger(payload.createdCount)
+      ? payload.createdCount
+      : threads.length;
+  return { operationId, requestedCount, createdCount, threads };
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -1002,8 +1065,20 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.automation = automation;
     }
   }
+  if (activity.kind === "synara.threads.created") {
+    const synaraThreadCreation = extractWorkLogSynaraThreadCreation(payload);
+    if (synaraThreadCreation) {
+      entry.synaraThreadCreation = synaraThreadCreation;
+    }
+  }
   const readableTitle =
     extractCollabActionTitle(payload) ??
+    deriveSynaraMcpToolTitle({
+      toolName,
+      title: commandActionDisplay?.title ?? title,
+      fallbackLabel: activity.summary,
+      isRunning: activity.kind !== "tool.completed",
+    }) ??
     deriveReadableToolTitle({
       title: commandActionDisplay?.title ?? title,
       fallbackLabel: activity.summary,
@@ -1305,6 +1380,7 @@ function mergeDerivedWorkLogEntries(
   const requestKind = next.requestKind ?? previous.requestKind;
   const subagents = next.subagents ?? previous.subagents;
   const subagentAction = next.subagentAction ?? previous.subagentAction;
+  const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
@@ -1324,6 +1400,7 @@ function mergeDerivedWorkLogEntries(
     ...(requestKind ? { requestKind } : {}),
     ...(subagents ? { subagents } : {}),
     ...(subagentAction ? { subagentAction } : {}),
+    ...(synaraThreadCreation ? { synaraThreadCreation } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),

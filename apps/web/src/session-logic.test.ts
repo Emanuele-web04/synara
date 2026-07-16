@@ -1036,6 +1036,67 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("exposes a provider-independent Synara thread creation recap", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "synara-created-threads",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        turnId: "turn-1",
+        kind: "synara.threads.created",
+        summary: "Created 2 Synara threads",
+        tone: "info",
+        payload: {
+          operationId: "gateway:create:two-workers",
+          requestedCount: 2,
+          createdCount: 2,
+          threads: [
+            {
+              threadId: "thread-terra",
+              title: "Explain the repository with Terra",
+              provider: "codex",
+              model: "gpt-5.6-terra",
+              environment: "local",
+              status: "task_dispatched",
+            },
+            {
+              threadId: "thread-claude",
+              title: "Explain the repository with Claude",
+              provider: "claudeAgent",
+              model: "claude-sonnet-5",
+              environment: "worktree",
+              status: "task_dispatched",
+            },
+          ],
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    expect(entry?.synaraThreadCreation).toEqual({
+      operationId: "gateway:create:two-workers",
+      requestedCount: 2,
+      createdCount: 2,
+      threads: [
+        {
+          threadId: "thread-terra",
+          title: "Explain the repository with Terra",
+          provider: "codex",
+          model: "gpt-5.6-terra",
+          environment: "local",
+          status: "task_dispatched",
+        },
+        {
+          threadId: "thread-claude",
+          title: "Explain the repository with Claude",
+          provider: "claudeAgent",
+          model: "claude-sonnet-5",
+          environment: "worktree",
+          status: "task_dispatched",
+        },
+      ],
+    });
+  });
+
   it("omits checkpoint captured info entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2387,6 +2448,58 @@ describe("deriveWorkLogEntries", () => {
       toolTitle: "Codex Apps: Github Fetch Pr",
       detail: "Fetching PR details",
     });
+  });
+
+  it("presents Synara MCP activity consistently across provider item shapes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "synara-mcp-create-thread-progress",
+        kind: "tool.updated",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            toolCallId: "synara-mcp-create",
+            toolName: "mcp__synara__synara_create_thread",
+          },
+        },
+      }),
+      makeActivity({
+        id: "synara-dynamic-send-message-progress",
+        kind: "tool.updated",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Synara__synara_send_message",
+          data: {
+            toolCallId: "synara-dynamic-send",
+          },
+        },
+      }),
+      makeActivity({
+        id: "synara-file-change-list-threads-progress",
+        kind: "tool.updated",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          title: "mcp__Synara__synara_list_threads",
+          data: {
+            toolCallId: "synara-file-change-list",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => [entry.itemType, entry.toolTitle])).toEqual(
+      expect.arrayContaining([
+        ["mcp_tool_call", "Synara is creating a thread"],
+        ["dynamic_tool_call", "Synara is sending a message"],
+        ["file_change", "Synara is listing threads"],
+      ]),
+    );
+    expect(entries).toHaveLength(3);
   });
 
   it("uses present-tense command headings while the command is still running", () => {

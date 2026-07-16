@@ -726,6 +726,34 @@ function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry[
   return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
 }
 
+function workLogSynaraThreadCreationsEqual(
+  a: WorkLogEntry["synaraThreadCreation"],
+  b: WorkLogEntry["synaraThreadCreation"],
+) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (
+    a.operationId !== b.operationId ||
+    a.requestedCount !== b.requestedCount ||
+    a.createdCount !== b.createdCount ||
+    a.threads.length !== b.threads.length
+  ) {
+    return false;
+  }
+  return a.threads.every((thread, index) => {
+    const other = b.threads[index];
+    return (
+      other !== undefined &&
+      thread.threadId === other.threadId &&
+      thread.title === other.title &&
+      thread.provider === other.provider &&
+      thread.model === other.model &&
+      thread.environment === other.environment &&
+      thread.status === other.status
+    );
+  });
+}
+
 function workLogToolOutputsEqual(
   a: NonNullable<WorkLogEntry["toolDetails"]>["output"],
   b: NonNullable<WorkLogEntry["toolDetails"]>["output"],
@@ -795,6 +823,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
     workLogSubagentsEqual(a.subagents, b.subagents) &&
     workLogAutomationsEqual(a.automation, b.automation) &&
+    workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
     workLogToolDetailsEqual(a.toolDetails, b.toolDetails)
   );
 }

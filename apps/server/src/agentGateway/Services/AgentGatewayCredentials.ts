@@ -8,8 +8,9 @@
  *
  * @module agentGateway/Services/AgentGatewayCredentials
  */
-import type { ThreadId } from "@synara/contracts";
+import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
+import type { AgentGatewaySessionIdentity } from "./AgentGatewaySessionRegistry.ts";
 
 export interface AgentGatewayMcpConnection {
   /** Loopback streamable-HTTP MCP endpoint, e.g. `http://127.0.0.1:3773/mcp`. */
@@ -28,12 +29,19 @@ export interface AgentGatewayStdioProxySpawn {
 export interface AgentGatewayCredentialsShape {
   /** Streamable-HTTP MCP endpoint served by this Synara instance. */
   readonly mcpEndpointUrl: string;
-  /** Mint (or re-derive) the stable bearer token for a thread. */
-  readonly issueSessionToken: (threadId: ThreadId) => string;
-  /** Resolve a bearer token back to its thread id, or null when invalid. */
+  /** Mint a new opaque bearer token for one provider session. */
+  readonly issueSessionToken: (threadId: ThreadId, provider: ProviderKind) => string;
+  /** Resolve a live bearer token back to its thread id, or null when invalid. */
   readonly verifySessionToken: (token: string) => string | null;
+  /** Resolve the complete non-secret invocation scope. */
+  readonly verifySession: (token: string) => AgentGatewaySessionIdentity | null;
+  /** Revoke exactly one provider session credential. */
+  readonly revokeSessionToken: (token: string) => void;
   /** Convenience bundle used when injecting MCP config into provider sessions. */
-  readonly connectionForThread: (threadId: ThreadId) => AgentGatewayMcpConnection;
+  readonly connectionForThread: (
+    threadId: ThreadId,
+    provider: ProviderKind,
+  ) => AgentGatewayMcpConnection;
   /** Spawn spec for the stdio->HTTP proxy used by stdio-only MCP clients. */
   readonly stdioProxy: AgentGatewayStdioProxySpawn;
 }

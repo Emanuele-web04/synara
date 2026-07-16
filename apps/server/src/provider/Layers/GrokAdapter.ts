@@ -44,6 +44,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyTextPartForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
@@ -99,6 +103,15 @@ import { GrokAdapter, type GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "grok" as const;
+
+export const takeGrokSynaraHarnessPolicyTextPart = (
+  state: SynaraHarnessPolicyDeliveryState,
+  scopedGatewayConnectionAvailable: boolean,
+) =>
+  takeSynaraHarnessPolicyTextPartForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable,
+  });
 const GROK_RESUME_VERSION = 1 as const;
 const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
@@ -293,6 +306,8 @@ interface PendingUserInput {
 }
 
 interface GrokSessionContext {
+  harnessPolicyDelivered?: boolean;
+  readonly gatewaySessionToken?: string;
   readonly threadId: ThreadId;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
@@ -843,6 +858,9 @@ export function makeGrokAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        if (ctx.gatewaySessionToken && agentGatewayCredentials) {
+          agentGatewayCredentials.revokeSessionToken(ctx.gatewaySessionToken);
+        }
         yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.sessionConfigReady !== undefined) {
@@ -1081,8 +1099,19 @@ export function makeGrokAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
+          const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+            input.threadId,
+            PROVIDER,
+          );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
+          );
+          yield* Effect.addFinalizer(() =>
+            sessionScopeTransferred || !agentGatewayConnection || !agentGatewayCredentials
+              ? Effect.void
+              : Effect.sync(() =>
+                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
+                ),
           );
           let ctx!: GrokSessionContext;
 
@@ -1130,7 +1159,7 @@ export function makeGrokAdapter(
               ? {
                   buildMcpServers: (initializeResult) =>
                     buildAcpSynaraMcpServers({
-                      connection: agentGatewayCredentials.connectionForThread(input.threadId),
+                      connection: agentGatewayConnection!,
                       initializeResult,
                       stdioProxy: agentGatewayCredentials.stdioProxy,
                     }),
@@ -1264,6 +1293,9 @@ export function makeGrokAdapter(
 
           ctx = {
             threadId: input.threadId,
+            ...(agentGatewayConnection
+              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
+              : {}),
             session,
             scope: sessionScope,
             acp,
@@ -1778,6 +1810,13 @@ export function makeGrokAdapter(
             operation: "sendTurn",
             issue: "Turn requires non-empty text or attachments.",
           });
+        }
+        const harnessPolicy = takeGrokSynaraHarnessPolicyTextPart(
+          ctx,
+          agentGatewayCredentials !== undefined,
+        );
+        if (harnessPolicy) {
+          promptParts.unshift(harnessPolicy);
         }
 
         // A stop can land while the config RPCs or attachment reads above were

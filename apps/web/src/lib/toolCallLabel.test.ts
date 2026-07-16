@@ -3,6 +3,7 @@ import {
   deriveInlineCommandCall,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
+  deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   isInspectCommand,
   normalizeCompactToolLabel,
@@ -54,6 +55,103 @@ describe("normalizeCompactToolLabel", () => {
     expect(normalizeCompactToolLabel("Tool call completed")).toBe("Tool call");
     expect(normalizeCompactToolLabel("Ran command done")).toBe("Ran command");
     expect(normalizeCompactToolLabel("Ran command started")).toBe("Ran command");
+  });
+});
+
+describe("deriveSynaraMcpToolTitle", () => {
+  it("has intentional running and completed copy for every Synara gateway action", () => {
+    const cases = [
+      ["synara_context", "Synara is checking its context", "Synara checked its context"],
+      [
+        "synara_capabilities",
+        "Synara is checking available agents",
+        "Synara checked available agents",
+      ],
+      ["synara_list_projects", "Synara is listing projects", "Synara listed projects"],
+      ["synara_list_threads", "Synara is listing threads", "Synara listed threads"],
+      ["synara_read_thread", "Synara is reading a thread", "Synara read a thread"],
+      ["synara_create_thread", "Synara is creating a thread", "Synara created a thread"],
+      ["synara_create_threads", "Synara is creating threads", "Synara created threads"],
+      [
+        "synara_wait_for_threads",
+        "Synara is waiting for threads",
+        "Synara finished waiting for threads",
+      ],
+      ["synara_send_message", "Synara is sending a message", "Synara sent a message"],
+      ["synara_interrupt_thread", "Synara is interrupting a thread", "Synara interrupted a thread"],
+      ["synara_set_thread_title", "Synara is renaming a thread", "Synara renamed a thread"],
+      ["synara_set_thread_archived", "Synara is updating a thread", "Synara updated a thread"],
+      [
+        "synara_create_automation",
+        "Synara is creating an automation",
+        "Synara created an automation",
+      ],
+      ["synara_list_automations", "Synara is listing automations", "Synara listed automations"],
+      [
+        "synara_cancel_automation",
+        "Synara is stopping an automation",
+        "Synara stopped an automation",
+      ],
+    ] as const;
+
+    for (const [toolName, running, completed] of cases) {
+      expect(deriveSynaraMcpToolTitle({ toolName, isRunning: true })).toBe(running);
+      expect(deriveSynaraMcpToolTitle({ toolName, isRunning: false })).toBe(completed);
+    }
+  });
+
+  it("turns provider-specific create-thread identifiers into activity sentences", () => {
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "Synara__synara_create_thread",
+        isRunning: true,
+      }),
+    ).toBe("Synara is creating a thread");
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "mcp__synara__synara_create_thread",
+        isRunning: false,
+      }),
+    ).toBe("Synara created a thread");
+  });
+
+  it("recognizes bare and already-humanized Synara tool names", () => {
+    expect(deriveSynaraMcpToolTitle({ toolName: "synara_send_message", isRunning: true })).toBe(
+      "Synara is sending a message",
+    );
+    expect(
+      deriveSynaraMcpToolTitle({ title: "Synara: Synara List Threads", isRunning: false }),
+    ).toBe("Synara listed threads");
+  });
+
+  it("ignores tools from other MCP servers", () => {
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "mcp__codex_apps__github_fetch_pr",
+        isRunning: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps future Synara actions branded without exposing raw identifiers", () => {
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "mcp__synara__synara_delete_project",
+        isRunning: true,
+      }),
+    ).toBe("Synara is handling delete project");
+    expect(
+      deriveSynaraMcpToolTitle({
+        toolName: "Synara__synara_delete_project",
+        isRunning: false,
+      }),
+    ).toBe("Synara handled delete project");
+    expect(
+      deriveSynaraMcpToolTitle({
+        title: "Synara is handling delete project",
+        isRunning: true,
+      }),
+    ).toBe("Synara is handling delete project");
   });
 });
 

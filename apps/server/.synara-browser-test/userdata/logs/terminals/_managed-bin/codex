@@ -1,0 +1,85 @@
+#!/bin/sh
+# Managed codex wrapper injected by synara terminal sessions.
+printf '\033]0;%s\007' 'Codex CLI'
+export SYNARA_TERMINAL_CLI_KIND='codex'
+export CODEX_HOME='/Users/emanueledipietro/.codex/worktrees/c73c/synara/apps/server/.synara-browser-test/userdata/logs/terminals/_managed-bin/codex-home'
+if [ -f '/Users/emanueledipietro/.codex/worktrees/c73c/synara/apps/server/.synara-browser-test/userdata/logs/terminals/_managed-bin/notify-hook.sh' ]; then
+  export CODEX_TUI_RECORD_SESSION=1
+  if [ -z "${CODEX_TUI_SESSION_LOG_PATH:-}" ]; then
+    _synara_codex_ts="$(date +%s 2>/dev/null || echo "$$")"
+    export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/synara-codex-session-$$_${_synara_codex_ts}.jsonl"
+  fi
+  (
+    _synara_log="$CODEX_TUI_SESSION_LOG_PATH"
+    _synara_notify='/Users/emanueledipietro/.codex/worktrees/c73c/synara/apps/server/.synara-browser-test/userdata/logs/terminals/_managed-bin/notify-hook.sh'
+    _synara_last_turn_id=""
+    _synara_last_approval_id=""
+    _synara_last_exec_call_id=""
+    _synara_approval_fallback_seq=0
+
+    _synara_emit_event() {
+      _synara_event="$1"
+      _synara_payload=$(printf '{"hook_event_name":"%s"}' "$_synara_event")
+      "$_synara_notify" "$_synara_payload" >/dev/null 2>&1 || true
+    }
+
+    _synara_i=0
+    while [ ! -f "$_synara_log" ] && [ "$_synara_i" -lt 200 ]; do
+      _synara_i=$((_synara_i + 1))
+      sleep 0.05
+    done
+    if [ ! -f "$_synara_log" ]; then
+      exit 0
+    fi
+
+    tail -n 0 -F "$_synara_log" 2>/dev/null | while IFS= read -r _synara_line; do
+      case "$_synara_line" in
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)
+          _synara_turn_id=$(printf '%s
+' "$_synara_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          [ -n "$_synara_turn_id" ] || _synara_turn_id="task_started"
+          if [ "$_synara_turn_id" != "$_synara_last_turn_id" ]; then
+            _synara_last_turn_id="$_synara_turn_id"
+            _synara_emit_event "Start"
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)
+          _synara_approval_id=$(printf '%s
+' "$_synara_line" | awk -F'"id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          [ -n "$_synara_approval_id" ] || _synara_approval_id=$(printf '%s
+' "$_synara_line" | awk -F'"approval_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          [ -n "$_synara_approval_id" ] || _synara_approval_id=$(printf '%s
+' "$_synara_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          if [ -z "$_synara_approval_id" ]; then
+            _synara_approval_fallback_seq=$((_synara_approval_fallback_seq + 1))
+            _synara_approval_id="approval_request_${_synara_approval_fallback_seq}"
+          fi
+          if [ "$_synara_approval_id" != "$_synara_last_approval_id" ]; then
+            _synara_last_approval_id="$_synara_approval_id"
+            _synara_emit_event "PermissionRequest"
+          fi
+          ;;
+        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)
+          _synara_exec_call_id=$(printf '%s
+' "$_synara_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')
+          if [ -n "$_synara_exec_call_id" ]; then
+            if [ "$_synara_exec_call_id" != "$_synara_last_exec_call_id" ]; then
+              _synara_last_exec_call_id="$_synara_exec_call_id"
+              _synara_emit_event "Start"
+            fi
+          else
+            _synara_emit_event "Start"
+          fi
+          ;;
+      esac
+    done
+  ) &
+  SYNARA_CODEX_START_WATCHER_PID=$!
+fi
+'/opt/homebrew/bin/codex' --enable codex_hooks -c 'notify=["bash","/Users/emanueledipietro/.codex/worktrees/c73c/synara/apps/server/.synara-browser-test/userdata/logs/terminals/_managed-bin/notify-hook.sh"]' "$@"
+_synara_status=$?
+if [ -n "${SYNARA_CODEX_START_WATCHER_PID:-}" ]; then
+  kill "$SYNARA_CODEX_START_WATCHER_PID" >/dev/null 2>&1 || true
+  wait "$SYNARA_CODEX_START_WATCHER_PID" 2>/dev/null || true
+fi
+exit "$_synara_status"

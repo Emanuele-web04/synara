@@ -5,6 +5,7 @@ import {
   negotiateMcpProtocolVersion,
   parseMcpMessage,
   MCP_DEFAULT_PROTOCOL_VERSION,
+  type McpToolDefinition,
 } from "./protocol.ts";
 
 describe("agent gateway MCP protocol", () => {
@@ -59,5 +60,21 @@ describe("agent gateway MCP protocol", () => {
       title: "Synara App Control",
       version: "1.2.3",
     });
+  });
+
+  it("supports MCP tool annotations without changing protocol shaping", () => {
+    const tool: McpToolDefinition = {
+      name: "synara_context",
+      description: "Inspect the current Synara harness context.",
+      inputSchema: { type: "object" },
+      annotations: {
+        title: "Synara context",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    };
+    assert.equal(tool.annotations?.title, "Synara context");
   });
 });

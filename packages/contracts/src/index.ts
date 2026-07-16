@@ -8,6 +8,7 @@ export * from "./providerDiscovery";
 export * from "./providerRuntime";
 export * from "./model";
 export * from "./agentMentions";
+export * from "./agentGateway";
 export * from "./ws";
 export * from "./keybindings";
 export * from "./server";

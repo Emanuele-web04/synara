@@ -48,51 +48,60 @@ function killChildTreeByPid(pid, signal) {
   spawnSync("pkill", [`-${signal}`, "-P", String(pid)], { stdio: "ignore" });
 }
 
+function escapeExtendedRegex(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function listPidsByExactProcessName(processName) {
+  const result = spawnSync("pgrep", ["-x", processName], { encoding: "utf8" });
+  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  if (!output) {
+    return [];
+  }
+  return output
+    .split("\n")
+    .map((value) => Number(value.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+function readProcessCommand(pid) {
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  return typeof result.stdout === "string" ? result.stdout.trim() : "";
+}
+
 function cleanupStaleDevApps() {
   if (process.platform === "win32") {
     return;
   }
 
-  spawnSync("pkill", ["-f", "--", `--synara-dev-root=${desktopDir}`], { stdio: "ignore" });
+  const executable = escapeExtendedRegex(resolveElectronPath());
+  const devRoot = escapeExtendedRegex(desktopDir);
+  const commandPattern = `^${executable}[[:space:]]+--synara-dev-root=${devRoot}([[:space:]]|$)`;
+  spawnSync("pkill", ["-f", "--", commandPattern], { stdio: "ignore" });
 }
 
 function listStaleComputerUsePids() {
-  if (process.platform === "win32") {
+  if (process.platform !== "darwin") {
     return [];
   }
 
-  const result = spawnSync("pgrep", ["-fal", "Synara \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
-    encoding: "utf8",
+  return listPidsByExactProcessName("Electron").filter((pid) => {
+    const command = readProcessCommand(pid);
+    if (!/Synara \(Dev\)\.app\/Contents\/MacOS\/Electron/.test(command)) {
+      return false;
+    }
+    if (!/computerUseMcp\.mjs\s+mcp(?:\s|$)/.test(command)) {
+      return false;
+    }
+    // Leave the current worktree's helper alone and only reap stale runtimes
+    // from other worktrees or abandoned dev sessions.
+    if (command.includes(desktopDir)) {
+      return false;
+    }
+    return true;
   });
-  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
-  if (!output) {
-    return [];
-  }
-
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      const firstSpace = line.indexOf(" ");
-      if (firstSpace <= 0) {
-        return [];
-      }
-
-      const pid = Number(line.slice(0, firstSpace));
-      const command = line.slice(firstSpace + 1);
-      if (!Number.isInteger(pid) || pid <= 0) {
-        return [];
-      }
-
-      // Leave the current worktree's helper alone and only reap stale runtimes
-      // from other worktrees or abandoned dev sessions.
-      if (command.includes(desktopDir)) {
-        return [];
-      }
-
-      return [pid];
-    });
 }
 
 function cleanupStaleComputerUseApps() {
@@ -117,22 +126,19 @@ function cleanupStaleComputerUseApps() {
 }
 
 function warnIfAlphaAppRunning() {
-  if (process.platform === "win32") {
+  if (process.platform !== "darwin") {
     return;
   }
 
-  const result = spawnSync("pgrep", ["-fal", "/Applications/Synara\\.app/Contents/MacOS/Synara"], {
-    encoding: "utf8",
-  });
-  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
-  if (!output) {
+  const pids = listPidsByExactProcessName("Synara");
+  if (pids.length === 0) {
     return;
   }
 
   console.error(
     "[desktop-dev] Synara is still running. Close it before testing voice in Synara (Dev), or you may be looking at the wrong app/runtime.",
   );
-  console.error(output);
+  console.error(`[desktop-dev] Running Synara process IDs: ${pids.join(", ")}`);
 }
 
 function startApp() {

@@ -22,11 +22,10 @@ import {
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
-import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
@@ -221,13 +220,7 @@ const ServerConfigLive = (input: CliInput) =>
   );
 
 const LayerLive = (input: CliInput) => {
-  const runtimeServicesLayer = makeServerRuntimeServicesLayer();
-  const providerLayer = makeServerProviderLayer();
-  const providerHealthLayer = ProviderHealthLive.pipe(
-    // Provider health reads persisted provider settings while constructing its
-    // cache, so build it with the same runtime services layer exposed to Server.
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const { runtimeServicesLayer, providerLayer } = makeServerApplicationLayers();
   const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
     // The reaper coordinates orchestration state with live provider sessions,
     // so it belongs at the top level where both layers are available.
@@ -238,7 +231,6 @@ const LayerLive = (input: CliInput) => {
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
-    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(providerSessionReaperLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),

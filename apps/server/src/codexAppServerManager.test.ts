@@ -30,6 +30,7 @@ import {
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
+import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -40,6 +41,20 @@ const approvalRequiredTurnOverrides = {
   approvalPolicy: "untrusted",
   sandboxPolicy: { type: "readOnly" },
 } as const;
+
+describe("Codex Synara harness policy", () => {
+  it("keeps the same host policy exactly once in default and plan instructions", () => {
+    for (const instructions of [
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+    ]) {
+      expect(instructions).toContain(SYNARA_HARNESS_POLICY_MARKER);
+      expect(instructions.split(SYNARA_HARNESS_POLICY_MARKER)).toHaveLength(2);
+      expect(instructions).toContain("Synara is the host and harness");
+      expect(instructions).toContain("synara_create_threads exactly once");
+    }
+  });
+});
 
 function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
   const manager = new CodexAppServerManager();
@@ -906,6 +921,20 @@ describe("startSession", () => {
 });
 
 describe("sendTurn", () => {
+  it("clears stale collaboration receiver routing before a new turn", async () => {
+    const { manager, context } = createSendTurnHarness();
+    context.collabReceiverTurns.set("reused-child", "old-turn");
+    context.collabReceiverParents.set("reused-child", "old-parent");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Start the next turn",
+    });
+
+    expect(context.collabReceiverTurns.size).toBe(0);
+    expect(context.collabReceiverParents.size).toBe(0);
+  });
+
   it("sends text and image user input items to turn/start", async () => {
     const { manager, context, requireSession, sendRequest, updateSession } =
       createSendTurnHarness();

@@ -72,6 +72,8 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
+import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
@@ -106,6 +108,7 @@ import {
 } from "./MessagesTimeline.logic";
 import {
   deriveReadableCommandDisplay,
+  deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   resolveCommandVisualKind,
 } from "../../lib/toolCallLabel";
@@ -408,6 +411,8 @@ interface MessagesTimelineProps {
   threadMarkers?: readonly ThreadMarker[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
+  /** Provenance for a conversation created from another Synara task. */
+  crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -466,6 +471,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onTogglePinMessage,
   threadMarkers = [],
   enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
+  crossTaskOrigin = null,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -626,6 +632,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const firstUserMessageId = useMemo(() => {
+    for (const row of rows) {
+      if (row.kind === "message" && row.message.role === "user") {
+        return row.message.id;
+      }
+    }
+    return null;
+  }, [rows]);
   const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
@@ -969,7 +983,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "work" &&
         (() => {
           const groupId = row.id;
-          const groupedEntries = row.groupedEntries;
+          // Creation milestones are reserved for the end-of-turn recap card.
+          // The provider's actual Synara MCP tool rows remain visible here.
+          const groupedEntries = row.groupedEntries.filter(
+            (workEntry) => !workEntry.synaraThreadCreation,
+          );
+          if (groupedEntries.length === 0) {
+            return null;
+          }
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
@@ -1079,14 +1100,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             pastedTextCount: renderedPastedTexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
+          const showCrossTaskOrigin =
+            crossTaskOrigin !== null && row.message.id === firstUserMessageId;
           return (
-            <div className="flex w-full justify-end">
-              <div
-                className={cn(
-                  "group flex flex-col items-end gap-px",
-                  isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
-                )}
-              >
+            <div className="flex w-full flex-col gap-3">
+              {showCrossTaskOrigin ? (
+                <CrossTaskOriginLabel
+                  origin={crossTaskOrigin}
+                  {...(onOpenThread ? { onOpenSourceThread: onOpenThread } : {})}
+                />
+              ) : null}
+              <div className="flex w-full justify-end">
+                <div
+                  className={cn(
+                    "group flex flex-col items-end gap-px",
+                    isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
+                  )}
+                >
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 <UserDispatchModeChip
                   dispatchMode={row.message.dispatchMode}
@@ -1229,6 +1259,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   </div>
                 )}
+                </div>
               </div>
             </div>
           );
@@ -1241,8 +1272,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
-            const toolEntries = workEntries.filter((entry) => entry.tone === "tool");
-            const statusEntries = workEntries.filter((entry) => entry.tone !== "tool");
+            const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
+            const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
+            const statusEntries = displayEntries.filter((entry) => entry.tone !== "tool");
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
             const toolExpanded =
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
@@ -1332,7 +1364,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ]
             .filter((value): value is string => Boolean(value))
             .join(" • ");
-          const collapsedTurnItems = row.collapsedTurnItems;
+          const allTurnWorkEntries = [
+            ...(row.leadingWorkEntries ?? []),
+            ...(row.inlineWorkEntries ?? []),
+            ...(row.collapsedTurnItems ?? []).flatMap((item) =>
+              item.kind === "work" ? [item.entry] : [],
+            ),
+          ];
+          const synaraThreadCreationRecaps = [
+            ...new Map(
+              allTurnWorkEntries.flatMap((entry) =>
+                entry.synaraThreadCreation
+                  ? [[entry.synaraThreadCreation.operationId, entry.synaraThreadCreation] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
+          const collapsedTurnItems = row.collapsedTurnItems?.filter(
+            (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
+          );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
@@ -1573,6 +1623,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ) : null}
                   </div>
                 )}
+                {!row.assistantTurnInProgress && row.showAssistantCopyButton
+                  ? synaraThreadCreationRecaps.map((creation) => (
+                      <div key={creation.operationId} className="mt-2 mb-4">
+                        <SynaraThreadCreationCard
+                          creation={creation}
+                          {...(onOpenThread
+                            ? {
+                                onOpenThread: (createdThreadId) =>
+                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                              }
+                            : {})}
+                        />
+                      </div>
+                    ))
+                  : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
@@ -2765,16 +2830,16 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
 // agents surface the bare tool name (synara_*), and Codex reports server/tool
 // pairs that the label humanizer renders as "Synara: ...".
-function isSynaraMcpToolCall(workEntry: TimelineWorkEntry): boolean {
-  if (workEntry.itemType !== "mcp_tool_call") {
-    return false;
-  }
-  const toolName = workEntry.toolName?.trim().toLowerCase() ?? "";
-  if (toolName.startsWith("mcp__synara__") || toolName.startsWith("synara_")) {
-    return true;
-  }
-  const title = (workEntry.toolTitle ?? workEntry.label ?? "").trim().toLowerCase();
-  return title.startsWith("synara:") || title.startsWith("synara ");
+function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
+  return (
+    deriveSynaraMcpToolTitle({
+      toolName: workEntry.toolName,
+      title: workEntry.toolTitle,
+      fallbackLabel: workEntry.label,
+      isRunning:
+        workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed",
+    }) !== null
+  );
 }
 
 // Render command, agent-task, file-change, and file-read rows at the tighter
@@ -2811,6 +2876,15 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  const synaraTitle = deriveSynaraMcpToolTitle({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    isRunning: workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed",
+  });
+  if (synaraTitle) {
+    return synaraTitle;
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
@@ -2987,7 +3061,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isSynaraToolRow = !isGitHubToolRow && isSynaraMcpToolCall(workEntry);
+  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
   const isMcpToolRow =
     workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
   const LeftIcon = isGitHubToolRow

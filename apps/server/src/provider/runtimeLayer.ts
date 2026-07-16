@@ -26,7 +26,11 @@ import { ProviderService } from "./Services/ProviderService";
 import { ProviderSessionDirectory } from "./Services/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
 
-export function makeServerProviderLayer(): Layer.Layer<
+export function makeServerProviderLayer(
+  options: {
+    readonly agentGatewayCredentialsLayer?: typeof AgentGatewayCredentialsWithSecretsLive;
+  } = {},
+): Layer.Layer<
   ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry | ProviderSessionDirectory,
   ProviderUnsupportedError,
   | SqlClient.SqlClient
@@ -55,7 +59,8 @@ export function makeServerProviderLayer(): Layer.Layer<
     // excluded for now: their server processes are pooled across threads, so a
     // per-thread bearer token cannot be attached to the shared server config.
     // Pi has no MCP client support.
-    const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+    const agentGatewayCredentialsLayer =
+      options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));

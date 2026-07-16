@@ -55,6 +55,7 @@ const tokenStats = {
   topProviderPercent: 83.3,
   heatmapMetric: "tokens",
   heatmap: [],
+  models: [],
 } satisfies ProfileTokenStats;
 
 describe("selectProfileTopProvider", () => {

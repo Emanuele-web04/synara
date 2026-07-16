@@ -43,6 +43,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyTextPartForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
@@ -108,6 +112,15 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 
 const PROVIDER = "cursor" as const;
+
+export const takeCursorSynaraHarnessPolicyTextPart = (
+  state: SynaraHarnessPolicyDeliveryState,
+  scopedGatewayConnectionAvailable: boolean,
+) =>
+  takeSynaraHarnessPolicyTextPartForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable,
+  });
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 // Backstop for an alive-but-silent cursor-agent child: if a turn produces no
@@ -150,6 +163,8 @@ interface PendingUserInput {
 }
 
 interface CursorSessionContext {
+  harnessPolicyDelivered?: boolean;
+  readonly gatewaySessionToken?: string;
   readonly threadId: ThreadId;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
@@ -626,6 +641,9 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
+        if (ctx.gatewaySessionToken && agentGatewayCredentials) {
+          agentGatewayCredentials.revokeSessionToken(ctx.gatewaySessionToken);
+        }
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.notificationFiber) {
@@ -673,8 +691,19 @@ export function makeCursorAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
+          const agentGatewayConnection = agentGatewayCredentials?.connectionForThread(
+            input.threadId,
+            PROVIDER,
+          );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
+          );
+          yield* Effect.addFinalizer(() =>
+            sessionScopeTransferred || !agentGatewayConnection || !agentGatewayCredentials
+              ? Effect.void
+              : Effect.sync(() =>
+                  agentGatewayCredentials.revokeSessionToken(agentGatewayConnection.bearerToken),
+                ),
           );
           let ctx!: CursorSessionContext;
 
@@ -710,7 +739,7 @@ export function makeCursorAdapter(
               ? {
                   buildMcpServers: (initializeResult) =>
                     buildAcpSynaraMcpServers({
-                      connection: agentGatewayCredentials.connectionForThread(input.threadId),
+                      connection: agentGatewayConnection!,
                       initializeResult,
                       stdioProxy: agentGatewayCredentials.stdioProxy,
                     }),
@@ -944,6 +973,9 @@ export function makeCursorAdapter(
 
           ctx = {
             threadId: input.threadId,
+            ...(agentGatewayConnection
+              ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
+              : {}),
             session,
             scope: sessionScope,
             acp,
@@ -1193,6 +1225,13 @@ export function makeCursorAdapter(
             operation: "sendTurn",
             issue: "Turn requires non-empty text or attachments.",
           });
+        }
+        const harnessPolicy = takeCursorSynaraHarnessPolicyTextPart(
+          ctx,
+          agentGatewayCredentials !== undefined,
+        );
+        if (harnessPolicy) {
+          promptParts.unshift(harnessPolicy);
         }
 
         ctx.activeTurnId = turnId;

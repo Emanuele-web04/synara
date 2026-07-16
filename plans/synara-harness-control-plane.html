@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Synara Harness Control Plane</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f4f2ed;
+        --paper: #fffdf8;
+        --ink: #24231f;
+        --muted: #69675f;
+        --line: #d9d4c9;
+        --accent: #475bd8;
+        --accent-soft: #e8ebff;
+        --safe: #1f7252;
+        --safe-soft: #e3f3eb;
+        --warn: #a05c18;
+        --warn-soft: #fff0d9;
+        --danger: #a13939;
+        --danger-soft: #fbe5e3;
+        --shadow: 0 14px 50px rgba(55, 47, 36, 0.1);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171714;
+          --paper: #211f1b;
+          --ink: #f0ede5;
+          --muted: #b2aea4;
+          --line: #3e3a33;
+          --accent: #9aa7ff;
+          --accent-soft: #292f57;
+          --safe: #78d3ac;
+          --safe-soft: #203d32;
+          --warn: #f0b66f;
+          --warn-soft: #49331d;
+          --danger: #f29b95;
+          --danger-soft: #4b2927;
+          --shadow: 0 14px 50px rgba(0, 0, 0, 0.28);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        line-height: 1.55;
+      }
+      a {
+        color: var(--accent);
+      }
+      code {
+        font:
+          0.9em ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        background: color-mix(in srgb, var(--line) 45%, transparent);
+        border-radius: 5px;
+        padding: 0.1em 0.35em;
+      }
+      .shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 24px auto 80px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+      header {
+        padding: clamp(28px, 6vw, 72px);
+        border-bottom: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
+        gap: 48px;
+        align-items: end;
+      }
+      .eyebrow {
+        color: var(--accent);
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      h1 {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: clamp(2.4rem, 6vw, 5.5rem);
+        line-height: 0.95;
+        letter-spacing: -0.045em;
+        margin: 14px 0 22px;
+        max-width: 12ch;
+      }
+      .lede {
+        color: var(--muted);
+        font-size: clamp(1rem, 1.8vw, 1.2rem);
+        max-width: 64ch;
+      }
+      .verdict {
+        border-left: 3px solid var(--accent);
+        padding: 0 0 0 18px;
+      }
+      .verdict strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+      .verdict p {
+        margin: 0;
+        color: var(--muted);
+      }
+      nav {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        gap: 22px;
+        overflow-x: auto;
+        padding: 13px clamp(24px, 5vw, 64px);
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--paper) 92%, transparent);
+        backdrop-filter: blur(14px);
+      }
+      nav a {
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 750;
+        text-decoration: none;
+      }
+      nav a:hover {
+        color: var(--accent);
+      }
+      main {
+        padding: clamp(28px, 6vw, 72px);
+      }
+      section {
+        margin: 0 0 76px;
+        scroll-margin-top: 70px;
+      }
+      h2 {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: clamp(1.8rem, 3vw, 2.8rem);
+        letter-spacing: -0.025em;
+        line-height: 1.1;
+        margin: 0 0 14px;
+      }
+      .section-intro {
+        color: var(--muted);
+        max-width: 70ch;
+        margin-bottom: 28px;
+      }
+      .three-layers {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 1px solid var(--line);
+      }
+      .layer {
+        padding: 28px;
+        min-height: 250px;
+      }
+      .layer + .layer {
+        border-left: 1px solid var(--line);
+      }
+      .number {
+        display: inline-grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 850;
+      }
+      .layer h3 {
+        font-size: 1.15rem;
+        margin: 24px 0 10px;
+      }
+      .layer p {
+        color: var(--muted);
+        margin: 0;
+      }
+      .layer .outcome {
+        margin-top: 22px;
+        color: var(--ink);
+        font-weight: 700;
+      }
+      .flow-wrap {
+        border: 1px solid var(--line);
+        padding: 24px;
+        overflow-x: auto;
+      }
+      svg {
+        width: 100%;
+        min-width: 820px;
+        height: auto;
+        color: var(--ink);
+      }
+      .flow-node rect {
+        fill: var(--paper);
+        stroke: var(--line);
+        stroke-width: 1.5;
+      }
+      .flow-node.primary rect {
+        fill: var(--accent-soft);
+        stroke: var(--accent);
+      }
+      .flow-node.safe rect {
+        fill: var(--safe-soft);
+        stroke: var(--safe);
+      }
+      .flow-node.danger rect {
+        fill: var(--danger-soft);
+        stroke: var(--danger);
+      }
+      .flow-node text {
+        fill: var(--ink);
+        font:
+          700 14px Inter,
+          sans-serif;
+      }
+      .flow-sub {
+        fill: var(--muted) !important;
+        font:
+          12px Inter,
+          sans-serif !important;
+      }
+      .arrow {
+        stroke: var(--accent);
+        stroke-width: 2;
+        fill: none;
+      }
+      .blocked {
+        stroke: var(--danger);
+        stroke-width: 2;
+        stroke-dasharray: 6 5;
+        fill: none;
+      }
+      .timeline {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(130px, 1fr));
+        border-top: 2px solid var(--accent);
+        margin-top: 42px;
+      }
+      .milestone {
+        padding: 20px 18px 0 0;
+        position: relative;
+      }
+      .milestone::before {
+        content: "";
+        position: absolute;
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--paper);
+        border: 3px solid var(--accent);
+        top: -8px;
+        left: 0;
+      }
+      .milestone small {
+        color: var(--accent);
+        font-weight: 800;
+      }
+      .milestone strong {
+        display: block;
+        margin: 6px 0;
+      }
+      .milestone span {
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      .compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .compare article {
+        border: 1px solid var(--line);
+        padding: 28px;
+      }
+      .compare .adopt {
+        border-top: 4px solid var(--safe);
+      }
+      .compare .reject {
+        border-top: 4px solid var(--danger);
+      }
+      .compare h3 {
+        margin-top: 0;
+      }
+      ul {
+        padding-left: 1.15rem;
+      }
+      li + li {
+        margin-top: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        padding: 14px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .tag {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 0.72rem;
+        font-weight: 800;
+      }
+      .tag.high {
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+      .tag.med {
+        color: var(--warn);
+        background: var(--warn-soft);
+      }
+      .tag.low {
+        color: var(--safe);
+        background: var(--safe-soft);
+      }
+      .api-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .api {
+        border: 1px solid var(--line);
+        padding: 22px;
+      }
+      .api h3 {
+        margin: 0 0 6px;
+      }
+      .api p {
+        color: var(--muted);
+        margin: 0;
+      }
+      .api code {
+        display: inline-block;
+        margin-bottom: 12px;
+      }
+      .proof {
+        background: var(--safe-soft);
+        border-left: 4px solid var(--safe);
+        padding: 24px 26px;
+      }
+      .proof strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+      footer {
+        border-top: 1px solid var(--line);
+        padding: 28px clamp(24px, 6vw, 72px);
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: center;
+      }
+      footer p {
+        color: var(--muted);
+        margin: 0;
+      }
+      button {
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        border-radius: 7px;
+        padding: 11px 15px;
+        font: inherit;
+        font-weight: 750;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 3px solid var(--accent-soft);
+        outline-offset: 2px;
+      }
+      @media (max-width: 860px) {
+        header {
+          grid-template-columns: 1fr;
+          gap: 26px;
+        }
+        .three-layers,
+        .compare,
+        .api-grid {
+          grid-template-columns: 1fr;
+        }
+        .layer + .layer {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+        .timeline {
+          grid-template-columns: 1fr;
+          border-top: 0;
+          border-left: 2px solid var(--accent);
+          margin-left: 8px;
+        }
+        .milestone {
+          padding: 0 0 24px 24px;
+        }
+        .milestone::before {
+          top: 3px;
+          left: -8px;
+        }
+        footer {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div>
+          <div class="eyebrow">Implementation architecture · Plan 006</div>
+          <h1>Synara is the harness.</h1>
+          <p class="lede">
+            A control-plane plan that makes every provider recognize Synara first, routes
+            Synara-resource actions through Synara MCP, and prevents detached agents or retries from
+            multiplying threads.
+          </p>
+        </div>
+        <aside class="verdict">
+          <strong>The key decision</strong>
+          <p>
+            Do not rely on a stronger prompt alone. Combine provider-native host instructions,
+            truthful capability discovery, and server-enforced turn-scoped idempotency.
+          </p>
+        </aside>
+      </header>
+
+      <nav aria-label="Plan sections">
+        <a href="#architecture">Architecture</a>
+        <a href="#flow">Target flow</a>
+        <a href="#milestones">Milestones</a>
+        <a href="#api">Tool surface</a>
+        <a href="#pr">PR #2829</a>
+        <a href="#risks">Risks</a>
+        <a href="#proof">Proof</a>
+      </nav>
+
+      <main>
+        <section id="architecture">
+          <h2>Three layers, one invariant</h2>
+          <p class="section-intro">
+            The model should understand the host, but the server must remain correct when the model
+            misunderstands, retries, or continues in a detached background task.
+          </p>
+          <div class="three-layers">
+            <article class="layer">
+              <span class="number">1</span>
+              <h3>Model awareness</h3>
+              <p>
+                A single versioned Synara host policy is delivered through Codex developer
+                instructions, Claude system append, and the safest available provider-specific
+                channel everywhere else.
+              </p>
+              <p class="outcome">
+                “I am running inside Synara. Synara owns threads and automations.”
+              </p>
+            </article>
+            <article class="layer">
+              <span class="number">2</span>
+              <h3>Capability truth</h3>
+              <p>
+                <code>synara_context</code> and <code>synara_capabilities</code> expose canonical
+                providers, models, reasoning options, and honest limitations before a destructive
+                action.
+              </p>
+              <p class="outcome">
+                No guessed <code>gpt-5.6-terra-low</code> slug and no silent fallback.
+              </p>
+            </article>
+            <article class="layer">
+              <span class="number">3</span>
+              <h3>Server authority</h3>
+              <p>
+                Writes require a live provider session and active parent turn. One turn commits one
+                exact creation batch; deterministic ids make retries return the same result.
+              </p>
+              <p class="outcome">Detached background agents cannot create thread after thread.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="flow">
+          <h2>The target request flow</h2>
+          <p class="section-intro">
+            The happy path is one batch and one bounded wait. The historical detached retry path is
+            rejected before any thread or worktree side effect.
+          </p>
+          <div class="flow-wrap">
+            <svg viewBox="0 0 1080 350" role="img" aria-labelledby="flow-title flow-desc">
+              <title id="flow-title">Synara thread coordination flow</title>
+              <desc id="flow-desc">
+                A user request moves through context, validation, reservation, exact creation, wait,
+                and synthesis. Detached retries are blocked.
+              </desc>
+              <defs>
+                <marker
+                  id="arrow"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
+                </marker>
+                <marker
+                  id="stop"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="7"
+                  markerHeight="7"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M0,0 L10,5 L0,10 z" fill="var(--danger)" />
+                </marker>
+              </defs>
+              <path class="arrow" marker-end="url(#arrow)" d="M170 100 H215" />
+              <path class="arrow" marker-end="url(#arrow)" d="M365 100 H410" />
+              <path class="arrow" marker-end="url(#arrow)" d="M560 100 H605" />
+              <path class="arrow" marker-end="url(#arrow)" d="M755 100 H800" />
+              <path class="arrow" marker-end="url(#arrow)" d="M950 100 H990" />
+              <path class="blocked" marker-end="url(#stop)" d="M330 275 C500 275 500 190 675 190" />
+
+              <g class="flow-node primary">
+                <rect x="20" y="55" width="150" height="90" rx="10" />
+                <text x="95" y="88" text-anchor="middle">User request</text>
+                <text class="flow-sub" x="95" y="112" text-anchor="middle">exactly 2 threads</text>
+              </g>
+              <g class="flow-node">
+                <rect x="215" y="55" width="150" height="90" rx="10" />
+                <text x="290" y="88" text-anchor="middle">Host context</text>
+                <text class="flow-sub" x="290" y="112" text-anchor="middle">
+                  capabilities + models
+                </text>
+              </g>
+              <g class="flow-node">
+                <rect x="410" y="55" width="150" height="90" rx="10" />
+                <text x="485" y="88" text-anchor="middle">Preflight</text>
+                <text class="flow-sub" x="485" y="112" text-anchor="middle">
+                  all entries or none
+                </text>
+              </g>
+              <g class="flow-node safe">
+                <rect x="605" y="55" width="150" height="90" rx="10" />
+                <text x="680" y="88" text-anchor="middle">Reserve batch</text>
+                <text class="flow-sub" x="680" y="112" text-anchor="middle">one plan per turn</text>
+              </g>
+              <g class="flow-node safe">
+                <rect x="800" y="55" width="150" height="90" rx="10" />
+                <text x="875" y="88" text-anchor="middle">Create + wait</text>
+                <text class="flow-sub" x="875" y="112" text-anchor="middle">2 pinned results</text>
+              </g>
+              <g class="flow-node primary">
+                <rect x="990" y="55" width="70" height="90" rx="10" />
+                <text x="1025" y="88" text-anchor="middle">Report</text>
+                <text class="flow-sub" x="1025" y="112" text-anchor="middle">both</text>
+              </g>
+
+              <g class="flow-node danger">
+                <rect x="70" y="230" width="260" height="90" rx="10" />
+                <text x="200" y="263" text-anchor="middle">Detached native background agent</text>
+                <text class="flow-sub" x="200" y="288" text-anchor="middle">
+                  parent turn already completed
+                </text>
+              </g>
+              <g class="flow-node danger">
+                <rect x="605" y="170" width="150" height="70" rx="10" />
+                <text x="680" y="200" text-anchor="middle">Rejected</text>
+                <text class="flow-sub" x="680" y="221" text-anchor="middle">
+                  caller_turn_inactive
+                </text>
+              </g>
+            </svg>
+          </div>
+        </section>
+
+        <section id="milestones">
+          <h2>Implementation sequence</h2>
+          <p class="section-intro">
+            The order keeps diagnosis, policy, authorization, and persistence separate so each layer
+            can be verified before coordination behavior changes.
+          </p>
+          <div class="timeline">
+            <div class="milestone">
+              <small>01</small><strong>Characterize</strong
+              ><span>Lock the six-thread incident into failing tests.</span>
+            </div>
+            <div class="milestone">
+              <small>02</small><strong>Recognize</strong
+              ><span>Central host policy through every provider's strongest channel.</span>
+            </div>
+            <div class="milestone">
+              <small>03</small><strong>Authorize</strong
+              ><span>Session-scoped credentials and active-turn write checks.</span>
+            </div>
+            <div class="milestone">
+              <small>04</small><strong>Validate</strong
+              ><span>Canonical provider, model, and option resolver.</span>
+            </div>
+            <div class="milestone">
+              <small>05</small><strong>Reserve</strong
+              ><span>One exact idempotent creation plan per caller turn.</span>
+            </div>
+            <div class="milestone">
+              <small>06</small><strong>Coordinate</strong
+              ><span>Bounded wait, final synthesis, recovery replay.</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="api">
+          <h2>A tool surface models can reason about</h2>
+          <p class="section-intro">
+            Plural work becomes a first-class operation. Failures are data to report, not permission
+            to invent replacement workers.
+          </p>
+          <div class="api-grid">
+            <article class="api">
+              <code>synara_context</code>
+              <h3>Who and where am I?</h3>
+              <p>
+                Returns the Synara harness identity, caller thread/turn/provider, and available host
+                capabilities.
+              </p>
+            </article>
+            <article class="api">
+              <code>synara_capabilities</code>
+              <h3>What can Synara actually run?</h3>
+              <p>
+                Returns the canonical model catalog and supported reasoning options used by server
+                validation.
+              </p>
+            </article>
+            <article class="api">
+              <code>synara_create_threads</code>
+              <h3>Create the exact batch once</h3>
+              <p>
+                Validates 1–20 entries atomically, reserves one plan, and replays the same result
+                for the same request.
+              </p>
+            </article>
+            <article class="api">
+              <code>synara_wait_for_threads</code>
+              <h3>Wait without side effects</h3>
+              <p>
+                Pins each selected run and returns ordered status, summary, and errors with a short
+                rolling timeout.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section id="pr">
+          <h2>PR #2829: inspiration, not architecture</h2>
+          <p class="section-intro">
+            The external draft contains useful narrow patterns, but its 710-file V2 migration is
+            neither necessary nor safe to import wholesale.
+          </p>
+          <div class="compare">
+            <article class="adopt">
+              <h3>Adopt selectively</h3>
+              <ul>
+                <li>Provider-session MCP invocation scope</li>
+                <li>Capability and canonical target validation</li>
+                <li>Stable command/thread/message ids</li>
+                <li>Batch creation and explicit wait</li>
+                <li>Creation provenance and tool annotations</li>
+              </ul>
+              <p><a href="https://github.com/pingdotgg/t3code/pull/2829">Inspect PR #2829</a></p>
+            </article>
+            <article class="reject">
+              <h3>Reject or change</h3>
+              <ul>
+                <li>No full orchestration V2 rewrite</li>
+                <li>No T3 names inside Synara</li>
+                <li>No random fallback when idempotency key is omitted</li>
+                <li>No ten-minute default MCP wait</li>
+                <li>No Claude MCP-only allowlist that hides native tools</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section id="risks">
+          <h2>Risks that deserve reviewer attention</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Risk</th>
+                <th>Likelihood</th>
+                <th>Mitigation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Detached process races turn completion</td>
+                <td><span class="tag high">High</span></td>
+                <td>Resolve current active turn at write time; terminal transition wins.</td>
+              </tr>
+              <tr>
+                <td>Duplicate worktree or partial thread batch</td>
+                <td><span class="tag high">High</span></td>
+                <td>
+                  Reserve before side effects, deterministic ids, ownership-aware compensation,
+                  startup recovery.
+                </td>
+              </tr>
+              <tr>
+                <td>Dynamic model catalog temporarily unavailable</td>
+                <td><span class="tag med">Medium</span></td>
+                <td>Allow configured default only; fail closed for unverified custom targets.</td>
+              </tr>
+              <tr>
+                <td>Provider host text competes with native prompts</td>
+                <td><span class="tag med">Medium</span></td>
+                <td>
+                  One concise versioned policy, delivered exactly once through the strongest
+                  channel.
+                </td>
+              </tr>
+              <tr>
+                <td>Pooled provider leaks another thread's token</td>
+                <td><span class="tag high">High</span></td>
+                <td>
+                  Keep MCP capability false unless per-session binding exists; never put a thread
+                  token in shared config.
+                </td>
+              </tr>
+              <tr>
+                <td>Tool annotations create false confidence</td>
+                <td><span class="tag low">Low</span></td>
+                <td>
+                  Treat annotations as advisory; tests assert backend idempotency and authorization.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="proof">
+          <h2>The acceptance test</h2>
+          <div class="proof">
+            <strong
+              >Replay the original instruction and deliberately attempt the old failure
+              path.</strong
+            >
+            Start two workers—Codex GPT 5.6 Terra with low reasoning and Claude Sonnet 5—ask both
+            what the repository is about, wait for both, and synthesize. Then simulate a detached
+            native subagent retrying invalid and alternative targets. The final database must
+            contain exactly two operation-owned threads, no OpenCode fallback, canonical Codex
+            options, and one parent synthesis.
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>Full executor handoff: <code>plans/006-make-synara-the-agent-harness.md</code></p>
+        <button id="copy-plan" type="button">Copy handoff summary</button>
+      </footer>
+    </div>
+
+    <script>
+      const summary = `# Synara harness control-plane handoff
+
+Implement Plan 006 in this order:
+1. Add failing regression coverage for the six-thread incident.
+2. Centralize a versioned Synara host policy and deliver it through every provider's strongest native instruction channel.
+3. Scope MCP credentials to provider sessions and reject destructive calls without an active caller turn.
+4. Validate canonical provider/model/options through one resolver shared with synara_capabilities.
+5. Add one exact, durable, idempotent synara_create_threads plan per caller turn.
+6. Add bounded synara_wait_for_threads and replay the original incident end-to-end.
+
+Do not copy PR #2829 wholesale, use exclusive Claude MCP allowlists, silently substitute models, or attach per-thread tokens to pooled provider config. See plans/006-make-synara-the-agent-harness.md for exact contracts, files, tests, STOP conditions, and done criteria.`;
+
+      document.getElementById("copy-plan").addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        try {
+          await navigator.clipboard.writeText(summary);
+          button.textContent = "Copied";
+        } catch {
+          const area = document.createElement("textarea");
+          area.value = summary;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+          button.textContent = "Copied";
+        }
+        setTimeout(() => {
+          button.textContent = "Copy handoff summary";
+        }, 1600);
+      });
+    </script>
+  </body>
+</html>

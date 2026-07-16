@@ -1244,6 +1244,26 @@ export default function ChatView({
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const crossTaskSourceThreadId =
+    serverThread?.creationSource && serverThread.sourceThreadId
+      ? serverThread.sourceThreadId
+      : null;
+  const crossTaskSourceThread = useStore(
+    useMemo(
+      () => createThreadSelector(crossTaskSourceThreadId),
+      [crossTaskSourceThreadId],
+    ),
+  );
+  const crossTaskOrigin = useMemo(
+    () =>
+      crossTaskSourceThreadId
+        ? {
+            sourceThreadId: crossTaskSourceThreadId,
+            sourceProvider: crossTaskSourceThread?.modelSelection.provider ?? null,
+          }
+        : null,
+    [crossTaskSourceThread?.modelSelection.provider, crossTaskSourceThreadId],
+  );
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
@@ -11105,6 +11125,7 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     enteringUserMessageIds={enteringUserMessageIds}
+                    crossTaskOrigin={crossTaskOrigin}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}

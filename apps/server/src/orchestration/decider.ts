@@ -459,6 +459,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createBranchFlowCompleted: command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
+          ...(command.creationSource !== undefined
+            ? {
+                creationSource: command.creationSource,
+                sourceThreadId: command.sourceThreadId ?? null,
+                sourceTurnId: command.sourceTurnId ?? null,
+                gatewayOperationId: command.gatewayOperationId ?? null,
+                gatewayOperationIndex: command.gatewayOperationIndex ?? null,
+              }
+            : {}),
           subagentAgentId: command.subagentAgentId,
           subagentNickname: command.subagentNickname,
           subagentRole: command.subagentRole,

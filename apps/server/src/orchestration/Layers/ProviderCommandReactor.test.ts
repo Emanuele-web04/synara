@@ -2782,7 +2782,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("does not promote a second queued turn while the first promoted turn is still starting", async () => {
+  it("keeps the next queued turn blocked until the promoted turn settles", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const firstSendGate: {
@@ -2866,11 +2866,24 @@ describe("ProviderCommandReactor", () => {
       input: "first queued turn",
     });
 
-    // A duplicate/late terminal event can arrive while the promoted turn is
-    // still inside provider startup. It must not drain the next queued message.
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-promoted-1"),
+    });
+    expect(firstSendGate.release).not.toBeNull();
+    firstSendGate.release?.({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-promoted-1"),
+    });
+    await harness.drain();
+
+    // A duplicate/late terminal event for the previous turn can arrive after
+    // the promoted turn has fully started. It must not release that promoted
+    // turn's session reservation or drain the next queued message.
     await harness.emitRuntimeEvent({
       type: "turn.aborted",
-      eventId: asEventId("evt-turn-aborted-while-promotion-starting"),
+      eventId: asEventId("evt-late-turn-aborted-after-promotion-started"),
       provider: "codex",
       threadId: ThreadId.makeUnsafe("thread-1"),
       createdAt: new Date().toISOString(),
@@ -2882,14 +2895,27 @@ describe("ProviderCommandReactor", () => {
     } as ProviderRuntimeEvent);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(firstSendGate.release).not.toBeNull();
-    firstSendGate.release?.({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: asTurnId("turn-promoted-1"),
-    });
-    await harness.drain();
-
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-promoted-first"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-promoted-1"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "second queued turn",
+    });
   });
 
   it("queues a child-thread turn while the shared parent session runs and drains it on settle", async () => {

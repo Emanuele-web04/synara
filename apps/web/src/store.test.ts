@@ -1945,6 +1945,23 @@ describe("store pure functions", () => {
 });
 
 describe("store read model sync", () => {
+  it("preserves cross-task creation provenance from the read model", () => {
+    const sourceThreadId = ThreadId.makeUnsafe("source-thread");
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        creationSource: "synara_mcp",
+        sourceThreadId,
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+    const thread = getThreadFromState(next, ThreadId.makeUnsafe("thread-1"));
+
+    expect(thread?.creationSource).toBe("synara_mcp");
+    expect(thread?.sourceThreadId).toBe(sourceThreadId);
+  });
+
   it("adds the desktop bridge token to server attachment preview URLs", () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
     const testWindow = {

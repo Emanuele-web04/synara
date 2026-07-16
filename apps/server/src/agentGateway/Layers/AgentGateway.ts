@@ -13,30 +13,52 @@
  *
  * @module agentGateway/Layers/AgentGateway
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import {
   AutomationId,
+  SynaraCreateThreadsInput,
+  SynaraWaitForThreadsInput,
+  SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   type AutomationDefinition,
   CommandId,
   DEFAULT_MODEL_BY_PROVIDER,
+  EventId,
   MessageId,
   type OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  TurnId,
   type ModelSelection,
   type ProviderKind,
+  type ServerProviderStatus,
+  type SynaraCreateThreadsResult,
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { AgentGateway, type AgentGatewayShape } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
+import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
+import { SYNARA_GATEWAY_HARNESS_POLICY, SYNARA_HARNESS_POLICY_VERSION } from "../harnessPolicy.ts";
+import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  type AgentGatewayProviderAvailability,
+  AgentGatewayTargetError,
+  loadAgentGatewayProviderCatalog,
+  resolveAgentGatewayTarget,
+} from "../targetResolver.ts";
 import {
   buildMcpInitializeResult,
   jsonRpcError,
@@ -48,6 +70,7 @@ import {
   mcpToolResultJson,
   parseMcpMessage,
   type JsonRpcRequest,
+  type JsonRpcId,
   type McpToolCallResult,
   type McpToolDefinition,
 } from "../protocol.ts";
@@ -58,6 +81,8 @@ const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
 const HEARTBEAT_DEFAULT_INTERVAL_MINUTES = 5;
 const HEARTBEAT_DEFAULT_MAX_ITERATIONS = 50;
+const MCP_MAX_BATCH_MESSAGES = 50;
+const CREATION_REPLAY_WAIT_MS = 60_000;
 
 const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "codex",
@@ -65,23 +90,35 @@ const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
 ];
 
-const AGENT_GATEWAY_INSTRUCTIONS = `You are connected to Synara, the app hosting this session. When the user asks to create, inspect, continue, steer, archive, rename, or otherwise manage Synara threads, use the synara_* tools instead of simulating actions.
+const AGENT_GATEWAY_INSTRUCTIONS = SYNARA_GATEWAY_HARNESS_POLICY;
 
-Guidelines:
-- Use synara_list_threads before reading or steering threads you do not know.
-- Use synara_list_projects before creating a thread in another project.
-- Use synara_create_thread only when the user explicitly asks for a new/background thread or the work genuinely benefits from a parallel worker. Threads you create are ordinary standalone threads; keep track of their ids to follow up on them.
-- For periodic monitoring ("check every N minutes"), create a heartbeat automation on your own thread with synara_create_automation instead of relying on memory, then read the threads you spawned on each wake and cancel the automation with synara_cancel_automation when the work is done.
-- When coordinated work finishes, synthesize the results and reference thread ids and statuses.
-- Report tool results back to the user with thread ids, status, and next actions.`;
+const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
 
 interface ToolContext {
   readonly callerThreadId: string;
+  readonly callerSessionKey: string;
+  readonly callerProvider: ProviderKind;
+  readonly callerCapabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly callerTurnId: string | null;
+  readonly jsonRpcRequestId: JsonRpcId;
 }
 
 type ToolHandler = (
@@ -92,9 +129,34 @@ type ToolHandler = (
 interface ToolEntry {
   readonly definition: McpToolDefinition;
   readonly handler: ToolHandler;
+  readonly requiresActiveTurn?: boolean;
 }
 
 class ToolInputError extends Error {}
+
+class GatewayToolError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(code: string, message: string, details?: unknown) {
+    super(message);
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function gatewayToolErrorResult(error: GatewayToolError | AgentGatewayTargetError) {
+  return {
+    ...mcpToolResultJson({
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      },
+    }),
+    isError: true as const,
+  };
+}
 
 function readStringArg(
   args: Record<string, unknown>,
@@ -167,14 +229,113 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
-function makeAgentIds() {
-  const id = randomUUID();
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stableDigest(value: unknown, length = 32): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex").slice(0, length);
+}
+
+function makeAgentIds(operationId: string, index: number) {
+  const id = stableDigest({ operationId, index }, 32);
   return {
     threadId: ThreadId.makeUnsafe(`agent:${id}`),
     threadCreateCommandId: CommandId.makeUnsafe(`agent:${id}:thread-create`),
     turnStartCommandId: CommandId.makeUnsafe(`agent:${id}:turn-start`),
     messageId: MessageId.makeUnsafe(`agent:${id}:message`),
+    compensateCommandId: CommandId.makeUnsafe(`agent:${id}:compensate-delete`),
   };
+}
+
+interface RecoverableCreationPlanEntry {
+  readonly workspaceRoot: string;
+  readonly environment: "local" | "worktree";
+  readonly newBranch: string | null;
+  readonly plannedWorktreePath: string | null;
+  readonly ownershipPreflightPassed: boolean;
+  readonly ids: {
+    readonly threadId: string;
+    readonly compensateCommandId: string;
+  };
+}
+
+function parseRecoverableCreationPlan(
+  planJson: string,
+): ReadonlyArray<RecoverableCreationPlanEntry> {
+  const parsed: unknown = JSON.parse(planJson);
+  if (!Array.isArray(parsed)) {
+    throw new Error("Stored gateway creation plan is not an array.");
+  }
+  return parsed.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`Stored gateway creation plan entry ${index} is invalid.`);
+    }
+    const value = entry as Record<string, unknown>;
+    const ids = value.ids;
+    if (!ids || typeof ids !== "object") {
+      throw new Error(`Stored gateway creation plan entry ${index} has no deterministic ids.`);
+    }
+    const idRecord = ids as Record<string, unknown>;
+    if (
+      typeof value.workspaceRoot !== "string" ||
+      (value.environment !== "local" && value.environment !== "worktree") ||
+      (value.newBranch !== null && typeof value.newBranch !== "string") ||
+      (value.plannedWorktreePath !== null && typeof value.plannedWorktreePath !== "string") ||
+      typeof idRecord.threadId !== "string" ||
+      typeof idRecord.compensateCommandId !== "string"
+    ) {
+      throw new Error(`Stored gateway creation plan entry ${index} is incomplete.`);
+    }
+    return {
+      workspaceRoot: value.workspaceRoot,
+      environment: value.environment,
+      newBranch: value.newBranch,
+      plannedWorktreePath: value.plannedWorktreePath,
+      // Older in-progress rows predate explicit ownership proof. They remain
+      // decodable, but recovery refuses destructive git cleanup for them.
+      ownershipPreflightPassed: value.ownershipPreflightPassed === true,
+      ids: {
+        threadId: idRecord.threadId,
+        compensateCommandId: idRecord.compensateCommandId,
+      },
+    };
+  });
+}
+
+function readRecordArg(
+  args: Record<string, unknown>,
+  name: string,
+): Record<string, unknown> | undefined {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ToolInputError(`Argument "${name}" must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function decodeCreateThreadsInput(value: unknown) {
+  try {
+    return Schema.decodeUnknownSync(SynaraCreateThreadsInput)(value);
+  } catch (error) {
+    throw new ToolInputError(`Invalid Synara creation plan: ${errorText(error)}`);
+  }
+}
+
+function decodeWaitForThreadsInput(value: unknown) {
+  try {
+    return Schema.decodeUnknownSync(SynaraWaitForThreadsInput)(value);
+  } catch (error) {
+    throw new ToolInputError(`Invalid Synara wait request: ${errorText(error)}`);
+  }
 }
 
 const errorText = (error: unknown): string =>
@@ -186,6 +347,206 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const git = yield* GitCore;
+  const providerDiscovery = yield* ProviderDiscoveryService;
+  const providerHealth = yield* ProviderHealth;
+  const serverSettings = yield* ServerSettingsService;
+  const operationRepository = yield* AgentGatewayOperationRepository;
+  const projectionTurns = yield* ProjectionTurnRepository;
+  const serverConfig = yield* ServerConfig;
+
+  const loadProviderAvailabilities = Effect.gen(function* () {
+    const [settings, statuses] = yield* Effect.all([
+      serverSettings.getSettings,
+      providerHealth.getStatuses,
+    ]);
+    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>(
+      statuses.map((status) => [status.provider, status]),
+    );
+    return new Map<ProviderKind, AgentGatewayProviderAvailability>(
+      PROVIDER_KINDS.map((provider) => {
+        const status = statusByProvider.get(provider);
+        return [
+          provider,
+          {
+            enabled: settings.providers[provider].enabled,
+            ...(status
+              ? {
+                  available: status.available,
+                  authStatus: status.authStatus,
+                  ...(status.message ? { message: status.message } : {}),
+                }
+              : {}),
+          },
+        ];
+      }),
+    );
+  });
+
+  const awaitCreationReplay = (
+    operationId: string,
+  ): Effect.Effect<McpToolCallResult, GatewayToolError | ToolInputError> =>
+    Effect.gen(function* () {
+      const deadline = Date.now() + CREATION_REPLAY_WAIT_MS;
+      let operation = yield* operationRepository
+        .getById(operationId)
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      while (
+        operation !== null &&
+        operation.status !== "completed" &&
+        operation.status !== "failed" &&
+        Date.now() < deadline
+      ) {
+        yield* Effect.sleep(25);
+        operation = yield* operationRepository
+          .getById(operationId)
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      }
+      if (operation?.status === "completed") {
+        return mcpToolResultJson(JSON.parse(operation.resultJson ?? "{}"));
+      }
+      if (operation?.status === "failed") {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "operation_failed",
+            "The original thread-creation operation failed; it will not create replacement threads.",
+            {
+              operationId,
+              error: operation.errorJson ? JSON.parse(operation.errorJson) : null,
+            },
+          ),
+        );
+      }
+      return yield* Effect.fail(
+        new GatewayToolError(
+          "operation_failed",
+          "The original thread-creation operation is still in progress. Retry only with the same request id; Synara will not create replacement threads.",
+          { operationId, status: operation?.status ?? "missing" },
+        ),
+      );
+    });
+
+  const interruptedOperations = yield* operationRepository.listNonTerminal().pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("agent gateway recovery could not list interrupted operations", {
+        error: errorText(error),
+      }).pipe(Effect.as([])),
+    ),
+  );
+  yield* Effect.forEach(
+    interruptedOperations,
+    (operation) =>
+      Effect.gen(function* () {
+        if (operation.status === "reserved") {
+          yield* operationRepository.fail({
+            operationId: operation.operationId,
+            errorJson: JSON.stringify({
+              code: "server_restarted_before_dispatch",
+              message:
+                "Synara restarted before dispatch began. No git or orchestration resources were touched.",
+            }),
+            now: isoNow(),
+          });
+          return;
+        }
+        yield* operationRepository.markCompensating({
+          operationId: operation.operationId,
+          now: isoNow(),
+        });
+        const plan = parseRecoverableCreationPlan(operation.planJson);
+        const recoveryErrors: string[] = [];
+        yield* Effect.forEach(
+          [...plan].reverse(),
+          (entry) =>
+            Effect.gen(function* () {
+              const projected = yield* snapshotQuery.getThreadShellById(
+                ThreadId.makeUnsafe(entry.ids.threadId),
+              );
+              if (Option.isSome(projected)) {
+                if (
+                  projected.value.creationSource !== "synara_mcp" ||
+                  projected.value.gatewayOperationId !== operation.operationId
+                ) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Refusing to delete thread ${entry.ids.threadId}: gateway ownership does not match operation ${operation.operationId}.`,
+                    ),
+                  );
+                }
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.delete",
+                  commandId: CommandId.makeUnsafe(entry.ids.compensateCommandId),
+                  threadId: ThreadId.makeUnsafe(entry.ids.threadId),
+                });
+              }
+            }).pipe(
+              Effect.catch((error) => Effect.sync(() => recoveryErrors.push(errorText(error)))),
+            ),
+          { discard: true },
+        );
+        yield* Effect.forEach(
+          [...plan].reverse(),
+          (entry) =>
+            entry.environment === "worktree" && entry.plannedWorktreePath && entry.newBranch
+              ? Effect.gen(function* () {
+                  if (!entry.ownershipPreflightPassed) {
+                    return yield* Effect.fail(
+                      new Error(
+                        `Refusing to clean worktree ${entry.plannedWorktreePath}: the operation has no durable ownership preflight.`,
+                      ),
+                    );
+                  }
+                  if (existsSync(entry.plannedWorktreePath!)) {
+                    yield* git.removeWorktree({
+                      cwd: entry.workspaceRoot,
+                      path: entry.plannedWorktreePath!,
+                      force: true,
+                    });
+                  }
+                  const branches = yield* git.listBranches({ cwd: entry.workspaceRoot });
+                  if (
+                    branches.branches.some(
+                      (branch) => !branch.isRemote && branch.name === entry.newBranch,
+                    )
+                  ) {
+                    yield* git.deleteBranch({
+                      cwd: entry.workspaceRoot,
+                      branch: entry.newBranch!,
+                      force: true,
+                    });
+                  }
+                }).pipe(
+                  Effect.catch((error) => Effect.sync(() => recoveryErrors.push(errorText(error)))),
+                )
+              : Effect.void,
+          { discard: true },
+        );
+        if (recoveryErrors.length > 0) {
+          yield* Effect.logWarning("agent gateway recovery remains incomplete", {
+            operationId: operation.operationId,
+            errors: recoveryErrors,
+          });
+          return;
+        }
+        yield* operationRepository.fail({
+          operationId: operation.operationId,
+          errorJson: JSON.stringify({
+            code: "server_restarted",
+            message:
+              "Synara restarted before the operation completed. Deterministic operation-owned resources were compensated; no replacements were created.",
+            compensatedCount: plan.length,
+          }),
+          now: isoNow(),
+        });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("agent gateway recovery failed", {
+            operationId: operation.operationId,
+            error: errorText(error),
+          }),
+        ),
+      ),
+    { concurrency: 1, discard: true },
+  );
 
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
@@ -262,12 +623,98 @@ export const makeAgentGateway = Effect.gen(function* () {
 
   // --- read tools -----------------------------------------------------------
 
+  const contextTool: ToolEntry = {
+    definition: {
+      name: "synara_context",
+      description:
+        "Inspect the current Synara harness identity, caller thread/turn, and authorized coordination capabilities.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: {
+        title: "Synara context",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (_args, context) =>
+      Effect.gen(function* () {
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const turnId = caller.latestTurn?.state === "running" ? caller.latestTurn.turnId : null;
+        return mcpToolResultJson({
+          harness: { name: "Synara", policyVersion: SYNARA_HARNESS_POLICY_VERSION },
+          caller: {
+            threadId: caller.id,
+            turnId,
+            provider: context.callerProvider,
+            projectId: caller.projectId,
+          },
+          capabilities: {
+            threadRead: context.callerCapabilities.has("thread:read"),
+            threadCreate: turnId !== null && context.callerCapabilities.has("thread:write"),
+            threadWait: context.callerCapabilities.has("thread:read"),
+            automations: turnId !== null && context.callerCapabilities.has("automation:write"),
+          },
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const capabilitiesTool: ToolEntry = {
+    definition: {
+      name: "synara_capabilities",
+      description:
+        "List the canonical Synara provider/model targets and gateway limits used to validate thread creation.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: {
+        title: "Synara capabilities",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (_args, context) =>
+      Effect.gen(function* () {
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const project = yield* snapshotQuery.getProjectShellById(caller.projectId).pipe(
+          Effect.mapError((error) => new ToolInputError(errorText(error))),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(new ToolInputError(`Project "${caller.projectId}" was not found.`)),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
+        const availabilities = yield* loadProviderAvailabilities;
+        const providers = yield* Effect.forEach(PROVIDER_KINDS, (provider) =>
+          loadAgentGatewayProviderCatalog({
+            provider,
+            discovery: providerDiscovery,
+            ...(availabilities.get(provider) !== undefined
+              ? { availability: availabilities.get(provider)! }
+              : {}),
+            cwd: project.workspaceRoot,
+          }),
+        );
+        return mcpToolResultJson({
+          providers,
+          limits: {
+            maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+            maxWaitMs: 60_000,
+            oneCreationPlanPerActiveTurn: true,
+          },
+        });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const listProjects: ToolEntry = {
     definition: {
       name: "synara_list_projects",
       description:
         "List Synara projects (id, title, workspace root). Use before creating a thread in another project.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { title: "List Synara projects", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: () =>
       snapshotQuery.getShellSnapshot().pipe(
@@ -303,6 +750,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         },
         additionalProperties: false,
       },
+      annotations: { title: "List Synara threads", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -335,7 +783,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_thread",
       description:
-        "Read one thread's status and recent messages (newest last, truncated). Pass the returned nextCursor as cursor to page older messages.",
+        "Read one Synara thread's status and recent messages (newest last, truncated). Pass the returned nextCursor as cursor to page older messages.",
       inputSchema: {
         type: "object",
         properties: {
@@ -350,6 +798,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["threadId"],
         additionalProperties: false,
       },
+      annotations: { title: "Read a Synara thread", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -378,180 +827,507 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
-  // --- write tools ----------------------------------------------------------
-
-  const createThread: ToolEntry = {
+  const waitForThreads: ToolEntry = {
     definition: {
-      name: "synara_create_thread",
+      name: "synara_wait_for_threads",
       description:
-        "Create a new standalone Synara thread and send it an initial task prompt. Supports any provider/model (e.g. a Grok worker from a Codex thread) and an optional isolated git worktree for file-editing tasks. Keep the returned threadId to follow up on it.",
+        "Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Timeouts only report progress; they never retry, replace, cancel, or create work.",
       inputSchema: {
         type: "object",
         properties: {
-          prompt: { type: "string", description: "Initial task message for the new thread." },
-          provider: {
-            type: "string",
-            enum: [...PROVIDER_KINDS],
-            description: "Provider running the new thread.",
+          threadIds: {
+            type: "array",
+            minItems: 1,
+            maxItems: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+            items: { type: "string" },
           },
-          model: {
-            type: "string",
-            description: "Model slug; defaults to the provider's default model.",
+          runIds: {
+            type: "array",
+            maxItems: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+            items: { type: ["string", "null"] },
+            description: "Optional pinned turn ids from a prior wait. Must match threadIds length.",
           },
-          projectId: {
-            type: "string",
-            description: "Target project; defaults to your thread's project.",
-          },
-          environment: {
-            type: "string",
-            enum: ["local", "worktree"],
-            description:
-              "local = share the project workspace (default for local callers, read-only work); worktree = isolated git worktree (for file edits). Threads running in a worktree default to worktree and cannot spawn local workers.",
-          },
-          baseBranch: {
-            type: "string",
-            description: "Worktree only: branch to fork from; defaults to the current branch.",
-          },
-          branchName: {
-            type: "string",
-            description: "Worktree only: new branch name; defaults to a generated agent/ branch.",
-          },
-          runtimeMode: {
-            type: "string",
-            enum: ["approval-required", "full-access"],
-            description:
-              "Defaults to your thread's runtime mode. Cannot exceed it: an approval-required caller cannot spawn full-access threads.",
+          timeoutMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: 60_000,
+            description: "Long-poll duration; defaults to 30000ms.",
           },
         },
-        required: ["prompt", "provider"],
+        required: ["threadIds"],
         additionalProperties: false,
+      },
+      annotations: {
+        title: "Wait for Synara threads",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
       },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
-        const prompt = readStringArg(args, "prompt", { required: true })!;
-        const provider = parseProviderKind(readStringArg(args, "provider", { required: true })!);
-        const model = readStringArg(args, "model");
-        const environmentArg = readStringArg(args, "environment");
-        if (
-          environmentArg !== undefined &&
-          environmentArg !== "local" &&
-          environmentArg !== "worktree"
-        ) {
-          throw new ToolInputError(`Argument "environment" must be "local" or "worktree".`);
+        const input = decodeWaitForThreadsInput(args);
+        if (input.runIds && input.runIds.length !== input.threadIds.length) {
+          throw new ToolInputError('Argument "runIds" must have the same length as "threadIds".');
         }
-        const runtimeModeArg = readStringArg(args, "runtimeMode");
-        if (
-          runtimeModeArg !== undefined &&
-          runtimeModeArg !== "approval-required" &&
-          runtimeModeArg !== "full-access"
-        ) {
-          throw new ToolInputError(
-            `Argument "runtimeMode" must be "approval-required" or "full-access".`,
-          );
-        }
-
-        // The caller only provides defaults (project, runtime mode); the new
-        // thread is an ordinary top-level thread with no parent linkage.
-        const caller = yield* requireThreadShell(context.callerThreadId);
-
-        // Isolation boundary: a caller the user confined to a worktree must
-        // not place workers on the shared project checkout. Default to a
-        // fresh worktree and reject explicit "local" requests.
-        const callerIsolatedInWorktree = caller.envMode === "worktree";
-        if (environmentArg === "local" && callerIsolatedInWorktree) {
-          throw new ToolInputError(
-            'Your thread runs in an isolated worktree, so spawned threads cannot use environment "local". Omit environment (defaults to "worktree") or ask the user to run this task from a local thread.',
-          );
-        }
-        const environment = environmentArg ?? (callerIsolatedInWorktree ? "worktree" : "local");
-
-        const projectIdArg = readStringArg(args, "projectId");
-        const projectId = ProjectId.makeUnsafe(projectIdArg ?? caller.projectId);
-        const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
-          Effect.mapError((error) => new ToolInputError(errorText(error))),
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
-              onSome: (shell) => Effect.succeed(shell),
-            }),
+        const timeoutMs = input.timeoutMs ?? 30_000;
+        const deadline = Date.now() + timeoutMs;
+        const pinned = yield* Effect.forEach(input.threadIds, (threadId, index) =>
+          snapshotQuery.getThreadDetailById(threadId).pipe(
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new GatewayToolError("thread_not_found", `Thread "${threadId}" was not found.`),
+                  ),
+                onSome: (thread) =>
+                  Effect.succeed({
+                    threadId,
+                    runId: input.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
+                  }),
+              }),
+            ),
           ),
         );
 
-        const modelSelection = buildModelSelection(provider, model);
-        // Privilege boundary: a delegated agent must not escalate its workers
-        // beyond what the user granted the calling thread. Only the user can
-        // grant full access (by running the caller itself in full-access).
-        if (runtimeModeArg === "full-access" && caller.runtimeMode !== "full-access") {
-          throw new ToolInputError(
-            'Your thread runs in "approval-required" mode, so spawned threads cannot use "full-access". Omit runtimeMode or ask the user to switch your thread to full access first.',
+        const readPinned = () =>
+          Effect.forEach(pinned, (pin) =>
+            Effect.gen(function* () {
+              const detail = yield* snapshotQuery.getThreadDetailById(pin.threadId).pipe(
+                Effect.mapError((error) => new ToolInputError(errorText(error))),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new GatewayToolError(
+                          "thread_not_found",
+                          `Thread "${pin.threadId}" was not found.`,
+                        ),
+                      ),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+              if (pin.runId === null) {
+                return {
+                  threadId: pin.threadId,
+                  runId: null,
+                  state: "idle",
+                  terminal: true,
+                  timedOut: false,
+                  summary: null,
+                  error: null,
+                };
+              }
+              const turn = yield* projectionTurns
+                .getByTurnId({ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) })
+                .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+              const row = Option.getOrUndefined(turn);
+              const state =
+                row?.state ??
+                (detail.latestTurn?.turnId === pin.runId ? detail.latestTurn.state : "pending");
+              const terminal =
+                state === "completed" || state === "error" || state === "interrupted";
+              const assistantMessage = detail.messages
+                .filter((message) => message.role === "assistant" && message.turnId === pin.runId)
+                .at(-1);
+              return {
+                threadId: pin.threadId,
+                runId: pin.runId,
+                state,
+                terminal,
+                timedOut: false,
+                summary: terminal ? (assistantMessage?.text ?? null) : null,
+                error: state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
+              };
+            }),
+          );
+
+        let results = yield* readPinned();
+        while (results.some((result) => !result.terminal) && Date.now() < deadline) {
+          yield* Effect.sleep(Math.min(200, Math.max(1, deadline - Date.now())));
+          results = yield* readPinned();
+        }
+        const timedOut = results.some((result) => !result.terminal);
+        const finalResults = results.map((result) => ({
+          ...result,
+          timedOut: !result.terminal && timedOut,
+        }));
+        return mcpToolResultJson({
+          callerThreadId: context.callerThreadId,
+          runIds: pinned.map((pin) => pin.runId),
+          allTerminal: finalResults.every((result) => result.terminal),
+          timedOut,
+          threads: finalResults,
+        });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed(
+            error instanceof GatewayToolError
+              ? gatewayToolErrorResult(error)
+              : mcpToolResultError(errorText(error)),
+          ),
+        ),
+      ),
+  };
+
+  // --- write tools ----------------------------------------------------------
+
+  const appendThreadCreationRecap = (input: {
+    readonly callerThreadId: string;
+    readonly callerTurnId: string;
+    readonly result: SynaraCreateThreadsResult;
+  }) => {
+    const marker = stableDigest({
+      operationId: input.result.operationId,
+      kind: "threads-created-recap",
+    });
+    const createdAt = isoNow();
+    const threadLabel = input.result.createdCount === 1 ? "thread" : "threads";
+    return orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
+        threadId: ThreadId.makeUnsafe(input.callerThreadId),
+        activity: {
+          id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
+          tone: "info",
+          kind: "synara.threads.created",
+          summary: `Created ${input.result.createdCount} Synara ${threadLabel}`,
+          payload: {
+            source: "synara_mcp",
+            operationId: input.result.operationId,
+            requestId: input.result.requestId,
+            requestedCount: input.result.requestedCount,
+            createdCount: input.result.createdCount,
+            threads: input.result.threads,
+          },
+          turnId: TurnId.makeUnsafe(input.callerTurnId),
+          createdAt,
+        },
+        createdAt,
+      })
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("agent gateway could not append thread creation recap", {
+            operationId: input.result.operationId,
+            callerThreadId: input.callerThreadId,
+            error: errorText(error),
+          }),
+        ),
+      );
+  };
+
+  const runCreateThreads = (input: typeof SynaraCreateThreadsInput.Type, context: ToolContext) =>
+    Effect.gen(function* () {
+      if (context.callerTurnId === null) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "caller_turn_inactive",
+            "Thread creation requires an active caller turn.",
+          ),
+        );
+      }
+      const callerTurnId = context.callerTurnId;
+      const caller = yield* requireThreadShell(context.callerThreadId);
+      const operationId = `gateway:create:${stableDigest({
+        callerThreadId: context.callerThreadId,
+        callerTurnId,
+        requestId: input.requestId,
+      })}`;
+      const fingerprint = stableDigest(input, 64);
+      const existingOperation = yield* operationRepository
+        .getByScope({
+          callerThreadId: context.callerThreadId,
+          callerTurnId,
+          operationKind: "create_threads",
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      if (existingOperation !== null) {
+        if (existingOperation.requestId !== input.requestId) {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "creation_plan_locked",
+              "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
+              {
+                operationId: existingOperation.operationId,
+                requestId: existingOperation.requestId,
+                requestedCount: existingOperation.requestedCount,
+                status: existingOperation.status,
+              },
+            ),
           );
         }
-        const runtimeMode = runtimeModeArg ?? caller.runtimeMode;
-        // Same flow as UI-created threads: start with the deterministic
-        // placeholder so the first-turn reactor auto-renames it with a
-        // model-generated title. A custom title here would block that rename.
-        const title = buildPromptThreadTitleFallback(prompt);
-
-        let branch: string | null = null;
-        let worktreePath: string | null = null;
-        if (environment === "worktree") {
-          const baseBranchArg = readStringArg(args, "baseBranch");
-          // A worktree-isolated caller forks from its own branch by default,
-          // not from whatever the shared checkout happens to have checked
-          // out — the worker should continue the caller's line of work. Only
-          // within the caller's own project: the branch name is meaningless
-          // (or worse, collides) in another project's repository.
-          const callerBranch =
-            callerIsolatedInWorktree && caller.projectId === projectId
-              ? (caller.branch ?? null)
-              : null;
-          const baseBranch =
-            baseBranchArg ??
-            callerBranch ??
-            (yield* git.statusDetails(project.workspaceRoot).pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-              Effect.flatMap((status) =>
-                status.isRepo && status.branch
-                  ? Effect.succeed(status.branch)
-                  : Effect.fail(
-                      new ToolInputError(
-                        'The project is not on a git branch; pass an explicit baseBranch or use environment "local".',
-                      ),
-                    ),
-              ),
-            ));
-          const newBranch =
-            readStringArg(args, "branchName") ??
-            `agent/${slugify(title)}-${randomUUID().slice(0, 8)}`;
-          const created = yield* git
-            .createWorktree({
-              cwd: project.workspaceRoot,
-              branch: baseBranch,
-              newBranch,
-              path: null,
-            })
-            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-          branch = created.worktree.branch;
-          worktreePath = created.worktree.path;
+        if (existingOperation.fingerprint !== fingerprint) {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "idempotency_conflict",
+              `Request id "${input.requestId}" was already used with a different creation plan.`,
+              { operationId: existingOperation.operationId },
+            ),
+          );
         }
+        if (existingOperation.status === "completed") {
+          return mcpToolResultJson(JSON.parse(existingOperation.resultJson ?? "{}"));
+        }
+        if (existingOperation.status === "failed") {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "operation_failed",
+              "The original thread-creation operation failed; it will not create replacement threads.",
+              {
+                operationId: existingOperation.operationId,
+                error: existingOperation.errorJson ? JSON.parse(existingOperation.errorJson) : null,
+              },
+            ),
+          );
+        }
+        return yield* awaitCreationReplay(existingOperation.operationId);
+      }
+      const callerIsolatedInWorktree = caller.envMode === "worktree";
+      const providerAvailabilities = yield* loadProviderAvailabilities;
 
-        const ids = makeAgentIds();
-        const now = isoNow();
-        yield* orchestrationEngine
-          .dispatch({
-            type: "thread.create",
-            commandId: ids.threadCreateCommandId,
-            threadId: ids.threadId,
+      // Validate and resolve the entire exact plan before reserving any git or
+      // orchestration side effect.
+      const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
+        Effect.gen(function* () {
+          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller.projectId);
+          const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
+          const target = yield* resolveAgentGatewayTarget({
+            target: spec.target,
+            discovery: providerDiscovery,
+            ...(providerAvailabilities.get(spec.target.provider) !== undefined
+              ? { availability: providerAvailabilities.get(spec.target.provider)! }
+              : {}),
+            cwd: project.workspaceRoot,
+          });
+          const environment = spec.environment ?? (callerIsolatedInWorktree ? "worktree" : "local");
+          if (environment === "local" && callerIsolatedInWorktree) {
+            return yield* Effect.fail(
+              new ToolInputError(
+                'Your thread runs in an isolated worktree, so created threads cannot use environment "local".',
+              ),
+            );
+          }
+          if (spec.runtimeMode === "full-access" && caller.runtimeMode !== "full-access") {
+            return yield* Effect.fail(
+              new ToolInputError(
+                'Your thread runs in "approval-required" mode, so created threads cannot use "full-access".',
+              ),
+            );
+          }
+          const runtimeMode = spec.runtimeMode ?? caller.runtimeMode;
+          const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
+          let baseBranch: string | null = null;
+          let newBranch: string | null = null;
+          let plannedWorktreePath: string | null = null;
+          if (environment === "worktree") {
+            const callerBranch =
+              callerIsolatedInWorktree && caller.projectId === projectId
+                ? (caller.branch ?? null)
+                : null;
+            baseBranch =
+              spec.baseBranch ??
+              callerBranch ??
+              (yield* git.statusDetails(project.workspaceRoot).pipe(
+                Effect.mapError((error) => new ToolInputError(errorText(error))),
+                Effect.flatMap((status) =>
+                  status.isRepo && status.branch
+                    ? Effect.succeed(status.branch)
+                    : Effect.fail(
+                        new ToolInputError(
+                          'The project is not on a git branch; pass baseBranch or use environment "local".',
+                        ),
+                      ),
+                ),
+              ));
+            newBranch =
+              spec.branchName ??
+              `agent/${slugify(title)}-${stableDigest({ operationId, index }, 8)}`;
+            plannedWorktreePath = join(
+              serverConfig.worktreesDir,
+              basename(project.workspaceRoot),
+              newBranch.replace(/\//g, "-"),
+            );
+            if (existsSync(plannedWorktreePath)) {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  `Worktree path "${plannedWorktreePath}" already exists. Synara will not reuse or remove a pre-existing path.`,
+                ),
+              );
+            }
+            const branches = yield* git
+              .listBranches({ cwd: project.workspaceRoot })
+              .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+            if (branches.branches.some((branch) => !branch.isRemote && branch.name === newBranch)) {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  `Branch "${newBranch}" already exists. Synara will not reuse or remove a pre-existing branch.`,
+                ),
+              );
+            }
+          }
+          return {
+            index,
+            spec,
             projectId,
-            title,
-            modelSelection,
+            workspaceRoot: project.workspaceRoot,
+            target,
+            environment,
             runtimeMode,
+            title,
+            baseBranch,
+            newBranch,
+            plannedWorktreePath,
+            ownershipPreflightPassed: true,
+            ids: makeAgentIds(operationId, index),
+          };
+        }),
+      );
+
+      const plannedWorktrees = prepared
+        .map((entry) => entry.plannedWorktreePath)
+        .filter((path): path is string => path !== null);
+      if (new Set(plannedWorktrees).size !== plannedWorktrees.length) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            "The creation plan resolves multiple entries to the same worktree path. Use distinct branchName values.",
+          ),
+        );
+      }
+
+      const now = isoNow();
+      const reservation = yield* operationRepository
+        .reserve({
+          operationId,
+          callerThreadId: context.callerThreadId,
+          callerTurnId,
+          operationKind: "create_threads",
+          requestId: input.requestId,
+          fingerprint,
+          requestedCount: prepared.length,
+          planJson: canonicalJson(
+            prepared.map((entry) => ({
+              index: entry.index,
+              spec: entry.spec,
+              projectId: entry.projectId,
+              workspaceRoot: entry.workspaceRoot,
+              environment: entry.environment,
+              runtimeMode: entry.runtimeMode,
+              baseBranch: entry.baseBranch,
+              newBranch: entry.newBranch,
+              plannedWorktreePath: entry.plannedWorktreePath,
+              ownershipPreflightPassed: entry.ownershipPreflightPassed,
+              ids: entry.ids,
+            })),
+          ),
+          now,
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+
+      if (reservation.kind === "idempotency_conflict") {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "idempotency_conflict",
+            `Request id "${input.requestId}" was already used with a different creation plan.`,
+            { operationId: reservation.operation.operationId },
+          ),
+        );
+      }
+      if (reservation.kind === "creation_plan_locked") {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "creation_plan_locked",
+            "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
+            {
+              operationId: reservation.operation.operationId,
+              requestId: reservation.operation.requestId,
+              requestedCount: reservation.operation.requestedCount,
+              status: reservation.operation.status,
+            },
+          ),
+        );
+      }
+      if (reservation.kind === "replay" && reservation.operation.status === "completed") {
+        return mcpToolResultJson(JSON.parse(reservation.operation.resultJson ?? "{}"));
+      }
+      if (reservation.kind === "replay" && reservation.operation.status === "failed") {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "operation_failed",
+            "The original thread-creation operation failed; it will not create replacement threads.",
+            {
+              operationId: reservation.operation.operationId,
+              error: reservation.operation.errorJson
+                ? JSON.parse(reservation.operation.errorJson)
+                : null,
+            },
+          ),
+        );
+      }
+
+      if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
+        return yield* awaitCreationReplay(operationId);
+      }
+
+      const claimed = yield* operationRepository
+        .markDispatching({ operationId, now: isoNow() })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      if (!claimed) {
+        return yield* awaitCreationReplay(operationId);
+      }
+
+      const createdThreads: Array<(typeof prepared)[number]> = [];
+      const createdWorktrees: Array<{
+        readonly cwd: string;
+        readonly path: string;
+        readonly branch: string;
+      }> = [];
+
+      const results = yield* Effect.forEach(prepared, (entry) =>
+        Effect.gen(function* () {
+          let branch: string | null = null;
+          let worktreePath: string | null = null;
+          if (entry.environment === "worktree") {
+            const created = yield* git.createWorktree({
+              cwd: entry.workspaceRoot,
+              branch: entry.baseBranch!,
+              newBranch: entry.newBranch!,
+              path: entry.plannedWorktreePath,
+            });
+            branch = created.worktree.branch;
+            worktreePath = created.worktree.path;
+            createdWorktrees.push({ cwd: entry.workspaceRoot, path: worktreePath, branch });
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.create",
+            commandId: entry.ids.threadCreateCommandId,
+            threadId: entry.ids.threadId,
+            projectId: entry.projectId,
+            title: entry.title,
+            modelSelection: entry.target,
+            runtimeMode: entry.runtimeMode,
             interactionMode: "default",
-            envMode: environment,
+            envMode: entry.environment,
             branch,
             worktreePath,
+            creationSource: "synara_mcp",
+            sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+            sourceTurnId: TurnId.makeUnsafe(callerTurnId),
+            gatewayOperationId: operationId,
+            gatewayOperationIndex: entry.index,
             ...(worktreePath !== null
               ? {
                   associatedWorktreePath: worktreePath,
@@ -559,50 +1335,311 @@ export const makeAgentGateway = Effect.gen(function* () {
                   associatedWorktreeRef: branch,
                 }
               : {}),
-            createdAt: now,
-          })
-          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+            createdAt: isoNow(),
+          });
+          createdThreads.push(entry);
 
-        yield* orchestrationEngine
-          .dispatch({
+          yield* orchestrationEngine.dispatch({
             type: "thread.turn.start",
-            commandId: ids.turnStartCommandId,
-            threadId: ids.threadId,
+            commandId: entry.ids.turnStartCommandId,
+            threadId: entry.ids.threadId,
             message: {
-              messageId: ids.messageId,
+              messageId: entry.ids.messageId,
               role: "user",
-              text: prompt,
+              text: entry.spec.prompt,
               attachments: [],
             },
-            modelSelection,
+            modelSelection: entry.target,
             dispatchMode: "queue",
             dispatchOrigin: "agent",
-            runtimeMode,
+            runtimeMode: entry.runtimeMode,
             interactionMode: "default",
             createdAt: isoNow(),
-          })
-          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+          });
 
-        return mcpToolResultJson({
-          threadId: ids.threadId,
-          projectId,
-          title,
-          provider: modelSelection.provider,
-          model: modelSelection.model,
-          runtimeMode,
-          environment,
-          branch,
-          worktreePath,
-          status: "task dispatched",
-        });
-      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+          return {
+            index: entry.index,
+            threadId: entry.ids.threadId,
+            projectId: entry.projectId,
+            title: entry.title,
+            target: entry.target,
+            provider: entry.target.provider,
+            model: entry.target.model,
+            runtimeMode: entry.runtimeMode,
+            environment: entry.environment,
+            branch,
+            worktreePath,
+            status: "task_dispatched",
+          };
+        }),
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.gen(function* () {
+            yield* operationRepository
+              .markCompensating({ operationId, now: isoNow() })
+              .pipe(Effect.catch(() => Effect.void));
+            const compensationErrors: string[] = [];
+            let compensatedThreadCount = 0;
+            let compensatedWorktreeCount = 0;
+            yield* Effect.forEach(
+              [...createdThreads].reverse(),
+              (entry) =>
+                orchestrationEngine
+                  .dispatch({
+                    type: "thread.delete",
+                    commandId: entry.ids.compensateCommandId,
+                    threadId: entry.ids.threadId,
+                  })
+                  .pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        compensatedThreadCount += 1;
+                      }),
+                    ),
+                    Effect.catch((error) =>
+                      Effect.sync(() =>
+                        compensationErrors.push(
+                          `thread ${entry.ids.threadId}: ${errorText(error)}`,
+                        ),
+                      ),
+                    ),
+                  ),
+              { discard: true },
+            );
+            yield* Effect.forEach(
+              [...createdWorktrees].reverse(),
+              (worktree) =>
+                git.removeWorktree({ cwd: worktree.cwd, path: worktree.path, force: true }).pipe(
+                  Effect.flatMap(() =>
+                    git.deleteBranch({
+                      cwd: worktree.cwd,
+                      branch: worktree.branch,
+                      force: true,
+                    }),
+                  ),
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      compensatedWorktreeCount += 1;
+                    }),
+                  ),
+                  Effect.catch((error) =>
+                    Effect.sync(() =>
+                      compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
+                    ),
+                  ),
+                ),
+              { discard: true },
+            );
+            const failure = {
+              message: errorText(cause),
+              createdThreadCount: createdThreads.length,
+              compensatedThreadCount,
+              compensatedWorktreeCount,
+              compensationErrors,
+            };
+            if (compensationErrors.length > 0) {
+              yield* Effect.logWarning("agent gateway compensation remains pending", {
+                operationId,
+                errors: compensationErrors,
+              });
+              return yield* Effect.fail(
+                new GatewayToolError(
+                  "operation_failed",
+                  "Synara could not dispatch the exact creation plan and cleanup is still pending. The durable operation remains compensating and will never create replacements.",
+                  { operationId, ...failure, compensationPending: true },
+                ),
+              );
+            }
+            yield* operationRepository
+              .fail({ operationId, errorJson: JSON.stringify(failure), now: isoNow() })
+              .pipe(Effect.catch(() => Effect.void));
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "operation_failed",
+                "Synara could not dispatch the exact creation plan. Created operation-owned resources were compensated; no replacements were created.",
+                { operationId, ...failure },
+              ),
+            );
+          }),
+        ),
+      );
+
+      const result = {
+        operationId,
+        requestId: input.requestId,
+        requestedCount: input.threads.length,
+        createdCount: results.length,
+        threadIds: results.map((entry) => entry.threadId),
+        threads: results,
+      };
+      yield* operationRepository
+        .complete({ operationId, resultJson: JSON.stringify(result), now: isoNow() })
+        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+      yield* appendThreadCreationRecap({
+        callerThreadId: context.callerThreadId,
+        callerTurnId,
+        result,
+      });
+      return mcpToolResultJson(result);
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          error instanceof GatewayToolError || error instanceof AgentGatewayTargetError
+            ? gatewayToolErrorResult(error)
+            : mcpToolResultError(errorText(error)),
+        ),
+      ),
+    );
+
+  const createThreads: ToolEntry = {
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_create_threads",
+      description:
+        "Create an exact batch of 1–20 standalone Synara threads. Call once for plural requests; retries with the same requestId replay the same durable operation and never add replacement threads.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: {
+            type: "string",
+            maxLength: 256,
+            description: "Stable id for this exact user-requested creation plan.",
+          },
+          threads: {
+            type: "array",
+            minItems: 1,
+            maxItems: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+            items: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+                title: { type: "string" },
+                target: {
+                  type: "object",
+                  description:
+                    "Canonical ModelSelection from synara_capabilities: provider, model, and provider-specific options.",
+                },
+                projectId: { type: "string" },
+                environment: { type: "string", enum: ["local", "worktree"] },
+                baseBranch: { type: "string" },
+                branchName: { type: "string" },
+                runtimeMode: {
+                  type: "string",
+                  enum: ["approval-required", "full-access"],
+                },
+              },
+              required: ["prompt", "target"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["requestId", "threads"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Create Synara threads",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (args, context) => runCreateThreads(decodeCreateThreadsInput(args), context),
+  };
+
+  const createThread: ToolEntry = {
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_create_thread",
+      description:
+        "Create exactly one standalone Synara thread. For two or more threads use one synara_create_threads call instead.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string", maxLength: 256 },
+          prompt: { type: "string" },
+          title: { type: "string" },
+          target: {
+            type: "object",
+            description: "Canonical provider/model/options selection from synara_capabilities.",
+          },
+          provider: { type: "string", enum: [...PROVIDER_KINDS] },
+          model: { type: "string" },
+          options: { type: "object" },
+          projectId: { type: "string" },
+          environment: { type: "string", enum: ["local", "worktree"] },
+          baseBranch: { type: "string" },
+          branchName: { type: "string" },
+          runtimeMode: { type: "string", enum: ["approval-required", "full-access"] },
+        },
+        required: ["requestId", "prompt"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Create a Synara thread",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    handler: (args, context) =>
+      Effect.suspend(() => {
+        const explicitTarget = readRecordArg(args, "target");
+        let target: Record<string, unknown>;
+        if (explicitTarget) {
+          target = explicitTarget;
+        } else {
+          const provider = parseProviderKind(readStringArg(args, "provider", { required: true })!);
+          const modelSelection = buildModelSelection(provider, readStringArg(args, "model"));
+          const options = readRecordArg(args, "options");
+          target = { ...modelSelection, ...(options ? { options } : {}) };
+        }
+        const spec: Record<string, unknown> = {
+          prompt: readStringArg(args, "prompt", { required: true })!,
+          target,
+        };
+        for (const key of [
+          "title",
+          "projectId",
+          "environment",
+          "baseBranch",
+          "branchName",
+          "runtimeMode",
+        ]) {
+          const value = args[key];
+          if (value !== undefined) spec[key] = value;
+        }
+        return runCreateThreads(
+          decodeCreateThreadsInput({
+            requestId: readStringArg(args, "requestId", { required: true }),
+            threads: [spec],
+          }),
+          context,
+        ).pipe(
+          Effect.map((result) => {
+            if (result.isError) return result;
+            const batch = JSON.parse(result.content[0]?.text ?? "{}") as {
+              operationId?: string;
+              requestId?: string;
+              threads?: Array<Record<string, unknown>>;
+            };
+            return mcpToolResultJson({
+              operationId: batch.operationId,
+              requestId: batch.requestId,
+              ...(batch.threads?.[0] ?? {}),
+            });
+          }),
+        );
+      }).pipe(Effect.catchDefect((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
   const sendMessage: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_send_message",
       description:
-        'Send a follow-up message to an existing thread. mode "queue" (default) waits for the current turn; "steer" redirects a running turn where the provider supports it (otherwise it is queued).',
+        'Send a Synara follow-up message to an existing thread. mode "queue" (default) waits for the current turn; "steer" redirects a running turn where the provider supports it (otherwise it is queued).',
       inputSchema: {
         type: "object",
         properties: {
@@ -613,6 +1650,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["threadId", "message"],
         additionalProperties: false,
       },
+      annotations: { title: "Send a Synara message", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -653,9 +1691,10 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const interruptThread: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_interrupt_thread",
-      description: "Interrupt the running turn of a thread.",
+      description: "Interrupt the running turn of a Synara thread.",
       inputSchema: {
         type: "object",
         properties: {
@@ -664,6 +1703,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["threadId"],
         additionalProperties: false,
       },
+      annotations: { title: "Interrupt a Synara thread", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -685,9 +1725,10 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const setThreadTitle: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_title",
-      description: "Rename a thread.",
+      description: "Rename a Synara thread.",
       inputSchema: {
         type: "object",
         properties: {
@@ -697,6 +1738,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["threadId", "title"],
         additionalProperties: false,
       },
+      annotations: { title: "Rename a Synara thread", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -718,10 +1760,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const setThreadArchived: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_archived",
       description:
-        "Archive or unarchive a thread. Defaults to your own thread when threadId is omitted.",
+        "Archive or unarchive a Synara thread. Defaults to your own thread when threadId is omitted.",
       inputSchema: {
         type: "object",
         properties: {
@@ -731,6 +1774,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["archived"],
         additionalProperties: false,
       },
+      annotations: { title: "Update a Synara thread", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -756,10 +1800,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   // --- automation tools -----------------------------------------------------
 
   const createAutomation: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_create_automation",
       description:
-        "Create a heartbeat automation that wakes a thread on an interval (default: your own thread every 5 minutes). Use it for periodic monitoring instead of relying on memory; cancel it with synara_cancel_automation when done.",
+        "Create a Synara heartbeat automation that wakes a thread on an interval (default: your own thread every 5 minutes). Use it for periodic monitoring instead of relying on memory; cancel it with synara_cancel_automation when done.",
       inputSchema: {
         type: "object",
         properties: {
@@ -785,6 +1830,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["name", "prompt"],
         additionalProperties: false,
       },
+      annotations: { title: "Create a Synara automation", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -852,7 +1898,8 @@ export const makeAgentGateway = Effect.gen(function* () {
   const listAutomations: ToolEntry = {
     definition: {
       name: "synara_list_automations",
-      description: "List automations (id, name, schedule, target thread, enabled, next run).",
+      description:
+        "List Synara automations (id, name, schedule, target thread, enabled, next run).",
       inputSchema: {
         type: "object",
         properties: {
@@ -860,6 +1907,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         },
         additionalProperties: false,
       },
+      annotations: { title: "List Synara automations", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (args) =>
       Effect.gen(function* () {
@@ -884,10 +1932,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const cancelAutomation: ToolEntry = {
+    requiresActiveTurn: true,
     definition: {
       name: "synara_cancel_automation",
       description:
-        'Stop an automation. mode "disable" (default) pauses it and keeps history; "delete" archives it.',
+        'Stop a Synara automation. mode "disable" (default) pauses it and keeps history; "delete" archives it.',
       inputSchema: {
         type: "object",
         properties: {
@@ -897,6 +1946,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["automationId"],
         additionalProperties: false,
       },
+      annotations: { title: "Stop a Synara automation", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -923,9 +1973,13 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   const tools: ReadonlyArray<ToolEntry> = [
+    contextTool,
+    capabilitiesTool,
     listProjects,
     listThreads,
     readThread,
+    waitForThreads,
+    createThreads,
     createThread,
     sendMessage,
     interruptThread,
@@ -937,7 +1991,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   ];
   const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]));
 
-  const handleRequest = (request: JsonRpcRequest, context: ToolContext) =>
+  const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
     Effect.gen(function* () {
       switch (request.method) {
         case "initialize":
@@ -969,7 +2023,51 @@ export const makeAgentGateway = Effect.gen(function* () {
             typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs)
               ? (rawArgs as Record<string, unknown>)
               : {};
-          const result = yield* Effect.suspend(() => tool.handler(args, context)).pipe(
+          const requiredCapability = tool.requiresActiveTurn
+            ? toolName.includes("automation")
+              ? "automation:write"
+              : "thread:write"
+            : "thread:read";
+          if (!context.callerCapabilities.has(requiredCapability)) {
+            return jsonRpcResult(
+              request.id,
+              gatewayToolErrorResult(
+                new GatewayToolError(
+                  "capability_denied",
+                  `This provider session is not authorized for ${requiredCapability}.`,
+                  { requiredCapability },
+                ),
+              ),
+            );
+          }
+          let invocationContext: ToolContext = {
+            ...context,
+            jsonRpcRequestId: request.id,
+          };
+          if (tool.requiresActiveTurn) {
+            const caller = yield* requireThreadShell(context.callerThreadId);
+            if (caller.latestTurn?.state !== "running") {
+              return jsonRpcResult(
+                request.id,
+                gatewayToolErrorResult(
+                  new GatewayToolError(
+                    "caller_turn_inactive",
+                    "This Synara write was rejected because the calling turn is no longer active. Detached or completed agents cannot mutate Synara resources.",
+                    {
+                      callerThreadId: context.callerThreadId,
+                      latestTurnId: caller.latestTurn?.turnId ?? null,
+                      latestTurnState: caller.latestTurn?.state ?? null,
+                    },
+                  ),
+                ),
+              );
+            }
+            invocationContext = {
+              ...invocationContext,
+              callerTurnId: caller.latestTurn.turnId,
+            };
+          }
+          const result = yield* Effect.suspend(() => tool.handler(args, invocationContext)).pipe(
             Effect.catchDefect((defect) => Effect.succeed(mcpToolResultError(errorText(defect)))),
           );
           return jsonRpcResult(request.id, result);
@@ -986,16 +2084,21 @@ export const makeAgentGateway = Effect.gen(function* () {
   const handleMcpPost: AgentGatewayShape["handleMcpPost"] = (input) =>
     Effect.gen(function* () {
       const token = extractBearerToken(input.authorizationHeader);
-      const callerThreadId = token ? credentials.verifySessionToken(token) : null;
-      if (!callerThreadId) {
+      const callerSession = token ? credentials.verifySession(token) : null;
+      if (!callerSession) {
         return {
           status: 401,
-          body: jsonRpcError(null, JSON_RPC_INVALID_REQUEST, "Missing or invalid bearer token."),
+          body: jsonRpcError(
+            null,
+            JSON_RPC_INVALID_REQUEST,
+            "caller_session_inactive: Missing, expired, revoked, or invalid provider-session credential.",
+          ),
         };
       }
-      // Tokens are stateless HMACs and survive restarts, so bind their
-      // validity to the caller thread's existence: a token minted for a
-      // since-deleted thread must not keep app-control access.
+      const callerThreadId = callerSession.threadId;
+      // The registry is in-memory and session scoped. Also bind the credential
+      // to the current projected thread/provider so a deleted or re-routed
+      // session cannot retain app-control access.
       const callerThread = yield* snapshotQuery
         .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -1009,7 +2112,26 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         };
       }
-      const context: ToolContext = { callerThreadId };
+      if (callerThread.value.modelSelection.provider !== callerSession.provider) {
+        return {
+          status: 401,
+          body: jsonRpcError(
+            null,
+            JSON_RPC_INVALID_REQUEST,
+            "caller_session_inactive: Provider session no longer owns this thread.",
+          ),
+        };
+      }
+      const context: Omit<ToolContext, "jsonRpcRequestId"> = {
+        callerThreadId,
+        callerSessionKey: callerSession.sessionKey,
+        callerProvider: callerSession.provider,
+        callerCapabilities: callerSession.capabilities,
+        callerTurnId:
+          callerThread.value.latestTurn?.state === "running"
+            ? callerThread.value.latestTurn.turnId
+            : null,
+      };
 
       const rawMessages = Array.isArray(input.body) ? input.body : [input.body];
       if (rawMessages.length === 0) {
@@ -1018,12 +2140,46 @@ export const makeAgentGateway = Effect.gen(function* () {
           body: jsonRpcError(null, JSON_RPC_INVALID_REQUEST, "Empty JSON-RPC batch."),
         };
       }
+      if (rawMessages.length > MCP_MAX_BATCH_MESSAGES) {
+        return {
+          status: 400,
+          body: jsonRpcError(
+            null,
+            JSON_RPC_INVALID_REQUEST,
+            `JSON-RPC batches may contain at most ${MCP_MAX_BATCH_MESSAGES} messages.`,
+          ),
+        };
+      }
+      const parsedMessages = rawMessages.map(parseMcpMessage);
+      const requestIds = new Set<string>();
+      for (const parsed of parsedMessages) {
+        if (parsed.kind !== "request") continue;
+        const key = `${typeof parsed.request.id}:${String(parsed.request.id)}`;
+        if (requestIds.has(key)) {
+          return {
+            status: 400,
+            body: jsonRpcError(
+              parsed.request.id,
+              JSON_RPC_INVALID_REQUEST,
+              `Duplicate JSON-RPC request id ${JSON.stringify(parsed.request.id)} in one batch.`,
+            ),
+          };
+        }
+        requestIds.add(key);
+      }
       const responses: Array<Record<string, unknown>> = [];
-      for (const raw of rawMessages) {
-        const parsed = parseMcpMessage(raw);
+      for (const parsed of parsedMessages) {
         switch (parsed.kind) {
           case "request":
-            responses.push(yield* handleRequest(parsed.request, context));
+            responses.push(
+              yield* handleRequest(parsed.request, context).pipe(
+                Effect.catch((error) =>
+                  Effect.succeed(
+                    jsonRpcResult(parsed.request.id, mcpToolResultError(errorText(error))),
+                  ),
+                ),
+              ),
+            );
             break;
           case "notification":
           case "response":

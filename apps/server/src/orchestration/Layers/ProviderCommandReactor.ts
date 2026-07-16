@@ -16,6 +16,7 @@ import {
   type ProviderReviewTarget,
   type ProviderStartOptions,
   type ProviderSkillReference,
+  type ProviderTurnStartResult,
   type OrchestrationSession,
   type OrchestrationProjectShell,
   type OrchestrationThread,
@@ -346,18 +347,22 @@ const make = Effect.gen(function* () {
   >();
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
-  // Provider sessions with a drained queued turn whose
-  // `thread.turn-start-requested` has been dispatched into the engine but not
-  // fully started by the worker. While set, recovery drains and terminal-event
-  // drains must hold off so two queued turns are never promoted at once.
+  // Provider sessions with a drained queued turn whose promotion is in flight.
+  // The reservation survives provider startup and binds to the exact turn that
+  // must settle before another queue can drain, preventing late terminal events
+  // from promoting overlapping work.
   // Keyed by the session-owning thread id (child subagent threads share the
   // parent session, so per-child keys would allow overlapping promotions on
-  // one session); the queued thread + message pair prevents unrelated starts
-  // from clearing another promotion's reservation.
-  const pendingQueuedDispatchBySessionThread = new Map<
-    string,
-    { readonly queuedThreadId: string; readonly messageId: string }
-  >();
+  // one session); the queued thread + message pair identifies the promoted
+  // command, while object identity protects a replacement reservation for a
+  // retry of that same command.
+  type PendingQueuedDispatch = {
+    readonly queuedThreadId: string;
+    readonly messageId: string;
+    releaseOnTurnId?: TurnId;
+    pendingTerminalTurnIds?: Set<TurnId>;
+  };
+  const pendingQueuedDispatchBySessionThread = new Map<string, PendingQueuedDispatch>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
   // Fresh sessions that cannot inherit native conversation state need one
   // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
@@ -624,14 +629,16 @@ const make = Effect.gen(function* () {
   // Child subagent threads share their parent's provider session, so the
   // lookup must resolve to the session-owning thread — a raw child-id lookup
   // would always miss and drain queued child messages into a live turn.
-  const hasLiveProviderTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
     const session = yield* providerService
       .listSessions()
       .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
-    return session?.status === "running" && session.activeTurnId !== undefined;
+    return session?.status === "running" ? session.activeTurnId : undefined;
   });
+  const hasLiveProviderTurn = (threadId: ThreadId) =>
+    resolveLiveProviderTurnId(threadId).pipe(Effect.map((turnId) => turnId !== undefined));
 
   const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
     `${threadId}:${messageId}`;
@@ -1276,17 +1283,18 @@ const make = Effect.gen(function* () {
       input.threadId,
     );
     let pendingContextBootstrapAttempt: PendingContextBootstrapAttempt | undefined;
+    let startedTurn: ProviderTurnStartResult | undefined;
 
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
-      yield* providerService
+      startedTurn = yield* providerService
         .startReview({
           threadId: input.threadId,
           target: input.reviewTarget,
         })
         .pipe(Effect.onError(() => cancelPendingStudioBaseline));
     } else if (input.dispatchMode === "steer") {
-      yield* providerService.steerTurn({
+      startedTurn = yield* providerService.steerTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
         ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -1384,6 +1392,7 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      startedTurn = sentTurn;
       if (pendingContextBootstrapAttempt) {
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
@@ -1426,6 +1435,7 @@ const make = Effect.gen(function* () {
       rollbackContextBootstrapThreadIds.delete(input.threadId);
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
+    return startedTurn;
   });
 
   const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
@@ -1678,20 +1688,29 @@ const make = Effect.gen(function* () {
   ) {
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.payload.threadId))?.id ?? event.payload.threadId;
-    const matchesReservation = (
-      entry: { readonly queuedThreadId: string; readonly messageId: string } | undefined,
-    ) =>
+    const matchesEvent = (entry: PendingQueuedDispatch | undefined) =>
       entry?.queuedThreadId === (event.payload.threadId as string) &&
       entry.messageId === event.payload.messageId;
-    const isPendingQueuedDispatch = matchesReservation(
-      pendingQueuedDispatchBySessionThread.get(sessionThreadId),
-    );
+    const reservationAtStart = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+    const isPendingQueuedDispatch = matchesEvent(reservationAtStart);
+    const ownsReservation = (entry: PendingQueuedDispatch | undefined) =>
+      isPendingQueuedDispatch && entry === reservationAtStart;
     const clearPendingQueuedDispatch = Effect.sync(() => {
-      if (
-        isPendingQueuedDispatch &&
-        matchesReservation(pendingQueuedDispatchBySessionThread.get(sessionThreadId))
-      ) {
+      if (ownsReservation(pendingQueuedDispatchBySessionThread.get(sessionThreadId))) {
         pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+      }
+    });
+    const bindPendingQueuedDispatchToTurn = Effect.fnUntraced(function* (turnId: TurnId) {
+      const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+      if (reservation === undefined || !ownsReservation(reservation)) {
+        return;
+      }
+      reservation.releaseOnTurnId = turnId;
+      const completedBeforeBinding = reservation.pendingTerminalTurnIds?.has(turnId);
+      delete reservation.pendingTerminalTurnIds;
+      if (completedBeforeBinding) {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+        yield* drainQueuedTurnsForSession(event.payload.threadId);
       }
     });
     try {
@@ -1724,7 +1743,8 @@ const make = Effect.gen(function* () {
       // live provider turn. Codex steers ride the live turn natively; everything
       // else re-queues and is promoted when the live turn settles.
       const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
-      const hasLiveTurn = yield* hasLiveProviderTurn(event.payload.threadId);
+      const liveTurnId = yield* resolveLiveProviderTurnId(event.payload.threadId);
+      const hasLiveTurn = liveTurnId !== undefined;
       // Steering is only meaningful against a live turn. The projection can
       // lag the runtime in the other direction too (turn already settled but
       // still projected as running), so recheck live state and dispatch a
@@ -1734,6 +1754,10 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" && providerName === "codex" && hasLiveTurn;
       if (!isCodexSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event.payload);
+        // The promotion raced another live turn and was re-queued. Release
+        // only when that exact blocking turn settles, not on any late
+        // terminal event for the shared provider session.
+        yield* bindPendingQueuedDispatchToTurn(liveTurnId);
         if (event.payload.dispatchMode === "steer") {
           // Preserve steer semantics: jump the queue (enqueue unshifts steers)
           // and ask the live turn to stop so the steer dispatches next.
@@ -1805,7 +1829,7 @@ const make = Effect.gen(function* () {
           : event.payload.dispatchMode;
       const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
 
-      yield* dispatchTurnForThread({
+      const startedTurn = yield* dispatchTurnForThread({
         threadId: event.payload.threadId,
         messageId: message.id,
         messageText: message.text,
@@ -1845,14 +1869,26 @@ const make = Effect.gen(function* () {
               detail,
               createdAt: event.payload.createdAt,
             });
-            yield* clearPendingQueuedDispatch;
-            yield* drainQueuedTurnsForSession(event.payload.threadId);
           }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
+      if (startedTurn && isPendingQueuedDispatch) {
+        yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
+      }
     } finally {
-      yield* clearPendingQueuedDispatch;
+      const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+      if (
+        isPendingQueuedDispatch &&
+        reservation !== undefined &&
+        ownsReservation(reservation) &&
+        reservation.releaseOnTurnId === undefined &&
+        !(yield* hasQueuedTurnStart(event.payload.threadId, event.payload.messageId)) &&
+        !(yield* hasLiveProviderTurn(event.payload.threadId))
+      ) {
+        yield* clearPendingQueuedDispatch;
+        yield* drainQueuedTurnsForSession(event.payload.threadId);
+      }
     }
   });
 
@@ -1945,6 +1981,23 @@ const make = Effect.gen(function* () {
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     observePendingContextBootstrapTerminalEvent(event);
+    const sessionThreadId =
+      (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
+    const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+    if (reservation) {
+      if (reservation.releaseOnTurnId === undefined) {
+        const terminalTurnIds = reservation.pendingTerminalTurnIds ?? new Set<TurnId>();
+        if (event.turnId !== undefined) {
+          terminalTurnIds.add(event.turnId);
+        }
+        reservation.pendingTerminalTurnIds = terminalTurnIds;
+        return;
+      }
+      if (reservation.releaseOnTurnId !== event.turnId) {
+        return;
+      }
+      pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+    }
     // Child subagent threads queue under their own id but share the parent's
     // provider session, and terminal runtime events carry the session-owning
     // thread id — drain every queue bound to this session.

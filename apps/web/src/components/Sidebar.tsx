@@ -1678,16 +1678,14 @@ export default function Sidebar() {
     nonStudioThreads: nonStudioSidebarDisplayThreads,
     studioThreads: studioSidebarDisplayThreads,
   } = useMemo(
-     () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
-     [sidebarDisplayThreads, studioProjectIdSet],
-   );
-  const {
-    nonStudioThreads: nonStudioSidebarTreeThreads,
-    studioThreads: studioSidebarTreeThreads,
-  } = useMemo(
-    () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
-    [sidebarTreeThreads, studioProjectIdSet],
+    () => partitionSidebarThreadsByProjectIds(sidebarDisplayThreads, studioProjectIdSet),
+    [sidebarDisplayThreads, studioProjectIdSet],
   );
+  const { nonStudioThreads: nonStudioSidebarTreeThreads, studioThreads: studioSidebarTreeThreads } =
+    useMemo(
+      () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
+      [sidebarTreeThreads, studioProjectIdSet],
+    );
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {

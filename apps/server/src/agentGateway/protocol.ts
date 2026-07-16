@@ -40,6 +40,13 @@ export interface McpToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  readonly annotations?: {
+    readonly title?: string;
+    readonly readOnlyHint?: boolean;
+    readonly destructiveHint?: boolean;
+    readonly idempotentHint?: boolean;
+    readonly openWorldHint?: boolean;
+  };
 }
 
 export interface McpToolCallResult {

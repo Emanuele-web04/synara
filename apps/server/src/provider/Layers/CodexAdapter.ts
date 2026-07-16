@@ -1619,7 +1619,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ? {
                   agentGatewayMcp: {
                     endpointUrl: agentGatewayCredentials.mcpEndpointUrl,
-                    issueBearerToken: agentGatewayCredentials.issueSessionToken,
+                    issueBearerToken: (threadId) =>
+                      agentGatewayCredentials.issueSessionToken(threadId, PROVIDER),
+                    revokeBearerToken: agentGatewayCredentials.revokeSessionToken,
                   },
                 }
               : {}),

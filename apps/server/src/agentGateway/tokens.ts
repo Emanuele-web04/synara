@@ -1,11 +1,9 @@
 /**
- * Agent gateway session tokens.
+ * Legacy agent gateway token helpers.
  *
- * Stateless bearer tokens that authenticate provider sessions against the
- * Synara agent gateway (`POST /mcp`). A token embeds the calling thread id and
- * an HMAC signature derived from a per-install secret, so tokens survive
- * server restarts without any persistence and cannot be forged or transferred
- * across installs.
+ * Kept only to verify and migrate historical token behavior in isolated tests.
+ * Live gateway credentials are opaque, expiring, and held by the in-memory
+ * AgentGatewaySessionRegistry; these helpers are not used for live sessions.
  *
  * Format: `sagw_<base64url(threadId)>.<base64url(hmacSha256(secret, threadId))>`
  *

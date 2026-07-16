@@ -7,6 +7,7 @@ describe("resolveAgentGatewayEndpointHost", () => {
     expect(resolveAgentGatewayEndpointHost(undefined)).toBe("127.0.0.1");
     expect(resolveAgentGatewayEndpointHost("0.0.0.0")).toBe("127.0.0.1");
     expect(resolveAgentGatewayEndpointHost("::")).toBe("127.0.0.1");
+    expect(resolveAgentGatewayEndpointHost("[::]")).toBe("127.0.0.1");
   });
 
   it("reuses an explicit bind host so child processes can reach the listener", () => {
@@ -16,5 +17,6 @@ describe("resolveAgentGatewayEndpointHost", () => {
 
   it("brackets IPv6 hosts for URL use", () => {
     expect(resolveAgentGatewayEndpointHost("::1")).toBe("[::1]");
+    expect(resolveAgentGatewayEndpointHost("[::1]")).toBe("[::1]");
   });
 });

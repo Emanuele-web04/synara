@@ -56,8 +56,11 @@ import {
 // Depends on: ProviderRuntimeEvent contracts, OrchestrationEngine, Projection repositories
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
-const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId =>
-  CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
+const providerCommandId = (
+  event: ProviderRuntimeEvent,
+  tag: string,
+  target: string = event.threadId,
+): CommandId => CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${target}`);
 
 const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 2_048;
@@ -76,6 +79,7 @@ const PENDING_GENERATED_IMAGES_CACHE_CAPACITY = 512;
 const PENDING_GENERATED_IMAGES_TTL = Duration.minutes(60);
 const ACTIVITY_UPDATE_FINGERPRINT_CACHE_CAPACITY = 4_096;
 const ACTIVITY_UPDATE_FINGERPRINT_TTL = Duration.minutes(360);
+const MAX_NATIVE_CHILDREN_PER_PARENT_TURN = 20;
 // One turn realistically produces a handful of images; the cap only bounds a
 // pathological provider replaying image completions in a loop.
 const MAX_PENDING_GENERATED_IMAGES_PER_TURN = 32;
@@ -1671,6 +1675,37 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(undefined),
   });
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
+  const nativeChildIdsBySourceTurn = new Map<string, Set<string>>();
+
+  const claimNativeChildSlot = Effect.fnUntraced(function* (
+    parentThreadId: ThreadId,
+    sourceTurnId: TurnId | null,
+    childThreadId: ThreadId,
+  ) {
+    const budgetKey = `${parentThreadId}:${sourceTurnId ?? "session"}`;
+    let childIds = nativeChildIdsBySourceTurn.get(budgetKey);
+    if (!childIds) {
+      const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+      childIds = new Set(
+        snapshot.threads
+          .filter(
+            (thread) =>
+              thread.parentThreadId === parentThreadId &&
+              (thread.sourceTurnId ?? null) === sourceTurnId,
+          )
+          .map((thread) => thread.id),
+      );
+      nativeChildIdsBySourceTurn.set(budgetKey, childIds);
+    }
+    if (childIds.has(childThreadId)) {
+      return { admitted: true, budgetKey } as const;
+    }
+    if (childIds.size >= MAX_NATIVE_CHILDREN_PER_PARENT_TURN) {
+      return { admitted: false, budgetKey } as const;
+    }
+    childIds.add(childThreadId);
+    return { admitted: true, budgetKey } as const;
+  });
 
   const dispatchActivityUpdate = Effect.fnUntraced(function* (
     event: ProviderRuntimeEvent,
@@ -1688,7 +1723,11 @@ const make = Effect.gen(function* () {
 
     yield* orchestrationEngine.dispatch({
       type: "thread.activity.append",
-      commandId: providerCommandId(event, "thread-activity-append"),
+      commandId: providerCommandId(
+        event,
+        "thread-activity-append",
+        `${threadId}:${activity.id}:${activity.sequence ?? "none"}`,
+      ),
       threadId,
       activity,
       createdAt: activity.createdAt,
@@ -2078,7 +2117,7 @@ const make = Effect.gen(function* () {
 
       yield* orchestrationEngine.dispatch({
         type: "thread.message.assistant.delta",
-        commandId: providerCommandId(input.event, input.commandTag),
+        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
         threadId: input.threadId,
         messageId: input.messageId,
         delta: bufferedText,
@@ -2164,7 +2203,7 @@ const make = Effect.gen(function* () {
       if (hasRenderableAssistantText(text)) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
-          commandId: providerCommandId(input.event, input.finalDeltaCommandTag),
+          commandId: providerCommandId(input.event, input.finalDeltaCommandTag, input.messageId),
           threadId: input.threadId,
           messageId: input.messageId,
           delta: text,
@@ -2175,7 +2214,7 @@ const make = Effect.gen(function* () {
 
       yield* orchestrationEngine.dispatch({
         type: "thread.message.assistant.complete",
-        commandId: providerCommandId(input.event, input.commandTag),
+        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
         threadId: input.threadId,
         messageId: input.messageId,
         ...(input.turnId ? { turnId: input.turnId } : {}),
@@ -2224,7 +2263,7 @@ const make = Effect.gen(function* () {
         const joined = missingMarkdown.join("\n\n");
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
-          commandId: providerCommandId(input.event, "generated-image-delta"),
+          commandId: providerCommandId(input.event, "generated-image-delta", targetMessageId),
           threadId: input.threadId,
           messageId: targetMessageId,
           delta: targetMessageText.trim().length > 0 ? `\n\n${joined}` : joined,
@@ -2242,7 +2281,7 @@ const make = Effect.gen(function* () {
       if (shouldComplete) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.complete",
-          commandId: providerCommandId(input.event, "generated-image-complete"),
+          commandId: providerCommandId(input.event, "generated-image-complete", targetMessageId),
           threadId: input.threadId,
           messageId: targetMessageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
@@ -2399,7 +2438,7 @@ const make = Effect.gen(function* () {
       const existingPlan = input.threadProposedPlans.find((entry) => entry.id === input.planId);
       yield* orchestrationEngine.dispatch({
         type: "thread.proposed-plan.upsert",
-        commandId: providerCommandId(input.event, "proposed-plan-upsert"),
+        commandId: providerCommandId(input.event, "proposed-plan-upsert", input.planId),
         threadId: input.threadId,
         proposedPlan: {
           id: input.planId,
@@ -2591,6 +2630,7 @@ const make = Effect.gen(function* () {
       ) =>
         Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
+          const sourceTurnId = toTurnId(event.turnId) ?? null;
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           // Mirror the parent load: only this event's heavy-detail handlers read the
@@ -2610,9 +2650,35 @@ const make = Effect.gen(function* () {
               : undefined;
 
           if (Option.isNone(existingThread)) {
+            const slot = yield* claimNativeChildSlot(parentThread.id, sourceTurnId, childThreadId);
+            if (!slot.admitted) {
+              const overflowId = EventId.makeUnsafe(
+                `provider-native-child-overflow:${slot.budgetKey}`,
+              );
+              yield* orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: CommandId.makeUnsafe(`provider:native-child-overflow:${slot.budgetKey}`),
+                threadId: parentThread.id,
+                activity: {
+                  id: overflowId,
+                  tone: "error",
+                  kind: "subagent.materialization.capped",
+                  summary: `Synara limited this provider turn to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} visible native subagents.`,
+                  payload: {
+                    source: "provider_native",
+                    cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
+                    rejectedProviderThreadId: providerThreadId,
+                  },
+                  turnId: sourceTurnId,
+                  createdAt: now,
+                },
+                createdAt: now,
+              });
+              return undefined;
+            }
             yield* orchestrationEngine.dispatch({
               type: "thread.create",
-              commandId: providerCommandId(event, "subagent-thread-create"),
+              commandId: providerCommandId(event, "subagent-thread-create", childThreadId),
               threadId: childThreadId,
               projectId: parentThread.projectId,
               title: subagentThreadTitle({
@@ -2630,6 +2696,9 @@ const make = Effect.gen(function* () {
               associatedWorktreeBranch: parentThread.associatedWorktreeBranch,
               associatedWorktreeRef: parentThread.associatedWorktreeRef,
               parentThreadId: parentThread.id,
+              creationSource: "provider_native",
+              sourceThreadId: parentThread.id,
+              ...(sourceTurnId !== null ? { sourceTurnId } : {}),
               subagentAgentId: identity?.agentId ?? null,
               subagentNickname: identity?.nickname ?? null,
               subagentRole: identity?.role ?? null,
@@ -2645,7 +2714,7 @@ const make = Effect.gen(function* () {
             ) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
-                commandId: providerCommandId(event, "subagent-thread-meta-update"),
+                commandId: providerCommandId(event, "subagent-thread-meta-update", childThreadId),
                 threadId: childThreadId,
                 ...(identity?.nickname !== undefined || identity?.role !== undefined
                   ? {
@@ -2684,6 +2753,11 @@ const make = Effect.gen(function* () {
                   providerThreadId,
                 }),
                 parentThreadId: parentThread.id,
+                creationSource: "provider_native" as const,
+                sourceThreadId: parentThread.id,
+                sourceTurnId,
+                gatewayOperationId: null,
+                gatewayOperationIndex: null,
                 subagentAgentId: identity?.agentId ?? null,
                 subagentNickname: identity?.nickname ?? null,
                 subagentRole: identity?.role ?? null,
@@ -2739,6 +2813,9 @@ const make = Effect.gen(function* () {
               extractSubagentIdentity(event, providerThreadId),
             )
           : { threadId: parentThread.id, thread: parentThread };
+      if (targetThreadResolution === undefined) {
+        return;
+      }
       const thread = targetThreadResolution.thread;
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const eventTurnId = resolveTerminalTurnId(event, activeTurnId);
@@ -2851,7 +2928,7 @@ const make = Effect.gen(function* () {
 
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
-            commandId: providerCommandId(event, "thread-session-set"),
+            commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -2872,7 +2949,7 @@ const make = Effect.gen(function* () {
         if (inferredRuntimeMode && inferredRuntimeMode !== thread.runtimeMode) {
           yield* orchestrationEngine.dispatch({
             type: "thread.runtime-mode.set",
-            commandId: providerCommandId(event, "thread-runtime-mode-set"),
+            commandId: providerCommandId(event, "thread-runtime-mode-set", thread.id),
             threadId: thread.id,
             runtimeMode: inferredRuntimeMode,
             createdAt: now,
@@ -2923,7 +3000,11 @@ const make = Effect.gen(function* () {
           if (spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
               type: "thread.message.assistant.delta",
-              commandId: providerCommandId(event, "assistant-delta-buffer-spill"),
+              commandId: providerCommandId(
+                event,
+                "assistant-delta-buffer-spill",
+                assistantMessageId,
+              ),
               threadId: thread.id,
               messageId: assistantMessageId,
               delta: spillChunk,
@@ -2934,7 +3015,7 @@ const make = Effect.gen(function* () {
         } else {
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
-            commandId: providerCommandId(event, "assistant-delta"),
+            commandId: providerCommandId(event, "assistant-delta", assistantMessageId),
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
@@ -3151,7 +3232,7 @@ const make = Effect.gen(function* () {
         if (shouldApplyRuntimeError) {
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
-            commandId: providerCommandId(event, "runtime-error-session-set"),
+            commandId: providerCommandId(event, "runtime-error-session-set", thread.id),
             threadId: thread.id,
             session: {
               threadId: thread.id,
@@ -3170,7 +3251,7 @@ const make = Effect.gen(function* () {
       if (event.type === "thread.metadata.updated" && event.payload.name) {
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
-          commandId: providerCommandId(event, "thread-meta-update"),
+          commandId: providerCommandId(event, "thread-meta-update", thread.id),
           threadId: thread.id,
           title: event.payload.name,
         });
@@ -3221,7 +3302,11 @@ const make = Effect.gen(function* () {
             // across turns and cause the diff card to render on the wrong row.
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",
-              commandId: providerCommandId(event, "thread-turn-diff-complete"),
+              commandId: providerCommandId(
+                event,
+                "thread-turn-diff-complete",
+                `${thread.id}:${turnId}`,
+              ),
               threadId: thread.id,
               turnId,
               completedAt: now,
