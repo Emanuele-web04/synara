@@ -637,7 +637,10 @@ export function createWsNativeApi(): NativeApi {
           method: "POST",
         }),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
-      updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
+      // Provider updates run up to 2 minutes server-side; callers wrap this in
+      // withProviderUpdateTimeout, which owns the client-side watchdog.
+      updateProvider: (input) =>
+        transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
@@ -669,7 +672,10 @@ export function createWsNativeApi(): NativeApi {
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
-      compactThread: (input) => transport.request(WS_METHODS.providerCompactThread, input),
+      // Compaction is capped server-side per provider (ACP providers allow up
+      // to the 10-minute turn-idle ceiling), so the server owns this bound.
+      compactThread: (input) =>
+        transport.request(WS_METHODS.providerCompactThread, input, { timeoutMs: null }),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
       listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),
