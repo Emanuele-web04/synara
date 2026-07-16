@@ -4958,7 +4958,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps an unfinished task list visible once the latest turn is settled", async () => {
+  it("hides an unfinished task list once the latest turn is settled", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -4968,9 +4968,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
-          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
-          expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
-          expect(document.body.textContent).toContain("Patch the shared checklist receiver");
+          expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
           expect(document.body.textContent).not.toContain("1 background agent");
         },
         { timeout: 8_000, interval: 16 },

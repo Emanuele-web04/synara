@@ -530,6 +530,85 @@ describe("store pure functions", () => {
     });
   });
 
+  it.each([
+    { status: "ready", expectedState: "completed" },
+    { status: "interrupted", expectedState: "interrupted" },
+    { status: "stopped", expectedState: "interrupted" },
+  ] as const)(
+    "settles the running latest turn when a session-set event leaves running ($status → $expectedState)",
+    ({ status, expectedState }) => {
+      const initialState = makeState(
+        makeThread({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-running"),
+            state: "running",
+            requestedAt: "2026-02-27T00:01:00.000Z",
+            startedAt: "2026-02-27T00:01:05.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      );
+
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.session-set", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          session: {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            status,
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-02-27T00:02:00.000Z",
+          },
+        }),
+      ]);
+
+      expect(next.threads[0]?.latestTurn).toMatchObject({
+        turnId: TurnId.makeUnsafe("turn-running"),
+        state: expectedState,
+        completedAt: "2026-02-27T00:02:00.000Z",
+      });
+    },
+  );
+
+  it("does not settle the running turn while an interrupted session still retains it", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-running"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.session-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "interrupted",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.makeUnsafe("turn-running"),
+          lastError: null,
+          updatedAt: "2026-02-27T00:02:00.000Z",
+        },
+      }),
+    ]);
+
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-running"),
+      state: "running",
+      completedAt: null,
+    });
+  });
+
   it("adds projects immediately from live project.created events", () => {
     const next = applyOrchestrationEvents(
       {
@@ -1524,6 +1603,40 @@ describe("store pure functions", () => {
     });
   });
 
+  it("keeps a settled turn intact when a late provider diff placeholder arrives", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: "2026-02-27T00:01:30.000Z",
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-diff-completed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: TurnId.makeUnsafe("turn-1"),
+        completedAt: "2026-02-27T00:01:31.000Z",
+        status: "missing",
+        files: [],
+        checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-late"),
+        assistantMessageId: null,
+        checkpointTurnCount: 1,
+      }),
+    ]);
+
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-1"),
+      state: "completed",
+      completedAt: "2026-02-27T00:01:30.000Z",
+    });
+  });
+
   it("does not leak the previous turn's assistantMessageId into a null-id summary for a different turn", () => {
     const existingAssistantMessageId = MessageId.makeUnsafe("assistant-turn-1");
     const initialState = makeState(
@@ -2406,6 +2519,165 @@ describe("store read model sync", () => {
     expect(next.threadTurnStateById?.[threadId]?.latestTurn?.completedAt).toBe(completedAt);
     expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
     expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
+  });
+
+  it("adopts a settled session when the snapshot's terminal turn supersedes the preserved one", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path-superseded");
+    const staleTurnId = TurnId.makeUnsafe("turn-hot-path-stale");
+    const settledTurnId = TurnId.makeUnsafe("turn-hot-path-settled-next");
+    const assistantId = MessageId.makeUnsafe("assistant-hot-path-superseded");
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: staleTurnId,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+        latestTurn: {
+          turnId: staleTurnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Working on it.",
+            turnId: staleTurnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            streaming: true,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    const completedAt = "2026-02-27T00:01:00.000Z";
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        latestTurn: {
+          turnId: settledTurnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:30.000Z",
+          startedAt: "2026-02-27T00:00:30.000Z",
+          completedAt,
+          assistantMessageId: null,
+        },
+        updatedAt: completedAt,
+        messages: [],
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: completedAt,
+        },
+      }),
+    );
+
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn).toMatchObject({
+      turnId: settledTurnId,
+      state: "completed",
+      completedAt,
+    });
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
+    expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
+  });
+
+  it("keeps the local session running when a same-timestamp snapshot carries a different terminal turn", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path-ambiguous");
+    const liveTurnId = TurnId.makeUnsafe("turn-hot-path-live");
+    const priorTurnId = TurnId.makeUnsafe("turn-hot-path-prior");
+    const assistantId = MessageId.makeUnsafe("assistant-hot-path-ambiguous");
+    const sharedUpdatedAt = "2026-02-27T00:00:02.000Z";
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: liveTurnId,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: sharedUpdatedAt,
+        },
+        latestTurn: {
+          turnId: liveTurnId,
+          state: "running",
+          requestedAt: sharedUpdatedAt,
+          startedAt: sharedUpdatedAt,
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Starting the follow-up.",
+            turnId: liveTurnId,
+            createdAt: sharedUpdatedAt,
+            streaming: true,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        latestTurn: {
+          turnId: priorTurnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: sharedUpdatedAt,
+          assistantMessageId: null,
+        },
+        updatedAt: sharedUpdatedAt,
+        messages: [],
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: sharedUpdatedAt,
+        },
+      }),
+    );
+
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
+    expect(next.threadSessionById?.[threadId]?.activeTurnId).toBe(liveTurnId);
   });
 
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {

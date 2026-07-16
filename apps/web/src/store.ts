@@ -1135,6 +1135,7 @@ function mergeReadModelSessionWithLiveHotPath(
   previousThread: Thread | undefined,
   options: {
     preserveRunningTurn: boolean;
+    incomingLatestTurn: ReadModelThread["latestTurn"];
   },
 ): ReadModelThread["session"] {
   const previousSession = previousThread?.session;
@@ -1160,11 +1161,24 @@ function mergeReadModelSessionWithLiveHotPath(
       lastError: previousSession.lastError ?? incomingSession.lastError,
     };
   }
+  // When the snapshot is strictly newer than the local session AND carries a
+  // terminal latestTurn for a different turn than the one preserved locally, the
+  // server has provably moved past the local turn — resurrecting "running" with
+  // the stale activeTurnId would desync the session from the (adopted) settled
+  // turn forever. Equal timestamps are ambiguous (a queued follow-up can start in
+  // the same millisecond the prior turn settles), so they preserve the local
+  // running session and let the next live event or snapshot resolve the race.
+  const supersededByTerminalTurn =
+    incomingSession.updatedAt > previousSession.updatedAt &&
+    options.incomingLatestTurn != null &&
+    options.incomingLatestTurn.completedAt != null &&
+    options.incomingLatestTurn.turnId !== previousThread?.latestTurn?.turnId;
   if (
     previousSession.orchestrationStatus === "running" &&
     incomingSession.status !== "running" &&
     incomingSession.status !== "error" &&
-    previousSession.activeTurnId !== undefined
+    previousSession.activeTurnId !== undefined &&
+    !supersededByTerminalTurn
   ) {
     return {
       ...incomingSession,
@@ -1239,6 +1253,7 @@ function mergeReadModelThreadDetailWithLiveHotPath(
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
+    incomingLatestTurn: incoming.latestTurn,
   });
   const latestTurn = mergeReadModelLatestTurnWithLiveHotPath(incoming.latestTurn, previousThread, {
     preserveRunningTurn,
@@ -2686,11 +2701,29 @@ function reconcileLatestTurnFromSession(
     });
   }
 
-  if (session.status === "error" && thread.latestTurn?.state === "running") {
+  // Mirror of the server projector's settlement rule: once the session leaves
+  // "running", no later event is guaranteed to close the turn (checkpoint diff
+  // events only enrich it), so a still-running latestTurn settles here. A retained
+  // activeTurnId blocks settlement (except on error): stop-requested flows emit
+  // "interrupted" while keeping the turn active until the provider's terminal
+  // event decides the real outcome.
+  const settledState =
+    session.status === "error"
+      ? ("error" as const)
+      : session.status === "interrupted" || session.status === "stopped"
+        ? ("interrupted" as const)
+        : session.status === "ready"
+          ? ("completed" as const)
+          : null;
+  if (
+    settledState !== null &&
+    thread.latestTurn?.state === "running" &&
+    (session.activeTurnId == null || settledState === "error")
+  ) {
     return buildLatestTurn({
       previous: thread.latestTurn,
       turnId: thread.latestTurn.turnId,
-      state: "error",
+      state: settledState,
       requestedAt: thread.latestTurn.requestedAt,
       startedAt: thread.latestTurn.startedAt,
       completedAt: session.updatedAt,
@@ -2851,14 +2884,17 @@ function applyTurnDiffSummaryToThread(
       )
     : sortTurnDiffSummaries([...thread.turnDiffSummaries, nextSummary]);
 
-  const isActivePlaceholder =
+  // Mirror of the server projector's placeholder guard: a provider-diff
+  // placeholder only carries live diff totals and must never change the turn
+  // lifecycle — neither close a running turn nor flip an already-settled one
+  // to "interrupted" when it loses the race against session settlement.
+  const isSameTurnPlaceholder =
     isProviderDiffPlaceholderRef(nextSummary.checkpointRef) &&
     nextSummary.status === "missing" &&
-    thread.latestTurn?.turnId === nextSummary.turnId &&
-    thread.latestTurn.state === "running";
+    thread.latestTurn?.turnId === nextSummary.turnId;
   const latestTurn =
     thread.latestTurn === null || thread.latestTurn.turnId === nextSummary.turnId
-      ? isActivePlaceholder
+      ? isSameTurnPlaceholder
         ? thread.latestTurn
         : buildLatestTurn({
             previous: thread.latestTurn,

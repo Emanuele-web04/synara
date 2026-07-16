@@ -37,6 +37,85 @@ function makeEvent(input: {
   } as OrchestrationEvent;
 }
 
+function makeSessionSetEvent(input: {
+  sequence: number;
+  commandId: string;
+  occurredAt: string;
+  status: string;
+  activeTurnId: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}): OrchestrationEvent {
+  return makeEvent({
+    sequence: input.sequence,
+    type: "thread.session-set",
+    aggregateKind: "thread",
+    aggregateId: "thread-1",
+    occurredAt: input.occurredAt,
+    commandId: input.commandId,
+    payload: {
+      threadId: "thread-1",
+      session: {
+        threadId: "thread-1",
+        status: input.status,
+        providerName: "codex",
+        providerSessionId: "session-1",
+        providerThreadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        activeTurnId: input.activeTurnId,
+        lastError: input.lastError,
+        updatedAt: input.updatedAt,
+      },
+    },
+  });
+}
+
+// Projects "thread-1" through creation and a running session on "turn-1".
+async function projectThreadWithRunningTurn(input: { createdAt: string; startedAt: string }) {
+  const afterCreate = await Effect.runPromise(
+    projectEvent(
+      createEmptyReadModel(input.createdAt),
+      makeEvent({
+        sequence: 1,
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: input.createdAt,
+        commandId: "cmd-create",
+        payload: {
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "demo",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.3-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        },
+      }),
+    ),
+  );
+
+  return Effect.runPromise(
+    projectEvent(
+      afterCreate,
+      makeSessionSetEvent({
+        sequence: 2,
+        commandId: "cmd-running",
+        occurredAt: input.startedAt,
+        status: "running",
+        activeTurnId: "turn-1",
+        lastError: null,
+        updatedAt: input.startedAt,
+      }),
+    ),
+  );
+}
+
 describe("orchestration projector", () => {
   it("applies thread.created events", async () => {
     const now = new Date().toISOString();
@@ -494,6 +573,218 @@ describe("orchestration projector", () => {
       turnId: "turn-1",
       state: "running",
       completedAt: null,
+    });
+  });
+
+  it.each([
+    { status: "ready", expectedState: "completed" },
+    { status: "interrupted", expectedState: "interrupted" },
+    { status: "stopped", expectedState: "interrupted" },
+    { status: "error", expectedState: "error" },
+  ] as const)(
+    "settles a running latest turn when the session leaves running ($status → $expectedState)",
+    async ({ status, expectedState }) => {
+      const createdAt = "2026-02-23T08:00:00.000Z";
+      const startedAt = "2026-02-23T08:00:05.000Z";
+      const settledAt = "2026-02-23T08:00:10.000Z";
+
+      const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+
+      const afterSettled = await Effect.runPromise(
+        projectEvent(
+          afterRunning,
+          makeSessionSetEvent({
+            sequence: 3,
+            commandId: "cmd-settled",
+            occurredAt: settledAt,
+            status,
+            activeTurnId: null,
+            lastError: status === "error" ? "provider crashed" : null,
+            updatedAt: settledAt,
+          }),
+        ),
+      );
+
+      expect(afterSettled.threads[0]?.session?.status).toBe(status);
+      expect(afterSettled.threads[0]?.latestTurn).toMatchObject({
+        turnId: "turn-1",
+        state: expectedState,
+        startedAt,
+        completedAt: settledAt,
+      });
+    },
+  );
+
+  it.each([{ status: "idle" }, { status: "starting" }] as const)(
+    "keeps a running latest turn untouched for $status session updates",
+    async ({ status }) => {
+      const createdAt = "2026-02-23T08:00:00.000Z";
+      const startedAt = "2026-02-23T08:00:05.000Z";
+      const updatedAt = "2026-02-23T08:00:10.000Z";
+
+      const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+
+      const afterUpdate = await Effect.runPromise(
+        projectEvent(
+          afterRunning,
+          makeSessionSetEvent({
+            sequence: 3,
+            commandId: "cmd-lifecycle",
+            occurredAt: updatedAt,
+            status,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt,
+          }),
+        ),
+      );
+
+      expect(afterUpdate.threads[0]?.latestTurn).toMatchObject({
+        turnId: "turn-1",
+        state: "running",
+        completedAt: null,
+      });
+    },
+  );
+
+  it("does not settle while an interrupted session still retains the active turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const stopRequestedAt = "2026-02-23T08:00:10.000Z";
+    const settledAt = "2026-02-23T08:00:15.000Z";
+
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+
+    // Stop-requested flows emit "interrupted" while keeping the turn active until
+    // the provider's terminal event decides the real outcome.
+    const afterStopRequested = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-stop-requested",
+          occurredAt: stopRequestedAt,
+          status: "interrupted",
+          activeTurnId: "turn-1",
+          lastError: null,
+          updatedAt: stopRequestedAt,
+        }),
+      ),
+    );
+
+    expect(afterStopRequested.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "running",
+      completedAt: null,
+    });
+
+    const afterTerminal = await Effect.runPromise(
+      projectEvent(
+        afterStopRequested,
+        makeSessionSetEvent({
+          sequence: 4,
+          commandId: "cmd-terminal",
+          occurredAt: settledAt,
+          status: "ready",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: settledAt,
+        }),
+      ),
+    );
+
+    expect(afterTerminal.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "completed",
+      completedAt: settledAt,
+    });
+  });
+
+  it("does not let a late provider-diff placeholder unsettle a session-settled turn", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const startedAt = "2026-02-23T08:00:05.000Z";
+    const settledAt = "2026-02-23T08:00:10.000Z";
+    const placeholderAt = "2026-02-23T08:00:11.000Z";
+    const checkpointAt = "2026-02-23T08:00:12.000Z";
+
+    const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
+
+    const afterSettled = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeSessionSetEvent({
+          sequence: 3,
+          commandId: "cmd-settled",
+          occurredAt: settledAt,
+          status: "ready",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: settledAt,
+        }),
+      ),
+    );
+
+    const afterLatePlaceholder = await Effect.runPromise(
+      projectEvent(
+        afterSettled,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: placeholderAt,
+          commandId: "cmd-late-placeholder",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "provider-diff:event-late",
+            status: "missing",
+            files: [],
+            assistantMessageId: null,
+            completedAt: placeholderAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterLatePlaceholder.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "completed",
+      completedAt: settledAt,
+    });
+
+    const afterRealCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterLatePlaceholder,
+        makeEvent({
+          sequence: 5,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: checkpointAt,
+          commandId: "cmd-real-checkpoint",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/synara/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: checkpointAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterRealCheckpoint.threads[0]?.checkpoints).toMatchObject([
+      { turnId: "turn-1", status: "ready" },
+    ]);
+    expect(afterRealCheckpoint.threads[0]?.latestTurn).toMatchObject({
+      turnId: "turn-1",
+      state: "completed",
+      completedAt: checkpointAt,
     });
   });
 
