@@ -40,8 +40,51 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   --diffs-header-font-family: var(--font-ui-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
   --diffs-font-size: var(--app-font-size-chat-code, 11px);
+  /* Match the app chrome — set on :host so hunk rows/gutters/separators inherit. */
+  --diffs-bg: var(--background) !important;
+  --diffs-light-bg: var(--background) !important;
+  --diffs-dark-bg: var(--background) !important;
+  --diffs-token-light-bg: transparent;
+  --diffs-token-dark-bg: transparent;
+
+  --diffs-bg-context-override: var(--background) !important;
+  --diffs-bg-context-number-override: var(--background) !important;
+  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground)) !important;
+  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
+
+  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
+
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-emphasis-override: color-mix(
+    in srgb,
+    var(--background) 80%,
+    var(--destructive)
+  ) !important;
+
+  /* Force the derived tokens Pierre reads for hunk rows (not only the *-override knobs).
+     Do not pin --diffs-line-bg on :host — addition/deletion rows set that per line-type. */
+  --diffs-bg-context: var(--background) !important;
+  --diffs-bg-context-number: var(--background) !important;
+  --diffs-bg-buffer: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
+  --diffs-bg-separator: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-addition: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
+  --diffs-bg-deletion: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-emphasis: color-mix(in srgb, var(--background) 80%, var(--destructive)) !important;
+
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
+  background-color: var(--background) !important;
 }
 
 [data-diffs-header],
@@ -50,32 +93,24 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-error-wrapper],
 [data-virtualizer-buffer] {
   --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
-  --diffs-token-light-bg: transparent;
-  --diffs-token-dark-bg: transparent;
+  --diffs-bg: var(--background) !important;
+  --diffs-light-bg: var(--background) !important;
+  --diffs-dark-bg: var(--background) !important;
+  --diffs-bg-context: var(--background) !important;
+  --diffs-bg-context-number: var(--background) !important;
+  background-color: var(--background) !important;
+}
 
-  --diffs-bg-context-override: color-mix(in srgb, var(--background) 97%, var(--foreground));
-  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 94%, var(--foreground));
-  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground));
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 90%, var(--foreground));
-
-  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success));
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success));
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success));
-
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive));
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive));
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive));
-  --diffs-bg-deletion-emphasis-override: color-mix(
-    in srgb,
-    var(--background) 80%,
-    var(--destructive)
-  );
-
-  background-color: var(--diffs-bg) !important;
+/* Unmodified hunk chrome — pin to theme background without wiping +/- tints. */
+[data-line-type="context"],
+[data-line-type="context-expanded"],
+[data-column-number]:where([data-line-type="context"], [data-line-type="context-expanded"]),
+[data-gutter-buffer="buffer"],
+[data-separator],
+[data-separator-wrapper],
+[data-separator-content] {
+  --diffs-line-bg: var(--background) !important;
+  background-color: var(--background) !important;
 }
 
 [data-diff],
@@ -91,11 +126,13 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file-info] {
   font-family: var(--font-ui-family) !important;
   font-size: var(--app-font-size-ui, 12px) !important;
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: var(--background) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
 }
 
+/* Sticky header chrome. Layout for the custom slot only — do not zero-out
+   Pierre's default header padding (that clips path/+N text). */
 [data-diffs-header] {
   --diffs-header-font-family: var(--font-ui-family) !important;
   font-family: var(--font-ui-family) !important;
@@ -103,51 +140,37 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   position: sticky !important;
   top: 0;
   z-index: 4;
-  background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
+  background-color: var(--background) !important;
   border-bottom: 1px solid var(--border) !important;
   cursor: pointer;
 }
 
-[data-header-content] {
+[data-diffs-header="custom"] {
+  display: flex !important;
   align-items: center !important;
+  min-height: 0 !important;
+  padding: 0 !important;
 }
 
-::slotted([slot="header-prefix"]) {
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  flex-shrink: 0 !important;
-  line-height: 0 !important;
+::slotted([slot="header-custom"]) {
+  display: flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
 }
 
-/* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
-[data-change-icon] {
-  display: none;
-}
-
-[data-title],
-[data-prev-name] {
-  font-family: var(--font-ui-family) !important;
-  font-size: var(--app-font-size-ui, 12px) !important;
-  font-weight: 400 !important;
-  cursor: pointer;
-  color: var(--foreground) !important;
+/* Give gutters a little air so line numbers aren't clipped by the card edge. */
+[data-column-number] {
+  padding-left: 1.25ch !important;
 }
 
 /* Every number rendered inside a diff reads in the UI font (with tabular figures
-   so columns still line up), not the mono code font: gutter line numbers, the
-   "N unmodified lines" separators, and the header +/- counts. The library pins
-   the header counts to --diffs-font-family and the gutter/separators inherit it
+   so columns still line up), not the mono code font: gutter line numbers and the
+   "N unmodified lines" separators. The library pins these to --diffs-font-family
    from the hunk body, so each needs an explicit override. */
 [data-line-number-content],
 [data-column-number],
 [data-unmodified-lines] {
-  font-family: var(--font-ui-family) !important;
-  font-variant-numeric: tabular-nums !important;
-}
-
-[data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
   font-family: var(--font-ui-family) !important;
   font-variant-numeric: tabular-nums !important;
 }

@@ -25,9 +25,9 @@ export interface DiffFileChatActions {
 
 const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 
-// Per-file actions menu rendered inside the diff header, left of the collapse
-// chevron. Marked with data-diff-header-menu so header clicks on it do not
-// toggle the file collapse state.
+// Per-file actions menu rendered in the custom header's trailing slot, left of
+// the collapse chevron. Marked with data-diff-header-menu so header clicks on
+// it do not toggle the file collapse state.
 function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffFileChatActions }) {
   return (
     <Menu>
@@ -112,16 +112,16 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
   const { chatActions, isCollapsed } = props;
   const shouldPreviewImage =
     !isCollapsed && props.workspaceRoot !== null && isSupportedLocalImagePath(filePath);
-  const renderHeaderMetadata = useCallback(
+  const renderHeaderTrailing = useCallback(
     () => (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+      <>
         {chatActions ? (
-          <span data-diff-header-menu="true" style={{ display: "inline-flex" }}>
+          <span data-diff-header-menu="true" className="inline-flex">
             <DiffFileHeaderActionsMenu filePath={filePath} chatActions={chatActions} />
           </span>
         ) : null}
         <DiffFileCollapseChevron collapsed={isCollapsed} />
-      </span>
+      </>
     ),
     [chatActions, filePath, isCollapsed],
   );
@@ -137,7 +137,11 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
       if (clickedHeaderMenu) return;
       const clickedHeader = composedPath.some((node: EventTarget) => {
         if (!(node instanceof Element)) return false;
-        return node.hasAttribute("data-diffs-header") || node.hasAttribute("data-file-info");
+        return (
+          node.hasAttribute("data-diff-file-header") ||
+          node.hasAttribute("data-diffs-header") ||
+          node.hasAttribute("data-file-info")
+        );
       });
       if (!clickedHeader) return;
       event.stopPropagation();
@@ -158,7 +162,7 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
         diffStyle={props.diffRenderMode === "split" ? "split" : "unified"}
         overflow={props.diffWordWrap ? "wrap" : "scroll"}
         collapsed={props.isCollapsed}
-        renderHeaderMetadata={renderHeaderMetadata}
+        renderHeaderTrailing={renderHeaderTrailing}
       />
       {shouldPreviewImage ? (
         <LocalImagePreview

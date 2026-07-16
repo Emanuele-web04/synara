@@ -31,7 +31,7 @@
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@opencode-ai/sdk": "^1.15.13",
-    "@pierre/diffs": "^1.1.0-beta.16",
+    "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
