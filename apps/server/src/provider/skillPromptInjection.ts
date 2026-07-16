@@ -33,6 +33,8 @@ function pathSegments(path: string): Set<string> {
 export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: string): boolean {
   const segments = pathSegments(skillPath);
   switch (provider) {
+    case "antigravity":
+      return true;
     case "codex":
       // Codex injects structured skill items only from roots it knows: its own
       // folders plus `~/.synara/skills`, which Synara registers at session start
@@ -51,7 +53,7 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
       // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
-      // gemini/grok/droid/kilo/opencode have no native skill support.
+      // Antigravity/Grok/Droid/Kilo/OpenCode have no native skill support.
       return true;
   }
 }

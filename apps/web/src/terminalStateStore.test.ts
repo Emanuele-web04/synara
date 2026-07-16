@@ -266,6 +266,24 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalCliKindsById).toEqual({});
   });
 
+  it("persists Antigravity CLI terminal identity", () => {
+    const store = useTerminalStateStore.getState();
+    store.newTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalMetadata(THREAD_ID, "terminal-2", {
+      cliKind: "antigravity",
+      label: "Antigravity CLI",
+    });
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalLabelsById["terminal-2"]).toBe("Antigravity 1");
+    expect(terminalState.terminalCliKindsById).toEqual({
+      "terminal-2": "antigravity",
+    });
+  });
+
   it("clears terminal provider identity when metadata cliKind is null", () => {
     const store = useTerminalStateStore.getState();
     store.newTerminal(THREAD_ID, "terminal-2");

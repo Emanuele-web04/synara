@@ -94,6 +94,7 @@ import {
   providerUpdateNotificationKey,
   PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
   PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  withProviderUpdateTimeout,
 } from "../providerUpdates";
 import {
   getGitInvalidationThreadIdForEvent,
@@ -326,7 +327,10 @@ function ProviderUpdateNotifications() {
         const api = ensureNativeApi();
         for (const provider of providers) {
           try {
-            const result = await api.server.updateProvider({ provider: provider.provider });
+            const result = await withProviderUpdateTimeout({
+              provider: provider.provider,
+              request: api.server.updateProvider({ provider: provider.provider }),
+            });
             const refreshed = result.providers.find(
               (entry) => entry.provider === provider.provider,
             );

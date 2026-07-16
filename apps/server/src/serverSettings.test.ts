@@ -78,11 +78,11 @@ describe("ServerSettingsService", () => {
         Effect.provide(
           ServerSettingsService.layerTest({
             textGenerationModelSelection: {
-              provider: "gemini",
-              model: DEFAULT_MODEL_BY_PROVIDER.gemini,
+              provider: "antigravity",
+              model: DEFAULT_MODEL_BY_PROVIDER.antigravity,
             },
             providers: {
-              gemini: { enabled: false },
+              antigravity: { enabled: false },
             },
           }),
         ),
