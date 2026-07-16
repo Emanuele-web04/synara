@@ -576,10 +576,14 @@ export function createWsNativeApi(): NativeApi {
     },
     pullRequests: {
       list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
+      reviewRequestCount: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewRequestCount, input),
       detail: (input) => transport.request(WS_METHODS.pullRequestsDetail, input),
       diff: (input) => transport.request(WS_METHODS.pullRequestsDiff, input),
       action: (input) =>
         transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
+      comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
+      setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
     },
     contextMenu: {
       show: async <T extends string>(

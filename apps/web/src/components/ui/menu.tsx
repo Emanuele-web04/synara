@@ -112,7 +112,9 @@ function MenuItem({
     <MenuPrimitive.Item
       className={cn(
         COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-        "data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground",
+        // text-destructive (not -foreground): these items sit on the popup surface, so they
+        // need the red accent itself — the foreground token is for text on a destructive fill.
+        "data-inset:ps-8 data-[variant=destructive]:text-destructive",
         className,
       )}
       data-inset={inset}

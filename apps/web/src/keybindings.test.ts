@@ -236,11 +236,6 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenCreationAllowed,
   },
   {
-    shortcut: modShortcut("g", { altKey: true }),
-    command: "chat.newGemini",
-    whenAst: whenCreationAllowed,
-  },
-  {
     shortcut: ctrlShortcut("tab"),
     command: "view.recent.next",
   },
@@ -943,13 +938,6 @@ describe("chat/editor shortcuts", () => {
       "chat.newCursor",
     );
     assert.strictEqual(
-      resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.newGemini",
-    );
-    assert.strictEqual(
       resolveShortcutCommand(
         event({ code: "KeyC", key: "ç", metaKey: true, altKey: true }),
         DEFAULT_BINDINGS,
@@ -981,17 +969,6 @@ describe("chat/editor shortcuts", () => {
         },
       ),
       "chat.newCursor",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(
-        event({ code: "KeyG", key: "©", metaKey: true, altKey: true }),
-        DEFAULT_BINDINGS,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: false },
-        },
-      ),
-      "chat.newGemini",
     );
   });
 
@@ -1406,8 +1383,7 @@ describe("resolveShortcutCommand", () => {
       (binding) =>
         binding.command !== "chat.newClaude" &&
         binding.command !== "chat.newCodex" &&
-        binding.command !== "chat.newCursor" &&
-        binding.command !== "chat.newGemini",
+        binding.command !== "chat.newCursor",
     );
 
     assert.strictEqual(
@@ -1430,13 +1406,6 @@ describe("resolveShortcutCommand", () => {
         context: { terminalFocus: false },
       }),
       "chat.newCursor",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), legacyBindings, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.newGemini",
     );
     assert.strictEqual(
       resolveShortcutCommand(
@@ -1470,17 +1439,6 @@ describe("resolveShortcutCommand", () => {
         },
       ),
       "chat.newCursor",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(
-        event({ code: "KeyG", key: "©", metaKey: true, altKey: true }),
-        legacyBindings,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: false },
-        },
-      ),
-      "chat.newGemini",
     );
   });
 });

@@ -111,21 +111,30 @@ describe("GrokAdapter runtime event scoping", () => {
   });
 
   it("merges Grok CLI and xAI API model lists without duplicates", () => {
-    expect(
-      mergeGrokModelDescriptors([
-        [
-          { slug: "grok-build", name: "Grok 4.3" },
-          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-        ],
-        [
-          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-          { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
-        ],
-      ]),
-    ).toEqual([
+    const models = mergeGrokModelDescriptors([
+      [
+        { slug: "grok-build", name: "Grok 4.3" },
+        { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+      ],
+      [
+        { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+        { slug: "grok-4.5", name: "Grok 4.5" },
+      ],
+    ]);
+
+    expect(models.map(({ slug, name }) => ({ slug, name }))).toEqual([
       { slug: "grok-build", name: "Grok 4.3" },
       { slug: "grok-build-0.1", name: "Grok Build 0.1" },
-      { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
+      { slug: "grok-4.5", name: "Grok 4.5" },
     ]);
+    for (const model of models) {
+      expect(model.defaultReasoningEffort).toBe("low");
+      expect(model.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
+        "none",
+        "low",
+        "medium",
+        "high",
+      ]);
+    }
   });
 });

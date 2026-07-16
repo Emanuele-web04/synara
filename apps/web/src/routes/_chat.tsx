@@ -398,17 +398,14 @@ function ChatRouteGlobalShortcuts() {
       if (
         command === "chat.newClaude" ||
         command === "chat.newCodex" ||
-        command === "chat.newCursor" ||
-        command === "chat.newGemini"
+        command === "chat.newCursor"
       ) {
         const provider =
           command === "chat.newClaude"
             ? "claudeAgent"
             : command === "chat.newCodex"
               ? "codex"
-              : command === "chat.newCursor"
-                ? "cursor"
-                : "gemini";
+              : "cursor";
         const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
         if (!target) return;
         event.preventDefault();

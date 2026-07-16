@@ -73,7 +73,7 @@ describe("providerStatusCache", () => {
     expect(
       orderProviderStatuses([
         {
-          provider: "gemini",
+          provider: "antigravity",
           status: "ready",
           available: true,
           authStatus: "authenticated",
@@ -119,7 +119,7 @@ describe("providerStatusCache", () => {
         checkedAt: "2026-04-15T10:03:00.000Z",
       },
       {
-        provider: "gemini",
+        provider: "antigravity",
         status: "ready",
         available: true,
         authStatus: "authenticated",

@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.4",
+    date: "Jul 15",
+    features: [
+      {
+        id: "pull-request-workspace",
+        title: "Review pull requests without leaving Synara",
+        description:
+          "Browse, search, and filter pull requests across your projects, then open a complete review workspace beside the conversation.",
+        details:
+          "The new GitHub CLI-backed Pull Requests view groups work by involvement and state, supports project-scoped discovery, and opens summary, code, and timeline views with checks, reviewers, commits, file changes, and discussion context.",
+      },
+      {
+        id: "pull-request-actions",
+        title: "Take action from the review workspace",
+        description:
+          "Comment, merge, close, reopen, and pin pull requests while keeping the latest repository state close at hand.",
+        details:
+          "Mutations use shared cache coordination, single-flight refreshes, guarded optimistic state, and recovery paths so overlapping actions and refreshes remain predictable. Pinned pull requests stay easy to return to from the project workspace.",
+      },
+      {
+        id: "resilient-pr-discovery",
+        title: "Repository failures stay contained",
+        description:
+          "One unavailable repository no longer prevents useful pull-request results from the rest of your workspace.",
+        details:
+          "GitHub CLI availability, authentication, repository discovery, partial-result errors, stale cached data, and retry recovery now have explicit states. Per-repository failures remain visible without discarding successful results.",
+      },
+      {
+        id: "global-feedback",
+        title: "Send feedback from anywhere",
+        description:
+          "Open the new feedback dialog from the command menu or with /feedback whenever an idea or problem comes up.",
+        details:
+          "Feedback is now a global workflow rather than a settings-only destination, with consistent command routing and a focused dialog that keeps the current task in place.",
+      },
+      {
+        id: "desktop-window-restore",
+        title: "Desktop windows reopen where you left them",
+        description:
+          "Synara restores the previous desktop window size, position, and maximized state while keeping reopened windows on a visible display.",
+        details:
+          "Window state is persisted across launches and validated against the current monitor layout, avoiding off-screen restoration when displays have changed.",
+      },
+      {
+        id: "steadier-model-sessions",
+        title: "Model and session behavior is more predictable",
+        description:
+          "Agent sessions, transcript rendering, model discovery, and reasoning controls now stay aligned across more providers.",
+        details:
+          "Session orchestration and transcript rendering share a cleaner lifecycle, Pi custom-provider authentication follows auth.json semantics, Cursor transport-only variants stay out of the picker, and Grok reasoning-effort options match provider capabilities. The interface also adopts the system UI font more consistently.",
+      },
+    ],
+  },
+  {
     version: "0.5.3",
     date: "Jul 14",
     features: [

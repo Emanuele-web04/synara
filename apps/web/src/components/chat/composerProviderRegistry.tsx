@@ -14,13 +14,11 @@ import {
 import {
   getDefaultContextWindow,
   getDefaultEffort,
-  getGeminiThinkingSelectionValue,
   hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeGeminiModelOptions,
-  normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveLabeledOptionValue,
@@ -185,16 +183,21 @@ function getProviderStateFromCapabilities(
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
-    case "gemini": {
-      const providerOptions = modelOptions?.gemini;
-      rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
-      normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
+    case "antigravity": {
+      const providerOptions = modelOptions?.antigravity;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;
     }
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeGrokModelOptions(model, providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? providerOptions?.reasoningEffort
+          : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
     case "droid": {
@@ -286,10 +289,10 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
   },
-  gemini: {
+  antigravity: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("antigravity", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("antigravity", input),
   },
   grok: {
     getState: (input) => getProviderStateFromCapabilities(input),

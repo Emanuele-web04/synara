@@ -35,7 +35,9 @@ import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
+import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -121,12 +123,19 @@ export function makeServerRuntimeServicesLayer() {
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ProjectPullRequestPinsLive),
+    Layer.provideMerge(OrchestrationLayerLive),
+  );
 
   return Layer.mergeAll(
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
     AutomationRepositoryLive,
+    ProjectPullRequestPinsLive,
+    pullRequestServiceLayer,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

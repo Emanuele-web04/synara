@@ -3,10 +3,53 @@
 // Layer: Web settings/notification utility
 // Exports: update candidate helpers, notification keys, and auto-refresh timing.
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
+} from "@synara/contracts";
 
 export const PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS = 10_000;
 export const PROVIDER_UPDATE_REFRESH_INTERVAL_MS = 60 * 60 * 1_000;
+// The server stops provider commands after two minutes. This slightly longer
+// client watchdog also covers a stalled transport so loading UI always settles.
+export const PROVIDER_UPDATE_REQUEST_TIMEOUT_MS = 2 * 60_000 + 15_000;
+
+function formatUpdateTimeout(timeoutMs: number): string {
+  if (timeoutMs % 60_000 === 0) {
+    const minutes = timeoutMs / 60_000;
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  const seconds = timeoutMs / 1_000;
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+export async function withProviderUpdateTimeout<T>(input: {
+  readonly provider: ProviderKind;
+  readonly request: Promise<T>;
+  readonly timeoutMs?: number;
+}): Promise<T> {
+  const timeoutMs = input.timeoutMs ?? PROVIDER_UPDATE_REQUEST_TIMEOUT_MS;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `${PROVIDER_DISPLAY_NAMES[input.provider]} update timed out after ${formatUpdateTimeout(timeoutMs)}.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([input.request, timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 type ProviderUpdateFilterInput = {
   readonly providers: ReadonlyArray<ServerProviderStatus>;
@@ -31,6 +74,15 @@ type ProviderUpdateVisibilityInput = {
 
 export function isProviderUpdateActive(provider: ServerProviderStatus): boolean {
   return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
+}
+
+export function shouldOfferProviderUpdateAction(provider: ServerProviderStatus): boolean {
+  const advisory = provider.versionAdvisory;
+  return (
+    advisory?.canUpdate === true &&
+    advisory.updateCommand !== null &&
+    (advisory.status === "behind_latest" || advisory.status === "unknown")
+  );
 }
 
 function isProviderEnabled(

@@ -25,6 +25,12 @@ const actions: SidebarSearchAction[] = [
     keywords: ["extensions"],
   },
   {
+    id: "feedback",
+    label: "Feedback Synara",
+    description: "Send feedback or report an issue to the Synara team.",
+    keywords: ["feedback", "bug", "issue", "report", "support"],
+  },
+  {
     id: "usage-settings",
     label: "Usage settings",
     description: "Open provider usage and remaining credits.",
@@ -152,7 +158,18 @@ describe("SidebarSearchPalette.logic", () => {
 
     assert.deepEqual(
       result.map((action) => action.id),
-      ["new-thread", "plugins", "usage-settings"],
+      ["new-thread", "plugins", "feedback", "usage-settings"],
+    );
+  });
+
+  it("matches Feedback Synara by feedback and issue keywords", () => {
+    assert.deepEqual(
+      matchSidebarSearchActions(actions, "feedback").map((action) => action.id),
+      ["feedback"],
+    );
+    assert.deepEqual(
+      matchSidebarSearchActions(actions, "bug").map((action) => action.id),
+      ["feedback"],
     );
   });
 
