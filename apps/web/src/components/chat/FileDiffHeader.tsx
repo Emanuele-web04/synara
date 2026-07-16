@@ -36,9 +36,7 @@ export const FileDiffHeader = memo(function FileDiffHeader(props: {
       ? splitRepoRelativePath(stripPatchPathPrefix(props.fileDiff.prevName)).name
       : null;
   const prevPath =
-    isRename && props.fileDiff.prevName
-      ? stripPatchPathPrefix(props.fileDiff.prevName)
-      : null;
+    isRename && props.fileDiff.prevName ? stripPatchPathPrefix(props.fileDiff.prevName) : null;
   const stat = useMemo(() => summarizeFileDiffStats([props.fileDiff]), [props.fileDiff]);
 
   return (
