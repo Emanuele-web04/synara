@@ -268,10 +268,8 @@ const WORKFLOW_RUN_ID_PATTERN = /\bwf_[a-z0-9-]{6,}\b/;
 // Enough of a prompt to render a two-line preview with an expand affordance.
 export const WORKFLOW_PROMPT_PREVIEW_CHARS = 400;
 
-// Launch identifiers from the Workflow tool result. The structured
-// tool_use_result is {status: "async_launched", taskId, taskType:
-// "local_workflow", runId, scriptPath, ...}; free-text fallback covers older
-// result shapes.
+// Launch identifiers from the Workflow tool result. taskType was added after
+// the original structured result shape, so it may be absent on older results.
 export function parseClaudeWorkflowLaunch(value: unknown): ClaudeWorkflowLaunch | undefined {
   if (typeof value === "string") {
     try {
@@ -284,7 +282,7 @@ export function parseClaudeWorkflowLaunch(value: unknown): ClaudeWorkflowLaunch 
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  if (record.taskType !== "local_workflow") {
+  if (record.taskType !== undefined && record.taskType !== "local_workflow") {
     return undefined;
   }
   const taskId = readString(record.taskId);

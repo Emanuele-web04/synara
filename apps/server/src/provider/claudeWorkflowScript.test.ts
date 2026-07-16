@@ -115,6 +115,23 @@ describe("parseClaudeWorkflowLaunch", () => {
     });
   });
 
+  it("accepts the original structured result without taskType", () => {
+    expect(
+      parseClaudeWorkflowLaunch({
+        status: "async_launched",
+        taskId: "wf-task-1",
+        runId: "wf_abc123",
+        scriptPath: "/home/user/.claude/workflows/spec.ts",
+        transcriptDir: "/tmp/transcripts",
+      }),
+    ).toEqual({
+      taskId: "wf-task-1",
+      runId: "wf_abc123",
+      scriptPath: "/home/user/.claude/workflows/spec.ts",
+      transcriptDir: "/tmp/transcripts",
+    });
+  });
+
   it("rejects non-workflow results", () => {
     expect(parseClaudeWorkflowLaunch({ taskType: "bash", runId: "wf_abc123" })).toBeUndefined();
     expect(parseClaudeWorkflowLaunch("wf_abc123")).toBeUndefined();

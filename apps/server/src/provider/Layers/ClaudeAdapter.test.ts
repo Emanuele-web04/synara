@@ -2261,7 +2261,8 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         uuid: "workflow-meta-progress",
       } as unknown as SDKMessage);
 
-      // The Workflow tool returns immediately with a structured async launch.
+      // Older Workflow results omit taskType but still carry the launch
+      // identifiers needed for resume and transcript polling.
       harness.query.emit({
         type: "user",
         session_id: "sdk-session-workflow-meta",
@@ -2280,7 +2281,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         tool_use_result: {
           status: "async_launched",
           taskId: "wf-real-1",
-          taskType: "local_workflow",
           workflowName: "spec",
           runId: "wf_abc123",
           summary: "Launched",

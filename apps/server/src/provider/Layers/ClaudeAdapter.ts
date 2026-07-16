@@ -2877,10 +2877,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // path and runId; surfacing them on task.updated is what lets the
           // panel offer stop-then-resume.
           const workflowLaunch =
-            parseClaudeWorkflowLaunch(toolResult.structuredResult) ??
-            (tool.toolName === "Workflow" && toolResult.text.length > 0
-              ? parseClaudeWorkflowLaunchFromText(toolResult.text)
-              : undefined);
+            tool.toolName === "Workflow"
+              ? (parseClaudeWorkflowLaunch(toolResult.structuredResult) ??
+                (toolResult.text.length > 0
+                  ? parseClaudeWorkflowLaunchFromText(toolResult.text)
+                  : undefined))
+              : undefined;
           const workflowLaunchTaskId =
             workflowLaunch?.taskId ??
             (context.liveWorkflowTaskIds.size === 1
