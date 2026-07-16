@@ -78,6 +78,9 @@ export function requireSpaceAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly spaceId: SpaceId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  // Aggregate ids are durable event-stream identities, not recyclable row ids. A deleted
+  // Space remains in the read model as a tombstone; recreating it would append a second
+  // `space.created` lifecycle to the same aggregate and make replay semantics ambiguous.
   if (!findSpaceById(input.readModel, input.spaceId)) {
     return Effect.void;
   }

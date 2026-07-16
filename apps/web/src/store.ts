@@ -705,7 +705,7 @@ function removeSpace(state: AppState, spaceId: Space["id"]): AppState {
  * domain events do. Unmoved spaces keep their object identity so a no-op reorder (or a
  * replayed event) leaves the state referentially unchanged.
  */
-function applySpaceOrder(
+export function applySpaceOrder(
   state: AppState,
   orderedSpaceIds: ReadonlyArray<Space["id"]>,
   updatedAt?: string,
@@ -4645,6 +4645,7 @@ interface AppStore extends AppState {
   setAllProjectsExpanded: (expanded: boolean) => void;
   collapseProjectsExcept: (activeProjectId: Project["id"] | null) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
+  reorderSpacesLocally: (orderedSpaceIds: ReadonlyArray<Space["id"]>) => void;
   renameProjectLocally: (projectId: Project["id"], name: string | null) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
@@ -4681,6 +4682,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => collapseProjectsExcept(state, activeProjectId)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
+  reorderSpacesLocally: (orderedSpaceIds) =>
+    set((state) => applySpaceOrder(state, orderedSpaceIds)),
   renameProjectLocally: (projectId, name) => {
     set((state) => renameProjectLocally(state, projectId, name));
     persistAppStateNow();

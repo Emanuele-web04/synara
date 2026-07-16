@@ -95,6 +95,22 @@ describe("Spaces", () => {
     ]);
     expect(readModel.projects[0]?.spaceId).toBeNull();
     expect(readModel.spaces.find((space) => space.id === workSpaceId)?.deletedAt).not.toBeNull();
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "space.create",
+            commandId: CommandId.makeUnsafe("cmd-space-recreate-deleted-id"),
+            spaceId: workSpaceId,
+            name: "Recycled identity",
+            icon: "star",
+            createdAt,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow(/cannot be created twice/i);
   });
 
   it("reserves Void and enforces case-insensitive active-space names", async () => {

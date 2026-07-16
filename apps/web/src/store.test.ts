@@ -24,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applySpaceOrder,
   applyOrchestrationEvents,
   applyOrchestrationEventsHotPath,
   collapseProjectsExcept,
@@ -376,6 +377,43 @@ describe("store pure functions", () => {
       [sideSpaceId, noopUpdatedAt],
       [workSpaceId, noopUpdatedAt],
     ]);
+  });
+
+  it("applies a Space order immediately for optimistic drag feedback", () => {
+    const workSpaceId = SpaceId.makeUnsafe("space-work");
+    const sideSpaceId = SpaceId.makeUnsafe("space-side");
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    const state = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: workSpaceId,
+          name: "Work",
+          icon: "bag",
+          sortOrder: 0,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: workSpaceId },
+      ),
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: sideSpaceId,
+          name: "Side",
+          icon: "rocket",
+          sortOrder: 1,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: sideSpaceId },
+      ),
+    ]);
+
+    const reordered = applySpaceOrder(state, [sideSpaceId, workSpaceId]);
+
+    expect(reordered.spaces.map((space) => space.id)).toEqual([sideSpaceId, workSpaceId]);
+    expect(reordered.spaces.map((space) => space.sortOrder)).toEqual([0, 1]);
   });
 
   it("markThreadUnread moves lastVisitedAt before completion for a completed thread", () => {

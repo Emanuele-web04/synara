@@ -65,6 +65,7 @@ export function useSpacesController(input: {
 
   const navigate = useNavigate();
   const spaces = useStore((store) => store.spaces);
+  const reorderSpacesLocally = useStore((store) => store.reorderSpacesLocally);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const activeSpaceId = useSpacesUiStore((store) => store.activeSpaceId);
   const setActiveSpaceId = useSpacesUiStore((store) => store.setActiveSpaceId);
@@ -330,7 +331,16 @@ export function useSpacesController(input: {
     (orderedSpaceIds: ReadonlyArray<SpaceId>, movedSpaceId: SpaceId) => {
       const api = readNativeApi();
       if (!api) return;
+      const previousSpaceIds = spaces.map((space) => space.id);
+      reorderSpacesLocally(orderedSpaceIds);
       void reorderSpaces({ api, movedSpaceId, orderedSpaceIds }).catch((error) => {
+        const currentSpaceIds = useStore.getState().spaces.map((space) => space.id);
+        if (
+          currentSpaceIds.length === orderedSpaceIds.length &&
+          currentSpaceIds.every((spaceId, index) => spaceId === orderedSpaceIds[index])
+        ) {
+          reorderSpacesLocally(previousSpaceIds);
+        }
         toastManager.add({
           type: "error",
           title: "Unable to reorder spaces",
@@ -338,7 +348,7 @@ export function useSpacesController(input: {
         });
       });
     },
-    [],
+    [reorderSpacesLocally, spaces],
   );
 
   const handleBulkMoveProjects = useCallback(
