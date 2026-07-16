@@ -93,6 +93,7 @@ import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuer
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
+  composerMentionPathNeedsQuoting,
   formatComposerMentionToken,
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -6348,6 +6349,11 @@ export default function ChatView({
       addFiles: addComposerFiles,
     },
     appendReferenceText: (referenceText) => appendComposerPromptText(threadId, referenceText),
+    appendPathMentions: (paths) => {
+      for (const absolutePath of paths) {
+        appendComposerPromptText(threadId, formatComposerMentionToken(absolutePath));
+      }
+    },
     dragDepthRef,
     focusComposer,
     setIsDragOverComposer,
@@ -9346,8 +9352,8 @@ export default function ChatView({
 
   // Rewrites the active `@...` mention to an absolute folder path with a trailing separator
   // so the local-folder picker stays open and the user can keep browsing by clicking or typing.
-  // Paths with whitespace are written as an unclosed `@"...` so detectComposerTrigger keeps
-  // matching and the picker stays open while the user descends into folders with spaces.
+  // Paths that need quoting (spaces, parentheses, …) are written as an unclosed
+  // `@"...` so detectComposerTrigger keeps matching while the user descends (#351).
   const handleNavigateLocalFolder = useCallback(
     (absolutePath: string) => {
       const { snapshot, trigger } = resolveActiveComposerTrigger();
@@ -9356,7 +9362,7 @@ export default function ChatView({
       const withTrailingSeparator = absolutePath.endsWith(separator)
         ? absolutePath
         : `${absolutePath}${separator}`;
-      const base = /\s/.test(withTrailingSeparator)
+      const base = composerMentionPathNeedsQuoting(withTrailingSeparator)
         ? `@"${withTrailingSeparator}`
         : `@${withTrailingSeparator}`;
       applyComposerTriggerReplacement({ snapshot, trigger, base });

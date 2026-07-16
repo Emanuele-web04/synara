@@ -24,9 +24,21 @@ export function extractComposerMentionPath(match: RegExpExecArray | RegExpMatchA
   return (match[2] ?? match[3] ?? "").trim();
 }
 
+/**
+ * Paths that need quoting so spaces, parentheses, and shell-ish characters
+ * stay a single mention token (#351). Prefer quoting over relying on the
+ * unquoted `[^()\s@]+` trigger form.
+ */
+export function composerMentionPathNeedsQuoting(path: string): boolean {
+  return /[\s()"'`$\\]/.test(path);
+}
+
 export function formatComposerMentionToken(path: string): string {
   const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
-  return /\s/.test(normalizedPath) ? `@"${normalizedPath}"` : `@${normalizedPath}`;
+  // Quoted form matches createComposerMentionTokenRegex: @"..." (no escapes inside).
+  return composerMentionPathNeedsQuoting(normalizedPath)
+    ? `@"${normalizedPath}"`
+    : `@${normalizedPath}`;
 }
 
 function escapeRegExp(value: string): string {

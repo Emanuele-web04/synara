@@ -83,4 +83,17 @@ describe("formatComposerMentionToken", () => {
   it("quotes mention tokens with whitespace", () => {
     expect(formatComposerMentionToken("Google Drive")).toBe('@"Google Drive"');
   });
+
+  it("quotes paths with parentheses so they stay one mention token (#351)", () => {
+    expect(formatComposerMentionToken("/Users/me/Mac (2)/Projects")).toBe(
+      '@"/Users/me/Mac (2)/Projects"',
+    );
+    expect(formatComposerMentionToken("/Users/me/Happy Dropbox/Mac (2)/app")).toBe(
+      '@"/Users/me/Happy Dropbox/Mac (2)/app"',
+    );
+  });
+
+  it("leaves simple paths unquoted", () => {
+    expect(formatComposerMentionToken("/Users/me/projects/app")).toBe("@/Users/me/projects/app");
+  });
 });
