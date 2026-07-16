@@ -586,7 +586,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
-  it.effect("drops retired model picker jump keybindings without startup issues", () =>
+  it.effect("drops retired legacy keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { keybindingsConfigPath } = yield* ServerConfig;
@@ -595,6 +595,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         JSON.stringify([
           { key: "mod+1", command: "modelPicker.jump.1" },
           { key: "mod+2", command: "composer.modelPicker.jump.2" },
+          { key: "mod+alt+g", command: "chat.newGemini" },
           { key: "mod+k", command: "sidebar.search" },
         ]),
       );
@@ -609,6 +610,9 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         configState.keybindings.some((entry) =>
           String(entry.command).includes("modelPicker.jump."),
         ),
+      );
+      assert.isFalse(
+        configState.keybindings.some((entry) => String(entry.command) === "chat.newGemini"),
       );
       assert.isTrue(
         configState.keybindings.some(
@@ -629,6 +633,9 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
       assert.isFalse(
         persisted.some((entry) => String(entry.command).includes("modelPicker.jump.")),
+      );
+      assert.isFalse(
+        persisted.some((entry) => String(entry.command) === "chat.newGemini"),
       );
       assert.isFalse(
         persisted.some((entry) => entry.command === "modelPicker.toggle" && entry.key === "mod+1"),

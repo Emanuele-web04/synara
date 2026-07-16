@@ -568,8 +568,9 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
-// Retired picker jump commands have no current equivalent; dropping them avoids
-// rebinding old number-key shortcuts to a different action.
+// Commands removed without a direct replacement are dropped during startup so
+// persisted configs from older releases do not produce validation warnings.
+const RETIRED_LEGACY_KEYBINDING_COMMANDS = new Set(["chat.newGemini"]);
 const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
 const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
@@ -606,7 +607,10 @@ function readKeybindingEntryCommand(entry: unknown): string | null {
 }
 
 function isRetiredLegacyKeybindingCommand(command: string): boolean {
-  return RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command);
+  return (
+    RETIRED_LEGACY_KEYBINDING_COMMANDS.has(command) ||
+    RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command)
+  );
 }
 
 // Cross-device configs can lag behind command renames; normalize known aliases
