@@ -253,7 +253,7 @@ describe("TerminalEvent", () => {
     ).toBe(true);
   });
 
-  it("accepts activity events", () => {
+  it.each(["codex", "claude", "antigravity"] as const)("accepts %s activity events", (cliKind) => {
     expect(
       decodes(TerminalEvent, {
         type: "activity",
@@ -261,7 +261,7 @@ describe("TerminalEvent", () => {
         terminalId: DEFAULT_TERMINAL_ID,
         createdAt: new Date().toISOString(),
         hasRunningSubprocess: true,
-        cliKind: "codex",
+        cliKind,
         agentState: "running",
       }),
     ).toBe(true);

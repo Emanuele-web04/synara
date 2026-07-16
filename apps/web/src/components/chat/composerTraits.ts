@@ -64,14 +64,13 @@ function asBooleanDescriptor(
 function primaryTraitSelectDescriptor(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
 ): Extract<ProviderOptionDescriptor, { type: "select" }> | null {
-  return (
-    descriptors.find(
-      (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
-        descriptor.type === "select" &&
-        descriptor.id !== "contextWindow" &&
-        descriptor.id !== "autoCompactWindow",
-    ) ?? null
+  const descriptor = descriptors.find(
+    (candidate): candidate is Extract<ProviderOptionDescriptor, { type: "select" }> =>
+      candidate.type === "select" &&
+      candidate.id !== "contextWindow" &&
+      candidate.id !== "autoCompactWindow",
   );
+  return descriptor && descriptor.options.length > 1 ? descriptor : null;
 }
 
 function selectOptions(descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null) {

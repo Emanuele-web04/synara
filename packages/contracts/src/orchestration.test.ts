@@ -179,6 +179,22 @@ it.effect("preserves Pi model selections when decoding model selections", () =>
   }),
 );
 
+it.effect("preserves Antigravity effort options separately from the model", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+  }),
+);
+
 it.effect("preserves Pi model selections through the JSON codec", () =>
   Effect.gen(function* () {
     const codec = Schema.fromJsonString(ModelSelection);
