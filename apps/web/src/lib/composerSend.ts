@@ -181,19 +181,14 @@ export function resolvePromptEffortFromModelSelection(
   modelSelection: ModelSelection,
 ): string | null {
   switch (modelSelection.provider) {
+    case "antigravity":
+      return null;
     case "codex":
       return modelSelection.options?.reasoningEffort ?? null;
     case "claudeAgent":
       return modelSelection.options?.effort ?? null;
     case "cursor":
       return modelSelection.options?.reasoningEffort ?? null;
-    case "gemini":
-      return (
-        modelSelection.options?.thinkingLevel ??
-        (modelSelection.options?.thinkingBudget !== undefined
-          ? String(modelSelection.options.thinkingBudget)
-          : null)
-      );
     case "grok":
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;

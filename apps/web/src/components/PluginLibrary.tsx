@@ -89,7 +89,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
-  "gemini",
+  "antigravity",
   "grok",
   "droid",
   "kilo",
@@ -397,7 +397,9 @@ export function PluginLibrary() {
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
-  const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const antigravityCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("antigravity"),
+  );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
@@ -418,9 +420,9 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
       },
-      gemini: {
-        plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
+      antigravity: {
+        plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
       },
       grok: {
         plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
@@ -447,7 +449,7 @@ export function PluginLibrary() {
       claudeCapabilitiesQuery.data,
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
-      geminiCapabilitiesQuery.data,
+      antigravityCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
       droidCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,

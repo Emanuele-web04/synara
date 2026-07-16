@@ -9,7 +9,7 @@ type ModelProviderKind =
   | "codex"
   | "claudeAgent"
   | "cursor"
-  | "gemini"
+  | "antigravity"
   | "grok"
   | "droid"
   | "kilo"
@@ -26,6 +26,11 @@ const DROID_ONLY_MODEL_SLUGS = new Set(
     .map((model) => model.slug.toLowerCase())
     .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
 );
+
+const LEGACY_GEMINI_MODEL_LABELS: Readonly<Record<string, string>> = {
+  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+  "gemini-3-flash-preview": "Gemini 3.5 Flash",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -55,11 +60,14 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("cursor")) {
     return "cursor";
   }
+  if (lowerLabel.includes("antigravity")) {
+    return "antigravity";
+  }
   if (lowerLabel.includes("claude") || lowerLabel.includes("anthropic")) {
     return "claudeAgent";
   }
   if (lowerLabel.includes("gemini") || lowerLabel.includes("google")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
@@ -78,7 +86,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "cursor" ||
-    provider === "gemini" ||
+    provider === "antigravity" ||
     provider === "grok" ||
     provider === "droid" ||
     provider === "kilo" ||
@@ -86,6 +94,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "pi"
   ) {
     return provider;
+  }
+  if (provider === "gemini") {
+    return "antigravity";
   }
   if (typeof provider === "string") {
     const providerFromLabel = inferProviderFromLabel(provider);
@@ -103,7 +114,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     return "claudeAgent";
   }
   if (lowerModel.includes("gemini")) {
-    return "gemini";
+    return "antigravity";
   }
   if (lowerModel.includes("grok")) {
     return "grok";
@@ -138,16 +149,56 @@ function normalizeModelOptions(input: unknown): unknown {
   return Object.fromEntries(entries);
 }
 
+function splitLegacyAntigravityModelLabel(model: string): {
+  model: string;
+  reasoningEffort?: string;
+} {
+  const match = model.trim().match(/^(.*?)\s+\(([^()]+)\)$/u);
+  if (!match?.[1] || !match[2]) {
+    return { model };
+  }
+  const reasoningEffort = match[2].trim().toLowerCase();
+  if (!new Set(["low", "medium", "high", "thinking"]).has(reasoningEffort)) {
+    return { model };
+  }
+  return {
+    model: match[1].trim(),
+    reasoningEffort,
+  };
+}
+
+function migrateLegacyGeminiModel(model: string): string {
+  const trimmed = model.trim();
+  return LEGACY_GEMINI_MODEL_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
 export function normalizeLegacyModelSelection(input: {
   readonly provider: unknown;
   readonly model: string;
   readonly options: unknown;
 }): Record<string, unknown> {
   const provider = inferLegacyModelProvider(input.provider, input.model);
-  const options = normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+  const migratedGeminiSelection = input.provider === "gemini";
+  const normalizedOptions = migratedGeminiSelection
+    ? undefined
+    : normalizeModelOptions(readLegacyProviderOptions(input.options, provider));
+  const antigravityModel =
+    provider === "antigravity"
+      ? splitLegacyAntigravityModelLabel(
+          migratedGeminiSelection ? migrateLegacyGeminiModel(input.model) : input.model,
+        )
+      : null;
+  const options =
+    antigravityModel?.reasoningEffort &&
+    (normalizedOptions === undefined || isRecord(normalizedOptions))
+      ? {
+          ...(isRecord(normalizedOptions) ? normalizedOptions : {}),
+          reasoningEffort: antigravityModel.reasoningEffort,
+        }
+      : normalizedOptions;
   return {
     provider,
-    model: input.model,
+    model: antigravityModel?.model ?? input.model,
     ...(options === undefined ? {} : { options }),
   };
 }

@@ -87,11 +87,6 @@ describe("discoverSkillsCatalog", () => {
       "cursor-only",
       "Cursor",
     );
-    await writeSkill(
-      path.join(homeDir, ".gemini", "skills", "gemini-only"),
-      "gemini-only",
-      "Gemini",
-    );
     await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
     await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
     await writeSkill(
@@ -108,7 +103,6 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("codex-only")?.scope).toBe("codex");
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
-    expect(byName.get("gemini-only")?.scope).toBe("gemini");
     expect(byName.get("grok-only")?.scope).toBe("grok");
     expect(byName.get("kilo-only")?.scope).toBe("kilo");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
@@ -152,7 +146,6 @@ describe("discoverSkillsCatalog", () => {
   it("prefers the provider-native copy and falls back to Synara for that provider", async () => {
     await writeSkill(path.join(synaraBaseDir, "skills", "shared"), "shared", "Synara copy");
     await writeSkill(path.join(homeDir, ".codex", "skills", "shared"), "shared", "Codex copy");
-    await writeSkill(path.join(homeDir, ".gemini", "skills", "shared"), "shared", "Gemini copy");
     await writeSkill(path.join(synaraBaseDir, "skills", "only-synara"), "only-synara", "Fallback");
 
     const codexView = await discoverSkillsCatalog({ homeDir, synaraBaseDir, provider: "codex" });
@@ -169,28 +162,18 @@ describe("discoverSkillsCatalog", () => {
     });
     const claudeShared = claudeView.find((skill) => skill.name === "shared");
     expect(claudeShared?.scope).toBe("synara");
-
-    const geminiView = await discoverSkillsCatalog({
-      homeDir,
-      synaraBaseDir,
-      provider: "gemini",
-    });
-    const geminiShared = geminiView.find((skill) => skill.name === "shared");
-    expect(geminiShared?.scope).toBe("gemini");
   });
 
   it("uses documented provider alias roots before Synara fallbacks", async () => {
     await writeSkill(path.join(synaraBaseDir, "skills", "shared"), "shared", "Synara copy");
     await writeSkill(path.join(homeDir, ".agents", "skills", "shared"), "shared", "Agents alias");
-    await writeSkill(path.join(homeDir, ".gemini", "skills", "shared"), "shared", "Gemini copy");
-
-    const geminiView = await discoverSkillsCatalog({
+    const antigravityView = await discoverSkillsCatalog({
       homeDir,
       synaraBaseDir,
-      provider: "gemini",
+      provider: "antigravity",
     });
 
-    expect(geminiView.find((skill) => skill.name === "shared")?.scope).toBe("agents");
+    expect(antigravityView.find((skill) => skill.name === "shared")?.scope).toBe("agents");
   });
 
   it("uses provider-native roots before shared aliases for Grok and Pi", async () => {

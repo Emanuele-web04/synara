@@ -11,7 +11,7 @@ import {
   SYNARA_TERMINAL_HOOK_OSC_PREFIX,
   SYNARA_TERMINAL_CLI_KIND_ENV_KEY,
   type TerminalAgentHookEventType,
-  type TerminalCliKind,
+  type ManagedTerminalCliKind,
 } from "@synara/shared/terminalThreads";
 
 export interface ManagedTerminalWrapperState {
@@ -20,7 +20,7 @@ export interface ManagedTerminalWrapperState {
   hookScriptPath: string | null;
   claudeSettingsPath: string | null;
   zshDir: string | null;
-  targetPathByCliKind: Partial<Record<TerminalCliKind, string>>;
+  targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>>;
 }
 
 function shellQuote(value: string): string {
@@ -258,7 +258,7 @@ function buildCodexWrapperScript(input: {
 
 function buildWrapperScript(input: {
   claudeSettingsPath: string;
-  cliKind: TerminalCliKind;
+  cliKind: ManagedTerminalCliKind;
   codexHomeDir: string;
   notifyHookPath: string;
   targetPath: string;
@@ -375,7 +375,7 @@ export function prepareManagedTerminalWrappers(options: {
     };
   }
 
-  const targetPathByCliKind: Partial<Record<TerminalCliKind, string>> = {};
+  const targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>> = {};
   for (const cliKind of ["codex", "claude"] as const) {
     const commandName = managedTerminalCommandNameForCliKind(cliKind);
     const targetPath = resolveExecutableOnPath(commandName, options.baseEnv);
@@ -409,7 +409,7 @@ export function prepareManagedTerminalWrappers(options: {
     0o644,
   );
   for (const [cliKind, targetPath] of Object.entries(targetPathByCliKind) as Array<
-    [TerminalCliKind, string]
+    [ManagedTerminalCliKind, string]
   >) {
     const wrapperPath = path.join(options.rootDir, managedTerminalCommandNameForCliKind(cliKind));
     writeFileIfChanged(

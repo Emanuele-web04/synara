@@ -853,8 +853,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "antigravity":
+      return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":
@@ -2043,7 +2043,7 @@ export default function ChatView({
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
+      antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
       droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
@@ -2078,11 +2078,13 @@ export default function ChatView({
       enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
     }),
   );
-  const geminiModelsQuery = useQuery(
+  const antigravityModelsQuery = useQuery(
     providerModelsQueryOptions({
-      provider: "gemini",
-      binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+      provider: "antigravity",
+      binaryPath: settings.antigravityBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled:
+        selectedProvider === "antigravity" || lockedProvider === "antigravity" || isModelPickerOpen,
     }),
   );
   const grokDynamicModelsQuery = useQuery(
@@ -2190,6 +2192,12 @@ export default function ChatView({
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
     (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
+  const antigravityModelDiscoveryPending =
+    !(
+      antigravityModelsQuery.data?.source === "antigravity.cli" &&
+      (antigravityModelsQuery.data.models.length ?? 0) > 0
+    ) &&
+    (antigravityModelsQuery.isLoading || antigravityModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -2207,10 +2215,10 @@ export default function ChatView({
         customModelsByProvider.cursor,
         composerModelHintByProvider.cursor,
       ),
-      gemini: getAppModelOptions(
-        "gemini",
-        customModelsByProvider.gemini,
-        composerModelHintByProvider.gemini,
+      antigravity: getAppModelOptions(
+        "antigravity",
+        customModelsByProvider.antigravity,
+        composerModelHintByProvider.antigravity,
       ),
       grok: getAppModelOptions(
         "grok",
@@ -2246,7 +2254,7 @@ export default function ChatView({
         cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      gemini: geminiModelsQuery.data,
+      antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
@@ -2258,7 +2266,7 @@ export default function ChatView({
       "claudeAgent",
       "codex",
       "cursor",
-      "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
@@ -2284,7 +2292,7 @@ export default function ChatView({
     cursorRuntimeModels,
     customModelsByProvider,
     droidDynamicModelsQuery.data,
-    geminiModelsQuery.data,
+    antigravityModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
@@ -2303,7 +2311,7 @@ export default function ChatView({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
-      gemini: geminiModelsQuery.data?.models ?? [],
+      antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
@@ -2315,7 +2323,7 @@ export default function ChatView({
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
-      geminiModelsQuery.data?.models,
+      antigravityModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
@@ -2326,7 +2334,7 @@ export default function ChatView({
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
-    gemini: geminiModelsQuery,
+    antigravity: antigravityModelsQuery,
     grok: grokDynamicModelsQuery,
     droid: droidDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
@@ -2391,38 +2399,43 @@ export default function ChatView({
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "droid"
-        ? droidModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : selectedProviderModelsQuery !== undefined &&
-                (selectedProviderModelsQuery.isLoading ||
-                  (selectedProviderModelsQuery.isFetching &&
-                    selectedProviderModelsQuery.data === undefined));
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : selectedProviderModelsQuery !== undefined &&
+                  (selectedProviderModelsQuery.isLoading ||
+                    (selectedProviderModelsQuery.isFetching &&
+                      selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "antigravity" ||
     selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "droid"
-        ? droidModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : false;
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -4434,7 +4447,7 @@ export default function ChatView({
       },
       onTerminalMetadataChange: (
         terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | null; label: string },
+        metadata: { cliKind: "codex" | "claude" | "antigravity" | null; label: string },
       ) => {
         if (!activeThreadId) return;
         storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
@@ -7789,12 +7802,11 @@ export default function ChatView({
       }
 
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedProviderForSend,
-        selectedModelSelectionForSend.provider === selectedProviderForSend
-          ? selectedModelSelectionForSend.model
-          : selectedModelForSend ||
-              targetProjectDefaultModelSelectionForSend?.model ||
-              DEFAULT_MODEL_BY_PROVIDER.codex,
+        selectedModelSelectionForSend.provider,
+        selectedModelSelectionForSend.model ||
+          selectedModelForSend ||
+          targetProjectDefaultModelSelectionForSend?.model ||
+          DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
 
@@ -8856,6 +8868,7 @@ export default function ChatView({
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
+          antigravity: antigravityModelDiscoveryPending,
           cursor: cursorModelDiscoveryPending,
           droid: droidModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
@@ -8898,6 +8911,7 @@ export default function ChatView({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={{
+        antigravity: antigravityModelDiscoveryPending,
         cursor: cursorModelDiscoveryPending,
         droid: droidModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,

@@ -50,7 +50,7 @@ describe("shouldInlineSkillForProvider", () => {
   });
 
   it("always inlines for providers without native skill support", () => {
-    for (const provider of ["gemini", "grok", "kilo", "opencode"] as const) {
+    for (const provider of ["antigravity", "grok", "kilo", "opencode"] as const) {
       expect(shouldInlineSkillForProvider(provider, synaraSkillPath)).toBe(true);
       expect(shouldInlineSkillForProvider(provider, claudeSkillPath)).toBe(true);
     }
@@ -67,7 +67,7 @@ describe("buildInlineSkillInstructions", () => {
       await writeFile(skillPath, "# Reviewer\n\nAlways review carefully.");
 
       const text = await buildInlineSkillInstructions({
-        provider: "gemini",
+        provider: "antigravity",
         skills: [
           { name: "reviewer", path: skillPath },
           { name: "missing", path: path.join(root, ".synara", "skills", "missing", "SKILL.md") },
@@ -92,7 +92,7 @@ describe("buildInlineSkillInstructions", () => {
       await writeFile(skillPath, "content".repeat(100));
 
       const text = await buildInlineSkillInstructions({
-        provider: "gemini",
+        provider: "antigravity",
         skills: [{ name: "reviewer", path: skillPath }],
         maxChars: 50,
       });

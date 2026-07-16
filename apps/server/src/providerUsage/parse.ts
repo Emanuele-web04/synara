@@ -95,7 +95,7 @@ export function formatUsd(amount: number): string {
   }).format(amount);
 }
 
-/** Recursively collect every nested object that owns a finite `key` (used for Gemini quota trees). */
+/** Recursively collect every nested object that owns a finite `key`. */
 export function collectRecordsWithKey(value: unknown, key: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const visit = (node: unknown): void => {

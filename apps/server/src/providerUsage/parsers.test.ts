@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { parseClaudeUsage } from "./providers/claude.ts";
 import { parseCodexUsage } from "./providers/codex.ts";
 import { parseCursorUsage } from "./providers/cursor.ts";
-import { parseGeminiQuota } from "./providers/gemini.ts";
 
 const NOW_MS = 1_738_000_000_000;
 
@@ -100,25 +99,5 @@ describe("parseCursorUsage", () => {
     expect(usageLine(snapshot, "On-demand")?.value).toContain("60.00");
     // remaining = (5000 - 1200) / 100 = $38.00 of $50.00
     expect(usageLine(snapshot, "Credits")?.value).toContain("38.00");
-  });
-});
-
-describe("parseGeminiQuota", () => {
-  it("groups remaining fractions into Pro/Flash used percent", () => {
-    const snapshot = parseGeminiQuota({
-      json: {
-        quota: [
-          { modelId: "gemini-2.5-pro", remainingFraction: 0.75, resetTime: "2026-02-01T00:00:00Z" },
-          { modelId: "gemini-2.5-flash", remainingFraction: 0.5 },
-        ],
-      },
-      nowMs: NOW_MS,
-      planName: "Paid",
-    });
-
-    expect(snapshot.status).toBe("ok");
-    expect(snapshot.planName).toBe("Paid");
-    expect(limit(snapshot, "Pro")?.usedPercent).toBeCloseTo(25);
-    expect(limit(snapshot, "Flash")?.usedPercent).toBeCloseTo(50);
   });
 });
