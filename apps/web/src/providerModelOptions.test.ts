@@ -121,6 +121,37 @@ describe("mergeDynamicModelOptions", () => {
       }),
     ).toEqual([{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }]);
   });
+
+  it("deduplicates Cursor transport variants by their base model", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "cursor",
+        staticOptions: [
+          {
+            slug: "grok-4.5[thinking=true]",
+            name: "Cursor Grok 4.5",
+            isCustom: true,
+          },
+        ],
+        dynamicModels: [
+          {
+            slug: "grok-4.5",
+            name: "Cursor Grok 4.5",
+            upstreamProviderId: "xai",
+            upstreamProviderName: "xAI",
+          },
+          { slug: "grok-4.5[thinking=true]", name: "Cursor Grok 4.5" },
+        ],
+      }),
+    ).toEqual([
+      {
+        slug: "grok-4.5",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+      },
+    ]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {

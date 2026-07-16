@@ -94,6 +94,18 @@ const ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT: ProviderModelDescriptor = {
   defaultReasoningEffort: "thinking",
 };
 
+const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "grok-4.5",
+  name: "Grok 4.5",
+  supportedReasoningEfforts: [
+    { value: "none" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+  defaultReasoningEffort: "low",
+};
+
 describe("getComposerProviderState", () => {
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
@@ -591,6 +603,50 @@ describe("getComposerProviderState", () => {
       promptEffort: "low",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("exposes and dispatches efforts for dynamically discovered Grok models", () => {
+    const selection = getComposerTraitSelection(
+      "grok",
+      "grok-4.5",
+      "",
+      { reasoningEffort: "high" },
+      GROK_RUNTIME_4_5_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-4.5",
+      runtimeModel: GROK_RUNTIME_4_5_WITH_REASONING,
+      prompt: "",
+      modelOptions: { grok: { reasoningEffort: "high" } },
+    });
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("high");
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "high",
+      modelOptionsForDispatch: { reasoningEffort: "high" },
+    });
+  });
+
+  it("exposes Grok efforts before runtime model discovery resolves", () => {
+    const selection = getComposerTraitSelection("grok", "grok-4.5", "", undefined);
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("low");
   });
 
   it("exposes and dispatches runtime-discovered Droid efforts for GPT-5.6", () => {

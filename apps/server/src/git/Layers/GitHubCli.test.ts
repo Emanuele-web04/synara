@@ -15,6 +15,7 @@ const layer = it.layer(GitHubCliLive);
 
 afterEach(() => {
   mockedRunProcess.mockReset();
+  vi.unstubAllEnvs();
 });
 
 layer("GitHubCliLive", (it) => {
@@ -751,9 +752,10 @@ layer("GitHubCliLive", (it) => {
         viewer: "octocat",
       });
 
-      assert.equal(result.length, 1);
-      assert.equal(result[0]?.title, "Healthy PR");
-      assert.deepStrictEqual(result[0]?.reviewRequestLogins, ["reviewer"]);
+      assert.equal(result.rawCount, 2);
+      assert.equal(result.entries.length, 1);
+      assert.equal(result.entries[0]?.title, "Healthy PR");
+      assert.deepStrictEqual(result.entries[0]?.reviewRequestLogins, ["reviewer"]);
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
         "pr",
         "list",
@@ -800,6 +802,49 @@ layer("GitHubCliLive", (it) => {
           "--limit",
           "50",
         ]),
+      );
+    }),
+  );
+
+  it.effect("uses GitHub's team-aware review search for beyond-cap pin verification", () =>
+    Effect.gen(function* () {
+      vi.stubEnv("GH_HOST", "enterprise.example.com");
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([{ number: 51 }, { number: 87 }]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const gh = yield* GitHubCli;
+      const numbers = yield* gh.listReviewRequestedPullRequestNumbers({
+        cwd: "/repo",
+        repository: "acme/app",
+        viewer: "octocat",
+        limit: 1_000,
+      });
+
+      assert.deepStrictEqual(numbers, [51, 87]);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "search",
+        "prs",
+        "--repo",
+        "acme/app",
+        "--review-requested",
+        "octocat",
+        "--state",
+        "open",
+        "--limit",
+        "1000",
+        "--json",
+        "number",
+      ]);
+      expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({ GH_HOST: "github.com" }),
+          signal: expect.any(AbortSignal),
+        }),
       );
     }),
   );
@@ -879,9 +924,21 @@ layer("GitHubCliLive", (it) => {
         detail.commits.map((commit) => commit.messageHeadline),
         ["", ""],
       );
+      // Avatars are derived from real user logins only: "platform" is a Team (slug), and a
+      // slug-derived URL could show an unrelated user who happens to share the name.
       assert.deepStrictEqual(detail.reviewers, [
-        { login: "platform", name: "Platform", avatarUrl: null, url: null },
-        { login: "reviewer", name: null, avatarUrl: null, url: null },
+        {
+          login: "platform",
+          name: "Platform",
+          avatarUrl: null,
+          url: null,
+        },
+        {
+          login: "reviewer",
+          name: null,
+          avatarUrl: "https://avatars.githubusercontent.com/reviewer?size=64",
+          url: null,
+        },
       ]);
       expect(detail.comments).toContainEqual(
         expect.objectContaining({
@@ -891,7 +948,11 @@ layer("GitHubCliLive", (it) => {
           reviewState: "PENDING",
         }),
       );
-      expect(mockedRunProcess.mock.calls[0]?.[1]?.at(-1)).not.toContain("files");
+      const detailFields = mockedRunProcess.mock.calls[0]?.[1]?.at(-1) ?? "";
+      expect(detailFields).not.toContain("files");
+      expect(detailFields).not.toMatch(
+        /headRepository|latestReviews|milestone|assignees|autoMergeRequest/,
+      );
     }),
   );
 
@@ -941,6 +1002,297 @@ layer("GitHubCliLive", (it) => {
         "github.com/acme/app",
         "--squash",
       ]);
+    }),
+  );
+
+  it.effect("falls back to a local merge-base git diff when GitHub rejects oversized diffs", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(
+          new Error(
+            "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of files (300).",
+          ),
+        )
+        .mockResolvedValueOnce({
+          stdout: "main 1111111111111111 2222222222222222\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "diff --git a/a.ts b/a.ts\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      const diff = yield* gh.getPullRequestDiff({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 357,
+      });
+      assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
+      assert.equal(diff.truncated, false);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "repos/acme/app/pulls/357",
+        "--jq",
+        '[.base.ref, .base.sha, .head.sha] | join(" ")',
+      ]);
+      expect(mockedRunProcess.mock.calls[2]?.[0]).toBe("git");
+      expect(mockedRunProcess.mock.calls[2]?.[1]).toEqual([
+        "diff",
+        "--no-color",
+        "1111111111111111...2222222222222222",
+      ]);
+    }),
+  );
+
+  it.effect("fetches missing fallback-diff commits through the matching configured remote", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
+        .mockResolvedValueOnce({
+          stdout: "main 1111111111111111 2222222222222222\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockRejectedValueOnce(new Error("fatal: bad object 2222222222222222"))
+        .mockResolvedValueOnce({
+          stdout:
+            "origin\thttps://oauth2:super-secret@github.com/acme/app.git (fetch)\n" +
+            "origin\thttps://oauth2:super-secret@github.com/acme/app.git (push)\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "false\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
+        .mockResolvedValueOnce({
+          stdout: "diff --git a/a.ts b/a.ts\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      const gh = yield* GitHubCli;
+      const diff = yield* gh.getPullRequestDiff({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 357,
+      });
+      assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
+      // Git resolves the validated remote name itself, preserving its transport and credentials
+      // without putting a token-bearing remote URL in argv or process-runner errors.
+      expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        "fetch",
+        "--quiet",
+        "--",
+        "origin",
+        "refs/pull/357/head",
+        "main",
+      ]);
+      expect(mockedRunProcess.mock.calls[5]?.[1]?.join(" ")).not.toContain("super-secret");
+    }),
+  );
+
+  it.effect("keeps a leading-dash remote name out of fallback fetch argv", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
+        .mockResolvedValueOnce({
+          stdout: "main 1111111111111111 2222222222222222\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockRejectedValueOnce(new Error("fatal: bad object 2222222222222222"))
+        .mockResolvedValueOnce({
+          stdout:
+            "--upload-pack=/tmp/attacker\tgit@github.com:acme/app.git (fetch)\n" +
+            "--upload-pack=/tmp/attacker\tgit@github.com:acme/app.git (push)\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "false\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
+        .mockResolvedValueOnce({
+          stdout: "diff --git a/a.ts b/a.ts\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      yield* gh.getPullRequestDiff({ cwd: "/repo", repository: "acme/app", number: 357 });
+
+      const fetchArgs = mockedRunProcess.mock.calls[5]?.[1];
+      expect(fetchArgs).toEqual([
+        "fetch",
+        "--quiet",
+        "--",
+        "https://github.com/acme/app.git",
+        "refs/pull/357/head",
+        "main",
+      ]);
+      expect(fetchArgs).not.toContain("--upload-pack=/tmp/attacker");
+    }),
+  );
+
+  it.effect("deepens shallow fallback-diff history in bounded increments", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
+        .mockResolvedValueOnce({
+          stdout: "main 1111111111111111 2222222222222222\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockRejectedValueOnce(new Error("fatal: no merge base"))
+        .mockResolvedValueOnce({
+          stdout: "origin\tgit@github.com:acme/app.git (fetch)\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "true\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
+        .mockRejectedValueOnce(new Error("fatal: no merge base"))
+        .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0, signal: null, timedOut: false })
+        .mockResolvedValueOnce({
+          stdout: "diff --git a/a.ts b/a.ts\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      const diff = yield* gh.getPullRequestDiff({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 357,
+      });
+
+      assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
+      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual(["rev-parse", "--is-shallow-repository"]);
+      expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        "fetch",
+        "--quiet",
+        "--deepen=64",
+        "--",
+        "origin",
+        "refs/pull/357/head",
+        "main",
+      ]);
+      expect(mockedRunProcess.mock.calls[7]?.[1]).toEqual([
+        "fetch",
+        "--quiet",
+        "--deepen=256",
+        "--",
+        "origin",
+        "refs/pull/357/head",
+        "main",
+      ]);
+      expect(mockedRunProcess.mock.calls.flatMap((call) => call[1])).not.toContain("--unshallow");
+    }),
+  );
+
+  it.effect("stops shallow fallback-diff recovery after the bounded deepen budget", () =>
+    Effect.gen(function* () {
+      const success = { stdout: "", stderr: "", code: 0, signal: null, timedOut: false } as const;
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
+        .mockResolvedValueOnce({ ...success, stdout: "main base-sha head-sha\n" })
+        .mockRejectedValueOnce(new Error("fatal: no merge base"))
+        .mockResolvedValueOnce({
+          ...success,
+          stdout: "origin\thttps://github.com/acme/app.git (fetch)\n",
+        })
+        .mockResolvedValueOnce({ ...success, stdout: "true\n" })
+        .mockResolvedValueOnce(success)
+        .mockRejectedValueOnce(new Error("fatal: no merge base"))
+        .mockResolvedValueOnce(success)
+        .mockRejectedValueOnce(new Error("fatal: no merge base"))
+        .mockResolvedValueOnce(success)
+        .mockRejectedValueOnce(new Error("fatal: no merge base"));
+
+      const gh = yield* GitHubCli;
+      const error = yield* gh
+        .getPullRequestDiff({ cwd: "/repo", repository: "acme/app", number: 357 })
+        .pipe(Effect.flip);
+
+      assert.equal(error.detail.includes("no merge base"), true);
+      expect(
+        mockedRunProcess.mock.calls
+          .map((call) => call[1].find((argument) => argument.startsWith("--deepen=")))
+          .filter((argument): argument is string => argument !== undefined),
+      ).toEqual(["--deepen=64", "--deepen=256", "--deepen=1024"]);
+      expect(mockedRunProcess.mock.calls.flatMap((call) => call[1])).not.toContain("--unshallow");
+    }),
+  );
+
+  it.effect("posts pull request comments through gh pr comment", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const gh = yield* GitHubCli;
+      yield* gh.commentOnPullRequest({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        body: "Looks good!\n\nShipping it.",
+      });
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "pr",
+        "comment",
+        "9",
+        "--repo",
+        "github.com/acme/app",
+        "--body-file",
+        "-",
+      ]);
+      // The body must never appear in argv — it travels over stdin.
+      expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ stdin: "Looks good!\n\nShipping it." }),
+      );
     }),
   );
 

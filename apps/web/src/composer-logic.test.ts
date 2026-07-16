@@ -439,6 +439,10 @@ describe("parseStandaloneComposerSlashCommand", () => {
     expect(parseStandaloneComposerSlashCommand("/fast")).toBe("fast");
   });
 
+  it("parses standalone /feedback command", () => {
+    expect(parseStandaloneComposerSlashCommand("/feedback")).toBe("feedback");
+  });
+
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
   });

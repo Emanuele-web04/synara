@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { WsAutomationCreateRpc, WsProjectsDiscoverScriptsRpc, WsRpcError, WsRpcGroup } from "./rpc";
+import {
+  WsAutomationCreateRpc,
+  WsProjectsDiscoverScriptsRpc,
+  WsPullRequestsReviewRequestCountRpc,
+  WsRpcError,
+  WsRpcGroup,
+} from "./rpc";
 
 describe("WS RPC contracts", () => {
   it("exports the additive Effect RPC group", () => {
@@ -17,5 +23,9 @@ describe("WS RPC contracts", () => {
 
   it("exports the automation create RPC", () => {
     expect(WsAutomationCreateRpc).toBeDefined();
+  });
+
+  it("exports the count-only pull request review RPC", () => {
+    expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
   });
 });

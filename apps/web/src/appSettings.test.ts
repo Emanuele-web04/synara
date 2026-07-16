@@ -87,6 +87,14 @@ describe("getAppModelOptions", () => {
     });
   });
 
+  it("keeps Cursor transport parameters out of selected-model hints", () => {
+    const options = getAppModelOptions("cursor", [], "grok-4.5[thinking=true]");
+
+    expect(
+      options.filter((option) => option.slug.startsWith("grok-4.5")).map((option) => option.slug),
+    ).toEqual(["grok-4.5"]);
+  });
+
   it("formats unknown GPT custom models with a readable label", () => {
     const options = getAppModelOptions("codex", ["gpt-5.1-codex-max"]);
 

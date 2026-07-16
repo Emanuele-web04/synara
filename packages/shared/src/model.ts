@@ -415,6 +415,12 @@ export function getModelCapabilities(
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
+  if (provider === "grok" && slug) {
+    // Grok exposes reasoning effort as a provider-level CLI option, while its
+    // runtime model catalog contains only model ids. New models must inherit the
+    // provider ladder even before runtime discovery has returned their descriptor.
+    return MODEL_CAPABILITIES_INDEX.grok["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
   return EMPTY_MODEL_CAPABILITIES;
 }
 

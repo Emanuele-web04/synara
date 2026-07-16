@@ -196,6 +196,11 @@ export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
 export const GitPullRequestIcon = centralIconWrapper("pull-request");
+// Pull-request state glyphs from the same three-node Central family as "pull-request",
+// so draft/closed/merged read as variations of one icon rather than four styles.
+export const GitPullRequestDraftIcon: LucideIcon = centralIconWrapper("draft");
+export const GitPullRequestClosedIcon: LucideIcon = centralIconWrapper("request-closed");
+export const GitMergeConflictIcon: LucideIcon = centralIconWrapper("merge-conflict");
 // Three descending-width lines — the app's one "filter controls" glyph (pull
 // request list filters, and anywhere else that opens a filter popover).
 export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");

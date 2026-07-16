@@ -530,7 +530,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -2027,7 +2027,6 @@ export default function ChatView({
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
-  const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
@@ -2150,11 +2149,8 @@ export default function ChatView({
     }),
   );
   const cursorRuntimeModels = useMemo(
-    () =>
-      showExpandedCursorModelVariants
-        ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
-    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
+    () => collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+    [cursorDynamicModelsQuery.data?.models],
   );
   const cursorModelDiscoveryEnabled =
     selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
@@ -5815,7 +5811,7 @@ export default function ChatView({
         model: resolvedModel,
       };
       setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
-      if (provider === "cursor" && !showExpandedCursorModelVariants) {
+      if (provider === "cursor") {
         setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
           persistSticky: true,
           model: resolvedModel,
@@ -5829,7 +5825,6 @@ export default function ChatView({
       scheduleComposerFocus,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
-      showExpandedCursorModelVariants,
       customModelsByProvider,
       modelOptionsByProvider,
     ],
@@ -9459,6 +9454,7 @@ export default function ChatView({
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
+    environmentMode: envMode ?? null,
     runtimeMode,
     interactionMode,
     threadId,

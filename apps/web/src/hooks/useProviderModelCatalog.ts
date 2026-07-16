@@ -14,8 +14,7 @@ import { useMemo } from "react";
 
 import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
-import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
-import { useFeatureFlags } from "../featureFlags";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
   providerAgentsQueryOptions,
   providerModelsQueryOptions,
@@ -60,8 +59,6 @@ export function useProviderModelCatalog(input: {
   const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
   const discoveryCwd = input.cwd ?? null;
   const { settings } = useAppSettings();
-  const featureFlags = useFeatureFlags();
-  const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
 
   const claudeDynamicModelsQuery = useQuery(
@@ -155,11 +152,8 @@ export function useProviderModelCatalog(input: {
   );
 
   const cursorRuntimeModels = useMemo(
-    () =>
-      showExpandedCursorModelVariants
-        ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
-    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
+    () => collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+    [cursorDynamicModelsQuery.data?.models],
   );
 
   const cursorModelDiscoveryEnabled = selectedProvider === "cursor" || discoveryEnabled;
