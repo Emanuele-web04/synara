@@ -25,7 +25,13 @@ import {
 
 import type { Space } from "~/types";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
-import { VOID_SPACE_ICON, VOID_SPACE_NAME, spaceDisplayName, spaceKey } from "~/lib/spaceGrouping";
+import {
+  VOID_SPACE_ICON,
+  VOID_SPACE_NAME,
+  resolveActiveSpaceId,
+  spaceDisplayName,
+  spaceKey,
+} from "~/lib/spaceGrouping";
 import { cn } from "~/lib/utils";
 import { PencilIcon, PlusIcon, Trash2 } from "~/lib/icons";
 import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
@@ -400,9 +406,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
    * the selected tab, the whole strip would silently drop out of the Tab order. Presenting
    * Void is also the state the store reconciles itself to a moment later.
    */
-  const activeSpaceId = props.spaces.some((space) => space.id === props.activeSpaceId)
-    ? props.activeSpaceId
-    : null;
+  const activeSpaceId = resolveActiveSpaceId(props.activeSpaceId, props.spaces);
   const activeSpace = activeSpaceId
     ? (props.spaces.find((space) => space.id === activeSpaceId) ?? null)
     : null;

@@ -20,6 +20,16 @@ export const VOID_SPACE_ICON = "black-hole";
  */
 export const VOID_SPACE_KEY = "void";
 
+/** Resolve stale persisted selection to Void before any Space-scoped list filters on it. */
+export function resolveActiveSpaceId(
+  activeSpaceId: SpaceId | null,
+  spaces: ReadonlyArray<Space>,
+): SpaceId | null {
+  return activeSpaceId !== null && spaces.some((space) => space.id === activeSpaceId)
+    ? activeSpaceId
+    : null;
+}
+
 /** Narrows a `SpaceId | null` to the string key that stands in for it. */
 export function spaceKey(spaceId: SpaceId | null): string {
   return spaceId ?? VOID_SPACE_KEY;

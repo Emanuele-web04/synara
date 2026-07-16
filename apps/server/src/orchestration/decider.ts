@@ -401,6 +401,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
         yield* requireSpaceAssignableProject({
           command,
+          projectTitle: project.title,
           projectWorkspaceRoot: project.workspaceRoot,
           workspacePaths,
         });
@@ -521,6 +522,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         requestedSpace !== undefined &&
         requestedSpace.deletedAt === null &&
         !isLegacyHomeChatContainerRow({
+          projectTitle: command.title,
           projectWorkspaceRoot: command.workspaceRoot,
           workspacePaths,
         })
@@ -558,6 +560,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      if (
+        command.title !== undefined &&
+        command.title !== existingProject.title &&
+        isLegacyHomeChatContainerRow({
+          projectTitle: existingProject.title,
+          projectWorkspaceRoot: existingProject.workspaceRoot,
+          workspacePaths,
+        })
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The legacy Chats container cannot be renamed.",
+        });
+      }
       if (command.spaceId !== undefined && command.spaceId !== null) {
         if (existingProject.deletedAt !== null) {
           return yield* new OrchestrationCommandInvariantError({
@@ -575,6 +591,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         // command may retitle or move the project.
         yield* requireSpaceAssignableProject({
           command,
+          projectTitle: command.title ?? existingProject.title,
           projectWorkspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
           workspacePaths,
         });

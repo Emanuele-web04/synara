@@ -312,27 +312,22 @@ describe("Spaces", () => {
       ),
     ).rejects.toThrow(/chats container/i);
 
-    // The reserved root, not mutable display metadata, identifies the legacy container.
-    ({ readModel } = await dispatch(readModel, {
-      type: "project.meta.update",
-      commandId: CommandId.makeUnsafe("cmd-rename-legacy-home"),
-      projectId: legacyHomeProjectId,
-      title: "Personal chats",
-    }));
+    // Keep the legacy discriminator stable: ordinary projects may legitimately own these
+    // roots, so the old Home row cannot be allowed to shed its canonical title.
     await expect(
       Effect.runPromise(
         decideOrchestrationCommand({
           command: {
             type: "project.meta.update",
-            commandId: CommandId.makeUnsafe("cmd-assign-renamed-legacy-home"),
+            commandId: CommandId.makeUnsafe("cmd-rename-legacy-home"),
             projectId: legacyHomeProjectId,
-            spaceId,
+            title: "Personal chats",
           },
           readModel,
           workspacePaths,
         }),
       ),
-    ).rejects.toThrow(/chats container/i);
+    ).rejects.toThrow(/cannot be renamed/i);
 
     // An ordinary project named anything else files normally under the same paths.
     const assigned = await Effect.runPromise(

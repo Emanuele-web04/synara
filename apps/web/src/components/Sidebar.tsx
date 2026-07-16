@@ -411,6 +411,7 @@ import {
   spaceDisplayIcon,
   spaceDisplayName,
   spaceKey,
+  resolveActiveSpaceId,
 } from "../lib/spaceGrouping";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -1385,7 +1386,8 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const spaces = useStore((store) => store.spaces);
   // Selection state only; the handlers and sync effects live in useSpacesController.
-  const activeSpaceId = useSpacesUiStore((store) => store.activeSpaceId);
+  const storedActiveSpaceId = useSpacesUiStore((store) => store.activeSpaceId);
+  const activeSpaceId = resolveActiveSpaceId(storedActiveSpaceId, spaces);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
