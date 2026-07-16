@@ -37,6 +37,7 @@ const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 30_000;
 const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
 type TranscriptStep = {
   readonly step_index?: number;
@@ -122,7 +123,7 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function hookScriptSource(): string {
+export function hookScriptSource(): string {
   return `const fs = require("node:fs");
 const event = process.argv[2] || "unknown";
 let payload = "";
@@ -130,7 +131,11 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { payload += chunk; });
 process.stdin.on("end", () => {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
-  if (target) fs.appendFileSync(target, event + "\\t" + payload.trim() + "\\n");
+  if (!target) {
+    process.stdout.write("{}\\n");
+    return;
+  }
+  fs.appendFileSync(target, event + "\\t" + payload.trim() + "\\n");
   if (event === "pre-tool") {
     const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
@@ -295,7 +300,10 @@ function effortLabel(value: string): string {
 export function parseAntigravityCliModelLabel(
   value: string,
 ): { model: string; effort?: string } | null {
-  const trimmed = value.replace(/\x1b\[[0-9;]*m/g, "").trim();
+  const trimmed = value
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .trim()
+    .replace(/^(?:[*•-]\s+)+/u, "");
   if (!trimmed) return null;
   const match = trimmed.match(/^(.*?)\s+\(([^()]+)\)$/u);
   if (!match?.[1] || !match[2]) return { model: trimmed };
@@ -303,6 +311,16 @@ export function parseAntigravityCliModelLabel(
     model: match[1].trim(),
     effort: match[2].trim().toLowerCase(),
   };
+}
+
+export function antigravityPromptCommandLineIssue(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform !== "win32" || prompt.length <= WINDOWS_PROMPT_MAX_CHARS) {
+    return null;
+  }
+  return `Antigravity prompts on Windows are limited to ${WINDOWS_PROMPT_MAX_CHARS.toLocaleString("en-US")} characters because the CLI accepts print-mode prompts as command-line arguments. Shorten the prompt or attach the content as files.`;
 }
 
 export function parseAntigravityModelLines(output: string): ProviderListModelsResult["models"] {
@@ -588,6 +606,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
   };
 
   const pollHookFile = async (context: AntigravitySessionContext) => {
+    if (context.stopped) return;
     if (!context.eventFile) return;
     let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
     try {
@@ -658,6 +677,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           }),
       });
       const existing = sessions.get(input.threadId);
+      if (existing) {
+        existing.stopped = true;
+        existing.interrupted = true;
+      }
       existing?.activeProcess?.kill();
       const now = new Date().toISOString();
       const conversationId = resumeConversationId(input.resumeCursor);
@@ -731,6 +754,14 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           provider: PROVIDER,
           operation: "turn/start",
           issue: "A prompt or file attachment is required.",
+        });
+      }
+      const promptIssue = antigravityPromptCommandLineIssue(normalizedPrompt);
+      if (promptIssue) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "turn/start",
+          issue: promptIssue,
         });
       }
       const turnId = TurnId.makeUnsafe(crypto.randomUUID());
@@ -825,6 +856,7 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       const timer = setInterval(() => void pollHookFile(context), POLL_INTERVAL_MS);
       child.once("error", (cause) => {
         clearInterval(timer);
+        if (sessions.get(input.threadId) !== context || context.activeProcess !== child) return;
         offer({
           ...base(context, { includeTurn: false }),
           type: "runtime.error",
@@ -838,6 +870,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       child.once("close", (code, signal) => {
         clearInterval(timer);
         void (async () => {
+          if (sessions.get(input.threadId) !== context || context.activeProcess !== child) {
+            await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+            return;
+          }
           await pollHookFile(context);
           if (!context.sawAssistant && stdout.trim()) {
             emitTextItem(

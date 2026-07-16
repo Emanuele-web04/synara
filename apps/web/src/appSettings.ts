@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Option, Schema } from "effect";
+import { Option, Schema, SchemaTransformation } from "effect";
 import {
   type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -134,6 +134,27 @@ const withDefaults =
       Schema.withDecodingDefault(() => fallback()),
     );
 
+const PersistedProviderKind = Schema.Literals([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "gemini",
+  "grok",
+  "droid",
+  "kilo",
+  "opencode",
+  "pi",
+]).pipe(
+  Schema.decodeTo(
+    ProviderKind,
+    SchemaTransformation.transform({
+      decode: (provider) => (provider === "gemini" ? "antigravity" : provider),
+      encode: (provider) => provider,
+    }),
+  ),
+);
+
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
@@ -148,6 +169,8 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
+  geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -212,26 +235,29 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
-  textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
-  defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
-  hiddenProviders: Schema.Array(ProviderKind).pipe(withDefaults(() => [])),
+  hiddenProviders: Schema.Array(PersistedProviderKind).pipe(withDefaults(() => [])),
   // Local-only UI preference: top-level provider order in Settings and the composer picker.
-  providerOrder: Schema.Array(ProviderKind).pipe(withDefaults(() => [...DEFAULT_PROVIDER_ORDER])),
+  providerOrder: Schema.Array(PersistedProviderKind).pipe(
+    withDefaults(() => [...DEFAULT_PROVIDER_ORDER]),
+  ),
   // Deprecated local-only preference kept for backward-compatible decoding.
   // Model-level hiding caused too many edge cases, so the app now normalizes it away.
   hiddenModels: Schema.Array(
     Schema.Struct({
-      provider: ProviderKind,
+      provider: PersistedProviderKind,
       slug: Schema.String,
     }),
   ).pipe(withDefaults(() => [])),
@@ -436,7 +462,12 @@ function normalizeProviderBinaryPathOverride(
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
-  const { enableAppshots: legacyEnableAppshots, ...currentSettings } = settings;
+  const {
+    enableAppshots: legacyEnableAppshots,
+    geminiBinaryPath: legacyGeminiBinaryPath,
+    customGeminiModels: legacyCustomGeminiModels,
+    ...currentSettings
+  } = settings;
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
@@ -445,7 +476,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     antigravityBinaryPath: normalizeProviderBinaryPathOverride(
       "antigravity",
-      settings.antigravityBinaryPath,
+      settings.antigravityBinaryPath || legacyGeminiBinaryPath,
     ),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
     droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
@@ -463,7 +494,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customAntigravityModels: normalizeCustomModelSlugs(
-      settings.customAntigravityModels,
+      [...settings.customAntigravityModels, ...(legacyCustomGeminiModels ?? [])],
       "antigravity",
     ),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),

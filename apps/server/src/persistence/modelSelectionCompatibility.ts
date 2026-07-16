@@ -3,7 +3,7 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-import { DEFAULT_MODEL_BY_PROVIDER, MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 
 type ModelProviderKind =
   | "codex"
@@ -26,6 +26,11 @@ const DROID_ONLY_MODEL_SLUGS = new Set(
     .map((model) => model.slug.toLowerCase())
     .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
 );
+
+const LEGACY_GEMINI_MODEL_LABELS: Readonly<Record<string, string>> = {
+  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+  "gemini-3-flash-preview": "Gemini 3.5 Flash",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -55,11 +60,11 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("cursor")) {
     return "cursor";
   }
-  if (lowerLabel.includes("claude") || lowerLabel.includes("anthropic")) {
-    return "claudeAgent";
-  }
   if (lowerLabel.includes("antigravity")) {
     return "antigravity";
+  }
+  if (lowerLabel.includes("claude") || lowerLabel.includes("anthropic")) {
+    return "claudeAgent";
   }
   if (lowerLabel.includes("gemini") || lowerLabel.includes("google")) {
     return "antigravity";
@@ -162,6 +167,11 @@ function splitLegacyAntigravityModelLabel(model: string): {
   };
 }
 
+function migrateLegacyGeminiModel(model: string): string {
+  const trimmed = model.trim();
+  return LEGACY_GEMINI_MODEL_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
 export function normalizeLegacyModelSelection(input: {
   readonly provider: unknown;
   readonly model: string;
@@ -175,7 +185,7 @@ export function normalizeLegacyModelSelection(input: {
   const antigravityModel =
     provider === "antigravity"
       ? splitLegacyAntigravityModelLabel(
-          migratedGeminiSelection ? DEFAULT_MODEL_BY_PROVIDER.antigravity : input.model,
+          migratedGeminiSelection ? migrateLegacyGeminiModel(input.model) : input.model,
         )
       : null;
   const options =

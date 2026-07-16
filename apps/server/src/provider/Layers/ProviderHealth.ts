@@ -86,6 +86,7 @@ import {
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
 import {
   enrichProviderStatusWithVersionAdvisory,
+  compareSemverVersions,
   makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
   parseGenericCliVersion,
@@ -113,6 +114,7 @@ const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
+const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
 
 const PROVIDERS = [
   CODEX_PROVIDER,
@@ -1598,11 +1600,25 @@ export const checkAntigravityProviderStatus = (
         message: detailFromResult(version) ?? "Antigravity CLI version check failed.",
       } satisfies ServerProviderStatus;
     }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    if (
+      parsedVersion !== null &&
+      compareSemverVersions(parsedVersion, MINIMUM_ANTIGRAVITY_CLI_VERSION) < 0
+    ) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        version: parsedVersion,
+        checkedAt,
+        message: `Antigravity CLI ${parsedVersion} is too old for Synara. Upgrade to ${MINIMUM_ANTIGRAVITY_CLI_VERSION} or newer.`,
+      } satisfies ServerProviderStatus;
+    }
     const models = yield* runAntigravityCommand(["models"], executable).pipe(
       Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
     if (
       Result.isSuccess(models) &&
       Option.isSome(models.success) &&

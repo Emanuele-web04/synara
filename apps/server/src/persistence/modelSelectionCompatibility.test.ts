@@ -42,6 +42,46 @@ it("infers Antigravity from persisted instance labels", () => {
   );
 });
 
+it("prefers an explicit Antigravity instance over a model vendor in its label", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "Antigravity Claude runtime",
+      model: "Claude Sonnet 4.6 (Thinking)",
+    }),
+    {
+      provider: "antigravity",
+      model: "Claude Sonnet 4.6",
+      options: { reasoningEffort: "thinking" },
+    },
+  );
+});
+
+it("migrates known Gemini models without discarding the saved selection", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "gemini",
+      model: "gemini-3.1-pro-preview",
+    }),
+    {
+      provider: "antigravity",
+      model: "Gemini 3.1 Pro",
+    },
+  );
+});
+
+it("preserves unknown Gemini models as custom Antigravity selections", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      provider: "gemini",
+      model: "gemini-custom-preview",
+    }),
+    {
+      provider: "antigravity",
+      model: "gemini-custom-preview",
+    },
+  );
+});
+
 it("infers Pi from persisted instance labels", () => {
   assert.deepEqual(
     normalizePersistedModelSelection({

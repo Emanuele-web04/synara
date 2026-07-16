@@ -751,6 +751,35 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("migrates persisted Gemini provider settings to Antigravity", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        textGenerationProvider: "gemini",
+        defaultProvider: "gemini",
+        hiddenProviders: ["gemini"],
+        providerOrder: ["codex", "gemini"],
+        hiddenModels: [{ provider: "gemini", slug: "gemini-3.1-pro-preview" }],
+        geminiBinaryPath: "/custom/bin/gemini",
+        customGeminiModels: ["gemini-custom-preview"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      textGenerationProvider: "antigravity",
+      defaultProvider: "antigravity",
+      hiddenProviders: ["antigravity"],
+      providerOrder: ["codex", "antigravity"],
+      hiddenModels: [{ provider: "antigravity", slug: "gemini-3.1-pro-preview" }],
+    });
+    expect(normalizeStoredAppSettings(decoded)).toMatchObject({
+      antigravityBinaryPath: "/custom/bin/gemini",
+      customAntigravityModels: ["gemini-custom-preview"],
+    });
+    expect(normalizeStoredAppSettings(decoded)).not.toHaveProperty("geminiBinaryPath");
+    expect(normalizeStoredAppSettings(decoded)).not.toHaveProperty("customGeminiModels");
+  });
+
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 

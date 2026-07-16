@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAntigravityHookConfig,
+  antigravityPromptCommandLineIssue,
+  hookScriptSource,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
   readCompleteAntigravityLines,
@@ -81,6 +83,17 @@ GPT-OSS 120B (Medium)
     );
   });
 
+  it("accepts bullet-prefixed model output", () => {
+    expect(parseAntigravityCliModelLabel("* Gemini 3.5 Flash (High)")).toEqual({
+      model: "Gemini 3.5 Flash",
+      effort: "high",
+    });
+    expect(parseAntigravityCliModelLabel("• Claude Sonnet 4.6 (Thinking)")).toEqual({
+      model: "Claude Sonnet 4.6",
+      effort: "thinking",
+    });
+  });
+
   it("discovers future CLI models without requiring a static catalog update", () => {
     expect(
       parseAntigravityModelLines(`
@@ -115,6 +128,25 @@ Claude Sonnet 5 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("keeps the globally installed hook neutral outside Synara sessions", async () => {
+    const result = await runAntigravityHelperProcess(
+      process.execPath,
+      ["-e", hookScriptSource(), "pre-tool"],
+      { timeoutMs: 1_000 },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("{}");
+  });
+
+  it("guards Windows command-line limits before spawning the CLI", () => {
+    expect(antigravityPromptCommandLineIssue("x".repeat(24_000), "win32")).toBeNull();
+    expect(antigravityPromptCommandLineIssue("x".repeat(24_001), "win32")).toContain(
+      "limited to 24,000 characters",
+    );
+    expect(antigravityPromptCommandLineIssue("x".repeat(120_000), "darwin")).toBeNull();
+  });
+
   it("marks every generated hook as a command hook", () => {
     expect(buildAntigravityHookConfig((event) => `capture ${event}`)).toEqual({
       "synara-capture": {
