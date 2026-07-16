@@ -75,6 +75,20 @@ describe("Spaces", () => {
     }));
     expect(readModel.projects[0]?.spaceId).toBeNull();
 
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-project-void-noop"),
+            projectId,
+            spaceId: null,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow(/already assigned/i);
+
     ({ readModel } = await dispatch(readModel, {
       type: "project.meta.update",
       commandId: CommandId.makeUnsafe("cmd-project-assign"),
@@ -82,6 +96,20 @@ describe("Spaces", () => {
       spaceId: workSpaceId,
     }));
     expect(readModel.projects[0]?.spaceId).toBe(workSpaceId);
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-project-assign-noop"),
+            projectId,
+            spaceId: workSpaceId,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow(/already assigned/i);
 
     const deletion = await dispatch(readModel, {
       type: "space.delete",

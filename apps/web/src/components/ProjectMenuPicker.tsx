@@ -15,7 +15,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "~/components/ui/menu";
-import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
+import { groupItemsBySpace, resolveActiveSpaceId, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useSpacesUiStore } from "~/spacesUiStore";
 import { useStore } from "~/store";
 import { SpaceIcon } from "./SpaceIcon";
@@ -76,7 +76,8 @@ function ProjectMenuPickerList(props: {
   const [query, setQuery] = useState("");
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
-  const activeSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
+  const storedActiveSpaceId = useSpacesUiStore((state) => state.activeSpaceId);
+  const activeSpaceId = resolveActiveSpaceId(storedActiveSpaceId, spaces);
 
   const groupedOptions = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();

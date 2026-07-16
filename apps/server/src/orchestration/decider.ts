@@ -560,6 +560,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      const requestedSpaceId =
+        command.spaceId !== undefined
+          ? command.spaceId
+          : nextProjectKind !== "project" && existingProject.spaceId !== null
+            ? null
+            : undefined;
+      const changedSpaceId =
+        requestedSpaceId !== undefined && requestedSpaceId !== existingProject.spaceId
+          ? requestedSpaceId
+          : undefined;
+      const hasOtherMetadataInput =
+        command.kind !== undefined ||
+        command.title !== undefined ||
+        command.workspaceRoot !== undefined ||
+        command.defaultModelSelection !== undefined ||
+        command.scripts !== undefined ||
+        command.isPinned !== undefined;
       if (
         command.title !== undefined &&
         command.title !== existingProject.title &&
@@ -596,6 +613,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspacePaths,
         });
         yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      }
+      if (
+        requestedSpaceId !== undefined &&
+        changedSpaceId === undefined &&
+        !hasOtherMetadataInput
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project is already assigned to this space.",
+        });
       }
       // Ownership must hold for the project's *effective* root, not only when the root field is
       // present on the command: a kind-only update (e.g. chat -> studio) would otherwise slip a
@@ -640,11 +667,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
-          ...(command.spaceId !== undefined
-            ? { spaceId: command.spaceId }
-            : nextProjectKind !== "project" && existingProject.spaceId !== null
-              ? { spaceId: null }
-              : {}),
+          ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
       };
