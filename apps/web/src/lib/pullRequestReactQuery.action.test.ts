@@ -124,6 +124,45 @@ describe("pullRequestActionMutationOptions", () => {
     expect(queryClient.getQueryState(unrelatedGitPullRequestKey)?.isInvalidated).toBe(false);
   });
 
+  it("updates the global row when an action starts from another associated project", async () => {
+    const queryClient = new QueryClient();
+    const projectA = "project-a" as ProjectId;
+    const projectB = "project-b" as ProjectId;
+    const input = {
+      projectId: projectA,
+      repository: "acme/widgets",
+      number: 42,
+      action: "ready",
+    } as const;
+    const globalListKey = pullRequestQueryKeys.list({ state: "open", projectId: null });
+    queryClient.setQueryData(globalListKey, {
+      entries: [
+        {
+          projectId: projectB,
+          repository: "acme/widgets",
+          number: 42,
+          state: "open",
+          isDraft: true,
+          isPinned: false,
+        },
+      ],
+    });
+    const options = pullRequestActionMutationOptions(queryClient);
+    if (!options.onMutate || !options.onSuccess) throw new Error("Action hooks are missing.");
+
+    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
+    expect(queryClient.getQueryData(globalListKey)).toMatchObject({
+      entries: [{ projectId: projectB, isDraft: false }],
+    });
+    await Reflect.apply(options.onSuccess, undefined, [
+      { workspaceRoot: "/repo" },
+      input,
+      context,
+      undefined,
+    ]);
+    expect(queryClient.getQueryState(globalListKey)?.isInvalidated).toBe(true);
+  });
+
   it("does not keep an action pending on the passive review-count refresh", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;

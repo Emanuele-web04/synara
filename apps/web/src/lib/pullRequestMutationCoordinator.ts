@@ -6,7 +6,11 @@ import type {
   PullRequestActionListPatch,
   PullRequestListQueryScope,
 } from "./pullRequestCache";
-import { pullRequestIdentityKey, queryKeysEqual } from "./pullRequestCache";
+import {
+  pullRequestIdentityKey,
+  pullRequestRemoteIdentityKey,
+  queryKeysEqual,
+} from "./pullRequestCache";
 
 export const PULL_REQUEST_ACTION_REFRESH_SCOPE_ID = "pull-requests:actions-and-refresh";
 
@@ -207,7 +211,7 @@ export function beginPullRequestActionProtection(
   patch: PullRequestActionListPatch,
 ): PullRequestActionProtectionContext {
   const coordinator = getPinMutationCoordinator(queryClient);
-  const identityKey = pullRequestIdentityKey(input);
+  const identityKey = pullRequestRemoteIdentityKey(input);
   const protectedFields = new Set<keyof PullRequestActionListPatch>();
   if (patch.state !== undefined) protectedFields.add("state");
   if (patch.isDraft !== undefined) protectedFields.add("isDraft");

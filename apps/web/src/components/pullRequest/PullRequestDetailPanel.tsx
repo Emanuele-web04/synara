@@ -335,7 +335,7 @@ export function PullRequestDetailPanel({
                   }
                 />
                 {/* Same popup chrome as the composer pickers (model/handoff), with emoji
-                    leads for scannability — the plain MenuPopup skin is banned here. */}
+                    leads for scannability. */}
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
                   {detail.state === "open" ? (
                     <>

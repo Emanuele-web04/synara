@@ -257,7 +257,6 @@ import {
   Menu,
   MenuGroup,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
@@ -1020,11 +1019,7 @@ function ProjectSortMenu({
         tooltip="Sort projects"
         tooltipSide="right"
       />
-      <MenuPopup
-        align="end"
-        side="bottom"
-        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
             Sort projects
@@ -1053,7 +1048,7 @@ function ProjectSortMenu({
             onThreadSortOrderChange={onThreadSortOrderChange}
           />
         </MenuGroup>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }
@@ -1099,11 +1094,7 @@ function ChatSortMenu({
         tooltip="Sort chats"
         tooltipSide="top"
       />
-      <MenuPopup
-        align="end"
-        side="bottom"
-        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
           <ThreadSortMenuItems
@@ -1111,7 +1102,7 @@ function ChatSortMenu({
             onThreadSortOrderChange={onThreadSortOrderChange}
           />
         </MenuGroup>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }

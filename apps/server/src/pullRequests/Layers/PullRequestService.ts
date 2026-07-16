@@ -7,6 +7,7 @@ import {
   type PullRequestListEntry,
   type PullRequestsListResult,
 } from "@synara/contracts";
+import { coalescePullRequestListEntries } from "@synara/shared/githubRepository";
 import { Effect, Layer, Scope, Semaphore } from "effect";
 
 import { ServerConfig } from "../../config";
@@ -428,7 +429,9 @@ export const makePullRequestService = (
                       }),
                   ),
                 ),
-                repositoryBatches: repositoryProjects.map((project) => ({
+                // The list cap belongs to the remote repository. Reporting one batch per local
+                // worktree made the all-projects UI overcount truncated repositories.
+                repositoryBatches: repositoryProjects.slice(0, 1).map((project) => ({
                   projectId: project.id,
                   projectTitle: project.title,
                   repository: repository.nameWithOwner,
@@ -484,9 +487,13 @@ export const makePullRequestService = (
           loadItem: loadPullRequestListItem,
         });
 
+        const visibleEntries = coalescePullRequestListEntries([
+          ...batchEntries,
+          ...recovery.entries,
+        ]);
         return {
           viewer,
-          entries: orderPullRequestListEntries([...batchEntries, ...recovery.entries]),
+          entries: orderPullRequestListEntries(visibleEntries),
           errors: [...errors, ...batches.flatMap((batch) => batch.errors), ...recovery.errors],
           repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
         };

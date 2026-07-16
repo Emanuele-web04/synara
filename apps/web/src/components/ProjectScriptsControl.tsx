@@ -44,6 +44,7 @@ import {
   ChatHeaderSplitDivider,
   ChatHeaderSplitGroup,
 } from "./chat/chatHeaderControls";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
   Dialog,
   DialogDescription,
@@ -55,7 +56,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
@@ -313,7 +314,7 @@ export default function ProjectScriptsControl({
             >
               <ChevronDownIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup align="end" className="min-w-64" sideOffset={8}>
+            <ComposerPickerMenuPopup align="end" className="min-w-64" sideOffset={8}>
               {scripts.map((script) => {
                 const shortcutLabel = shortcutLabelForCommand(
                   keybindings,
@@ -361,7 +362,7 @@ export default function ProjectScriptsControl({
                 <PlusIcon className="size-4 text-muted-foreground" />
                 <span className="col-span-2 min-w-0 truncate">Add action</span>
               </MenuItem>
-            </MenuPopup>
+            </ComposerPickerMenuPopup>
           </Menu>
         </ChatHeaderSplitGroup>
       ) : showInlineControls ? (

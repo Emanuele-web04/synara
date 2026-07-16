@@ -1,8 +1,8 @@
 // FILE: PullRequestList.tsx
 // Purpose: The pull requests list body — renders entries as PullRequestRows, either flat or
 //          under the involvement group headers produced by groupPullRequestEntriesByInvolvement
-//          (the "All" tab). Selection is matched on projectId + repository + number so the
-//          highlighted row tracks the URL-driven detail panel; pin toggles remain independent.
+//          (the "All" tab). Rows use repository + number identity because the global list has
+//          one row per remote PR; selection still retains project context for the detail panel.
 // Layer: Pull request presentation
 // Exports: PullRequestList
 

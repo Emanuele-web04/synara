@@ -92,6 +92,13 @@ export const PullRequestMergeCapabilities = Schema.Struct({
 });
 export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.Type;
 
+export const PullRequestProjectContext = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: TrimmedNonEmptyString,
+  isPinned: Schema.Boolean,
+});
+export type PullRequestProjectContext = typeof PullRequestProjectContext.Type;
+
 export const PullRequestListEntry = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
@@ -111,6 +118,11 @@ export const PullRequestListEntry = Schema.Struct({
   reviewDecision: Schema.NullOr(Schema.String),
   viewerReviewRequested: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  // A repository-level row can belong to several local projects/worktrees. The fallback keeps a
+  // newer client compatible with a server that still sends one project-local row at a time.
+  projectContexts: Schema.optional(Schema.Array(PullRequestProjectContext)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   // Decoding default keeps a newer client compatible with an older server that predates
   // the field (brief version skew during dev restarts must not reject whole payloads).
   mergeability: Schema.optional(GitPullRequestMergeability).pipe(

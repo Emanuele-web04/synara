@@ -56,7 +56,6 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
@@ -181,7 +180,7 @@ export function RuntimeUsageControls({
               />
             </span>
           </MenuTrigger>
-          <MenuPopup align="start" side="top" className="min-w-44">
+          <ComposerPickerMenuPopup align="start" side="top" className="min-w-44">
             <MenuRadioGroup
               value={runtimeMode}
               onValueChange={(value) => {
@@ -211,7 +210,7 @@ export function RuntimeUsageControls({
                 </span>
               </MenuRadioItem>
             </MenuRadioGroup>
-          </MenuPopup>
+          </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
     </div>

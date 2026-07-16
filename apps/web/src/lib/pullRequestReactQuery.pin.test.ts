@@ -99,15 +99,25 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     },
   );
 
-  it("patches only the matching project and reapplies the latest acknowledgement", async () => {
+  it("patches one project context inside a repository-level global row", async () => {
     const queryClient = new QueryClient();
     const projectA = "project-a" as ProjectId;
     const projectB = "project-b" as ProjectId;
     const listKey = pullRequestQueryKeys.list({ state: "open", projectId: null });
     queryClient.setQueryData(listKey, {
       entries: [
-        { projectId: projectA, repository: "Acme/Widgets", number: 42, isPinned: false },
-        { projectId: projectB, repository: "acme/widgets", number: 42, isPinned: false },
+        {
+          projectId: projectB,
+          projectTitle: "Project B",
+          headBranch: "feature",
+          repository: "Acme/Widgets",
+          number: 42,
+          isPinned: false,
+          projectContexts: [
+            { projectId: projectA, projectTitle: "Project A", isPinned: false },
+            { projectId: projectB, projectTitle: "Project B", isPinned: false },
+          ],
+        },
       ],
     });
     const input = {
@@ -124,16 +134,36 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
     expect(queryClient.getQueryData(listKey)).toEqual({
       entries: [
-        { projectId: projectA, repository: "Acme/Widgets", number: 42, isPinned: true },
-        { projectId: projectB, repository: "acme/widgets", number: 42, isPinned: false },
+        {
+          projectId: projectB,
+          projectTitle: "Project B",
+          headBranch: "feature",
+          repository: "Acme/Widgets",
+          number: 42,
+          isPinned: true,
+          projectContexts: [
+            { projectId: projectA, projectTitle: "Project A", isPinned: true },
+            { projectId: projectB, projectTitle: "Project B", isPinned: false },
+          ],
+        },
       ],
     });
 
     await Reflect.apply(options.onSuccess, undefined, [input, input, context, undefined]);
     expect(queryClient.getQueryData(listKey)).toEqual({
       entries: [
-        { projectId: projectA, repository: "Acme/Widgets", number: 42, isPinned: true },
-        { projectId: projectB, repository: "acme/widgets", number: 42, isPinned: false },
+        {
+          projectId: projectB,
+          projectTitle: "Project B",
+          headBranch: "feature",
+          repository: "Acme/Widgets",
+          number: 42,
+          isPinned: true,
+          projectContexts: [
+            { projectId: projectA, projectTitle: "Project A", isPinned: true },
+            { projectId: projectB, projectTitle: "Project B", isPinned: false },
+          ],
+        },
       ],
     });
   });

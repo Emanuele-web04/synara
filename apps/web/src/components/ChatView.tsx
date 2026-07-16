@@ -282,9 +282,10 @@ import {
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
@@ -10744,14 +10745,14 @@ export default function ChatView({
                                 >
                                   <ChevronDownIcon className="size-3.5" />
                                 </MenuTrigger>
-                                <MenuPopup align="end" side="top">
+                                <ComposerPickerMenuPopup align="end" side="top">
                                   <MenuItem
                                     disabled={isSendBusy || isConnecting}
                                     onClick={() => void onImplementPlanInNewThread()}
                                   >
                                     Implement in a new thread
                                   </MenuItem>
-                                </MenuPopup>
+                                </ComposerPickerMenuPopup>
                               </Menu>
                             </div>
                           )

@@ -301,6 +301,69 @@ describe("pullRequestsForceRefreshMutationOptions", () => {
     expect(queryClient.getQueryData(refreshedKey)).toEqual({ entries: [] });
   });
 
+  it("does not resurrect a fully unpinned aggregate out-of-cap row", async () => {
+    const queryClient = new QueryClient();
+    const projectA = "project-refresh-membership-a" as ProjectId;
+    const projectB = "project-refresh-membership-b" as ProjectId;
+    const input = { state: "open", projectId: null } as const;
+    const refreshedKey = pullRequestQueryKeys.list(input);
+    const staleEntry = {
+      projectId: projectA,
+      projectTitle: "Project A",
+      repository: "acme/widgets",
+      number: 99,
+      isPinned: true,
+      projectContexts: [
+        { projectId: projectA, projectTitle: "Project A", isPinned: true },
+        { projectId: projectB, projectTitle: "Project B", isPinned: true },
+      ],
+    };
+    queryClient.setQueryData(refreshedKey, { entries: [staleEntry] });
+    const refreshOptions = pullRequestsForceRefreshMutationOptions(queryClient);
+    const pinOptions = pullRequestSetPinnedMutationOptions(queryClient);
+    if (
+      !refreshOptions.onMutate ||
+      !refreshOptions.onSuccess ||
+      !pinOptions.onMutate ||
+      !pinOptions.onSuccess ||
+      !pinOptions.onSettled
+    ) {
+      throw new Error("Mutation hooks are missing.");
+    }
+
+    const refreshContext = await Reflect.apply(refreshOptions.onMutate, undefined, [
+      input,
+      undefined,
+    ]);
+    for (const projectId of [projectA, projectB]) {
+      const unpin = {
+        projectId,
+        repository: staleEntry.repository,
+        number: staleEntry.number,
+        isPinned: false,
+      } as const;
+      const pinContext = await Reflect.apply(pinOptions.onMutate, undefined, [unpin, undefined]);
+      await Reflect.apply(pinOptions.onSuccess, undefined, [unpin, unpin, pinContext, undefined]);
+      await Reflect.apply(pinOptions.onSettled, undefined, [
+        unpin,
+        null,
+        unpin,
+        pinContext,
+        undefined,
+      ]);
+    }
+    queryClient.setQueryData(refreshedKey, { entries: [] });
+
+    await Reflect.apply(refreshOptions.onSuccess, undefined, [
+      { entries: [staleEntry] },
+      input,
+      refreshContext,
+      undefined,
+    ]);
+
+    expect(queryClient.getQueryData(refreshedKey)).toEqual({ entries: [] });
+  });
+
   it("does not remove a newly pinned out-of-cap row when an older refresh settles", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-refresh-new-pin" as ProjectId;
