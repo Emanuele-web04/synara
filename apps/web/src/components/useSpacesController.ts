@@ -107,13 +107,7 @@ export function useSpacesController(input: {
           .map((thread) => [thread.id, thread.projectId] as const),
       ),
     });
-  }, [
-    ordinarySpaceProjects,
-    reconcileSpacesUi,
-    sidebarThreads,
-    spaces,
-    threadsHydrated,
-  ]);
+  }, [ordinarySpaceProjects, reconcileSpacesUi, sidebarThreads, spaces, threadsHydrated]);
 
   useRouteSpaceSync({
     isOnKanban,
