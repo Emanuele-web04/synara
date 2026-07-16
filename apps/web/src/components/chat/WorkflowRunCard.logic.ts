@@ -601,7 +601,7 @@ export function deriveWorkflowRunState(input: {
   );
   const finalAgentPhase = (agent: WorkflowFinalAgent): string | null =>
     canonicalPhase(agent.phaseTitle) ??
-    (agent.phaseIndex !== null ? (workflow.phases?.[agent.phaseIndex]?.title ?? null) : null);
+    (agent.phaseIndex !== null ? (workflow.phases?.[agent.phaseIndex - 1]?.title ?? null) : null);
   // Live snapshots join by label when the server zipped one on; unlabeled
   // snapshots fall back to first-seen order (progress labels arrive in agent
   // start order, the same order journal starts are recorded in).

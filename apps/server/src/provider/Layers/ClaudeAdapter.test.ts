@@ -2291,6 +2291,17 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       harness.query.emit({
         type: "system",
+        subtype: "task_updated",
+        task_id: "wf-real-1",
+        patch: { status: "completed" },
+        session_id: "sdk-session-workflow-meta",
+        uuid: "workflow-meta-updated",
+      } as unknown as SDKMessage);
+
+      // The final notification can arrive after the terminal status patch. It
+      // must still backfill authoritative per-agent state from output_file.
+      harness.query.emit({
+        type: "system",
         subtype: "task_notification",
         task_id: "wf-real-1",
         tool_use_id: "tool-workflow-1",

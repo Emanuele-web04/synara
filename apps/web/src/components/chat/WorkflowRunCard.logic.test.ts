@@ -406,8 +406,8 @@ describe("deriveWorkflowRunState", () => {
             taskId: "wf-1",
             status: "completed",
             workflowAgents: [
-              { label: "gamma-agent", phaseIndex: 0, state: "failed" },
-              { label: "epsilon-agent", phaseIndex: 1, model: "haiku", state: "completed" },
+              { label: "gamma-agent", phaseIndex: 1, state: "failed" },
+              { label: "epsilon-agent", phaseIndex: 2, model: "haiku", state: "completed" },
             ],
           },
         }),

@@ -114,6 +114,7 @@ import {
   claudeWorkflowRuntimeSnapshots,
   collectClaudeWorkflowRuntime,
   makeClaudeWorkflowRuntimeState,
+  readClaudeWorkflowOutputText,
 } from "../claudeWorkflowRuntime.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
@@ -293,6 +294,9 @@ interface ClaudeSessionContext {
   // live get tagged with it (recorded in workflowTaskIdByMemberTaskId); with
   // concurrent workflows membership is ambiguous and stays untagged.
   readonly liveWorkflowTaskIds: Set<string>;
+  // Workflow identity survives a terminal task_updated until task_notification
+  // supplies the authoritative final output file.
+  readonly knownWorkflowTaskIds: Set<string>;
   readonly workflowTaskIdByMemberTaskId: Map<string, string>;
   // Live transcript-directory pollers per workflow task id, plus the agent
   // labels seen so far (first-seen order from "<phase>: <label>" progress
@@ -2533,6 +2537,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingSubagentSteers: new Map(),
           pendingSubagentStops: new Set(),
           liveWorkflowTaskIds: new Set(),
+          knownWorkflowTaskIds: new Set(),
           workflowTaskIdByMemberTaskId: new Map(),
           workflowRuntimePollers: new Map(),
           workflowAgentLabels: new Map(),
@@ -3511,6 +3516,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }
             if (message.task_type === "local_workflow") {
               context.liveWorkflowTaskIds.add(message.task_id);
+              context.knownWorkflowTaskIds.add(message.task_id);
             } else if (context.liveWorkflowTaskIds.size === 1) {
               const [workflowTaskId] = context.liveWorkflowTaskIds;
               context.workflowTaskIdByMemberTaskId.set(message.task_id, workflowTaskId!);
@@ -3590,15 +3596,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
             // Settled workflows: the output file's workflowProgress carries the
             // final per-agent states/models the live stream never surfaced.
-            const workflowAgents =
-              context.liveWorkflowTaskIds.has(message.task_id) &&
+            const workflowOutputText =
+              context.knownWorkflowTaskIds.has(message.task_id) &&
               typeof message.output_file === "string" &&
               message.output_file.length > 0
-                ? yield* fileSystem.readFileString(message.output_file).pipe(
-                    Effect.map(parseClaudeWorkflowProgressAgents),
-                    Effect.orElseSucceed(() => undefined),
-                  )
+                ? yield* readClaudeWorkflowOutputText(fileSystem, message.output_file)
                 : undefined;
+            const workflowAgents = workflowOutputText
+              ? parseClaudeWorkflowProgressAgents(workflowOutputText)
+              : undefined;
             yield* offerRuntimeEvent({
               ...base,
               type: "task.completed",
@@ -3614,6 +3620,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             context.liveWorkflowTaskIds.delete(message.task_id);
+            context.knownWorkflowTaskIds.delete(message.task_id);
             context.workflowTaskIdByMemberTaskId.delete(message.task_id);
             yield* stopWorkflowRuntimePoller(context, message.task_id);
             const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
@@ -3897,6 +3904,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         for (const taskId of Array.from(context.workflowRuntimePollers.keys())) {
           yield* stopWorkflowRuntimePoller(context, taskId);
         }
+        context.liveWorkflowTaskIds.clear();
+        context.knownWorkflowTaskIds.clear();
 
         if (context.turnState) {
           yield* completeTurn(context, "interrupted", "Session stopped.");
@@ -4539,6 +4548,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingSubagentSteers,
             pendingSubagentStops,
             liveWorkflowTaskIds: new Set(),
+            knownWorkflowTaskIds: new Set(),
             workflowTaskIdByMemberTaskId: new Map(),
             workflowRuntimePollers: new Map(),
             workflowAgentLabels: new Map(),

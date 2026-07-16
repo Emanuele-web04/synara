@@ -12,9 +12,9 @@ import type { WorkflowAgentRuntimeSnapshot } from "@synara/contracts";
 
 import { WORKFLOW_PROMPT_PREVIEW_CHARS } from "./claudeWorkflowScript.ts";
 
-// Files larger than this are never read (runaway transcripts); growth beyond
-// the per-tick chunk cap is caught up over subsequent ticks.
-const MAX_TRANSCRIPT_FILE_BYTES = 5 * 1024 * 1024;
+// Workflow transcripts and settled output files share one runaway-file limit;
+// transcript growth beyond the per-tick cap is caught up on later ticks.
+export const MAX_CLAUDE_WORKFLOW_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 512 * 1024;
 const RECENT_TOOL_NAMES = 3;
 
@@ -231,7 +231,7 @@ const readAppendedLines = (
     if (!Number.isFinite(size) || size <= offset) {
       return undefined;
     }
-    if (size > MAX_TRANSCRIPT_FILE_BYTES) {
+    if (size > MAX_CLAUDE_WORKFLOW_FILE_BYTES) {
       return { lines: [], nextOffset: offset, skipped: true };
     }
     const file = yield* fileSystem.open(path);
@@ -246,6 +246,25 @@ const readAppendedLines = (
     }
     const text = new TextDecoder().decode(chunk.subarray(0, lastNewline));
     return { lines: text.split("\n"), nextOffset: offset + lastNewline + 1, skipped: false };
+  }).pipe(
+    Effect.scoped,
+    Effect.orElseSucceed(() => undefined),
+  );
+
+// Reads the settled workflow output within the same safety bound as live transcripts.
+export const readClaudeWorkflowOutputText = (
+  fileSystem: FileSystem.FileSystem,
+  path: string,
+): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    const info = yield* fileSystem.stat(path);
+    const size = Number(info.size);
+    if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_CLAUDE_WORKFLOW_FILE_BYTES) {
+      return undefined;
+    }
+    const file = yield* fileSystem.open(path);
+    const bytes = yield* file.readAlloc(size);
+    return bytes && bytes.length > 0 ? new TextDecoder().decode(bytes) : undefined;
   }).pipe(
     Effect.scoped,
     Effect.orElseSucceed(() => undefined),

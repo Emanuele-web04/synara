@@ -11,7 +11,9 @@ import {
   applyClaudeWorkflowJournalLines,
   claudeWorkflowRuntimeSnapshots,
   collectClaudeWorkflowRuntime,
+  MAX_CLAUDE_WORKFLOW_FILE_BYTES,
   makeClaudeWorkflowRuntimeState,
+  readClaudeWorkflowOutputText,
   type ClaudeWorkflowAgentAccum,
 } from "./claudeWorkflowRuntime.ts";
 
@@ -252,6 +254,20 @@ describe("collectClaudeWorkflowRuntime", () => {
         // A vanished directory degrades to "no change" rather than failing.
         rmSync(dir, { recursive: true, force: true });
         expect(yield* collectClaudeWorkflowRuntime(fileSystem, dir, state)).toBe(false);
+      }),
+    ));
+
+  it("reads settled output files within the workflow file limit", () =>
+    withDir((dir, fileSystem) =>
+      Effect.gen(function* () {
+        const outputPath = path.join(dir, "workflow-output.json");
+        writeFileSync(outputPath, '{"workflowProgress":[]}');
+        expect(yield* readClaudeWorkflowOutputText(fileSystem, outputPath)).toBe(
+          '{"workflowProgress":[]}',
+        );
+
+        writeFileSync(outputPath, "x".repeat(MAX_CLAUDE_WORKFLOW_FILE_BYTES + 1));
+        expect(yield* readClaudeWorkflowOutputText(fileSystem, outputPath)).toBeUndefined();
       }),
     ));
 });
