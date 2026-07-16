@@ -1379,10 +1379,13 @@ const make = Effect.gen(function* () {
 
             // Stale-resume errors can be transient CLI/session-file races, so
             // retry the native resume id once before paying the transcript
-            // bootstrap: the persisted cursor survives the stop, and a fresh
-            // spawn resumes from it without replaying Synara-side context.
+            // bootstrap. This must preserve the provider binding: startSession
+            // recovers the cursor from it when the fresh runtime is spawned.
+            if (!providerService.stopRuntimeSession) {
+              return yield* replayWithTranscriptBootstrap(error);
+            }
             yield* providerService
-              .stopSession({ threadId: input.threadId })
+              .stopRuntimeSession({ threadId: input.threadId })
               .pipe(Effect.catch(() => Effect.void));
             yield* ensureSessionForStaleRetry;
             yield* Effect.logWarning(

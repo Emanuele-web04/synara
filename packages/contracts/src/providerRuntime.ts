@@ -173,6 +173,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "turn.proposed.delta",
   "turn.proposed.completed",
   "turn.diff.updated",
+  "turn.steered",
   "item.started",
   "item.updated",
   "item.completed",

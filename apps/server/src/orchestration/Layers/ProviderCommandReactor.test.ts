@@ -2290,10 +2290,11 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
-    // Native-resume retry first: stop + restart without clearing the cursor.
-    expect(harness.stopSession).toHaveBeenCalledWith({
+    // Native-resume retry first: stop only the runtime so the persisted cursor survives.
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
+    expect(harness.stopSession).not.toHaveBeenCalled();
     const nativeRetrySendInput = harness.sendTurn.mock.calls[1]?.[0] as {
       readonly input?: string;
     };
@@ -2349,9 +2350,10 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     // The session restarts once with the persisted cursor intact...
-    expect(harness.stopSession).toHaveBeenCalledWith({
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
+    expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.startSession.mock.calls.length).toBe(2);
     // ...and the retry succeeds natively: no cursor clear, no bootstrap replay.
     expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { Schema } from "effect";
 
-import { ProviderRuntimeEvent } from "./providerRuntime";
+import { ProviderRuntimeEvent, type ProviderRuntimeEventType } from "./providerRuntime";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
+  it("includes turn.steered in the exported event type", () => {
+    const eventType: ProviderRuntimeEventType = "turn.steered";
+    expect(eventType).toBe("turn.steered");
+  });
+
   it("decodes turn.tasks.updated for task-list rendering", () => {
     const parsed = decodeRuntimeEvent({
       type: "turn.tasks.updated",
