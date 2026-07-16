@@ -255,13 +255,7 @@ function PullRequestsRouteView() {
           { preferredProjectId: search.selectedProjectId },
         ),
       ),
-    [
-      activeListData,
-      listQuery.data?.viewer,
-      query,
-      search.involvement,
-      search.selectedProjectId,
-    ],
+    [activeListData, listQuery.data?.viewer, query, search.involvement, search.selectedProjectId],
   );
   const grouped = useMemo(
     () =>

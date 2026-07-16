@@ -97,9 +97,7 @@ export function matchesPullRequestSearchQuery(
 
 export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
   return new Set(
-    entries
-      .filter((entry) => entry.viewerReviewRequested)
-      .map(pullRequestListRepositoryIdentity),
+    entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestListRepositoryIdentity),
   ).size;
 }
 

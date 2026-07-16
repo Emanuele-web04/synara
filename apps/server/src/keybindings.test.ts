@@ -634,9 +634,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.isFalse(
         persisted.some((entry) => String(entry.command).includes("modelPicker.jump.")),
       );
-      assert.isFalse(
-        persisted.some((entry) => String(entry.command) === "chat.newGemini"),
-      );
+      assert.isFalse(persisted.some((entry) => String(entry.command) === "chat.newGemini"));
       assert.isFalse(
         persisted.some((entry) => entry.command === "modelPicker.toggle" && entry.key === "mod+1"),
       );

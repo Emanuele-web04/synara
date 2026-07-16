@@ -336,8 +336,7 @@ export function patchOwnedPullRequestPinInCache(input: {
           ...current,
           entries: current.entries.map((entry) =>
             matchesPullRequestPinIdentity(entry, input.identity) &&
-            pullRequestListProjectPin(entry, input.identity.projectId) ===
-              input.expectedIsPinned
+            pullRequestListProjectPin(entry, input.identity.projectId) === input.expectedIsPinned
               ? updateEntryProjectPin(entry, input.identity.projectId, input.nextIsPinned)
               : entry,
           ),
