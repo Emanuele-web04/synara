@@ -819,6 +819,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.activityKind === b.activityKind &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
+    a.toolStatus === b.toolStatus &&
     stringArraysEqual(a.changedFiles, b.changedFiles) &&
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
     workLogSubagentsEqual(a.subagents, b.subagents) &&

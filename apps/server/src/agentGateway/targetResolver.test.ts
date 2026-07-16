@@ -2,7 +2,11 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
-import { AgentGatewayTargetError, resolveAgentGatewayTarget } from "./targetResolver.ts";
+import {
+  AgentGatewayTargetError,
+  agentGatewayTargetOptionGuidance,
+  resolveAgentGatewayTarget,
+} from "./targetResolver.ts";
 
 const discovery = {
   listModels: ({ provider }: { provider: string }) =>
@@ -25,6 +29,81 @@ const discovery = {
 } as unknown as ProviderDiscoveryServiceShape;
 
 describe("agent gateway target resolver", () => {
+  it.effect("builds examples from the exact model restrictions and preserves option types", () =>
+    Effect.gen(function* () {
+      const codexCatalog = {
+        provider: "codex" as const,
+        defaultModel: "gpt-5.5",
+        enabled: true,
+        available: true,
+        models: [
+          {
+            slug: "gpt-5.6-terra",
+            name: "GPT-5.6 Terra",
+            supportedReasoningEfforts: [
+              { value: "low", label: "Low" },
+              { value: "high", label: "High" },
+            ],
+          },
+        ],
+      };
+      const codexGuidance = agentGatewayTargetOptionGuidance(codexCatalog);
+      assert.deepEqual(codexGuidance.exampleTarget, {
+        provider: "codex",
+        model: "gpt-5.6-terra",
+        options: { reasoningEffort: "low" },
+      });
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: codexGuidance.exampleTarget!,
+          discovery,
+        }),
+        codexGuidance.exampleTarget,
+      );
+
+      const geminiGuidance = agentGatewayTargetOptionGuidance({
+        provider: "gemini",
+        defaultModel: "gemini-2.5-pro",
+        enabled: true,
+        available: true,
+        models: [{ slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }],
+      });
+      assert.deepEqual(geminiGuidance.exampleTarget?.options, { thinkingLevel: "LOW" });
+      const thinkingBudget = geminiGuidance.providerOptions.find(
+        (option) => option.key === "thinkingBudget",
+      );
+      assert.equal(thinkingBudget?.valueType, "number");
+      assert.deepEqual(thinkingBudget?.allowedValues, [-1, 512, 0]);
+
+      const budgetModel = {
+        slug: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        supportedReasoningEfforts: [
+          { value: "-1", label: "Dynamic" },
+          { value: "512", label: "512 tokens" },
+        ],
+      };
+      const budgetGuidance = agentGatewayTargetOptionGuidance({
+        provider: "gemini",
+        defaultModel: "gemini-2.5-flash",
+        enabled: true,
+        available: true,
+        models: [budgetModel],
+      });
+      assert.deepEqual(budgetGuidance.exampleTarget?.options, { thinkingBudget: -1 });
+      const budgetDiscovery = {
+        listModels: () => Effect.succeed({ source: "test", models: [budgetModel] }),
+      } as unknown as ProviderDiscoveryServiceShape;
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: budgetGuidance.exampleTarget!,
+          discovery: budgetDiscovery,
+        }),
+        budgetGuidance.exampleTarget,
+      );
+    }),
+  );
+
   it.effect("accepts Terra Low as a canonical model plus option", () =>
     Effect.gen(function* () {
       const target = {

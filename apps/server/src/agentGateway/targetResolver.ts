@@ -53,6 +53,90 @@ export interface AgentGatewayProviderAvailability {
   readonly message?: string;
 }
 
+export const AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION =
+  "Provider-specific target options. Use targetConstruction[provider].optionsByModel[model] when present; otherwise use providerOptions. Preserve each option's exact key, valueType, and allowedValues.";
+
+export type AgentGatewayTargetOptionValue = string | number | boolean;
+
+export interface AgentGatewayTargetOptionRule {
+  readonly key: string;
+  readonly valueType: "string" | "number" | "boolean";
+  readonly allowedValues: ReadonlyArray<AgentGatewayTargetOptionValue>;
+  readonly allowedValuesSource: "provider-contract" | "model-discovery";
+}
+
+export interface AgentGatewayTargetOptionGuidance {
+  readonly primaryOptionKey: string;
+  readonly alternativeOptionKeys: ReadonlyArray<string>;
+  readonly optionSelectionRule: string;
+  readonly providerOptions: ReadonlyArray<AgentGatewayTargetOptionRule>;
+  readonly optionsByModel: Readonly<
+    Record<string, ReadonlyArray<AgentGatewayTargetOptionRule>>
+  >;
+  readonly exampleTarget: {
+    readonly provider: ProviderKind;
+    readonly model: string;
+    readonly options: Readonly<Record<string, AgentGatewayTargetOptionValue>>;
+  } | null;
+}
+
+interface ProviderTargetOptionConfig {
+  readonly primaryOptionKey: string;
+  readonly options: ReadonlyArray<AgentGatewayTargetOptionRule>;
+}
+
+function providerOptionRule(
+  key: string,
+  valueType: AgentGatewayTargetOptionRule["valueType"],
+  allowedValues: ReadonlyArray<AgentGatewayTargetOptionValue>,
+  allowedValuesSource: AgentGatewayTargetOptionRule["allowedValuesSource"] = "provider-contract",
+): AgentGatewayTargetOptionRule {
+  return { key, valueType, allowedValues, allowedValuesSource };
+}
+
+function reasoningEffortOptionConfig(
+  allowedValues: ReadonlyArray<string>,
+): ProviderTargetOptionConfig {
+  return {
+    primaryOptionKey: "reasoningEffort",
+    options: [providerOptionRule("reasoningEffort", "string", allowedValues)],
+  };
+}
+
+function dynamicVariantOptionConfig(): ProviderTargetOptionConfig {
+  return {
+    primaryOptionKey: "variant",
+    options: [
+      providerOptionRule("variant", "string", [], "model-discovery"),
+      providerOptionRule("agent", "string", [], "model-discovery"),
+    ],
+  };
+}
+
+const PROVIDER_TARGET_OPTION_CONFIG = {
+  codex: reasoningEffortOptionConfig(CODEX_REASONING_EFFORT_OPTIONS),
+  cursor: reasoningEffortOptionConfig(CODEX_REASONING_EFFORT_OPTIONS),
+  grok: reasoningEffortOptionConfig(GROK_REASONING_EFFORT_OPTIONS),
+  droid: reasoningEffortOptionConfig(DROID_REASONING_EFFORT_OPTIONS),
+  claudeAgent: {
+    primaryOptionKey: "effort",
+    options: [providerOptionRule("effort", "string", CLAUDE_CODE_EFFORT_OPTIONS)],
+  },
+  pi: {
+    primaryOptionKey: "thinkingLevel",
+    options: [providerOptionRule("thinkingLevel", "string", PI_THINKING_LEVEL_OPTIONS)],
+  },
+  gemini: {
+    primaryOptionKey: "thinkingLevel",
+    options: [
+      providerOptionRule("thinkingLevel", "string", GEMINI_THINKING_LEVEL_OPTIONS),
+      providerOptionRule("thinkingBudget", "number", GEMINI_THINKING_BUDGET_OPTIONS),
+    ],
+  },
+  kilo: dynamicVariantOptionConfig(),
+  opencode: dynamicVariantOptionConfig(),
+} as const satisfies Record<ProviderKind, ProviderTargetOptionConfig>;
+
 function providerDefaultModel(provider: ProviderKind): string | null {
   return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
@@ -111,43 +195,178 @@ export function loadAgentGatewayProviderCatalog(input: {
 }
 
 function selectedReasoningEffort(target: ModelSelection): string | undefined {
-  switch (target.provider) {
-    case "codex":
-    case "cursor":
-    case "grok":
-    case "droid":
-      return target.options?.reasoningEffort;
-    case "claudeAgent":
-      return target.options?.effort;
-    case "pi":
-      return target.options?.thinkingLevel;
-    case "gemini":
-      return target.options?.thinkingLevel ?? target.options?.thinkingBudget?.toString();
-    case "kilo":
-    case "opencode":
-      return target.options?.variant;
+  const config = PROVIDER_TARGET_OPTION_CONFIG[target.provider];
+  const optionKeys =
+    target.provider === "gemini"
+      ? config.options.map((option) => option.key)
+      : [config.primaryOptionKey];
+  const rawOptions = target.options as Record<string, unknown> | undefined;
+  for (const optionKey of optionKeys) {
+    const value = rawOptions?.[optionKey];
+    if (typeof value === "number") return String(value);
+    if (typeof value === "string") return value;
   }
+  return undefined;
 }
 
 function staticEffortsForProvider(provider: ProviderKind): ReadonlyArray<string> {
-  switch (provider) {
-    case "codex":
-    case "cursor":
-      return CODEX_REASONING_EFFORT_OPTIONS;
-    case "claudeAgent":
-      return CLAUDE_CODE_EFFORT_OPTIONS;
-    case "grok":
-      return GROK_REASONING_EFFORT_OPTIONS;
-    case "droid":
-      return DROID_REASONING_EFFORT_OPTIONS;
-    case "pi":
-      return PI_THINKING_LEVEL_OPTIONS;
-    case "gemini":
-      return [...GEMINI_THINKING_LEVEL_OPTIONS, ...GEMINI_THINKING_BUDGET_OPTIONS.map(String)];
-    case "kilo":
-    case "opencode":
-      return [];
+  const config = PROVIDER_TARGET_OPTION_CONFIG[provider];
+  return config.options.flatMap((option) => option.allowedValues.map(String));
+}
+
+function providerTargetOptionRules(
+  provider: ProviderKind,
+): ReadonlyArray<AgentGatewayTargetOptionRule> {
+  return PROVIDER_TARGET_OPTION_CONFIG[provider].options;
+}
+
+function providerPrimaryOptionKey(provider: ProviderKind): string {
+  return PROVIDER_TARGET_OPTION_CONFIG[provider].primaryOptionKey;
+}
+
+function convertDiscoveredOptionValue(
+  value: string,
+  valueType: AgentGatewayTargetOptionRule["valueType"],
+): AgentGatewayTargetOptionValue | null {
+  if (valueType === "string") return value;
+  if (valueType === "number") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+function modelTargetOptionRules(
+  provider: ProviderKind,
+  model: ProviderModelDescriptor,
+): ReadonlyArray<AgentGatewayTargetOptionRule> {
+  const rules = providerTargetOptionRules(provider).map((rule) => ({ ...rule }));
+  const replaceAllowedValues = (
+    key: string,
+    values: ReadonlyArray<AgentGatewayTargetOptionValue>,
+    allowEmpty = false,
+  ) => {
+    if (values.length === 0 && !allowEmpty) return;
+    const index = rules.findIndex((rule) => rule.key === key);
+    if (index < 0) return;
+    rules[index] = {
+      ...rules[index]!,
+      allowedValues: values,
+      allowedValuesSource: "model-discovery",
+    };
+  };
+
+  const discoveredEfforts = model.supportedReasoningEfforts?.map((entry) => entry.value) ?? [];
+  if (provider === "gemini") {
+    const hasDiscoveredEfforts = discoveredEfforts.length > 0;
+    replaceAllowedValues(
+      "thinkingLevel",
+      discoveredEfforts.filter((value) =>
+        GEMINI_THINKING_LEVEL_OPTIONS.includes(
+          value as (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number],
+        ),
+      ),
+      hasDiscoveredEfforts,
+    );
+    replaceAllowedValues(
+      "thinkingBudget",
+      discoveredEfforts
+        .map((value) => Number(value))
+        .filter((value) =>
+          GEMINI_THINKING_BUDGET_OPTIONS.includes(
+            value as (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number],
+          ),
+        ),
+      hasDiscoveredEfforts,
+    );
+  } else {
+    replaceAllowedValues(providerPrimaryOptionKey(provider), discoveredEfforts);
+  }
+
+  for (const descriptor of model.optionDescriptors ?? []) {
+    const rule = rules.find((candidate) => candidate.key === descriptor.id);
+    if (!rule) continue;
+    if (descriptor.type === "select") {
+      replaceAllowedValues(
+        descriptor.id,
+        descriptor.options
+          .map((option) => convertDiscoveredOptionValue(option.id, rule.valueType))
+          .filter((value): value is AgentGatewayTargetOptionValue => value !== null),
+        true,
+      );
+    } else if (descriptor.type === "boolean") {
+      replaceAllowedValues(descriptor.id, [true, false]);
+    }
+  }
+  return rules;
+}
+
+function preferredExampleOptionValue(
+  rule: AgentGatewayTargetOptionRule,
+): AgentGatewayTargetOptionValue | null {
+  const preferences: ReadonlyArray<AgentGatewayTargetOptionValue> =
+    rule.key === "reasoningEffort"
+      ? ["medium", "low"]
+      : rule.key === "thinkingLevel"
+        ? ["LOW", "low"]
+        : ["low"];
+  return (
+    preferences.find((value) => rule.allowedValues.includes(value)) ??
+    rule.allowedValues[0] ??
+    null
+  );
+}
+
+function exampleOptionsForRules(
+  primaryOptionKey: string,
+  rules: ReadonlyArray<AgentGatewayTargetOptionRule>,
+): Readonly<Record<string, AgentGatewayTargetOptionValue>> {
+  const primaryRule = rules.find((rule) => rule.key === primaryOptionKey);
+  const exampleRule =
+    primaryRule && primaryRule.allowedValues.length > 0
+      ? primaryRule
+      : rules.find((rule) => rule.allowedValues.length > 0);
+  if (!exampleRule) return {};
+  const value = preferredExampleOptionValue(exampleRule);
+  return value === null ? {} : { [exampleRule.key]: value };
+}
+
+/** Compact, typed construction guidance returned before the full model catalog. */
+export function agentGatewayTargetOptionGuidance(
+  catalog: AgentGatewayProviderCatalog,
+): AgentGatewayTargetOptionGuidance {
+  const primaryOptionKey = providerPrimaryOptionKey(catalog.provider);
+  const providerOptions = providerTargetOptionRules(catalog.provider);
+  const optionsByModel = Object.fromEntries(
+    catalog.models.map((model) => [
+      model.slug,
+      modelTargetOptionRules(catalog.provider, model),
+    ]),
+  );
+  const exampleModel = catalog.models[0]?.slug ?? catalog.defaultModel;
+  const exampleRules = exampleModel
+    ? (optionsByModel[exampleModel] ?? providerOptions)
+    : providerOptions;
+  return {
+    primaryOptionKey,
+    alternativeOptionKeys: providerOptions
+      .map((rule) => rule.key)
+      .filter((key) => key !== primaryOptionKey),
+    optionSelectionRule:
+      "Use optionsByModel[model] when present. Its keys, valueType, and allowedValues are authoritative; otherwise use providerOptions.",
+    providerOptions,
+    optionsByModel,
+    exampleTarget:
+      catalog.available && exampleModel
+        ? {
+            provider: catalog.provider,
+            model: exampleModel,
+            options: exampleOptionsForRules(primaryOptionKey, exampleRules),
+          }
+        : null,
+  };
 }
 
 function failUnavailableOption(

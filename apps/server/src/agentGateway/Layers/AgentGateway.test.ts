@@ -10,8 +10,15 @@ import type {
   ServerProviderStatus,
   ThreadId as ThreadIdType,
 } from "@synara/contracts";
-import { AutomationId, MessageId, ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { Effect, Fiber, Layer, Option, Stream } from "effect";
+import {
+  AutomationId,
+  MessageId,
+  ModelSelection,
+  ProjectId,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
+import { Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -831,6 +838,73 @@ describe("AgentGateway", () => {
         "synara_list_automations",
         "synara_cancel_automation",
       ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("returns provider-specific target option keys before the model catalog", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: {},
+      });
+      const payload = toolResultJson(response.result);
+      const targetConstruction = payload.targetConstruction as Record<
+        string,
+        Record<string, unknown>
+      >;
+
+      assert.equal(targetConstruction.codex?.primaryOptionKey, "reasoningEffort");
+      assert.deepEqual(
+        (targetConstruction.codex?.exampleTarget as { options?: unknown } | undefined)?.options,
+        {
+          reasoningEffort: "medium",
+        },
+      );
+      const codexOptionsByModel = targetConstruction.codex?.optionsByModel as
+        | Record<string, Array<{ key: string; allowedValues: ReadonlyArray<unknown> }>>
+        | undefined;
+      assert.deepEqual(
+        codexOptionsByModel?.["gpt-5.6-terra"]?.find(
+          (option) => option.key === "reasoningEffort",
+        )?.allowedValues,
+        ["low", "high"],
+      );
+      assert.equal(targetConstruction.claudeAgent?.primaryOptionKey, "effort");
+      assert.deepEqual(
+        (targetConstruction.claudeAgent?.exampleTarget as { options?: unknown } | undefined)
+          ?.options,
+        { effort: "low" },
+      );
+      const gemini = targetConstruction.gemini as {
+        providerOptions: Array<{
+          key: string;
+          valueType: string;
+          allowedValues: ReadonlyArray<unknown>;
+        }>;
+        exampleTarget: { options: Record<string, unknown> };
+      };
+      assert.deepEqual(gemini.exampleTarget.options, { thinkingLevel: "LOW" });
+      assert.deepEqual(
+        gemini.providerOptions.find((option) => option.key === "thinkingBudget"),
+        {
+          key: "thinkingBudget",
+          valueType: "number",
+          allowedValues: [-1, 512, 0],
+          allowedValuesSource: "provider-contract",
+        },
+      );
+
+      for (const construction of Object.values(targetConstruction)) {
+        const exampleTarget = construction.exampleTarget;
+        if (exampleTarget === null || exampleTarget === undefined) continue;
+        assert.deepEqual(Schema.decodeUnknownSync(ModelSelection)(exampleTarget), exampleTarget);
+      }
+
+      const serialized = JSON.stringify(payload);
+      assert.isBelow(serialized.indexOf('"targetConstruction"'), serialized.indexOf('"providers"'));
     }).pipe(Effect.provide(gatewayLayer));
   });
 
