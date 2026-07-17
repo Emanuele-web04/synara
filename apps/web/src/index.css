@@ -2527,10 +2527,13 @@ diffs-container {
   border-top-right-radius: 0;
 }
 
-/* Recessed rail above the composer input: same hue as the input shell
-   (--composer-surface), darkened so the stacked strip reads as a variant
-   of that surface rather than a different theme token. */
+/* Stacked rail above the composer input: same hue as the input shell, gently
+   darkened. Light mode stays nearly white (a light wash); dark mode recesses more. */
 .chat-composer-stacked-top {
+  background: color-mix(in oklab, var(--composer-surface) 98%, black 2%);
+}
+
+.dark .chat-composer-stacked-top {
   background: color-mix(in oklab, var(--composer-surface) 84%, black 16%);
 }
 
