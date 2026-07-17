@@ -1,0 +1,35 @@
+{
+  "name": "@synara/mobile-web",
+  "version": "0.5.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.sw.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@synara/client": "workspace:*",
+    "@synara/contracts": "workspace:*",
+    "@tabler/icons-react": "^3.44.0",
+    "@tanstack/react-router": "^1.160.2",
+    "@tanstack/react-virtual": "^3.13.18",
+    "effect": "catalog:",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "typescript": "catalog:",
+    "vite": "^8.0.0",
+    "vitest": "catalog:"
+  }
+}

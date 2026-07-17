@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101113" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <link rel="manifest" href="/mobile/manifest.webmanifest" />
+    <link rel="icon" href="/mobile/icons/synara.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/mobile/icons/apple-touch-icon.png" />
+    <title>Synara Companion</title>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-shell" aria-label="Opening Synara Companion">
+        <img src="/mobile/icons/synara.svg" alt="" width="56" height="56" />
+        <span>Synara</span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
