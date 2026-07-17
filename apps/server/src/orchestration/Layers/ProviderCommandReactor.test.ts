@@ -2990,6 +2990,96 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("discards queued child turns when the shared parent session stops", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-child-thread-create-before-parent-stop"),
+        threadId: ThreadId.makeUnsafe("thread-child-before-parent-stop"),
+        projectId: asProjectId("project-1"),
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Queued child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-parent-before-stop"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-parent-session-running-before-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-parent-before-stop"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-child-turn-queued-before-parent-stop"),
+        threadId: ThreadId.makeUnsafe("thread-child-before-parent-stop"),
+        message: {
+          messageId: asMessageId("msg-child-queued-before-parent-stop"),
+          role: "user",
+          text: "must be discarded with the stopped session",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-parent-session-stop-with-child-queued"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-parent-terminal-after-explicit-stop"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-parent-before-stop"),
+      payload: { state: "completed" },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("drains sibling child queues after a promoted child turn fails to start", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

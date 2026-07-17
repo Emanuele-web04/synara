@@ -1251,7 +1251,7 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("keeps startup recovery compensating when an owned branch cannot be deleted", () => {
+  it.effect("terminalizes startup recovery when an owned branch cannot be deleted", () => {
     const interrupted: AgentGatewayOperationRecord = {
       operationId: "gateway:create:branch-cleanup",
       callerThreadId: "thread-parent",
@@ -1288,7 +1288,7 @@ describe("AgentGateway", () => {
       const harness = yield* makeHarness;
       assert.equal(harness.branchDeletes.length, 1);
       assert.equal(harness.branchDeletes[0]?.branch, "agent/owned-branch");
-      assert.equal(harness.getOperationStatus("turn-parent-active"), "compensating");
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
     }).pipe(Effect.provide(gatewayLayer));
   });
 

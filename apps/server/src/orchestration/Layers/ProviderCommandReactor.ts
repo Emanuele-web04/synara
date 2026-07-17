@@ -2402,13 +2402,31 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    queuedTurnStartsByThread.delete(thread.id);
-    yield* clearEditResendTurnStartKeysForThread(thread.id);
-    drainingQueuedTurns.delete(thread.id);
+    const stoppedSessionThreadId = providerThread?.id ?? thread.id;
+    const stopsProviderSession = providerThread === null || providerThread.id === thread.id;
+    const clearedQueuedThreadIds = new Set<ThreadId>([thread.id]);
+    if (stopsProviderSession) {
+      for (const queuedThreadId of [...queuedTurnStartsByThread.keys()]) {
+        const queuedThread = ThreadId.makeUnsafe(queuedThreadId);
+        const queuedProviderThread = yield* resolveProviderSessionThread(queuedThread);
+        if ((queuedProviderThread?.id ?? queuedThread) === stoppedSessionThreadId) {
+          clearedQueuedThreadIds.add(queuedThread);
+        }
+      }
+    }
+    for (const queuedThreadId of clearedQueuedThreadIds) {
+      queuedTurnStartsByThread.delete(queuedThreadId);
+      yield* clearEditResendTurnStartKeysForThread(queuedThreadId);
+      drainingQueuedTurns.delete(queuedThreadId);
+    }
     // Reservations are keyed by session-owning thread but may belong to a
-    // stopping child's queued message; drop both directions.
+    // stopping child's queued message. A provider-session stop clears every
+    // reservation for that session; a child-only interrupt clears its own.
     for (const [sessionThreadId, reservation] of pendingQueuedDispatchBySessionThread) {
-      if (sessionThreadId === (thread.id as string) || reservation.queuedThreadId === thread.id) {
+      if (
+        (stopsProviderSession && sessionThreadId === stoppedSessionThreadId) ||
+        clearedQueuedThreadIds.has(ThreadId.makeUnsafe(reservation.queuedThreadId))
+      ) {
         pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
     }

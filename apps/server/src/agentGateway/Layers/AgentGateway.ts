@@ -576,6 +576,16 @@ export const makeAgentGateway = Effect.gen(function* () {
           { discard: true },
         );
         if (recoveryErrors.length > 0) {
+          yield* operationRepository.fail({
+            operationId: operation.operationId,
+            errorJson: JSON.stringify({
+              code: "recovery_compensation_failed",
+              message:
+                "Synara could not fully compensate the interrupted operation during startup recovery. Some operation-owned resources may require manual cleanup; no replacements will be created.",
+              errors: recoveryErrors,
+            }),
+            now: isoNow(),
+          });
           yield* Effect.logWarning("agent gateway recovery remains incomplete", {
             operationId: operation.operationId,
             errors: recoveryErrors,
@@ -594,9 +604,31 @@ export const makeAgentGateway = Effect.gen(function* () {
         });
       }).pipe(
         Effect.catch((error) =>
-          Effect.logWarning("agent gateway recovery failed", {
-            operationId: operation.operationId,
-            error: errorText(error),
+          Effect.gen(function* () {
+            const detail = errorText(error);
+            yield* operationRepository
+              .fail({
+                operationId: operation.operationId,
+                errorJson: JSON.stringify({
+                  code: "startup_recovery_failed",
+                  message:
+                    "Synara could not recover the interrupted operation. Operation-owned resources may require manual cleanup; no replacements will be created.",
+                  error: detail,
+                }),
+                now: isoNow(),
+              })
+              .pipe(
+                Effect.catch((persistenceError) =>
+                  Effect.logWarning("agent gateway recovery status could not be persisted", {
+                    operationId: operation.operationId,
+                    error: errorText(persistenceError),
+                  }),
+                ),
+              );
+            yield* Effect.logWarning("agent gateway recovery failed", {
+              operationId: operation.operationId,
+              error: detail,
+            });
           }),
         ),
       ),
