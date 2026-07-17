@@ -1,5 +1,4 @@
-import { MessageId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
-import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import { CheckpointRef, EventId, MessageId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

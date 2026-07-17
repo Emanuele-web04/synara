@@ -1672,7 +1672,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          {canRevert && (
+                          {canUndo && (
                             <button
                               type="button"
                               className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:text-muted-foreground/35"
@@ -1680,7 +1680,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               title="Revert conversation and workspace to before this turn"
                               aria-label="Revert conversation and workspace to before this turn"
                               disabled={isRevertingCheckpoint || isWorking}
-                              onClick={() => onUndoTurnFiles(checkpointTurnCounts)}
+                              onClick={() => onUndoTurnFiles?.(checkpointTurnCounts)}
                             >
                               Revert turn
                               <Undo2Icon className="size-3" />
