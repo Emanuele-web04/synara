@@ -399,6 +399,113 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+export interface DesktopRemoteAccessSettings {
+  readonly version: 1;
+  readonly enabled: boolean;
+  readonly port: number;
+  readonly trustedOrigin: string | null;
+  readonly keepRunningOnClose: boolean;
+  readonly launchAtLogin: boolean;
+  readonly keepRunningNoticeShown: boolean;
+}
+
+export interface DesktopRemoteAccessSettingsPatch {
+  readonly enabled?: boolean;
+  readonly port?: number;
+  readonly trustedOrigin?: string | null;
+  readonly keepRunningOnClose?: boolean;
+  readonly launchAtLogin?: boolean;
+}
+
+export type DesktopTailscaleConnectionState =
+  | "connected"
+  | "signed-out"
+  | "stopped"
+  | "unavailable"
+  | "error";
+
+export type DesktopTailscaleServeState =
+  | "matching"
+  | "not-configured"
+  | "different-target"
+  | "unavailable"
+  | "error";
+
+export interface DesktopTailscaleDiagnostics {
+  readonly checkedAt: string;
+  readonly cliAvailable: boolean;
+  readonly executable: string | null;
+  readonly connectionState: DesktopTailscaleConnectionState;
+  readonly backendState: string | null;
+  readonly dnsName: string | null;
+  readonly tailnetName: string | null;
+  readonly serveState: DesktopTailscaleServeState;
+  readonly funnelEnabled: boolean;
+  readonly expectedProxyTarget: string;
+  readonly expectedServeCommand: string;
+  readonly proxyTargets: ReadonlyArray<string>;
+  readonly discoveredOrigin: string | null;
+  readonly mobileUrl: string | null;
+  readonly issue: string | null;
+}
+
+export interface DesktopRemoteAccessStatus {
+  readonly settings: DesktopRemoteAccessSettings;
+  readonly backend: {
+    readonly running: boolean;
+    readonly port: number | null;
+    readonly loopbackUrl: string | null;
+  };
+  readonly tailscale: DesktopTailscaleDiagnostics | null;
+  readonly mobileUrl: string | null;
+  readonly configurationIssue: string | null;
+}
+
+export interface DesktopPairingLink {
+  readonly id: string;
+  readonly credential: string;
+  readonly pairingUrl: string;
+  readonly expiresAt: string;
+}
+
+export interface DesktopPairedDevice {
+  readonly sessionId: string;
+  readonly subject: string;
+  readonly role: string;
+  readonly accessProfile: string;
+  readonly label: string | null;
+  readonly deviceType: string;
+  readonly os: string | null;
+  readonly browser: string | null;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+  readonly lastConnectedAt: string | null;
+  readonly connected: boolean;
+}
+
+export interface DesktopRemoteConnectionTestResult {
+  readonly reachable: boolean;
+  readonly status: number | null;
+  readonly message: string;
+}
+
+export interface DesktopRemoteAccessBridge {
+  getStatus: () => Promise<DesktopRemoteAccessStatus>;
+  updateSettings: (
+    patch: DesktopRemoteAccessSettingsPatch,
+  ) => Promise<DesktopRemoteAccessStatus>;
+  refreshDiagnostics: () => Promise<DesktopRemoteAccessStatus>;
+  copyMobileUrl: () => Promise<boolean>;
+  copyServeCommand: () => Promise<boolean>;
+  copyServeResetCommand: () => Promise<boolean>;
+  testConnection: () => Promise<DesktopRemoteConnectionTestResult>;
+  createPairingLink: (input?: { readonly label?: string }) => Promise<DesktopPairingLink>;
+  listDevices: () => Promise<ReadonlyArray<DesktopPairedDevice>>;
+  revokeDevice: (sessionId: string) => Promise<boolean>;
+  revokeAllDevices: () => Promise<number>;
+  onState: (listener: (status: DesktopRemoteAccessStatus) => void) => () => void;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   /**
@@ -446,6 +553,7 @@ export interface DesktopBridge {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
+  remoteAccess?: DesktopRemoteAccessBridge;
   appSnap: {
     getState: () => Promise<DesktopAppSnapState>;
     setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;

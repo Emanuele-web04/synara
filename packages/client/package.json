@@ -1,0 +1,48 @@
+{
+  "name": "@synara/client",
+  "version": "0.0.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./auth": {
+      "types": "./src/auth.ts",
+      "import": "./src/auth.ts"
+    },
+    "./connection": {
+      "types": "./src/connection.ts",
+      "import": "./src/connection.ts"
+    },
+    "./sequence": {
+      "types": "./src/sequence.ts",
+      "import": "./src/sequence.ts"
+    },
+    "./transport": {
+      "types": "./src/transport.ts",
+      "import": "./src/transport.ts"
+    }
+  },
+  "scripts": {
+    "dev": "tsdown src/index.ts src/auth.ts src/connection.ts src/sequence.ts src/transport.ts --format esm,cjs --watch --clean",
+    "build": "tsdown src/index.ts src/auth.ts src/connection.ts src/sequence.ts src/transport.ts --format esm,cjs --dts --clean",
+    "prepare": "effect-language-service patch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@synara/contracts": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
