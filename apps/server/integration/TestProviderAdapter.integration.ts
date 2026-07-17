@@ -5,6 +5,7 @@ import {
   EventId,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
+  RuntimeRequestId,
   RuntimeSessionId,
   ProviderSession,
   ProviderTurnStartResult,
@@ -27,6 +28,7 @@ import type {
 
 export interface TestTurnResponse {
   readonly events: ReadonlyArray<FixtureProviderRuntimeEvent>;
+  readonly deferCompletion?: boolean;
   readonly mutateWorkspace?: (input: {
     readonly cwd: string;
     readonly turnCount: number;
@@ -51,10 +53,12 @@ export type LegacyProviderRuntimeEvent = FixtureProviderRuntimeEvent;
 
 interface SessionState {
   readonly session: ProviderSession;
+  readonly lifecycleGeneration: string | undefined;
   snapshot: ProviderThreadSnapshot;
   turnCount: number;
   readonly queuedResponses: Array<TestTurnResponse>;
   readonly rollbackCalls: Array<number>;
+  deferredCompletionEvents: Array<ProviderRuntimeEvent>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -268,6 +272,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
 
         sessions.set(threadId, {
           session,
+          lifecycleGeneration: input.lifecycleGeneration,
           snapshot: {
             threadId,
             turns: [],
@@ -275,6 +280,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           turnCount: 0,
           queuedResponses: queuedResponsesForNextSession.splice(0),
           rollbackCalls: [],
+          deferredCompletionEvents: [],
         });
 
         return session;
@@ -309,6 +315,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             provider,
             sessionId: RuntimeSessionId.makeUnsafe(String(input.threadId)),
             createdAt: nowIso(),
+            ...(state.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: state.lifecycleGeneration }
+              : {}),
           };
           rawEvent.threadId = state.snapshot.threadId;
           if (Object.hasOwn(rawEvent, "turnId")) {
@@ -360,7 +369,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           turns: [...state.snapshot.turns, nextTurn],
         };
 
-        if (deferredTurnCompletedEvents.length === 0) {
+        if (response.deferCompletion) {
+          state.deferredCompletionEvents = deferredTurnCompletedEvents;
+        } else if (deferredTurnCompletedEvents.length === 0) {
           yield* emit({
             type: "turn.completed",
             eventId: EventId.makeUnsafe(randomUUID()),
@@ -400,18 +411,41 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       threadId,
       requestId,
       decision,
-    ) =>
-      sessions.has(threadId)
-        ? Effect.sync(() => {
-            const existing = approvalResponsesBySession.get(threadId) ?? [];
-            existing.push({
-              threadId,
-              requestId,
-              decision,
-            });
-            approvalResponsesBySession.set(threadId, existing);
-          })
-        : missingSessionEffect(provider, threadId);
+    ) => {
+      const state = sessions.get(threadId);
+      if (!state) {
+        return missingSessionEffect(provider, threadId);
+      }
+      return Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          const existing = approvalResponsesBySession.get(threadId) ?? [];
+          existing.push({
+            threadId,
+            requestId,
+            decision,
+          });
+          approvalResponsesBySession.set(threadId, existing);
+        });
+        yield* emit({
+          type: "request.resolved",
+          eventId: EventId.makeUnsafe(randomUUID()),
+          provider,
+          createdAt: nowIso(),
+          threadId,
+          requestId: RuntimeRequestId.makeUnsafe(requestId),
+          ...(state.lifecycleGeneration !== undefined
+            ? { lifecycleGeneration: state.lifecycleGeneration }
+            : {}),
+          payload: {
+            requestType: "unknown",
+            decision,
+          },
+        });
+        const deferredCompletionEvents = state.deferredCompletionEvents;
+        state.deferredCompletionEvents = [];
+        yield* Effect.forEach(deferredCompletionEvents, emit, { discard: true });
+      });
+    };
 
     const respondToUserInput: ProviderAdapterShape<ProviderAdapterError>["respondToUserInput"] = (
       threadId,

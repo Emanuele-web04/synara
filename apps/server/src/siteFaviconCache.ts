@@ -7,6 +7,8 @@
 //          Effect.promise). Follows the Map + TTL + max-size eviction pattern
 //          used by providerUsageSnapshot.ts / workspaceEntries.ts.
 
+import { outboundHttp } from "@synara/shared/outboundHttp";
+
 const FAVICON_CACHE_MAX = 500;
 const FAVICON_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
 const FAVICON_FAILURE_TTL_MS = 60 * 60 * 1000; // 1 h (negative cache)
@@ -78,17 +80,26 @@ async function fetchImage(
   timeoutMs: number,
 ): Promise<{ bytes: Uint8Array; contentType: string } | null> {
   try {
-    const response = await globalThis.fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
+    const response = await outboundHttp.request({
+      policy: {
+        service: "site-favicon",
+        allowedOrigins: [new URL(url).origin],
+        timeoutMs,
+        maxRequestBytes: 0,
+        maxResponseBytes: MAX_FAVICON_BYTES,
+        maxRedirects: 2,
+        maxConcurrent: 6,
+        maxQueued: 24,
+        requirePublicAddress: true,
+      },
+      url,
       headers: { Accept: "image/*" },
     });
-    if (!response.ok) return null;
+    if (response.status < 200 || response.status >= 300) return null;
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().startsWith("image/")) return null;
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength === 0 || buffer.byteLength > MAX_FAVICON_BYTES) return null;
-    return { bytes: new Uint8Array(buffer), contentType };
+    if (response.body.byteLength === 0) return null;
+    return { bytes: response.body, contentType };
   } catch {
     return null;
   }

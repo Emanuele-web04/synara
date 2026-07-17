@@ -19,6 +19,11 @@ import {
 } from "./updateInstallMarker";
 
 const temporaryDirectories: string[] = [];
+const artifact = {
+  path: Path.resolve("/tmp/Synara-update.zip"),
+  size: 123,
+  sha512: "a".repeat(128),
+} as const;
 
 function createMarkerPath(): string {
   const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-update-marker-"));
@@ -28,7 +33,7 @@ function createMarkerPath(): string {
 
 function marker(overrides: Partial<UpdateInstallMarker> = {}): UpdateInstallMarker {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     attemptId: "attempt-1",
     fromVersion: "1.0.0",
     toVersion: "1.1.0",
@@ -37,6 +42,7 @@ function marker(overrides: Partial<UpdateInstallMarker> = {}): UpdateInstallMark
     phase: "requested",
     consecutiveFailures: 0,
     lastFailureAt: null,
+    artifact,
     ...overrides,
   };
 }
@@ -56,6 +62,7 @@ describe("updateInstallMarker", () => {
       requestedAt: "2026-07-01T00:00:00.000Z",
       consecutiveFailures: 2,
       lastFailureAt: "2026-06-30T00:00:00.000Z",
+      artifact,
     });
 
     writeInstallMarker(filePath, value);
@@ -82,6 +89,17 @@ describe("updateInstallMarker", () => {
     FS.writeFileSync(filePath, "{not-json", "utf8");
 
     expect(readInstallMarker(filePath)).toMatchObject({ status: "invalid" });
+  });
+
+  it("rejects legacy markers that are not bound to an artifact", () => {
+    const filePath = createMarkerPath();
+    const { artifact: _artifact, ...legacyMarker } = marker();
+    FS.writeFileSync(filePath, JSON.stringify({ ...legacyMarker, schemaVersion: 1 }), "utf8");
+
+    expect(readInstallMarker(filePath)).toEqual({
+      status: "invalid",
+      error: "Marker does not match schema version 2.",
+    });
   });
 
   it("resolves values outside the marker schema as invalid", () => {
@@ -124,13 +142,30 @@ describe("updateInstallMarker", () => {
     const filePath = createMarkerPath();
     writeInstallMarker(filePath, marker());
 
-    expect(markInstallHandoffSync(filePath, "2026-07-01T00:00:05.000Z")).toMatchObject({
-      phase: "handoff",
-      handoffAt: "2026-07-01T00:00:05.000Z",
-    });
+    expect(
+      markInstallHandoffSync(
+        filePath,
+        { attemptId: "attempt-1", artifact },
+        "2026-07-01T00:00:05.000Z",
+      ),
+    ).toMatchObject({ phase: "handoff", handoffAt: "2026-07-01T00:00:05.000Z" });
     expect(readInstallMarker(filePath)).toEqual({
       status: "valid",
       marker: marker({ phase: "handoff", handoffAt: "2026-07-01T00:00:05.000Z" }),
     });
+  });
+
+  it("rejects handoff when the attempt or artifact identity changed", () => {
+    const filePath = createMarkerPath();
+    writeInstallMarker(filePath, marker());
+
+    expect(markInstallHandoffSync(filePath, { attemptId: "attempt-2", artifact })).toBeNull();
+    expect(
+      markInstallHandoffSync(filePath, {
+        attemptId: "attempt-1",
+        artifact: { ...artifact, sha512: "b".repeat(128) },
+      }),
+    ).toBeNull();
+    expect(readInstallMarker(filePath)).toEqual({ status: "valid", marker: marker() });
   });
 });

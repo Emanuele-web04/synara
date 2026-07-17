@@ -11,17 +11,7 @@ import type {
 } from "@synara/contracts";
 
 import type { DesktopAppSnapManager } from "./appSnapManager";
-
-export const APPSNAP_IPC_CHANNELS = {
-  getState: "desktop:appsnap-get-state",
-  setEnabled: "desktop:appsnap-set-enabled",
-  requestPermissions: "desktop:appsnap-request-permissions",
-  listPendingCaptures: "desktop:appsnap-list-pending-captures",
-  acknowledgeCapture: "desktop:appsnap-acknowledge-capture",
-  captured: "desktop:appsnap-captured",
-  error: "desktop:appsnap-error",
-  state: "desktop:appsnap-state",
-} as const;
+import { APPSNAP_IPC_CHANNELS } from "./ipcChannels";
 
 export function sendAppSnapState(
   webContents: WebContents | null | undefined,

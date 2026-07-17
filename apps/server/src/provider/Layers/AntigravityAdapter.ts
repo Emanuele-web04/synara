@@ -18,6 +18,7 @@ import {
 import { Effect, Layer, Queue, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -29,6 +30,7 @@ import {
 } from "../Services/AntigravityAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
@@ -66,6 +68,7 @@ type StoredTurn = {
 
 type AntigravitySessionContext = {
   session: ProviderSession;
+  readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
   readonly turns: StoredTurn[];
   activeTurnId?: TurnId | undefined;
@@ -180,7 +183,7 @@ export async function runAntigravityHelperProcess(
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: buildProviderChildEnvironment({ provider: PROVIDER }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -405,6 +408,23 @@ function isToolResultStep(step: TranscriptStep): boolean {
   );
 }
 
+export function makeAntigravityRuntimeEventBase(input: {
+  readonly threadId: ThreadId;
+  readonly lifecycleGeneration?: string;
+  readonly eventId?: EventId;
+  readonly createdAt?: string;
+}) {
+  return {
+    eventId: input.eventId ?? EventId.makeUnsafe(crypto.randomUUID()),
+    provider: PROVIDER,
+    threadId: input.threadId,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    ...(input.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: input.lifecycleGeneration }
+      : {}),
+  };
+}
+
 const makeAntigravityAdapter = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
@@ -419,10 +439,12 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     context: AntigravitySessionContext,
     options?: { includeTurn?: boolean; itemId?: RuntimeItemId },
   ) => ({
-    eventId: EventId.makeUnsafe(crypto.randomUUID()),
-    provider: PROVIDER,
-    threadId: context.session.threadId,
-    createdAt: new Date().toISOString(),
+    ...makeAntigravityRuntimeEventBase({
+      threadId: context.session.threadId,
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+    }),
     ...(options?.includeTurn !== false && context.activeTurnId
       ? { turnId: context.activeTurnId }
       : {}),
@@ -445,6 +467,24 @@ const makeAntigravityAdapter = Effect.gen(function* () {
     return context
       ? Effect.succeed(context)
       : Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
+  };
+
+  const teardownActiveProcess = (
+    context: AntigravitySessionContext,
+    method: string,
+  ): Effect.Effect<void, ProviderAdapterRequestError> => {
+    const child = context.activeProcess;
+    if (!child) return Effect.void;
+    return Effect.tryPromise({
+      try: () => teardownChildProcessTree(child),
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method,
+          detail: messageFromCause(cause, "Failed to stop the Antigravity process tree."),
+          cause,
+        }),
+    }).pipe(Effect.asVoid);
   };
 
   const currentTurn = (context: AntigravitySessionContext): StoredTurn | undefined =>
@@ -680,8 +720,8 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       if (existing) {
         existing.stopped = true;
         existing.interrupted = true;
+        yield* teardownActiveProcess(existing, "session/restart");
       }
-      existing?.activeProcess?.kill();
       const now = new Date().toISOString();
       const conversationId = resumeConversationId(input.resumeCursor);
       const modelSelection =
@@ -700,6 +740,9 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       };
       const context: AntigravitySessionContext = {
         session,
+        ...(input.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: input.lifecycleGeneration }
+          : {}),
         binaryPath,
         turns: [],
         ...(conversationId ? { conversationId } : {}),
@@ -839,11 +882,14 @@ const makeAntigravityAdapter = Effect.gen(function* () {
       ];
       const child = spawn(context.binaryPath, args, {
         cwd: context.session.cwd ?? serverConfig.cwd,
-        env: {
-          ...process.env,
-          SYNARA_ANTIGRAVITY_EVENTS: eventFile,
-          SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
-        },
+        env: buildProviderChildEnvironment({
+          provider: PROVIDER,
+          inheritedSynaraKeys: ["SYNARA_ANTIGRAVITY_EVENTS", "SYNARA_ANTIGRAVITY_HOOK_DECISION"],
+          overrides: {
+            SYNARA_ANTIGRAVITY_EVENTS: eventFile,
+            SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+          },
+        }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       context.activeProcess = child;
@@ -936,13 +982,10 @@ const makeAntigravityAdapter = Effect.gen(function* () {
 
   const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId) =>
     requireSession(threadId).pipe(
-      Effect.tap((context) =>
-        Effect.sync(() => {
-          context.interrupted = true;
-          context.activeProcess?.kill("SIGTERM");
-        }),
-      ),
-      Effect.asVoid,
+      Effect.flatMap((context) => {
+        context.interrupted = true;
+        return teardownActiveProcess(context, "turn/interrupt");
+      }),
     );
 
   const unsupported = (threadId: ThreadId, method: string) =>
@@ -956,11 +999,11 @@ const makeAntigravityAdapter = Effect.gen(function* () {
 
   const stopSession: AntigravityAdapterShape["stopSession"] = (threadId) =>
     requireSession(threadId).pipe(
-      Effect.tap((context) =>
-        Effect.sync(() => {
+      Effect.flatMap((context) =>
+        Effect.gen(function* () {
           context.stopped = true;
           context.interrupted = true;
-          context.activeProcess?.kill("SIGTERM");
+          yield* teardownActiveProcess(context, "session/stop");
           sessions.delete(threadId);
           offer({
             ...base(context, { includeTurn: false }),
@@ -969,7 +1012,6 @@ const makeAntigravityAdapter = Effect.gen(function* () {
           } satisfies ProviderRuntimeEvent);
         }),
       ),
-      Effect.asVoid,
     );
 
   const snapshot = (context: AntigravitySessionContext): ProviderThreadSnapshot => ({

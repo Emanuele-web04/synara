@@ -3,6 +3,7 @@ import {
   isToolLifecycleItemType,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurn,
+  type OrchestrationPendingInteraction,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
   type ProviderKind,
@@ -19,6 +20,8 @@ import {
 } from "@synara/shared/subagents";
 import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 import { pluralize } from "@synara/shared/text";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
@@ -49,17 +52,11 @@ export const PROVIDER_OPTIONS: Array<{
   value: ProviderPickerKind;
   label: string;
   available: boolean;
-}> = [
-  { value: "codex", label: "Codex", available: true },
-  { value: "claudeAgent", label: "Claude", available: true },
-  { value: "cursor", label: "Cursor", available: true },
-  { value: "antigravity", label: "Antigravity", available: true },
-  { value: "grok", label: "Grok", available: true },
-  { value: "droid", label: "Droid", available: true },
-  { value: "kilo", label: "Kilo", available: true },
-  { value: "opencode", label: "OpenCode", available: true },
-  { value: "pi", label: "Pi", available: true },
-];
+}> = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+  value: descriptor.kind,
+  label: descriptor.displayName,
+  available: descriptor.available,
+}));
 
 export interface WorkLogEntry {
   id: string;
@@ -150,6 +147,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
+  lifecycleGeneration?: string;
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
   detail?: string;
@@ -174,8 +172,66 @@ export function isProviderFileEditWorkLogEntry(
 
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
+  lifecycleGeneration?: string;
   createdAt: string;
   questions: ReadonlyArray<UserInputQuestion>;
+}
+
+function activityLifecycleGeneration(payload: Record<string, unknown> | null): string | undefined {
+  const generation = payload?.lifecycleGeneration;
+  return typeof generation === "string" && generation.length > 0 ? generation : undefined;
+}
+
+function deletePendingInteraction<T extends { requestId: ApprovalRequestId }>(
+  openByInstance: Map<string, T>,
+  requestId: ApprovalRequestId,
+  lifecycleGeneration: string | undefined,
+): void {
+  if (lifecycleGeneration !== undefined) {
+    openByInstance.delete(pendingRequestInstanceKey(requestId, lifecycleGeneration));
+    return;
+  }
+  for (const [key, pending] of openByInstance) {
+    if (pending.requestId === requestId) openByInstance.delete(key);
+  }
+}
+
+function replacePendingInteraction<T extends { requestId: ApprovalRequestId }>(
+  openByInstance: Map<string, T>,
+  pending: T,
+  lifecycleGeneration: string | undefined,
+): void {
+  deletePendingInteraction(openByInstance, pending.requestId, undefined);
+  openByInstance.set(pendingRequestInstanceKey(pending.requestId, lifecycleGeneration), pending);
+}
+
+function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>(
+  openByInstance: Map<string, T>,
+  settlements: ReadonlyArray<OrchestrationPendingInteraction> | undefined,
+  interactionKind: OrchestrationPendingInteraction["interactionKind"],
+): void {
+  if (settlements === undefined) {
+    return;
+  }
+  const actionableKeys = new Set(
+    settlements
+      .filter(
+        (settlement) =>
+          settlement.interactionKind === interactionKind &&
+          (settlement.status === "pending" || settlement.status === "retryable"),
+      )
+      .map((settlement) =>
+        pendingRequestInstanceKey(
+          settlement.requestId,
+          settlement.lifecycleGeneration ?? undefined,
+        ),
+      ),
+  );
+  for (const key of openByInstance.keys()) {
+    if (!actionableKeys.has(key)) {
+      openByInstance.delete(key);
+    }
+  }
 }
 
 export interface ActiveTaskListState {
@@ -411,8 +467,9 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
 
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
 ): PendingApproval[] {
-  const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
+  const openByInstance = new Map<string, PendingApproval>();
   const ordered = orderedActivities(activities);
 
   for (const activity of ordered) {
@@ -434,19 +491,25 @@ export function derivePendingApprovals(
           ? requestKindFromRequestType(payload.requestType)
           : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+    const lifecycleGeneration = activityLifecycleGeneration(payload);
 
     if (activity.kind === "approval.requested" && requestId && requestKind) {
-      openByRequestId.set(requestId, {
-        requestId,
-        requestKind,
-        createdAt: activity.createdAt,
-        ...(detail ? { detail } : {}),
-      });
+      replacePendingInteraction(
+        openByInstance,
+        {
+          requestId,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+          requestKind,
+          createdAt: activity.createdAt,
+          ...(detail ? { detail } : {}),
+        },
+        lifecycleGeneration,
+      );
       continue;
     }
 
     if (activity.kind === "approval.resolved" && requestId) {
-      openByRequestId.delete(requestId);
+      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
       continue;
     }
 
@@ -455,12 +518,14 @@ export function derivePendingApprovals(
       requestId &&
       isStalePendingRequestFailureDetail(detail)
     ) {
-      openByRequestId.delete(requestId);
+      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
       continue;
     }
   }
 
-  return [...openByRequestId.values()].toSorted((left, right) =>
+  retainActionableSettlements(openByInstance, settlements, "approval");
+
+  return [...openByInstance.values()].toSorted((left, right) =>
     left.createdAt.localeCompare(right.createdAt),
   );
 }
@@ -514,8 +579,9 @@ function parseUserInputQuestions(
 
 export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
 ): PendingUserInput[] {
-  const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
+  const openByInstance = new Map<string, PendingUserInput>();
   const ordered = orderedActivities(activities);
 
   for (const activity of ordered) {
@@ -528,22 +594,28 @@ export function derivePendingUserInputs(
         ? ApprovalRequestId.makeUnsafe(payload.requestId)
         : null;
     const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+    const lifecycleGeneration = activityLifecycleGeneration(payload);
 
     if (activity.kind === "user-input.requested" && requestId) {
       const questions = parseUserInputQuestions(payload);
       if (!questions) {
         continue;
       }
-      openByRequestId.set(requestId, {
-        requestId,
-        createdAt: activity.createdAt,
-        questions,
-      });
+      replacePendingInteraction(
+        openByInstance,
+        {
+          requestId,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+          createdAt: activity.createdAt,
+          questions,
+        },
+        lifecycleGeneration,
+      );
       continue;
     }
 
     if (activity.kind === "user-input.resolved" && requestId) {
-      openByRequestId.delete(requestId);
+      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
       continue;
     }
 
@@ -552,11 +624,13 @@ export function derivePendingUserInputs(
       requestId &&
       isStalePendingRequestFailureDetail(detail)
     ) {
-      openByRequestId.delete(requestId);
+      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
     }
   }
 
-  return [...openByRequestId.values()].toSorted((left, right) =>
+  retainActionableSettlements(openByInstance, settlements, "userInput");
+
+  return [...openByInstance.values()].toSorted((left, right) =>
     left.createdAt.localeCompare(right.createdAt),
   );
 }

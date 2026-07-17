@@ -88,7 +88,7 @@ export interface GitManagerShape {
    * Move a thread between Local and Worktree while preserving recoverable Git state.
    */
   readonly handoffThread: (
-    input: GitHandoffThreadInput,
+    input: Omit<GitHandoffThreadInput, "commandId" | "threadId">,
   ) => Effect.Effect<GitHandoffThreadResult, GitManagerServiceError>;
 
   /**

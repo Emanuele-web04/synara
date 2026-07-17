@@ -18,6 +18,7 @@ import {
   ThreadId,
   TurnId,
   IsoDateTime,
+  NonNegativeInt,
 } from "@synara/contracts";
 import { Schema, ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
@@ -37,6 +38,8 @@ export const ProjectionThreadMessage = Schema.Struct({
   dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   isStreaming: Schema.Boolean,
   source: OrchestrationMessageSource,
+  /** Server-owned orchestration event sequence for causal ordering. */
+  sequence: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -48,6 +51,7 @@ export const ListProjectionThreadMessagesInput = Schema.Struct({
 export type ListProjectionThreadMessagesInput = typeof ListProjectionThreadMessagesInput.Type;
 
 export const GetProjectionThreadMessageInput = Schema.Struct({
+  threadId: ThreadId,
   messageId: MessageId,
 });
 export type GetProjectionThreadMessageInput = typeof GetProjectionThreadMessageInput.Type;
@@ -64,23 +68,24 @@ export interface ProjectionThreadMessageRepositoryShape {
   /**
    * Insert or replace a projected thread message row.
    *
-   * Upserts by `messageId`.
+   * Upserts by the thread-scoped `(threadId, messageId)` identity.
    */
   readonly upsert: (
     message: ProjectionThreadMessage,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
-   * Read a projected thread message by id.
+   * Read a projected thread message by its thread-scoped identity.
    */
-  readonly getByMessageId: (
+  readonly getByThreadAndMessageId: (
     input: GetProjectionThreadMessageInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
   /**
    * List projected thread messages for a thread.
    *
-   * Returned in ascending creation order.
+   * Returned in ascending server-owned causal order. Legacy rows without a
+   * sequence retain their timestamp order ahead of sequenced rows.
    */
   readonly listByThreadId: (
     input: ListProjectionThreadMessagesInput,

@@ -1,6 +1,7 @@
 // FILE: providerUsage/http.ts
-// Purpose: Thin JSON-over-HTTP helper for usage fetchers, built on the global fetch (Bun/Node 24,
-// no extra dependency). Adds a hard timeout and tolerates non-JSON bodies.
+// Purpose: Bounded JSON helper for provider usage, backed by the pinned outbound authority.
+
+import { decodeOutboundJson, outboundHttp } from "@synara/shared/outboundHttp";
 
 export interface FetchJsonResult {
   readonly status: number;
@@ -12,27 +13,46 @@ export interface FetchJsonResult {
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export async function fetchJson(input: {
+  service: string;
   url: string;
+  allowedOrigins: ReadonlyArray<string>;
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: unknown;
   timeoutMs?: number;
 }): Promise<FetchJsonResult> {
-  const response = await fetch(input.url, {
+  const encodedBody = input.body === undefined ? undefined : JSON.stringify(input.body);
+  const response = await outboundHttp.request({
+    policy: {
+      service: input.service,
+      allowedOrigins: input.allowedOrigins,
+      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxRequestBytes: 64 * 1024,
+      maxResponseBytes: 1024 * 1024,
+      maxRedirects: 0,
+      maxConcurrent: 4,
+      maxQueued: 8,
+      requirePublicAddress: true,
+    },
+    url: input.url,
     method: input.method ?? "GET",
     headers: input.headers,
-    body: input.body === undefined ? undefined : JSON.stringify(input.body),
-    signal: AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    ...(encodedBody === undefined ? {} : { body: encodedBody }),
   });
 
   let json: unknown = null;
   try {
-    json = await response.json();
+    json = decodeOutboundJson(response, { maxDepth: 32, maxNodes: 100_000 });
   } catch {
     json = null;
   }
 
-  return { status: response.status, ok: response.ok, json, headers: response.headers };
+  return {
+    status: response.status,
+    ok: response.status >= 200 && response.status < 300,
+    json,
+    headers: response.headers,
+  };
 }
 
 /** Provider backends reject the access token once it is stale; treat that as "needs re-auth". */

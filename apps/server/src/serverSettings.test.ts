@@ -58,15 +58,51 @@ describe("ServerSettingsService", () => {
     expect(result.updated.enableProviderUpdateChecks).toBe(false);
     expect(result.updated.providers.codex.binaryPath).toBe("/usr/local/bin/codex");
     expect(result.parsed).toMatchObject({
-      enableAssistantStreaming: true,
-      enableProviderUpdateChecks: false,
-      providers: {
-        codex: {
-          binaryPath: "/usr/local/bin/codex",
-          customModels: ["gpt-custom"],
+      revision: 1,
+      migrationVersion: 1,
+      settings: {
+        enableAssistantStreaming: true,
+        enableProviderUpdateChecks: false,
+        providers: {
+          codex: {
+            binaryPath: "/usr/local/bin/codex",
+            customModels: ["gpt-custom"],
+          },
         },
       },
     });
+  });
+
+  it("keeps provider passwords server-only and returns configured flags to clients", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+        const view = yield* service.updateSettingsView({
+          providers: {
+            kilo: { serverPassword: "kilo-secret" },
+            opencode: { serverPassword: "opencode-secret" },
+          },
+        });
+        const internal = yield* service.getSettings;
+        const persisted = yield* fs.readFileString(settingsPath);
+        return { view, internal, persisted };
+      }),
+    );
+
+    expect(result.internal.providers.kilo.serverPasswordConfigured).toBe(true);
+    expect(result.internal.providers.opencode.serverPasswordConfigured).toBe(true);
+    expect(result.view.providers.kilo).toMatchObject({ serverPasswordConfigured: true });
+    expect(result.view.providers.opencode).toMatchObject({ serverPasswordConfigured: true });
+    expect(JSON.stringify(result.internal)).not.toContain("kilo-secret");
+    expect(JSON.stringify(result.internal)).not.toContain("opencode-secret");
+    expect(JSON.stringify(result.view)).not.toContain("kilo-secret");
+    expect(JSON.stringify(result.view)).not.toContain("opencode-secret");
+    expect(JSON.stringify(result.view)).not.toContain('"serverPassword"');
+    expect(result.persisted).not.toContain("kilo-secret");
+    expect(result.persisted).not.toContain("opencode-secret");
   });
 
   it("resolves text generation selection away from disabled providers", async () => {

@@ -21,12 +21,21 @@ export interface CapturedProcess {
 
 export interface CapturedProcessTree {
   descendants: CapturedProcess[];
+  /** False when the platform process snapshot failed and descendant absence is unproven. */
+  captureComplete?: boolean;
+}
+
+export interface CapturedProcessTreeInspection {
+  /** False when the process table could not be read, so exit cannot be proven. */
+  verified: boolean;
+  survivors: CapturedProcess[];
 }
 
 export type TerminalKillSignal = "SIGTERM" | "SIGKILL";
 
 export interface ProcessTreeKiller {
   capture(rootPid: number): CapturedProcessTree;
+  inspect?(tree: CapturedProcessTree): CapturedProcessTreeInspection;
   signal(input: {
     rootPid: number;
     signal: TerminalKillSignal;
@@ -182,12 +191,36 @@ export function createProcessTreeKiller(
 
   return {
     capture: (rootPid) => {
-      if (!Number.isInteger(rootPid) || rootPid <= 0 || globalThis.process.platform === "win32") {
-        return { descendants: [] };
+      if (!Number.isInteger(rootPid) || rootPid <= 0) {
+        return { descendants: [], captureComplete: false };
+      }
+      if (globalThis.process.platform === "win32") {
+        // tree-kill delegates to taskkill /T on Windows, which owns descendant traversal.
+        return { descendants: [], captureComplete: true };
       }
       const childrenByParentPid = deps.captureChildrenMap();
-      if (!childrenByParentPid) return { descendants: [] };
-      return { descendants: collectDescendantProcesses(rootPid, childrenByParentPid) };
+      if (!childrenByParentPid) return { descendants: [], captureComplete: false };
+      return {
+        descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
+        captureComplete: true,
+      };
+    },
+    inspect: (tree) => {
+      if (tree.descendants.length === 0) {
+        return { verified: true, survivors: [] };
+      }
+      const currentCommands = deps.readCurrentCommands(
+        tree.descendants.map((descendant) => descendant.pid),
+      );
+      if (currentCommands === null) {
+        return { verified: false, survivors: [...tree.descendants] };
+      }
+      return {
+        verified: true,
+        survivors: tree.descendants.filter(
+          (descendant) => currentCommands.get(descendant.pid) === descendant.command,
+        ),
+      };
     },
     signal: ({ rootPid, signal, tree, includeRootTree = true, onError }) => {
       // Signal captured descendants directly as well as through tree-kill. If

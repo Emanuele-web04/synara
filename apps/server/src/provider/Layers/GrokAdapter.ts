@@ -25,6 +25,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { decodeOutboundJson, decodeOutboundText, outboundHttp } from "@synara/shared/outboundHttp";
 import {
   Cause,
   DateTime,
@@ -49,10 +50,10 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -66,13 +67,13 @@ import {
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
 import {
+  acceptAcpPlanUpdate,
   makeAcpThreadLock,
   readAcpUsdCost,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
-import type { AcpSessionRuntimeOptions } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -81,6 +82,7 @@ import {
   makeAcpRequestResolvedEvent,
   makeAcpTokenUsageEvent,
   makeAcpToolCallEvent,
+  stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
   type AcpSessionMode,
@@ -88,7 +90,7 @@ import {
   type AcpToolCallState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
-import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
+import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
   resolveAcpTurnIdleTimeoutMs,
@@ -184,30 +186,6 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-function summarizeGrokAcpLogPayload(payload: unknown): unknown {
-  const text =
-    typeof payload === "string"
-      ? payload
-      : (() => {
-          try {
-            return JSON.stringify(payload, null, 2);
-          } catch {
-            return String(payload);
-          }
-        })();
-  if (text.length <= GROK_ACP_LOG_PAYLOAD_LIMIT) {
-    return text;
-  }
-  return `${text.slice(0, GROK_ACP_LOG_PAYLOAD_LIMIT)}... [truncated ${text.length - GROK_ACP_LOG_PAYLOAD_LIMIT} chars]`;
-}
-
-function summarizeGrokAcpRequestPayload(method: string, payload: unknown): unknown {
-  if (method === "session/prompt") {
-    return "[redacted session/prompt payload]";
-  }
-  return summarizeGrokAcpLogPayload(payload);
-}
-
 function isGrokAcpDebugEnabled(): boolean {
   return (
     process.env[GROK_ACP_DEBUG_ENV] === "1" ||
@@ -228,69 +206,6 @@ function mapGrokModelDiscoveryError(cause: unknown): ProviderAdapterRequestError
   });
 }
 
-function shouldMirrorGrokAcpProtocolLog(event: {
-  readonly direction: "incoming" | "outgoing";
-  readonly stage: "raw" | "decoded" | "decode_failed" | "dropped";
-  readonly payload: unknown;
-}): boolean {
-  if (event.stage === "decode_failed") return true;
-  if (event.stage === "dropped") return true;
-  if (event.direction !== "incoming" || event.stage !== "raw") return false;
-  const payload = summarizeGrokAcpLogPayload(event.payload);
-  if (typeof payload !== "string") return false;
-  return payload.includes("grokShell") || payload.includes("x.ai/fs_notify");
-}
-
-function makeGrokAcpRuntimeLoggers(
-  base: Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging">,
-): Pick<AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging"> {
-  const debugEnabled = isGrokAcpDebugEnabled();
-  const requestLogger: AcpSessionRuntimeOptions["requestLogger"] =
-    base.requestLogger || debugEnabled
-      ? (event) =>
-          Effect.gen(function* () {
-            if (base.requestLogger) {
-              yield* base.requestLogger(event);
-            }
-            if (debugEnabled && event.status === "failed") {
-              yield* Effect.logWarning("grok.acp.request_failed", {
-                marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-                method: event.method,
-                payload: summarizeGrokAcpRequestPayload(event.method, event.payload),
-                cause: event.cause ? Cause.pretty(event.cause) : undefined,
-              });
-            }
-          })
-      : undefined;
-  const protocolLogging: AcpSessionRuntimeOptions["protocolLogging"] =
-    base.protocolLogging || debugEnabled
-      ? {
-          logIncoming: base.protocolLogging?.logIncoming ?? debugEnabled,
-          logOutgoing: base.protocolLogging?.logOutgoing ?? false,
-          logger: (event) =>
-            Effect.gen(function* () {
-              if (base.protocolLogging?.logger) {
-                yield* base.protocolLogging.logger(event);
-              }
-              if (!debugEnabled || !shouldMirrorGrokAcpProtocolLog(event)) {
-                return;
-              }
-              yield* Effect.logWarning("grok.acp.protocol", {
-                marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
-                direction: event.direction,
-                stage: event.stage,
-                payload: summarizeGrokAcpLogPayload(event.payload),
-              });
-            }),
-        }
-      : undefined;
-
-  return {
-    ...(requestLogger ? { requestLogger } : {}),
-    ...(protocolLogging ? { protocolLogging } : {}),
-  };
-}
-
 export interface GrokAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
@@ -309,6 +224,7 @@ interface GrokSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewaySessionToken?: string;
   readonly threadId: ThreadId;
+  readonly lifecycleGeneration?: string;
   session: ProviderSession;
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
@@ -582,19 +498,34 @@ function fetchXaiLanguageModels(input: {
 }): Effect.Effect<Array<{ slug: string; name: string }>, ProviderAdapterRequestError> {
   return Effect.tryPromise({
     try: async () => {
-      const response = await fetch(`${input.baseUrl ?? XAI_API_BASE_URL}/language-models`, {
+      const baseUrl = input.baseUrl ?? XAI_API_BASE_URL;
+      const response = await outboundHttp.request({
+        url: `${baseUrl}/language-models`,
+        policy: {
+          service: "xai-model-discovery",
+          allowedOrigins: [new URL(baseUrl).origin],
+          timeoutMs: 10_000,
+          maxRequestBytes: 0,
+          maxResponseBytes: 1_000_000,
+          maxRedirects: 0,
+          maxConcurrent: 2,
+          maxQueued: 4,
+          requirePublicAddress: true,
+        },
         headers: {
+          Accept: "application/json",
           Authorization: `Bearer ${input.apiKey}`,
-          "Content-Type": "application/json",
         },
       });
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
+      if (response.status < 200 || response.status >= 300) {
+        const detail = decodeOutboundText(response);
         throw new Error(
           detail.trim() || `xAI language model discovery failed with HTTP ${response.status}.`,
         );
       }
-      return parseXaiLanguageModelDescriptors(await response.json());
+      return parseXaiLanguageModelDescriptors(
+        decodeOutboundJson(response, { maxDepth: 32, maxNodes: 20_000 }),
+      );
     },
     catch: (cause) =>
       new ProviderAdapterRequestError({
@@ -787,8 +718,14 @@ export function makeGrokAdapter(
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
-    const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+    const offerRuntimeEvent = (
+      lifecycleGeneration: string | undefined,
+      event: ProviderRuntimeEvent,
+    ) =>
+      PubSub.publish(
+        runtimeEventPubSub,
+        stampAcpRuntimeEventLifecycleGeneration(event, lifecycleGeneration),
+      ).pipe(Effect.asVoid);
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -823,12 +760,9 @@ export function makeGrokAdapter(
       rawPayload: unknown,
     ) =>
       Effect.gen(function* () {
-        const fingerprint = `${ctx.activeTurnId ?? "no-turn"}:${JSON.stringify(payload)}`;
-        if (ctx.lastPlanFingerprint === fingerprint) {
-          return;
-        }
-        ctx.lastPlanFingerprint = fingerprint;
+        if (!acceptAcpPlanUpdate(ctx, payload)) return;
         yield* offerRuntimeEvent(
+          ctx.lifecycleGeneration,
           makeAcpPlanUpdatedEvent({
             stamp: yield* makeEventStamp(),
             provider: PROVIDER,
@@ -877,7 +811,7 @@ export function makeGrokAdapter(
         }
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
-        yield* offerRuntimeEvent({
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "session.exited",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
@@ -932,7 +866,7 @@ export function makeGrokAdapter(
       },
     ) =>
       Effect.gen(function* () {
-        yield* offerRuntimeEvent({
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: input.lifecycle,
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
@@ -1121,7 +1055,15 @@ export function makeGrokAdapter(
             provider: PROVIDER,
             threadId: input.threadId,
           });
-          const acpRuntimeLoggers = makeGrokAcpRuntimeLoggers(acpNativeLoggers);
+          const acpRuntimeLoggers = makeAcpDebugLoggers({
+            base: acpNativeLoggers,
+            enabled: isGrokAcpDebugEnabled(),
+            provider: PROVIDER,
+            marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
+            payloadLimit: GROK_ACP_LOG_PAYLOAD_LIMIT,
+            shouldMirrorIncomingRaw: (payload) =>
+              payload.includes("grokShell") || payload.includes("x.ai/fs_notify"),
+          });
           const providerGrokOptions = input.providerOptions?.grok;
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
             ...(grokSettings.binaryPath !== undefined
@@ -1219,6 +1161,7 @@ export function makeGrokAdapter(
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
                 pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
                 yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
                   makeAcpRequestOpenedEvent({
                     stamp: yield* makeEventStamp(),
                     provider: PROVIDER,
@@ -1236,6 +1179,7 @@ export function makeGrokAdapter(
                 const resolved = yield* Deferred.await(decision);
                 pendingApprovals.delete(requestId);
                 yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
                   makeAcpRequestResolvedEvent({
                     stamp: yield* makeEventStamp(),
                     provider: PROVIDER,
@@ -1295,6 +1239,9 @@ export function makeGrokAdapter(
             threadId: input.threadId,
             ...(agentGatewayConnection
               ? { gatewaySessionToken: agentGatewayConnection.bearerToken }
+              : {}),
+            ...(input.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: input.lifecycleGeneration }
               : {}),
             session,
             scope: sessionScope,
@@ -1366,6 +1313,7 @@ export function makeGrokAdapter(
                       }
                       ctx.activeAssistantItemsWithContent.delete(scopedItemId);
                       yield* offerRuntimeEvent(
+                        input.lifecycleGeneration,
                         makeAcpAssistantItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
@@ -1460,6 +1408,7 @@ export function makeGrokAdapter(
                         // orphan (or worse, misfiled as thread compaction).
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                         yield* offerRuntimeEvent(
+                          input.lifecycleGeneration,
                           makeAcpToolCallEvent({
                             stamp: yield* makeEventStamp(),
                             provider: PROVIDER,
@@ -1482,6 +1431,7 @@ export function makeGrokAdapter(
                         ctx.activeTurnFailedToolDetail = failedToolDetail;
                       }
                       yield* offerRuntimeEvent(
+                        input.lifecycleGeneration,
                         makeAcpToolCallEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
@@ -1510,6 +1460,7 @@ export function makeGrokAdapter(
                         }
                       }
                       yield* offerRuntimeEvent(
+                        input.lifecycleGeneration,
                         makeAcpContentDeltaEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
@@ -1532,6 +1483,7 @@ export function makeGrokAdapter(
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       recordGrokSessionCost(ctx, event.cost);
                       yield* offerRuntimeEvent(
+                        input.lifecycleGeneration,
                         makeAcpTokenUsageEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
@@ -1592,21 +1544,21 @@ export function makeGrokAdapter(
               );
             }
 
-            yield* offerRuntimeEvent({
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "session.started",
               ...(yield* makeEventStamp()),
               provider: PROVIDER,
               threadId: input.threadId,
               payload: { resume: started.initializeResult },
             });
-            yield* offerRuntimeEvent({
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "session.state.changed",
               ...(yield* makeEventStamp()),
               provider: PROVIDER,
               threadId: input.threadId,
               payload: { state: "ready", reason: "Grok ACP session ready" },
             });
-            yield* offerRuntimeEvent({
+            yield* offerRuntimeEvent(input.lifecycleGeneration, {
               type: "thread.started",
               ...(yield* makeEventStamp()),
               provider: PROVIDER,
@@ -1648,7 +1600,7 @@ export function makeGrokAdapter(
           turnId,
           idleMs,
         });
-        yield* offerRuntimeEvent({
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
@@ -1772,37 +1724,15 @@ export function makeGrokAdapter(
             text: promptText,
           });
         }
-        if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
-            const attachmentPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!attachmentPath) {
-              return yield* new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail: `Invalid attachment id '${attachment.id}'.`,
-              });
-            }
-            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "session/prompt",
-                    detail: cause.message,
-                    cause,
-                  }),
-              ),
-            );
-            promptParts.push({
-              type: "image",
-              data: Buffer.from(bytes).toString("base64"),
-              mimeType: attachment.mimeType,
-            });
-          }
-        }
+        promptParts.push(
+          ...(yield* loadProviderPromptImageBlocks({
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            provider: PROVIDER,
+            method: "session/prompt",
+            readFile: fileSystem.readFile,
+          })),
+        );
 
         if (promptParts.length === 0) {
           return yield* new ProviderAdapterValidationError({
@@ -1850,7 +1780,7 @@ export function makeGrokAdapter(
           updatedAt: yield* nowIso,
         };
 
-        yield* offerRuntimeEvent({
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "turn.started",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
@@ -1890,7 +1820,7 @@ export function makeGrokAdapter(
                   ...(model ? { model } : {}),
                   lastError: detail,
                 };
-                yield* offerRuntimeEvent({
+                yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
                   provider: PROVIDER,
@@ -1935,7 +1865,7 @@ export function makeGrokAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
-                yield* offerRuntimeEvent({
+                yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
                   provider: PROVIDER,
@@ -1967,7 +1897,7 @@ export function makeGrokAdapter(
                 updatedAt: yield* nowIso,
                 ...(model ? { model } : {}),
               };
-              yield* offerRuntimeEvent({
+              yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                 type: "turn.completed",
                 ...(yield* makeEventStamp()),
                 provider: PROVIDER,
@@ -2317,7 +2247,7 @@ export function makeGrokAdapter(
         // Success: thread.state.changed is the single terminal signal —
         // ingestion projects it into the "Context compacted manually" row, so
         // emitting an item.completed row here too would duplicate it.
-        yield* offerRuntimeEvent({
+        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "thread.state.changed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
@@ -2335,12 +2265,13 @@ export function makeGrokAdapter(
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: process.env });
+          const childEnv = buildProviderChildEnvironment({ provider: "grok" });
+          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: childEnv });
           const child = yield* childProcessSpawner.spawn(
             ChildProcess.make(prepared.command, prepared.args, {
               shell: prepared.shell,
               ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-              env: process.env,
+              env: childEnv,
             }),
           );
           const [stdout, stderr, exitCode] = yield* Effect.all(

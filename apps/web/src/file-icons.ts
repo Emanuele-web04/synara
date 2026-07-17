@@ -8,9 +8,16 @@
 // Generic bracket glyph used whenever a file type has no dedicated Central icon.
 const DEFAULT_FILE_ICON = "code-brackets";
 
+// Lookup keys come from untrusted text (chat content, attachment names), so the
+// tables must be Maps: a plain-object lookup for `constructor` or `__proto__` walks
+// the prototype chain and returns an inherited member instead of an icon name.
+function createIconTable(entries: Record<string, string>): ReadonlyMap<string, string> {
+  return new Map(Object.entries(entries));
+}
+
 // Exact basename → Central icon name (case-insensitive lookup). Add entries here
 // when a well-known filename has a dedicated icon we want to surface.
-const FILE_ICON_BY_BASENAME: Record<string, string> = {
+const FILE_ICON_BY_BASENAME = createIconTable({
   "package.json": "npm",
   "package-lock.json": "npm",
   "npm-shrinkwrap.json": "npm",
@@ -51,12 +58,12 @@ const FILE_ICON_BY_BASENAME: Record<string, string> = {
   ".env.production": "settings-gear-1",
   ".env.test": "settings-gear-1",
   ".env.example": "settings-gear-1",
-};
+});
 
 // Extension → Central icon name. Longest extension wins because
 // `extensionCandidates` yields compound extensions first (e.g. `.d.ts` before
 // `.ts`). NOTE: the Python asset ships misspelled upstream as `phyton.svg`.
-const FILE_ICON_BY_EXTENSION: Record<string, string> = {
+const FILE_ICON_BY_EXTENSION = createIconTable({
   ts: "typescript",
   mts: "typescript",
   cts: "typescript",
@@ -149,7 +156,7 @@ const FILE_ICON_BY_EXTENSION: Record<string, string> = {
   ogg: "audio",
   m4a: "audio",
   aac: "audio",
-};
+});
 
 export function basenameOfPath(pathValue: string): string {
   const slashIndex = Math.max(pathValue.lastIndexOf("/"), pathValue.lastIndexOf("\\"));
@@ -162,10 +169,10 @@ export function basenameOfPath(pathValue: string): string {
 // assistant's `path/to/file.ts`) should render as a file mention chip.
 export function pathLooksLikeKnownFile(pathValue: string): boolean {
   const basename = basenameOfPath(pathValue).toLowerCase();
-  if (FILE_ICON_BY_BASENAME[basename]) {
+  if (FILE_ICON_BY_BASENAME.has(basename)) {
     return true;
   }
-  return extensionCandidates(basename).some((candidate) => FILE_ICON_BY_EXTENSION[candidate]);
+  return extensionCandidates(basename).some((candidate) => FILE_ICON_BY_EXTENSION.has(candidate));
 }
 
 export function inferEntryKindFromPath(pathValue: string): "file" | "directory" {
@@ -197,10 +204,10 @@ function extensionCandidates(fileName: string): string[] {
 // bracket glyph when the basename/extension has no dedicated icon.
 export function getFileIconName(pathValue: string): string {
   const basename = basenameOfPath(pathValue).toLowerCase();
-  const byName = FILE_ICON_BY_BASENAME[basename];
+  const byName = FILE_ICON_BY_BASENAME.get(basename);
   if (byName) return byName;
   for (const candidate of extensionCandidates(basename)) {
-    const byExt = FILE_ICON_BY_EXTENSION[candidate];
+    const byExt = FILE_ICON_BY_EXTENSION.get(candidate);
     if (byExt) return byExt;
   }
   return DEFAULT_FILE_ICON;
@@ -210,7 +217,7 @@ export function getFileIconName(pathValue: string): string {
 // filename has no recognizable extension (e.g. a download named only by its
 // Content-Type, like a UUID carrying a `text/calendar` body). Mirrors the
 // families covered by the extension map so the two stay visually consistent.
-const FILE_ICON_BY_MIME_TYPE: Record<string, string> = {
+const FILE_ICON_BY_MIME_TYPE = createIconTable({
   "application/pdf": "file-pdf",
   "application/json": "json",
   "application/xml": "code-brackets",
@@ -235,7 +242,7 @@ const FILE_ICON_BY_MIME_TYPE: Record<string, string> = {
   "text/markdown": "markdown",
   "text/html": "code-brackets",
   "text/xml": "code-brackets",
-};
+});
 
 // Attachments default to a neutral document glyph rather than the source-code
 // bracket: an arbitrary upload is far likelier to be a document than code.
@@ -250,16 +257,16 @@ export function getAttachmentIconName(attachment: {
   mimeType?: string | null | undefined;
 }): string {
   const basename = basenameOfPath(attachment.name).toLowerCase();
-  const byName = FILE_ICON_BY_BASENAME[basename];
+  const byName = FILE_ICON_BY_BASENAME.get(basename);
   if (byName) return byName;
   for (const candidate of extensionCandidates(basename)) {
-    const byExt = FILE_ICON_BY_EXTENSION[candidate];
+    const byExt = FILE_ICON_BY_EXTENSION.get(candidate);
     if (byExt) return byExt;
   }
 
   const mimeType = attachment.mimeType?.trim().toLowerCase() ?? "";
   if (mimeType.length > 0) {
-    const byMime = FILE_ICON_BY_MIME_TYPE[mimeType];
+    const byMime = FILE_ICON_BY_MIME_TYPE.get(mimeType);
     if (byMime) return byMime;
     const topLevelType = mimeType.split("/")[0];
     if (topLevelType === "image") return "image-alt-text";

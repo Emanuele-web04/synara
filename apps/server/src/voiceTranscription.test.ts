@@ -5,7 +5,8 @@
 // Depends on: voiceTranscription utility and mocked fetch responses.
 
 import type { ServerVoiceTranscriptionInput } from "@synara/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription";
 
@@ -20,28 +21,40 @@ const baseRequest: ServerVoiceTranscriptionInput = {
   audioBase64: WAV_BASE64,
 };
 
+function outboundJson(body: unknown, status = 200): OutboundHttpResponse {
+  return {
+    status,
+    headers: new Headers({ "content-type": "application/json" }),
+    body: new TextEncoder().encode(JSON.stringify(body)),
+    url: "https://chatgpt.com/backend-api/transcribe",
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("transcribeVoiceWithChatGptSession", () => {
   it("uses the ChatGPT transcription backend", async () => {
-    const fetchImpl = vi.fn(
-      async () => new Response(JSON.stringify({ text: "hello" }), { status: 200 }),
-    ) as unknown as typeof fetch;
+    const request = vi
+      .spyOn(outboundHttp, "request")
+      .mockResolvedValue(outboundJson({ text: "hello" }));
 
     await transcribeVoiceWithChatGptSession({
       request: baseRequest,
       resolveAuth: async () => ({ token: "chatgpt-token" }),
-      fetchImpl,
     });
 
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-    expect(url).toBe("https://chatgpt.com/backend-api/transcribe");
-    expect((init?.body as FormData).get("model")).toBeNull();
+    const outbound = request.mock.calls[0]?.[0];
+    expect(outbound?.url).toBe("https://chatgpt.com/backend-api/transcribe");
+    expect(new TextDecoder().decode(outbound?.body as Uint8Array)).not.toContain('name="model"');
   });
 
   it("refreshes the ChatGPT session once when the upload is unauthorized", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    const request = vi
+      .spyOn(outboundHttp, "request")
+      .mockResolvedValueOnce(outboundJson({}, 401))
+      .mockResolvedValueOnce(outboundJson({ text: "hello" }));
     const resolveAuth = vi.fn(async (refreshToken: boolean) => ({
       token: refreshToken ? "fresh-chatgpt-token" : "stale-chatgpt-token",
     }));
@@ -49,11 +62,22 @@ describe("transcribeVoiceWithChatGptSession", () => {
     await transcribeVoiceWithChatGptSession({
       request: baseRequest,
       resolveAuth,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(resolveAuth).toHaveBeenNthCalledWith(1, false);
     expect(resolveAuth).toHaveBeenNthCalledWith(2, true);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a provider-returned transcription origin before forwarding the token", async () => {
+    await expect(
+      transcribeVoiceWithChatGptSession({
+        request: baseRequest,
+        resolveAuth: async () => ({
+          token: "chatgpt-token",
+          transcriptionUrl: "https://attacker.example/transcribe",
+        }),
+      }),
+    ).rejects.toThrow(/not allowed/u);
   });
 });

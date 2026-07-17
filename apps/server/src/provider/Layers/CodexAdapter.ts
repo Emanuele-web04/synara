@@ -44,7 +44,7 @@ import {
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import {
   codexGeneratedImageArtifact,
   extractCodexGeneratedImageReference,
@@ -739,6 +739,9 @@ function runtimeEventBase(
     provider: event.provider,
     threadId: canonicalThreadId,
     createdAt: event.createdAt,
+    ...(event.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: event.lifecycleGeneration }
+      : {}),
     ...(event.turnId ? { turnId: event.turnId } : {}),
     ...(event.parentTurnId ? { parentTurnId: event.parentTurnId } : {}),
     ...(event.itemId ? { itemId: asRuntimeItemId(event.itemId) } : {}),
@@ -1628,14 +1631,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           })
         );
       }),
-      (manager) =>
-        Effect.sync(() => {
-          try {
-            manager.stopAll();
-          } catch {
-            // Finalizers should never fail and block shutdown.
-          }
-        }),
+      (manager) => Effect.promise(() => manager.stopAll()),
     );
 
     const startSession: CodexAdapterShape["startSession"] = (input) => {
@@ -1652,6 +1648,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
+        ...(input.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: input.lifecycleGeneration }
+          : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -1689,7 +1688,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               if (attachment.type !== "image") {
                 return null;
               }
-              const attachmentPath = resolveAttachmentPath({
+              const attachmentPath = resolveProviderAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,
               });
@@ -1767,7 +1766,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               if (attachment.type !== "image") {
                 return null;
               }
-              const attachmentPath = resolveAttachmentPath({
+              const attachmentPath = resolveProviderAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,
               });
@@ -1942,8 +1941,15 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       });
 
     const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-      Effect.sync(() => {
-        manager.stopSession(threadId);
+      Effect.tryPromise({
+        try: () => manager.stopSession(threadId),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId,
+            detail: toMessage(cause, "Failed to stop Codex adapter session."),
+            cause,
+          }),
       });
 
     const listSessions: CodexAdapterShape["listSessions"] = () =>
@@ -1953,8 +1959,15 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       Effect.sync(() => manager.hasSession(threadId));
 
     const stopAll: CodexAdapterShape["stopAll"] = () =>
-      Effect.sync(() => {
-        manager.stopAll();
+      Effect.tryPromise({
+        try: () => manager.stopAll(),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex:all"),
+            detail: toMessage(cause, "Failed to stop all Codex app-server processes."),
+            cause,
+          }),
       });
 
     const getComposerCapabilities: NonNullable<CodexAdapterShape["getComposerCapabilities"]> = () =>

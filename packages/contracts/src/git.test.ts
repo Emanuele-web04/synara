@@ -3,6 +3,7 @@ import { Schema } from "effect";
 
 import {
   GitCreateWorktreeInput,
+  GitHandoffThreadInput,
   GitPreparePullRequestThreadInput,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
@@ -10,6 +11,7 @@ import {
 } from "./git";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(GitCreateWorktreeInput);
+const decodeHandoffThreadInput = Schema.decodeUnknownSync(GitHandoffThreadInput);
 const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );
@@ -27,6 +29,28 @@ describe("GitCreateWorktreeInput", () => {
 
     expect(parsed.newBranch).toBeUndefined();
     expect(parsed.branch).toBe("feature/existing");
+  });
+});
+
+describe("GitHandoffThreadInput", () => {
+  it("carries durable orchestration identity with the Git handoff", () => {
+    const parsed = decodeHandoffThreadInput({
+      commandId: "command-handoff-1",
+      threadId: "thread-handoff-1",
+      cwd: "/repo",
+      targetMode: "worktree",
+      currentBranch: "main",
+      worktreePath: null,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      preferredLocalBranch: "main",
+      preferredWorktreeBaseBranch: "main",
+      preferredNewWorktreeName: "worktree/handoff",
+    });
+
+    expect(parsed.commandId).toBe("command-handoff-1");
+    expect(parsed.threadId).toBe("thread-handoff-1");
   });
 });
 
@@ -112,10 +136,11 @@ describe("GitSummarizeDiffInput", () => {
   it("accepts an optional codexHomePath for diff summaries", () => {
     const parsed = decodeSummarizeDiffInput({
       cwd: "/repo",
-      patch: "diff --git a/a b/a",
+      scope: "staged",
       codexHomePath: "/tmp/custom-codex-home",
     });
 
     expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
+    expect(parsed.scope).toBe("staged");
   });
 });

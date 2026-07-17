@@ -1,6 +1,24 @@
 import { assert, describe, it } from "vitest";
 
-import { getAttachmentIconName, getFileIconName, inferEntryKindFromPath } from "./file-icons";
+import {
+  getAttachmentIconName,
+  getFileIconName,
+  inferEntryKindFromPath,
+  pathLooksLikeKnownFile,
+} from "./file-icons";
+
+// Object.prototype member names, which lookup keys can collide with because they are
+// derived from untrusted text. Only `constructor` and `__proto__` survive the lowercased
+// basename (`toString` becomes `tostring` and misses by luck), so pin them all.
+const PROTOTYPE_MEMBER_TOKENS = [
+  "constructor",
+  "__proto__",
+  "toString",
+  "valueOf",
+  "hasOwnProperty",
+  "map.constructor",
+  "obj.__proto__",
+];
 
 describe("getFileIconName", () => {
   it("uses exact filename matches from the Central mapping", () => {
@@ -56,6 +74,25 @@ describe("getFileIconName", () => {
     assert.equal(inferEntryKindFromPath("C:\\repo\\.gitignore"), "file");
     assert.equal(inferEntryKindFromPath("scripts"), "directory");
   });
+
+  it("never resolves an inherited Object.prototype member as an icon name", () => {
+    for (const token of PROTOTYPE_MEMBER_TOKENS) {
+      assert.equal(getFileIconName(token), "code-brackets", token);
+    }
+  });
+});
+
+describe("pathLooksLikeKnownFile", () => {
+  it("does not mistake an Object.prototype member for a known file", () => {
+    for (const token of PROTOTYPE_MEMBER_TOKENS) {
+      assert.isFalse(pathLooksLikeKnownFile(token), `${token} must not look like a known file`);
+    }
+  });
+
+  it("still recognizes real files", () => {
+    assert.isTrue(pathLooksLikeKnownFile("src/index.ts"));
+    assert.isTrue(pathLooksLikeKnownFile("package.json"));
+  });
 });
 
 describe("getAttachmentIconName", () => {
@@ -83,6 +120,12 @@ describe("getAttachmentIconName", () => {
     assert.equal(getAttachmentIconName({ name: "clip", mimeType: "audio/x-wav" }), "audio");
     assert.equal(getAttachmentIconName({ name: "movie", mimeType: "video/quicktime" }), "video");
     assert.equal(getAttachmentIconName({ name: "notes", mimeType: "text/plain" }), "file-text");
+  });
+
+  it("never resolves an inherited Object.prototype member as an icon name", () => {
+    for (const token of PROTOTYPE_MEMBER_TOKENS) {
+      assert.equal(getAttachmentIconName({ name: token, mimeType: "" }), "file-text", token);
+    }
   });
 
   it("defaults to a document glyph rather than the source-code bracket", () => {

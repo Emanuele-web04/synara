@@ -3,6 +3,7 @@ import { Effect, FileSystem, Layer, Path, Random } from "effect";
 
 import packageJson from "../../../package.json" with { type: "json" };
 import { ServerConfig } from "../../config";
+import { writeFileStringAtomically } from "../../atomicWrite";
 import { ServerEnvironment, type ServerEnvironmentShape } from "../Services/ServerEnvironment";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel";
 
@@ -49,10 +50,10 @@ export const makeServerEnvironment = Effect.fn(function* () {
 
   const persistEnvironmentId = (value: string) =>
     Effect.gen(function* () {
-      yield* fileSystem.makeDirectory(path.dirname(serverConfig.environmentIdPath), {
-        recursive: true,
+      yield* writeFileStringAtomically({
+        filePath: serverConfig.environmentIdPath,
+        contents: `${value}\n`,
       });
-      yield* fileSystem.writeFileString(serverConfig.environmentIdPath, `${value}\n`);
     });
 
   const environmentIdRaw = yield* Effect.gen(function* () {

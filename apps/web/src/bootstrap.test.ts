@@ -13,9 +13,15 @@ describe("renderer bootstrap ordering", () => {
     expect(INDEX_SOURCE).toContain('<script type="module" src="/src/bootstrap.ts"></script>');
 
     const migrationImportIndex = BOOTSTRAP_SOURCE.indexOf('import "./storageOriginMigration";');
+    const signedOutBootstrapIndex = BOOTSTRAP_SOURCE.indexOf("bootstrapSignedOutScreen()");
+    const pairingBootstrapIndex = BOOTSTRAP_SOURCE.indexOf("bootstrapPairingSession()");
     const appImportIndex = BOOTSTRAP_SOURCE.indexOf('import("./main")');
     expect(migrationImportIndex).toBeGreaterThanOrEqual(0);
+    expect(signedOutBootstrapIndex).toBeGreaterThan(migrationImportIndex);
+    expect(pairingBootstrapIndex).toBeGreaterThan(migrationImportIndex);
+    expect(pairingBootstrapIndex).toBeGreaterThan(signedOutBootstrapIndex);
     expect(appImportIndex).toBeGreaterThan(migrationImportIndex);
+    expect(appImportIndex).toBeGreaterThan(pairingBootstrapIndex);
 
     expect(MAIN_SOURCE).not.toContain('import "./storageOriginMigration";');
   });

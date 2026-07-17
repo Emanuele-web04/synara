@@ -3641,9 +3641,11 @@ export default function Sidebar() {
       const threadSummary = sidebarThreadSummaryById[threadId];
       const isPinned = pinnedThreadIdSet.has(threadId);
       const hasPendingApprovals =
-        threadSummary?.hasPendingApprovals ?? derivePendingApprovals(thread.activities).length > 0;
+        threadSummary?.hasPendingApprovals ??
+        derivePendingApprovals(thread.activities, thread.pendingInteractions).length > 0;
       const hasPendingUserInput =
-        threadSummary?.hasPendingUserInput ?? derivePendingUserInputs(thread.activities).length > 0;
+        threadSummary?.hasPendingUserInput ??
+        derivePendingUserInputs(thread.activities, thread.pendingInteractions).length > 0;
       const canHandoff = canCreateThreadHandoff({
         thread,
         hasPendingApprovals,

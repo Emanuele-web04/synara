@@ -3,6 +3,7 @@ import type { OrchestrationEvent } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldApplyDeferredThreadShellSummary,
   shouldPublishThreadShellForEvent,
   shouldRefreshThreadShellSummary,
 } from "./threadShellEvents.ts";
@@ -78,9 +79,13 @@ describe("thread shell event relevance", () => {
   it("keeps events that update shell fields or summary state", () => {
     expect(shouldPublishThreadShellForEvent(activityEvent("approval.requested"))).toBe(true);
     expect(shouldRefreshThreadShellSummary(activityEvent("approval.requested"))).toBe(true);
+    expect(shouldApplyDeferredThreadShellSummary(activityEvent("approval.requested"))).toBe(false);
     expect(shouldPublishThreadShellForEvent(messageEvent({ role: "user", streaming: false }))).toBe(
       true,
     );
+    expect(
+      shouldApplyDeferredThreadShellSummary(messageEvent({ role: "user", streaming: false })),
+    ).toBe(true);
     expect(
       shouldPublishThreadShellForEvent(messageEvent({ role: "assistant", streaming: false })),
     ).toBe(true);

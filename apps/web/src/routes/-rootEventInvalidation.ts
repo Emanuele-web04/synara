@@ -100,9 +100,7 @@ export function resolveGitInvalidationCwdForThreadId(
   state: AppState,
   threadId: ThreadId,
 ): string | null {
-  const thread =
-    getThreadFromState(state, threadId) ??
-    state.threads.find((candidate) => candidate.id === threadId);
+  const thread = getThreadFromState(state, threadId);
   if (!thread) {
     return null;
   }

@@ -61,6 +61,24 @@ export function shouldRefreshThreadShellSummary(event: OrchestrationEvent): bool
   }
 }
 
+/**
+ * Events handled by the deferred shell-summary projector.
+ *
+ * Interaction counts are maintained atomically by the pending-interaction
+ * projector, which already owns the before/after settlement state. Keeping
+ * them out of the deferred projector avoids rescanning activity history.
+ */
+export function shouldApplyDeferredThreadShellSummary(event: OrchestrationEvent): boolean {
+  if (!shouldRefreshThreadShellSummary(event)) {
+    return false;
+  }
+  return (
+    event.type !== "thread.activity-appended" &&
+    event.type !== "thread.approval-response-requested" &&
+    event.type !== "thread.user-input-response-requested"
+  );
+}
+
 /** True only when an event can change the persisted thread shell sent to sidebar clients. */
 export function shouldPublishThreadShellForEvent(event: OrchestrationEvent): boolean {
   if (shouldApplyThreadsProjection(event) || OTHER_THREAD_SHELL_EVENT_TYPES.has(event.type)) {

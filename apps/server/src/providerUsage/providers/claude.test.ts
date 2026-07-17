@@ -8,6 +8,7 @@ import nodePath from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { outboundHttp } from "@synara/shared/outboundHttp";
 import { __resetClaudeUsageRateLimitState, claudeUsageFetcher } from "./claude";
 
 const NOW_MS = 1_780_000_000_000;
@@ -27,6 +28,24 @@ function rateLimitedResponse(retryAfterSeconds?: number): Response {
     headers["Retry-After"] = String(retryAfterSeconds);
   }
   return new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
+}
+
+function stubOutboundFetch(
+  fetchMock: (url: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): void {
+  vi.spyOn(outboundHttp, "request").mockImplementation(async (input) => {
+    const response = await fetchMock(input.url, {
+      ...(input.method === undefined ? {} : { method: input.method }),
+      headers: input.headers,
+      ...(input.body === undefined ? {} : { body: input.body }),
+    });
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: new Uint8Array(await response.arrayBuffer()),
+      url: String(input.url),
+    };
+  });
 }
 
 function makeClaudeHome(creds: Record<string, unknown>) {
@@ -59,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   __resetClaudeUsageRateLimitState();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -94,7 +114,7 @@ describe("claudeUsageFetcher", () => {
         five_hour: { utilization: 12, resets_at: "2026-06-09T12:00:00Z" },
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const snapshot = await claudeUsageFetcher.fetch({
       homeDir,
@@ -140,7 +160,7 @@ describe("claudeUsageFetcher", () => {
         seven_day: { utilization: 45, resets_at: "2026-06-15T12:00:00Z" },
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const snapshot = await claudeUsageFetcher.fetch({
       homeDir,
@@ -179,7 +199,7 @@ describe("claudeUsageFetcher", () => {
         five_hour: { utilization: 56, resets_at: "2026-06-09T12:00:00Z" },
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const snapshot = await claudeUsageFetcher.fetch({
       homeDir,
@@ -208,7 +228,7 @@ describe("claudeUsageFetcher", () => {
         ? rateLimitedResponse(120)
         : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } }),
     );
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
 
@@ -252,7 +272,7 @@ describe("claudeUsageFetcher", () => {
         ? rateLimitedResponse(120)
         : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
 
@@ -298,7 +318,7 @@ describe("claudeUsageFetcher", () => {
     });
 
     const fetchMock = vi.fn(async () => rateLimitedResponse());
-    vi.stubGlobal("fetch", fetchMock);
+    stubOutboundFetch(fetchMock);
 
     const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
     const snapshot = await claudeUsageFetcher.fetch(ctx);

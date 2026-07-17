@@ -12,7 +12,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
@@ -47,6 +47,8 @@ type ReactorInput =
       readonly source: "domain";
       readonly event: OrchestrationEvent;
     };
+
+const CHECKPOINT_REACTOR_CAPACITY = 256;
 
 function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
@@ -1097,7 +1099,6 @@ const make = Effect.gen(function* () {
     const restored = yield* checkpointStore.restoreCheckpoint({
       cwd: sessionRuntime.value.cwd,
       checkpointRef: targetCheckpointRef,
-      fallbackToHead: event.payload.turnCount === 0,
     });
     if (!restored) {
       yield* appendRevertFailureActivity({
@@ -1232,46 +1233,51 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
-
-  const start: CheckpointReactorShape["start"] = Effect.gen(function* () {
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.turn-start-requested" &&
-          event.type !== "thread.message-sent" &&
-          event.type !== "thread.checkpoint-revert-requested" &&
-          event.type !== "thread.turn-diff-completed"
-        ) {
-          return Effect.void;
-        }
-        return worker.enqueue({ source: "domain", event });
-      }),
-    );
-
-    yield* Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) => {
-        if (event.type === "turn.started" || event.type === "turn.completed") {
-          return worker.enqueue({ source: "runtime", event });
-        }
-        if (event.type === "item.completed" && event.payload.itemType === "file_change") {
-          return Effect.gen(function* () {
-            // Coalesce first (cheap) so bursts of edits collapse to one recompute.
-            if (liveDiffScheduledThreads.has(event.threadId)) {
-              return;
-            }
-            // Skip providers that stream their own live diff (handled elsewhere).
-            if (yield* supportsLiveTurnDiffPatch(event.provider)) {
-              return;
-            }
-            liveDiffScheduledThreads.add(event.threadId);
-            yield* worker.enqueue({ source: "runtime", event });
-          });
-        }
-        return Effect.void;
-      }),
-    );
+  const worker = yield* makeDrainableWorker(processInputSafely, {
+    capacity: CHECKPOINT_REACTOR_CAPACITY,
   });
+
+  const start: CheckpointReactorShape["start"] = startDrainableWorkerProducers(
+    worker,
+    Effect.gen(function* () {
+      yield* Effect.forkScoped(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (
+            event.type !== "thread.turn-start-requested" &&
+            event.type !== "thread.message-sent" &&
+            event.type !== "thread.checkpoint-revert-requested" &&
+            event.type !== "thread.turn-diff-completed"
+          ) {
+            return Effect.void;
+          }
+          return worker.enqueue({ source: "domain", event });
+        }),
+      );
+
+      yield* Effect.forkScoped(
+        Stream.runForEach(providerService.streamEvents, (event) => {
+          if (event.type === "turn.started" || event.type === "turn.completed") {
+            return worker.enqueue({ source: "runtime", event });
+          }
+          if (event.type === "item.completed" && event.payload.itemType === "file_change") {
+            return Effect.gen(function* () {
+              // Coalesce first (cheap) so bursts of edits collapse to one recompute.
+              if (liveDiffScheduledThreads.has(event.threadId)) {
+                return;
+              }
+              // Skip providers that stream their own live diff (handled elsewhere).
+              if (yield* supportsLiveTurnDiffPatch(event.provider)) {
+                return;
+              }
+              liveDiffScheduledThreads.add(event.threadId);
+              yield* worker.enqueue({ source: "runtime", event });
+            });
+          }
+          return Effect.void;
+        }),
+      );
+    }),
+  );
 
   return {
     start,
