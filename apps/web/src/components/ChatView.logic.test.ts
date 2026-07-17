@@ -1118,6 +1118,23 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
     ).toBe(false);
   });
 
+  // #103: Cursor CLI missing must not leave the whole model control in a permanent loading state.
+  it("does not keep the Cursor bootstrap skeleton after discovery is no longer loading", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "cursor",
+        selectedModel: "auto",
+        persistedModelSelection: {
+          provider: "cursor",
+          model: "auto",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: false,
+        requiresDiscoveredModels: true,
+      }),
+    ).toBe(false);
+  });
+
   it("prefers an explicit draft selection over persisted thread state", () => {
     expect(
       shouldShowComposerModelBootstrapSkeleton({

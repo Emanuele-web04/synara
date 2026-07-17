@@ -187,6 +187,20 @@ export function providerCommandsQueryOptions(input: {
   });
 }
 
+/**
+ * True only while the first real models fetch is still outstanding.
+ * Once discovery settles — with a catalog OR a failure (e.g. missing Cursor
+ * CLI, #103) — background refetches must not re-blank the composer picker,
+ * and a failed provider must not park the model control on a skeleton.
+ */
+export function isInitialModelDiscoveryPending(query: {
+  readonly isLoading: boolean;
+  readonly isFetching: boolean;
+  readonly isPlaceholderData: boolean;
+}): boolean {
+  return query.isLoading || (query.isFetching && query.isPlaceholderData);
+}
+
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
@@ -203,7 +217,7 @@ export function providerModelsQueryOptions(input: {
       input.agentDir ?? null,
       input.cwd ?? null,
     ),
-    queryFn: async () => {
+    queryFn: async (): Promise<ProviderListModelsResult> => {
       const api = ensureNativeApi();
       return api.provider.listModels({
         provider: input.provider,
@@ -214,7 +228,9 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    retry: input.provider === "droid" ? 0 : input.provider === "cursor" ? 1 : 3,
+    // Cursor/droid failures are permanent for a session (missing CLI/auth): fail
+    // fast so the picker settles to static options instead of spinning (#103).
+    retry: input.provider === "droid" || input.provider === "cursor" ? 0 : 3,
     staleTime: input.provider === "droid" ? 5 * 60_000 : 60_000,
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
