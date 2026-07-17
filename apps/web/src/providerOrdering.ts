@@ -4,18 +4,11 @@
 // Exports: default order, normalization, and order comparison helpers.
 
 import type { ProviderKind } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
-export const DEFAULT_PROVIDER_ORDER: readonly ProviderKind[] = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "antigravity",
-  "grok",
-  "droid",
-  "kilo",
-  "opencode",
-  "pi",
-];
+export const DEFAULT_PROVIDER_ORDER: readonly ProviderKind[] = PROVIDER_DESCRIPTORS.map(
+  (descriptor) => descriptor.kind,
+);
 
 const PROVIDER_KIND_SET: ReadonlySet<ProviderKind> = new Set(DEFAULT_PROVIDER_ORDER);
 

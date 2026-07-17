@@ -49,7 +49,7 @@ afterEach(() => {
   useStore.setState({
     projects: [],
     threadIds: [],
-    threads: [],
+    threadShellById: {},
   });
 });
 

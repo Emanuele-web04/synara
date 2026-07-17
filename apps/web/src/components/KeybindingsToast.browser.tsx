@@ -27,6 +27,7 @@ import {
   sendEffectRpcExit,
   type EffectRpcWebSocketClient,
 } from "../test/effectRpcWebSocketMock";
+import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 
 const THREAD_ID = "thread-kb-toast-test" as ThreadId;
@@ -40,29 +41,13 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: EffectRpcWebSocketClient | null = null;
+let serverConfigStreamClient: EffectRpcWebSocketClient | null = null;
 let serverConfigStreamRequestId: string | null = null;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createMinimalSnapshot(): OrchestrationReadModel {
@@ -167,6 +152,12 @@ function resolveWsRpc(tag: string): unknown {
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
   }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
@@ -193,8 +184,6 @@ function resolveWsRpc(tag: string): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    wsClient = client;
-    serverConfigStreamRequestId = null;
     client.addEventListener("message", (event) => {
       const rawData = event.data;
       if (typeof rawData !== "string") return;
@@ -214,6 +203,7 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerConfig) {
+        serverConfigStreamClient = client;
         serverConfigStreamRequestId = parsed.request.id;
         sendEffectRpcChunk(client, parsed.request.id, {
           type: "snapshot",
@@ -243,7 +233,9 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents
       ) {
         return;
       }
@@ -257,15 +249,15 @@ const worker = setupWorker(
 async function sendServerConfigUpdatedPush(
   issues: Array<{ kind: string; message: string }>,
 ): Promise<void> {
-  if (!wsClient) throw new Error("WebSocket client not connected");
   await vi.waitFor(
     () => {
       expect(serverConfigStreamRequestId).toBeTruthy();
+      expect(serverConfigStreamClient).toBeTruthy();
     },
     { timeout: 4_000, interval: 16 },
   );
-  if (!serverConfigStreamRequestId) return;
-  sendEffectRpcChunk(wsClient, serverConfigStreamRequestId, {
+  if (!serverConfigStreamRequestId || !serverConfigStreamClient) return;
+  sendEffectRpcChunk(serverConfigStreamClient, serverConfigStreamRequestId, {
     type: "configUpdated",
     payload: {
       issues,
@@ -277,28 +269,6 @@ async function sendServerConfigUpdatedPush(
 function queryToastTitles(): string[] {
   return Array.from(document.querySelectorAll('[data-slot="toast-title"]')).map(
     (el) => el.textContent ?? "",
-  );
-}
-
-async function waitForElement<T extends Element>(
-  query: () => T | null,
-  errorMessage: string,
-): Promise<T> {
-  let element: T | null = null;
-  await vi.waitFor(
-    () => {
-      element = query();
-      expect(element, errorMessage).toBeTruthy();
-    },
-    { timeout: 8_000, interval: 16 },
-  );
-  return element!;
-}
-
-async function waitForComposerEditor(): Promise<HTMLElement> {
-  return waitForElement(
-    () => document.querySelector<HTMLElement>('[data-testid="composer-editor"]'),
-    "App should render composer editor",
   );
 }
 
@@ -322,24 +292,32 @@ async function waitForNoToast(title: string): Promise<void> {
 }
 
 async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+  const host = createFullscreenTestHost();
 
   const router = getRouter(createMemoryHistory({ initialEntries: [`/${THREAD_ID}`] }));
 
   const screen = await render(<RouterProvider router={router} />, { container: host });
-  await waitForComposerEditor();
+  try {
+    await vi.waitFor(
+      () => {
+        expect(serverConfigStreamRequestId).toBeTruthy();
+        expect(serverConfigStreamClient).toBeTruthy();
+      },
+      { timeout: 20_000, interval: 16 },
+    );
+  } catch (cause) {
+    await screen.unmount();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
+  let cleanedUp = false;
 
   return {
     cleanup: async () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       await screen.unmount();
-      host.remove();
+      if (host.isConnected) host.remove();
     },
   };
 }
@@ -355,13 +333,15 @@ describe("Keybindings update toast", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
-  beforeEach(() => {
-    resetWsNativeApiForTest();
+  beforeEach(async () => {
+    await resetWsNativeApiForTest();
     localStorage.clear();
     document.body.innerHTML = "";
+    serverConfigStreamClient = null;
     serverConfigStreamRequestId = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
@@ -370,14 +350,24 @@ describe("Keybindings update toast", () => {
     });
     useStore.setState({
       projects: [],
-      threads: [],
+      threadIds: [],
+      threadShellById: {},
+      threadSessionById: {},
+      threadTurnStateById: {},
+      messageIdsByThreadId: {},
+      messageByThreadId: {},
+      activityIdsByThreadId: {},
+      activityByThreadId: {},
+      proposedPlanIdsByThreadId: {},
+      proposedPlanByThreadId: {},
+      turnDiffIdsByThreadId: {},
+      turnDiffSummaryByThreadId: {},
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
   });
 
   afterEach(() => {
-    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 

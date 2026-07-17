@@ -8,6 +8,7 @@ import {
   buildAntigravityHookConfig,
   antigravityPromptCommandLineIssue,
   hookScriptSource,
+  makeAntigravityRuntimeEventBase,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
   readCompleteAntigravityLines,
@@ -128,6 +129,23 @@ Claude Sonnet 5 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("propagates the owning lifecycle generation into runtime events", () => {
+    expect(
+      makeAntigravityRuntimeEventBase({
+        threadId: "thread-antigravity-lifecycle" as never,
+        lifecycleGeneration: "generation-1",
+        eventId: "event-1" as never,
+        createdAt: "2026-07-17T00:00:00.000Z",
+      }),
+    ).toMatchObject({
+      provider: "antigravity",
+      threadId: "thread-antigravity-lifecycle",
+      lifecycleGeneration: "generation-1",
+      eventId: "event-1",
+      createdAt: "2026-07-17T00:00:00.000Z",
+    });
+  });
+
   it("keeps the globally installed hook neutral outside Synara sessions", async () => {
     const result = await runAntigravityHelperProcess(
       process.execPath,

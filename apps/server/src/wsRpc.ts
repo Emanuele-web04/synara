@@ -5,31 +5,44 @@ import {
   DEFAULT_TERMINAL_ID,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
+  WS_BOOTSTRAP_METHOD,
+  WS_BOOTSTRAP_PATH,
+  WS_FEATURE_PATH,
   WS_METHODS,
+  WsBootstrapRpcGroup,
+  WsFeatureRpcGroup,
   WsRpcError,
-  WsRpcGroup,
   PullRequestsUnavailableError,
   type GitActionProgressEvent,
+  type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
   type OrchestrationShellStreamEvent,
+  type OrchestrationShellStreamItem,
+  type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
-import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
-import { ServerAuth } from "./auth/Services/ServerAuth";
+import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
+import {
+  ServerAuth,
+  type AuthError,
+  type AuthRequest,
+  type AuthenticatedSession,
+  type ServerAuthShape,
+} from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
-import { ServerConfig } from "./config";
+import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { listStudioThreadOutputs } from "./studioOutputs";
 import {
@@ -42,13 +55,26 @@ import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
+import {
+  beginGitHandoff,
+  completeGitHandoff,
+  discardPendingGitHandoff,
+  gitHandoffMetadataCommand,
+  recordGitHandoffResult,
+} from "./gitHandoffOperations";
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
+import {
+  attachmentPrincipalForSession,
+  CurrentManagedAttachmentPrincipal,
+  LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+} from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
+import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
@@ -63,17 +89,49 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
+import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
-import { shouldRejectUntrustedRequestOrigin } from "./trustedOrigins";
+import { makeWsStreamAdmission } from "./wsStreamAdmission";
+import { makeWsRequestAdmission } from "./wsRequestAdmission";
+import { negotiateWsCompatibility, validateWsFeatureCompatibility } from "./wsCompatibility";
+import {
+  requiresWebSocketAuthentication,
+  shouldRejectUntrustedRequestOrigin,
+} from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
+import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+
+class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
+  "synara/WsRequestAdmissionMiddleware",
+  { error: WsRpcError, requiredForClient: false },
+) {}
+
+const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.middleware(WsRequestAdmissionMiddleware);
+
+const wsRequestAdmissionMiddlewareLayer = Layer.effect(
+  WsRequestAdmissionMiddleware,
+  makeWsRequestAdmission.pipe(
+    Effect.map(
+      (admission) =>
+        ((effect, options) =>
+          RpcSchema.isStreamSchema(options.rpc.successSchema)
+            ? effect
+            : admission.guard(
+                options.clientId,
+                options.rpc._tag,
+                effect,
+              )) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>,
+    ),
+  ),
+);
 
 // Relative subdirectories scaffolded under a freshly created chat container workspace root.
 // The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
@@ -88,10 +146,6 @@ interface ProcessTableRow {
   readonly args: string;
 }
 
-function truncateDiagnosticText(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, Math.max(0, limit - 15))}... [truncated]` : value;
-}
-
 function redactProcessArgs(args: string): string {
   const redacted = args
     .replace(
@@ -100,7 +154,9 @@ function redactProcessArgs(args: string): string {
     )
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[redacted]");
-  return truncateDiagnosticText(redacted, MAX_DIAGNOSTIC_ARGS_CHARS);
+  return redacted.length > MAX_DIAGNOSTIC_ARGS_CHARS
+    ? `${redacted.slice(0, Math.max(0, MAX_DIAGNOSTIC_ARGS_CHARS - 15))}... [truncated]`
+    : redacted;
 }
 
 function parseProcessTable(output: string): ProcessTableRow[] {
@@ -180,69 +236,46 @@ const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
 // before the live-UI buffer so the sliding window only holds events that can
 // actually project to a shell update.
 function isShellRelevantEvent(event: OrchestrationEvent): boolean {
-  switch (event.type) {
-    case "space.created":
-    case "space.meta-updated":
-    case "space.order-updated":
-    case "space.deleted":
-    case "project.created":
-    case "project.meta-updated":
-    case "project.deleted":
-    case "thread.deleted":
-      return true;
-    default:
-      return event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event);
-  }
-}
-
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
-  OrchestrationEvent,
-  {
-    type:
-      | "thread.message-sent"
-      | "thread.proposed-plan-upserted"
-      | "thread.activity-appended"
-      | "thread.turn-diff-completed"
-      | "thread.reverted"
-      | "thread.conversation-rolled-back"
-      | "thread.session-set"
-      | "thread.meta-updated"
-      | "thread.pinned-message-added"
-      | "thread.pinned-message-removed"
-      | "thread.pinned-message-done-set"
-      | "thread.pinned-message-label-set"
-      | "thread.marker-added"
-      | "thread.marker-removed"
-      | "thread.marker-done-set"
-      | "thread.marker-label-set"
-      | "thread.archived"
-      | "thread.unarchived";
-  }
-> {
   return (
-    event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.activity-appended" ||
-    event.type === "thread.turn-diff-completed" ||
-    event.type === "thread.reverted" ||
-    event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set" ||
-    event.type === "thread.meta-updated" ||
-    event.type === "thread.pinned-message-added" ||
-    event.type === "thread.pinned-message-removed" ||
-    event.type === "thread.pinned-message-done-set" ||
-    event.type === "thread.pinned-message-label-set" ||
-    event.type === "thread.marker-added" ||
-    event.type === "thread.marker-removed" ||
-    event.type === "thread.marker-done-set" ||
-    event.type === "thread.marker-label-set" ||
-    event.type === "thread.archived" ||
-    event.type === "thread.unarchived"
+    event.type === "space.created" ||
+    event.type === "space.meta-updated" ||
+    event.type === "space.order-updated" ||
+    event.type === "space.deleted" ||
+    event.type === "project.created" ||
+    event.type === "project.meta-updated" ||
+    event.type === "project.deleted" ||
+    event.type === "thread.deleted" ||
+    (event.aggregateKind === "thread" && shouldPublishThreadShellForEvent(event))
   );
 }
 
-export const makeWsRpcLayer = () =>
-  WsRpcGroup.toLayer(
+function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
+  return (
+    event.aggregateKind === "thread" &&
+    event.aggregateId === threadId &&
+    (event.type === "thread.message-sent" ||
+      event.type === "thread.proposed-plan-upserted" ||
+      event.type === "thread.activity-appended" ||
+      event.type === "thread.turn-diff-completed" ||
+      event.type === "thread.reverted" ||
+      event.type === "thread.conversation-rolled-back" ||
+      event.type === "thread.session-set" ||
+      event.type === "thread.meta-updated" ||
+      event.type === "thread.pinned-message-added" ||
+      event.type === "thread.pinned-message-removed" ||
+      event.type === "thread.pinned-message-done-set" ||
+      event.type === "thread.pinned-message-label-set" ||
+      event.type === "thread.marker-added" ||
+      event.type === "thread.marker-removed" ||
+      event.type === "thread.marker-done-set" ||
+      event.type === "thread.marker-label-set" ||
+      event.type === "thread.archived" ||
+      event.type === "thread.unarchived")
+  );
+}
+
+const makeWsRpcHandlersLayer = () =>
+  AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
@@ -255,6 +288,7 @@ export const makeWsRpcLayer = () =>
       const keybindings = yield* Keybindings;
       const open = yield* Open;
       const orchestrationEngine = yield* OrchestrationEngineService;
+      const providerCommandReactor = yield* ProviderCommandReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
@@ -271,6 +305,7 @@ export const makeWsRpcLayer = () =>
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
+      const streamAdmission = yield* makeWsStreamAdmission;
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
         error instanceof GitHubCliError &&
@@ -401,6 +436,14 @@ export const makeWsRpcLayer = () =>
         providerService,
       });
 
+      const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
+        Effect.gen(function* () {
+          const attachmentPrincipal = yield* CurrentManagedAttachmentPrincipal;
+          return yield* runtimeStartup.enqueueCommand(
+            orchestrationEngine.dispatch(command, { attachmentPrincipal }),
+          );
+        });
+
       // Terminal-first threads are created with the generic "New terminal" placeholder.
       // The tracker buffers per-terminal input and, once a meaningful command is submitted,
       // surfaces a safe title used to auto-rename the thread on its first command.
@@ -439,9 +482,8 @@ export const makeWsRpcLayer = () =>
         pid: number;
         port: number;
       }) {
-        const localServerSnapshot = yield* Effect.promise(() => listLocalServers());
         const localServer =
-          localServerSnapshot.servers.find(
+          (yield* Effect.promise(() => listLocalServers())).servers.find(
             (server) => server.pid === input.pid && server.ports.includes(input.port),
           ) ?? null;
         const result = yield* Effect.promise(() => stopLocalServer(input, localServer));
@@ -477,8 +519,17 @@ export const makeWsRpcLayer = () =>
         };
       });
 
-      const refreshGitStatus = (cwd: string) =>
-        gitStatusBroadcaster.refreshStatus(cwd).pipe(Effect.catchCause(() => Effect.void));
+      const refreshGitStatusAfter = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
+          Effect.tap(() =>
+            gitStatusBroadcaster.refreshStatus(cwd).pipe(Effect.catchCause(() => Effect.void)),
+          ),
+        );
+      const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
+        Effect.mapError((cause) =>
+          toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
+        ),
+      );
 
       const toShellStreamEvent = (
         event: OrchestrationEvent,
@@ -557,23 +608,16 @@ export const makeWsRpcLayer = () =>
         }
       };
 
-      const isThreadDetailEventFor = (threadId: ThreadId, event: OrchestrationEvent) =>
-        event.aggregateKind === "thread" &&
-        event.aggregateId === threadId &&
-        isThreadDetailEvent(event);
-
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
-      return WsRpcGroup.of({
+      return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
               const { command: normalizedCommand, prepareWorkspaceRoot } =
                 yield* normalizeDispatchCommand({ command });
-              const result = yield* runtimeStartup.enqueueCommand(
-                orchestrationEngine.dispatch(normalizedCommand),
-              );
+              const result = yield* dispatchOrchestrationCommand(normalizedCommand);
               // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
               // AFTER the decider has accepted the command. A rejected dispatch (e.g. a
               // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
@@ -617,72 +661,161 @@ export const makeWsRpcLayer = () =>
             ).pipe(Effect.map((events) => Array.from(events))),
             "Failed to replay orchestration events",
           ),
-        [ORCHESTRATION_WS_METHODS.subscribeShell]: () =>
-          Stream.merge(
-            Stream.fromEffect(
-              projectionReadModelQuery.getShellSnapshot().pipe(
-                Effect.map((snapshot) => ({ kind: "snapshot" as const, snapshot })),
-                Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
+        [ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers]: (input) =>
+          rpcEffect(
+            providerCommandReactor.listBlockingDeliveries({
+              ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+              limit: input.limit ?? 50,
+            }),
+            "Failed to load provider delivery blockers",
+          ),
+        [ORCHESTRATION_WS_METHODS.reconcileProviderDelivery]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const principal = yield* CurrentManagedAttachmentPrincipal;
+              const result = yield* providerCommandReactor.reconcileDelivery({
+                eventSequence: input.eventSequence,
+                threadId: input.threadId,
+                expectedState: input.expectedState,
+                outcome: input.outcome,
+                reconciledBy: `${principal.ownerKind}:${principal.ownerId}`,
+                ...(input.note === undefined ? {} : { note: input.note }),
+              });
+              if (result === null) {
+                return yield* new WsRpcError({
+                  message:
+                    "Provider delivery no longer matches the requested thread and blocking state.",
+                  code: "PROVIDER_DELIVERY_RECONCILIATION_CONFLICT",
+                  retryable: false,
+                });
+              }
+              return result;
+            }),
+            "Failed to reconcile provider delivery",
+          ),
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "orchestration.shell" },
+            makeCursorSafeSnapshotLiveStream({
+              subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
+                Effect.map((stream) =>
+                  bufferLiveUiStream(stream.pipe(Stream.filter(isShellRelevantEvent)), {
+                    label: "orchestration.shell",
+                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                  }),
+                ),
               ),
-            ),
-            // Filter before buffering so the sliding window only evicts shell-relevant
-            // events; project after it so a stalled subscriber does not keep driving
-            // read-model queries for events it will never receive.
-            bufferLiveUiStream(
-              orchestrationEngine.streamDomainEvents.pipe(Stream.filter(isShellRelevantEvent)),
-              {
-                label: "orchestration.shell",
-                onDroppedEvents: failLiveUiStreamForSnapshotResync,
-              },
-            ).pipe(
-              Stream.mapEffect(toShellStreamEvent),
-              Stream.flatMap((event) =>
-                Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+              snapshot: projectionReadModelQuery
+                .getShellSnapshot()
+                .pipe(
+                  Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
+                ),
+              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+              getHighWaterSequence: getOrchestrationHighWaterSequence,
+              replay: (fromSequenceExclusive, throughSequenceInclusive) =>
+                orchestrationEngine
+                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .pipe(
+                    Stream.filter(isShellRelevantEvent),
+                    Stream.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to replay shell events"),
+                    ),
+                  ),
+            }).pipe(
+              Stream.mapEffect((item) =>
+                item.kind === "snapshot"
+                  ? Effect.succeed(
+                      Option.some<OrchestrationShellStreamItem>({
+                        kind: "snapshot",
+                        snapshot: item.snapshot,
+                      }),
+                    )
+                  : toShellStreamEvent(item.event),
+              ),
+              Stream.flatMap((item) =>
+                Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
               ),
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
-          Stream.merge(
-            Stream.fromEffect(
-              projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
-                Effect.map((snapshot) =>
-                  Option.map(snapshot, (value) => ({
-                    kind: "snapshot" as const,
-                    snapshot: value,
-                  })),
+        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            {
+              key: `orchestration.thread:${input.threadId}`,
+              threadId: input.threadId,
+            },
+            makeCursorSafeSnapshotLiveStream({
+              subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
+                Effect.map((stream) =>
+                  bufferLiveUiStream(
+                    stream.pipe(
+                      Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                    ),
+                    {
+                      label: "orchestration.thread-detail",
+                      onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                    },
+                  ),
+                ),
+              ),
+              snapshot: projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      projectionReadModelQuery.getSnapshotSequence().pipe(
+                        Effect.map(({ snapshotSequence }) => ({
+                          detail: Option.none<OrchestrationThreadDetailSnapshot>(),
+                          snapshotSequence,
+                        })),
+                      ),
+                    onSome: (detail) =>
+                      Effect.succeed({
+                        detail: Option.some(detail),
+                        snapshotSequence: detail.snapshotSequence,
+                      }),
+                  }),
                 ),
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
-            ).pipe(
-              Stream.flatMap((snapshot) =>
-                Option.isSome(snapshot) ? Stream.succeed(snapshot.value) : Stream.empty,
-              ),
-            ),
-            // Filter to this thread before buffering: otherwise a burst on another
-            // thread evicts this subscriber's own events from the sliding window.
-            bufferLiveUiStream(
-              orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
-              ),
-              {
-                label: "orchestration.thread-detail",
-                onDroppedEvents: failLiveUiStreamForSnapshotResync,
-              },
-            ).pipe(
-              Stream.map(
-                (event): OrchestrationThreadStreamItem => ({
-                  kind: "event",
-                  event,
-                }),
-              ),
+              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+              getHighWaterSequence: getOrchestrationHighWaterSequence,
+              replay: (fromSequenceExclusive, throughSequenceInclusive) =>
+                orchestrationEngine
+                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .pipe(
+                    Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
+                    Stream.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to replay thread events"),
+                    ),
+                  ),
+            }).pipe(
+              Stream.flatMap((item) => {
+                if (item.kind === "event") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "event",
+                    event: item.event,
+                  });
+                }
+                return Option.isSome(item.snapshot.detail)
+                  ? Stream.succeed<OrchestrationThreadStreamItem>({
+                      kind: "snapshot",
+                      snapshot: item.snapshot.detail.value,
+                    })
+                  : Stream.empty;
+              }),
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
-        [WS_METHODS.subscribeOrchestrationDomainEvents]: () =>
-          bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
-            label: "orchestration.domain-events",
-          }),
+        [WS_METHODS.subscribeOrchestrationDomainEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "orchestration.domain-events" },
+            bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
+              label: "orchestration.domain-events",
+            }),
+          ),
 
         [WS_METHODS.projectsListDirectories]: (input) =>
           rpcEffect(
@@ -710,22 +843,26 @@ export const makeWsRpcLayer = () =>
           rpcEffect(devServerManager.stop(input), "Failed to stop dev server"),
         [WS_METHODS.projectsListDevServers]: () =>
           rpcEffect(devServerManager.list, "Failed to list dev servers"),
-        [WS_METHODS.subscribeProjectDevServerEvents]: () =>
-          Stream.concat(
-            Stream.fromEffect(
-              devServerManager.list.pipe(
-                Effect.map(
-                  (result): ProjectDevServerEvent => ({
-                    type: "snapshot",
-                    servers: result.servers,
-                  }),
+        [WS_METHODS.subscribeProjectDevServerEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "projects.dev-servers" },
+            Stream.concat(
+              Stream.fromEffect(
+                devServerManager.list.pipe(
+                  Effect.map(
+                    (result): ProjectDevServerEvent => ({
+                      type: "snapshot",
+                      servers: result.servers,
+                    }),
+                  ),
                 ),
               ),
+              bufferLiveUiStream(devServerManager.stream, {
+                label: "projects.dev-servers",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }),
             ),
-            bufferLiveUiStream(devServerManager.stream, {
-              label: "projects.dev-servers",
-              onDroppedEvents: failLiveUiStreamForSnapshotResync,
-            }),
           ),
         [WS_METHODS.studioListThreadOutputs]: (input) =>
           rpcEffect(
@@ -789,27 +926,29 @@ export const makeWsRpcLayer = () =>
           rpcEffect(gitManager.summarizeDiff(input), "Failed to summarize diff"),
         [WS_METHODS.gitPull]: (input) =>
           rpcEffect(
-            git.pullCurrentBranch(input.cwd).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.pullCurrentBranch(input.cwd)),
+            ),
             "Failed to pull branch",
           ),
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              gitManager
-                .runStackedAction(input, {
+              refreshGitStatusAfter(
+                input.cwd,
+                gitManager.runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                })
-                .pipe(
-                  Effect.tap(() => refreshGitStatus(input.cwd)),
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) =>
-                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
-                  }),
-                ),
+                }),
+              ).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                }),
+              ),
             ),
             { label: "git.stacked-action" },
           ),
@@ -822,9 +961,7 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           rpcEffect(
-            gitManager
-              .preparePullRequestThread(input)
-              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(input.cwd, gitManager.preparePullRequestThread(input)),
             "Failed to prepare pull request thread",
           ),
         [WS_METHODS.pullRequestsList]: (input) =>
@@ -848,71 +985,117 @@ export const makeWsRpcLayer = () =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            git.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.createWorktree(input)),
+            ),
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
           rpcEffect(
-            git.createDetachedWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.createDetachedWorktree(input)),
+            ),
             "Failed to create detached worktree",
           ),
         [WS_METHODS.gitRemoveWorktree]: (input) =>
           rpcEffect(
-            git.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.removeWorktree(input)),
+            ),
             "Failed to remove worktree",
           ),
         [WS_METHODS.gitCreateBranch]: (input) =>
           rpcEffect(
-            git.createBranch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createBranch(input))),
             "Failed to create branch",
           ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(
-            Effect.scoped(git.checkoutBranch(input)).pipe(
-              Effect.tap(() => refreshGitStatus(input.cwd)),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, Effect.scoped(git.checkoutBranch(input))),
             ),
             "Failed to checkout branch",
           ),
         [WS_METHODS.gitStashAndCheckout]: (input) =>
           rpcEffect(
-            Effect.scoped(git.stashAndCheckout(input)).pipe(
-              Effect.tap(() => refreshGitStatus(input.cwd)),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, Effect.scoped(git.stashAndCheckout(input))),
             ),
             "Failed to stash and checkout",
           ),
         [WS_METHODS.gitStashDrop]: (input) =>
           rpcEffect(
-            git.stashDrop(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.stashDrop(input))),
             "Failed to drop stash",
           ),
         [WS_METHODS.gitStashInfo]: (input) =>
           rpcEffect(git.stashInfo(input), "Failed to read stash"),
         [WS_METHODS.gitRemoveIndexLock]: (input) =>
-          rpcEffect(git.removeIndexLock(input), "Failed to remove Git index lock"),
+          rpcEffect(
+            git.withMutation(input.cwd, git.removeIndexLock(input)),
+            "Failed to remove Git index lock",
+          ),
         [WS_METHODS.gitInit]: (input) =>
           rpcEffect(
-            git.initRepo(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.initRepo(input))),
             "Failed to initialize repository",
           ),
         [WS_METHODS.gitStageFiles]: (input) =>
           rpcEffect(
-            git.stageFiles(input.cwd, input.paths).pipe(
-              Effect.tap(() => refreshGitStatus(input.cwd)),
-              Effect.as({ ok: true }),
-            ),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.stageFiles(input.cwd, input.paths)),
+            ).pipe(Effect.as({ ok: true })),
             "Failed to stage files",
           ),
         [WS_METHODS.gitUnstageFiles]: (input) =>
           rpcEffect(
-            git.unstageFiles(input.cwd, input.paths).pipe(
-              Effect.tap(() => refreshGitStatus(input.cwd)),
-              Effect.as({ ok: true }),
-            ),
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(input.cwd, git.unstageFiles(input.cwd, input.paths)),
+            ).pipe(Effect.as({ ok: true })),
             "Failed to unstage files",
           ),
         [WS_METHODS.gitHandoffThread]: (input) =>
           rpcEffect(
-            gitManager.handoffThread(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            Effect.gen(function* () {
+              const { commandId, threadId, ...gitInput } = input;
+              const operation = yield* beginGitHandoff(input);
+              if (operation.phase === "pending" || operation.phase === "uncertain") {
+                return yield* new WsRpcError({
+                  message:
+                    operation.phase === "pending"
+                      ? "This Git handoff is already running."
+                      : "This Git handoff was interrupted before its filesystem result became durable; inspect the repository before retrying.",
+                });
+              }
+              if (operation.phase === "completed") return operation.result;
+
+              const result =
+                operation.phase === "git_applied"
+                  ? operation.result
+                  : yield* refreshGitStatusAfter(
+                      input.cwd,
+                      gitManager.handoffThread(gitInput).pipe(
+                        Effect.catch((error) =>
+                          discardPendingGitHandoff(commandId).pipe(
+                            Effect.catch(() => Effect.void),
+                            Effect.andThen(Effect.fail(error)),
+                          ),
+                        ),
+                      ),
+                    ).pipe(Effect.tap((gitResult) => recordGitHandoffResult(commandId, gitResult)));
+              yield* dispatchOrchestrationCommand(
+                gitHandoffMetadataCommand({ commandId, threadId }, result),
+              );
+              yield* completeGitHandoff(commandId);
+              return result;
+            }),
             "Failed to hand off thread",
           ),
 
@@ -956,16 +1139,20 @@ export const makeWsRpcLayer = () =>
             ),
             "Failed to close terminal",
           ),
-        [WS_METHODS.subscribeTerminalEvents]: () =>
+        [WS_METHODS.subscribeTerminalEvents]: (_, { clientId }) =>
           // Terminal output is an ordered byte stream with renderer ACK accounting.
           // Keep this lossless: dropping chunks would create holes until reattach.
-          Stream.callback((queue) =>
-            Effect.gen(function* () {
-              const unsubscribe = yield* terminalManager.subscribe((event) => {
-                Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
-              });
-              yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-            }),
+          streamAdmission.guard(
+            clientId,
+            { key: "terminal.events" },
+            Stream.callback((queue) =>
+              Effect.gen(function* () {
+                const unsubscribe = yield* terminalManager.subscribe((event) => {
+                  Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+                });
+                yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+              }),
+            ),
           ),
 
         [WS_METHODS.serverGetConfig]: () =>
@@ -973,9 +1160,9 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.serverGetEnvironment]: () =>
           rpcEffect(serverEnvironment.getDescriptor, "Failed to load server environment"),
         [WS_METHODS.serverGetSettings]: () =>
-          rpcEffect(serverSettings.getSettings, "Failed to load server settings"),
+          rpcEffect(serverSettings.getSettingsView, "Failed to load server settings"),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettings(input), "Failed to update server settings"),
+          rpcEffect(serverSettings.updateSettingsView(input), "Failed to update server settings"),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
@@ -1008,7 +1195,6 @@ export const makeWsRpcLayer = () =>
                 projectionReadModelQuery.getCounts(),
                 Effect.promise(() => readDescendantProcesses(process.pid)),
               ]);
-              const childProcesses = fullChildProcesses.slice(0, MAX_DIAGNOSTIC_CHILD_PROCESSES);
               const memory = process.memoryUsage();
               const diagnostics: ServerDiagnosticsResult = {
                 generatedAt: new Date().toISOString(),
@@ -1023,7 +1209,7 @@ export const makeWsRpcLayer = () =>
                     arrayBuffersBytes: Math.max(0, Math.round(memory.arrayBuffers)),
                   },
                 },
-                childProcesses,
+                childProcesses: fullChildProcesses.slice(0, MAX_DIAGNOSTIC_CHILD_PROCESSES),
                 childProcessTotalCount: fullChildProcesses.length,
                 childProcessTotalRssBytes: fullChildProcesses.reduce(
                   (total, processRow) => total + processRow.rssBytes,
@@ -1099,92 +1285,113 @@ export const makeWsRpcLayer = () =>
               ),
             "Failed to update keybinding",
           ),
-        [WS_METHODS.subscribeServerLifecycle]: () =>
-          Stream.concat(
-            Stream.fromEffect(
-              lifecycleEvents.snapshot.pipe(
-                Effect.map((snapshot) =>
-                  Array.from(snapshot.events).toSorted(
-                    (left, right) => left.sequence - right.sequence,
+        [WS_METHODS.subscribeServerLifecycle]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.lifecycle" },
+            Stream.concat(
+              Stream.fromEffect(
+                lifecycleEvents.snapshot.pipe(
+                  Effect.map((snapshot) =>
+                    Array.from(snapshot.events).toSorted(
+                      (left, right) => left.sequence - right.sequence,
+                    ),
+                  ),
+                ),
+              ).pipe(Stream.flatMap(Stream.fromIterable)),
+              bufferLiveUiStream(lifecycleEvents.stream, {
+                label: "server.lifecycle",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }),
+            ).pipe(
+              Stream.map(
+                (event): ServerLifecycleStreamEvent =>
+                  event.type === "welcome"
+                    ? { type: "welcome", payload: event.payload }
+                    : event.type === "ready"
+                      ? { type: "ready", payload: event.payload }
+                      : { type: "maintenance", payload: event.payload },
+              ),
+            ),
+          ),
+        [WS_METHODS.subscribeServerConfig]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.config" },
+            Stream.concat(
+              Stream.fromEffect(
+                loadServerConfig.pipe(
+                  Effect.map(
+                    (config): ServerConfigStreamEvent => ({
+                      type: "snapshot" as const,
+                      config,
+                    }),
                   ),
                 ),
               ),
-            ).pipe(Stream.flatMap(Stream.fromIterable)),
-            bufferLiveUiStream(lifecycleEvents.stream, {
-              label: "server.lifecycle",
-              onDroppedEvents: failLiveUiStreamForSnapshotResync,
-            }),
-          ).pipe(
-            Stream.map(
-              (event): ServerLifecycleStreamEvent =>
-                event.type === "welcome"
-                  ? { type: "welcome", payload: event.payload }
-                  : event.type === "ready"
-                    ? { type: "ready", payload: event.payload }
-                    : { type: "maintenance", payload: event.payload },
-            ),
-          ),
-        [WS_METHODS.subscribeServerConfig]: () =>
-          Stream.concat(
-            Stream.fromEffect(
-              loadServerConfig.pipe(
-                Effect.map(
-                  (config): ServerConfigStreamEvent => ({ type: "snapshot" as const, config }),
-                ),
-              ),
-            ),
-            Stream.merge(
-              bufferLiveUiStream(keybindings.streamChanges, {
-                label: "server.keybindings",
-                onDroppedEvents: failLiveUiStreamForSnapshotResync,
-              }).pipe(
-                Stream.map((event) => ({
-                  type: "configUpdated" as const,
-                  payload: { issues: event.issues, providers: [] },
-                })),
-              ),
               Stream.merge(
-                bufferLiveUiStream(providerHealth.streamChanges, {
-                  label: "server.provider-statuses",
+                bufferLiveUiStream(keybindings.streamChanges, {
+                  label: "server.keybindings",
                   onDroppedEvents: failLiveUiStreamForSnapshotResync,
                 }).pipe(
-                  Stream.map((providers) => ({
-                    type: "providerStatuses" as const,
-                    payload: { providers },
+                  Stream.map((event) => ({
+                    type: "configUpdated" as const,
+                    payload: { issues: event.issues, providers: [] },
                   })),
                 ),
-                bufferLiveUiStream(serverSettings.streamChanges, {
-                  label: "server.settings",
-                  onDroppedEvents: failLiveUiStreamForSnapshotResync,
-                }).pipe(
-                  Stream.map((settings) => ({
-                    type: "settingsUpdated" as const,
-                    payload: { settings },
-                  })),
+                Stream.merge(
+                  bufferLiveUiStream(providerHealth.streamChanges, {
+                    label: "server.provider-statuses",
+                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                  }).pipe(
+                    Stream.map((providers) => ({
+                      type: "providerStatuses" as const,
+                      payload: { providers },
+                    })),
+                  ),
+                  bufferLiveUiStream(serverSettings.streamViews, {
+                    label: "server.settings",
+                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                  }).pipe(
+                    Stream.map((settings) => ({
+                      type: "settingsUpdated" as const,
+                      payload: { settings },
+                    })),
+                  ),
                 ),
               ),
-            ),
-          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed"))),
-        [WS_METHODS.subscribeServerProviderStatuses]: () =>
-          Stream.concat(
-            Stream.fromEffect(
-              providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
-            ),
-            bufferLiveUiStream(providerHealth.streamChanges, {
-              label: "server.provider-statuses",
-              onDroppedEvents: failLiveUiStreamForSnapshotResync,
-            }).pipe(Stream.map((providers) => ({ providers }))),
+            ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server config stream failed"))),
           ),
-        [WS_METHODS.subscribeServerSettings]: () =>
-          Stream.concat(
-            Stream.fromEffect(
-              serverSettings.getSettings.pipe(Effect.map((settings) => ({ settings }))),
+        [WS_METHODS.subscribeServerProviderStatuses]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.provider-statuses" },
+            Stream.concat(
+              Stream.fromEffect(
+                providerHealth.getStatuses.pipe(Effect.map((providers) => ({ providers }))),
+              ),
+              bufferLiveUiStream(providerHealth.streamChanges, {
+                label: "server.provider-statuses",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((providers) => ({ providers }))),
             ),
-            bufferLiveUiStream(serverSettings.streamChanges, {
-              label: "server.settings",
-              onDroppedEvents: failLiveUiStreamForSnapshotResync,
-            }).pipe(Stream.map((settings) => ({ settings }))),
-          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed"))),
+          ),
+        [WS_METHODS.subscribeServerSettings]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.settings" },
+            Stream.concat(
+              Stream.fromEffect(
+                serverSettings.getSettingsView.pipe(Effect.map((settings) => ({ settings }))),
+              ),
+              bufferLiveUiStream(serverSettings.streamViews, {
+                label: "server.settings",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((settings) => ({ settings }))),
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
 
         [WS_METHODS.providerGetComposerCapabilities]: (input) =>
           rpcEffect(
@@ -1238,24 +1445,33 @@ export const makeWsRpcLayer = () =>
           rpcEffect(automationService.markRunRead(input), "Failed to update automation run"),
         [WS_METHODS.automationArchiveRun]: (input) =>
           rpcEffect(automationService.archiveRun(input), "Failed to update automation run"),
-        [WS_METHODS.subscribeAutomationEvents]: () =>
-          Stream.merge(
-            Stream.fromEffect(
-              automationService.list({}).pipe(
-                Effect.map(({ definitions, runs }) => ({
-                  type: "snapshot" as const,
-                  definitions,
-                  runs,
-                })),
+        [WS_METHODS.subscribeAutomationEvents]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "automation.events" },
+            Stream.merge(
+              Stream.fromEffect(
+                automationService.list({}).pipe(
+                  Effect.map(({ definitions, runs }) => ({
+                    type: "snapshot" as const,
+                    definitions,
+                    runs,
+                  })),
+                ),
               ),
+              automationService.streamEvents,
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
-            automationService.streamEvents,
-          ).pipe(Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed"))),
+          ),
       });
     }),
   );
 
-const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
+export const makeWsRpcLayer = () =>
+  Layer.merge(makeWsRpcHandlersLayer(), wsRequestAdmissionMiddlewareLayer);
+
+const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {
   spanPrefix: "ws.rpc",
   spanAttributes: {
     "rpc.transport": "websocket",
@@ -1266,45 +1482,171 @@ const makeRpcWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
   // desktop/dev setup routinely runs server and web on independently-built copies.
 }).pipe(Effect.provide(makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson))));
 
-export const websocketRpcRouteLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const rpcWebSocketHttpEffect = yield* makeRpcWebSocketHttpEffect;
-    const router = yield* HttpRouter.HttpRouter;
-    yield* router.add(
-      "GET",
-      "/ws",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const config = yield* ServerConfig;
-        const serverAuth = yield* ServerAuth;
-        const sessions = yield* SessionCredentialService;
-        const url = HttpServerRequest.toURL(request);
-        if (
-          !url ||
-          shouldRejectUntrustedRequestOrigin({
-            rawOrigin: request.headers.origin,
-            requestOrigin: url.origin,
+const makeBootstrapWebSocketHttpEffect = RpcServer.toHttpEffectWebsocket(WsBootstrapRpcGroup, {
+  spanPrefix: "ws.bootstrap",
+  spanAttributes: {
+    "rpc.transport": "websocket",
+    "rpc.system": "effect-rpc",
+  },
+}).pipe(
+  Effect.provide(
+    WsBootstrapRpcGroup.toLayer(
+      Effect.succeed(
+        WsBootstrapRpcGroup.of({
+          [WS_BOOTSTRAP_METHOD]: negotiateWsCompatibility,
+        }),
+      ),
+    ).pipe(Layer.provideMerge(RpcSerialization.layerJson)),
+  ),
+);
+
+function trustedWebSocketRequestUrl(
+  request: HttpServerRequest.HttpServerRequest,
+  config: ServerConfigShape,
+): URL | null {
+  const url = HttpServerRequest.toURL(request);
+  return url &&
+    !shouldRejectUntrustedRequestOrigin({
+      rawOrigin: request.headers.origin,
+      requestOrigin: url.origin,
+      config,
+    })
+    ? url
+    : null;
+}
+
+export function authenticateRpcWebSocketUpgrade(input: {
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly legacyToken: string | null;
+  readonly request: AuthRequest;
+  readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
+}): Effect.Effect<AuthenticatedSession | null, AuthError> {
+  if (
+    !requiresWebSocketAuthentication(input.config) ||
+    (isLoopbackHost(input.config.host) &&
+      !input.config.publicUrl &&
+      input.legacyToken === input.config.authToken)
+  ) {
+    return Effect.succeed(null);
+  }
+  return input.serverAuth.authenticateWebSocketUpgrade(input.request);
+}
+
+export function makeWebsocketRpcRouteLayer<R>(
+  rpcWebSocketHttpEffectSource: Effect.Effect<
+    Effect.Effect<
+      HttpServerResponse.HttpServerResponse,
+      never,
+      HttpServerRequest.HttpServerRequest | Scope.Scope
+    >,
+    never,
+    R
+  >,
+) {
+  return Layer.effectDiscard(
+    Effect.gen(function* () {
+      const rpcWebSocketHttpEffect = yield* rpcWebSocketHttpEffectSource;
+      const router = yield* HttpRouter.HttpRouter;
+      yield* router.add(
+        "GET",
+        WS_FEATURE_PATH,
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const config = yield* ServerConfig;
+          const serverAuth = yield* ServerAuth;
+          const sessions = yield* SessionCredentialService;
+          const url = trustedWebSocketRequestUrl(request, config);
+          if (!url) {
+            return HttpServerResponse.text("Forbidden", { status: 403 });
+          }
+          const compatibilityError = validateWsFeatureCompatibility(url.searchParams);
+          if (compatibilityError) {
+            return HttpServerResponse.jsonUnsafe(compatibilityError, {
+              status: 426,
+              headers: { "Cache-Control": "no-store" },
+            });
+          }
+          const legacyToken = url.searchParams.get("token");
+          const authenticatedSession = yield* authenticateRpcWebSocketUpgrade({
             config,
-          })
-        ) {
-          return HttpServerResponse.text("Forbidden", { status: 403 });
-        }
-        const legacyToken = url.searchParams.get("token");
-        const authenticatedSession =
-          !config.authToken || legacyToken === config.authToken
-            ? null
-            : yield* serverAuth.authenticateWebSocketUpgrade(makeEffectAuthRequest(request));
+            legacyToken,
+            request: makeEffectAuthRequest(request),
+            serverAuth,
+          });
 
-        if (!authenticatedSession) {
-          return yield* rpcWebSocketHttpEffect;
-        }
+          if (!authenticatedSession) {
+            return yield* rpcWebSocketHttpEffect.pipe(
+              Effect.provideService(
+                CurrentManagedAttachmentPrincipal,
+                LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+              ),
+            );
+          }
 
-        return yield* Effect.acquireUseRelease(
-          sessions.markConnected(authenticatedSession.sessionId),
-          () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(authenticatedSession.sessionId),
-        );
-      }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
-    );
-  }),
+          return yield* sessions.runAuthenticatedConnection(
+            authenticatedSession.sessionId,
+            rpcWebSocketHttpEffect.pipe(
+              Effect.provideService(
+                CurrentManagedAttachmentPrincipal,
+                attachmentPrincipalForSession(authenticatedSession.sessionId),
+              ),
+            ),
+          );
+        }).pipe(
+          Effect.catchTags({
+            AuthError: (error) => Effect.succeed(authErrorResponse(error)),
+            SessionCapacityError: (error) =>
+              Effect.succeed(
+                HttpServerResponse.text(error.message, {
+                  status: 429,
+                  headers: {
+                    "Cache-Control": "no-store",
+                    "Retry-After": String(error.retryAfterSeconds),
+                  },
+                }),
+              ),
+            SessionCredentialError: (error) =>
+              Effect.succeed(HttpServerResponse.text(error.message, { status: 401 })),
+          }),
+        ),
+      );
+    }),
+  );
+}
+
+function makeWebsocketBootstrapRouteLayer<R>(
+  bootstrapWebSocketHttpEffectSource: Effect.Effect<
+    Effect.Effect<
+      HttpServerResponse.HttpServerResponse,
+      never,
+      HttpServerRequest.HttpServerRequest | Scope.Scope
+    >,
+    never,
+    R
+  >,
+) {
+  return Layer.effectDiscard(
+    Effect.gen(function* () {
+      const bootstrapWebSocketHttpEffect = yield* bootstrapWebSocketHttpEffectSource;
+      const router = yield* HttpRouter.HttpRouter;
+      yield* router.add(
+        "GET",
+        WS_BOOTSTRAP_PATH,
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const config = yield* ServerConfig;
+          const url = trustedWebSocketRequestUrl(request, config);
+          if (!url) {
+            return HttpServerResponse.text("Forbidden", { status: 403 });
+          }
+          return yield* bootstrapWebSocketHttpEffect;
+        }),
+      );
+    }),
+  );
+}
+
+export const websocketRpcRouteLayer = Layer.merge(
+  makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
+  makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect),
 );

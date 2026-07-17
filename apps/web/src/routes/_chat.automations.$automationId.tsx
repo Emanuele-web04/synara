@@ -50,6 +50,7 @@ import {
 } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { createAllThreadsSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationApprovalBanner,
@@ -85,6 +86,8 @@ import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 export const Route = createFileRoute("/_chat/automations/$automationId")({
   component: AutomationDetailView,
 });
+
+const selectAllThreads = createAllThreadsSelector();
 
 function lastFinishedRun(runs: readonly AutomationRun[]): AutomationRun | null {
   return runs.find((run) => run.finishedAt != null || run.startedAt != null) ?? null;
@@ -169,7 +172,7 @@ function AutomationDetailView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
-  const threads = useStore((state) => state.threads);
+  const threads = useStore(selectAllThreads);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<AutomationFormState | null>(null);
   const [dialogWarnings, setDialogWarnings] = useState<readonly AutomationDraftWarning[]>([]);

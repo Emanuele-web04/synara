@@ -24,6 +24,10 @@ export interface PendingThreadRequestIds {
 
 export type PendingThreadRequestKind = "approval" | "user-input";
 
+export function pendingRequestInstanceKey(requestId: string, lifecycleGeneration?: string): string {
+  return `${requestId}\u0000${lifecycleGeneration ?? "legacy"}`;
+}
+
 function maxIso(left: string | null, right: string): string {
   if (left === null) {
     return right;
@@ -79,6 +83,36 @@ function isStalePendingRequestFailureDetail(detail: string | undefined): boolean
     normalized.includes("stale pending user input request") ||
     normalized.includes("unknown pending user input request")
   );
+}
+
+function lifecycleGenerationFromPayload(
+  payload: Record<string, unknown> | null,
+): string | undefined {
+  const generation = payload?.lifecycleGeneration;
+  return typeof generation === "string" && generation.length > 0 ? generation : undefined;
+}
+
+function deleteOpenRequest(
+  openRequests: Map<string, string>,
+  requestId: string,
+  lifecycleGeneration: string | undefined,
+): void {
+  if (lifecycleGeneration !== undefined) {
+    openRequests.delete(pendingRequestInstanceKey(requestId, lifecycleGeneration));
+    return;
+  }
+  for (const [key, openRequestId] of openRequests) {
+    if (openRequestId === requestId) openRequests.delete(key);
+  }
+}
+
+function replaceOpenRequest(
+  openRequests: Map<string, string>,
+  requestId: string,
+  lifecycleGeneration: string | undefined,
+): void {
+  deleteOpenRequest(openRequests, requestId, undefined);
+  openRequests.set(pendingRequestInstanceKey(requestId, lifecycleGeneration), requestId);
 }
 
 export function buildStalePendingRequestFailureDetail(
@@ -152,13 +186,14 @@ export function derivePendingThreadRequestIds(input: {
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
   >;
 }): PendingThreadRequestIds {
-  const openApprovals = new Map<string, true>();
-  const openUserInputs = new Map<string, true>();
+  const openApprovals = new Map<string, string>();
+  const openUserInputs = new Map<string, string>();
   const orderedActivities = [...input.activities].toSorted(compareActivitiesByOrder);
   for (const activity of orderedActivities) {
     const payload = toPayloadRecord(activity.payload);
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
+    const lifecycleGeneration = lifecycleGenerationFromPayload(payload);
 
     if (activity.kind === "approval.requested" && requestId) {
       const requestKind =
@@ -168,13 +203,13 @@ export function derivePendingThreadRequestIds(input: {
           ? payload.requestKind
           : requestKindFromRequestType(payload?.requestType);
       if (requestKind) {
-        openApprovals.set(requestId, true);
+        replaceOpenRequest(openApprovals, requestId, lifecycleGeneration);
       }
       continue;
     }
 
     if (activity.kind === "approval.resolved" && requestId) {
-      openApprovals.delete(requestId);
+      deleteOpenRequest(openApprovals, requestId, lifecycleGeneration);
       continue;
     }
 
@@ -183,19 +218,19 @@ export function derivePendingThreadRequestIds(input: {
       requestId &&
       isStalePendingRequestFailureDetail(detail)
     ) {
-      openApprovals.delete(requestId);
+      deleteOpenRequest(openApprovals, requestId, lifecycleGeneration);
       continue;
     }
 
     if (activity.kind === "user-input.requested" && requestId) {
       if (hasStructuredUserInputQuestions(payload)) {
-        openUserInputs.set(requestId, true);
+        replaceOpenRequest(openUserInputs, requestId, lifecycleGeneration);
       }
       continue;
     }
 
     if (activity.kind === "user-input.resolved" && requestId) {
-      openUserInputs.delete(requestId);
+      deleteOpenRequest(openUserInputs, requestId, lifecycleGeneration);
       continue;
     }
 
@@ -204,13 +239,13 @@ export function derivePendingThreadRequestIds(input: {
       requestId &&
       isStalePendingRequestFailureDetail(detail)
     ) {
-      openUserInputs.delete(requestId);
+      deleteOpenRequest(openUserInputs, requestId, lifecycleGeneration);
     }
   }
 
   return {
-    approvalRequestIds: [...openApprovals.keys()],
-    userInputRequestIds: [...openUserInputs.keys()],
+    approvalRequestIds: [...openApprovals.values()],
+    userInputRequestIds: [...openUserInputs.values()],
   };
 }
 

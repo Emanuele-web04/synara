@@ -126,18 +126,29 @@ describe("root event invalidation", () => {
     const projectId = ProjectId.makeUnsafe("project-1");
     const localThreadId = ThreadId.makeUnsafe("thread-local");
     const worktreeThreadId = ThreadId.makeUnsafe("thread-worktree");
-    const state = {
-      projects: [{ id: projectId, cwd: "/repo/main" }],
-      threads: [
-        makeThread({ id: localThreadId, projectId, envMode: "local", worktreePath: null }),
-        makeThread({
-          id: worktreeThreadId,
-          projectId,
-          envMode: "worktree",
-          worktreePath: "/repo/worktree",
-        }),
-      ],
-    } as AppState;
+    const localThread = makeThread({
+      id: localThreadId,
+      projectId,
+      envMode: "local",
+      worktreePath: null,
+    });
+    const worktreeThread = makeThread({
+      id: worktreeThreadId,
+      projectId,
+      envMode: "worktree",
+      worktreePath: "/repo/worktree",
+    });
+    const state: AppState = {
+      spaces: [],
+      projects: [{ id: projectId, cwd: "/repo/main" }] as AppState["projects"],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+      threadIds: [localThreadId, worktreeThreadId],
+      threadShellById: {
+        [localThreadId]: localThread,
+        [worktreeThreadId]: worktreeThread,
+      },
+    };
 
     expect(resolveGitInvalidationCwdForThreadId(state, localThreadId)).toBe("/repo/main");
     expect(resolveGitInvalidationCwdForThreadId(state, worktreeThreadId)).toBe("/repo/worktree");

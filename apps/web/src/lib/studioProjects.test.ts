@@ -96,9 +96,9 @@ describe("studioProjects", () => {
     useStore.setState({
       spaces: [],
       projects: [],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadIds: [],
+      threadShellById: {},
       threadsHydrated: true,
     });
   });

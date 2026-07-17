@@ -4,6 +4,7 @@ import type {
   AuthBootstrapResult,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
+  AuthLogoutResult,
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthRevokeClientSessionInput,
@@ -151,6 +152,10 @@ import type {
   OrchestrationGetFullThreadDiffResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
+  OrchestrationListProviderDeliveryBlockersInput,
+  OrchestrationListProviderDeliveryBlockersResult,
+  OrchestrationReconcileProviderDeliveryInput,
+  OrchestrationReconcileProviderDeliveryResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
@@ -606,6 +611,7 @@ export interface NativeApi {
     listAuthClients: () => Promise<ReadonlyArray<AuthClientSession>>;
     revokeAuthClient: (input: AuthRevokeClientSessionInput) => Promise<{ revoked: boolean }>;
     revokeOtherAuthClients: () => Promise<{ revokedCount: number }>;
+    logoutAuthSession: () => Promise<AuthLogoutResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -661,6 +667,12 @@ export interface NativeApi {
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
+    listProviderDeliveryBlockers: (
+      input?: OrchestrationListProviderDeliveryBlockersInput,
+    ) => Promise<OrchestrationListProviderDeliveryBlockersResult>;
+    reconcileProviderDelivery: (
+      input: OrchestrationReconcileProviderDeliveryInput,
+    ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;

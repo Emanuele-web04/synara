@@ -54,6 +54,11 @@ describe("EventNdjsonLogger", () => {
         const threadTwoPath = path.join(tempDir, "thread-2.log");
         assert.equal(fs.existsSync(threadOnePath), true);
         assert.equal(fs.existsSync(threadTwoPath), true);
+        if (process.platform !== "win32") {
+          assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
+          assert.equal(fs.statSync(threadOnePath).mode & 0o777, 0o600);
+          assert.equal(fs.statSync(threadTwoPath).mode & 0o777, 0o600);
+        }
 
         const first = parseLogLine(fs.readFileSync(threadOnePath, "utf8").trim());
         const second = parseLogLine(fs.readFileSync(threadTwoPath, "utf8").trim());
@@ -158,6 +163,11 @@ describe("EventNdjsonLogger", () => {
           matchingFiles.some((entry) => entry === `${fileStem}.3`),
           false,
         );
+        if (process.platform !== "win32") {
+          for (const entry of matchingFiles) {
+            assert.equal(fs.statSync(path.join(tempDir, entry)).mode & 0o777, 0o600);
+          }
+        }
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }

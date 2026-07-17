@@ -41,6 +41,9 @@ const writeTextFile = Effect.fn(function* (cwd: string, relativePath: string, co
   yield* fileSystem.writeFileString(absolutePath, contents).pipe(Effect.orDie);
 });
 
+const makeDirectorySymlink = (target: string, linkPath: string) =>
+  NodeFs.symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+
 it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
   describe("readFile", () => {
     it.effect("reads files relative to the workspace root", () =>
@@ -305,6 +308,193 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           .stat(escapedPath)
           .pipe(Effect.catch(() => Effect.succeed(null)));
         expect(escapedStat).toBeNull();
+      }),
+    );
+
+    it.effect("rejects missing files beneath a symlinked parent outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outside = yield* makeTempDir;
+        yield* Effect.promise(() =>
+          makeDirectorySymlink(outside, path.join(cwd, "linked-outside")),
+        );
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: "linked-outside/new/deep/file.txt",
+            contents: "must stay inside\n",
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain(
+          "Workspace file path must be relative to the project root: linked-outside/new/deep/file.txt",
+        );
+        const escapedStat = yield* Effect.promise(() =>
+          NodeFs.stat(path.join(outside, "new/deep/file.txt")).catch(() => null),
+        );
+        expect(escapedStat).toBeNull();
+      }),
+    );
+
+    it.effect("does not replace existing files through an outside symlinked parent", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outside = yield* makeTempDir;
+        yield* writeTextFile(outside, "existing.txt", "outside original\n");
+        yield* Effect.promise(() =>
+          makeDirectorySymlink(outside, path.join(cwd, "linked-outside")),
+        );
+
+        const error = yield* workspaceFileSystem
+          .writeFile({
+            cwd,
+            relativePath: "linked-outside/existing.txt",
+            contents: "replacement\n",
+          })
+          .pipe(Effect.flip);
+        const saved = yield* Effect.promise(() =>
+          NodeFs.readFile(path.join(outside, "existing.txt"), "utf8"),
+        );
+
+        expect(error.message).toContain(
+          "Workspace file path must be relative to the project root: linked-outside/existing.txt",
+        );
+        expect(saved).toBe("outside original\n");
+      }),
+    );
+
+    it.effect("writes missing files through symlinked parents that stay inside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* Effect.promise(() => NodeFs.mkdir(path.join(cwd, "actual")));
+        yield* Effect.promise(() =>
+          makeDirectorySymlink(path.join(cwd, "actual"), path.join(cwd, "linked-inside")),
+        );
+
+        const result = yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "linked-inside/new/deep/file.txt",
+          contents: "allowed\n",
+        });
+        const saved = yield* Effect.promise(() =>
+          NodeFs.readFile(path.join(cwd, "actual/new/deep/file.txt"), "utf8"),
+        );
+
+        expect(result).toEqual({ relativePath: "linked-inside/new/deep/file.txt" });
+        expect(saved).toBe("allowed\n");
+      }),
+    );
+
+    it.effect("preserves an in-workspace file symlink while replacing its target", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "actual/file.txt", "before\n");
+        yield* Effect.promise(() =>
+          NodeFs.symlink(path.join(cwd, "actual/file.txt"), path.join(cwd, "alias.txt")),
+        );
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "alias.txt",
+          contents: "after\n",
+        });
+
+        const aliasStat = yield* Effect.promise(() => NodeFs.lstat(path.join(cwd, "alias.txt")));
+        const saved = yield* Effect.promise(() =>
+          NodeFs.readFile(path.join(cwd, "actual/file.txt"), "utf8"),
+        );
+        expect(aliasStat.isSymbolicLink()).toBe(true);
+        expect(saved).toBe("after\n");
+      }),
+    );
+
+    it.effect("atomically replaces an existing regular file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "existing.txt", "before\n");
+
+        yield* workspaceFileSystem.writeFile({
+          cwd,
+          relativePath: "existing.txt",
+          contents: "after\n",
+        });
+
+        const saved = yield* Effect.promise(() =>
+          NodeFs.readFile(path.join(cwd, "existing.txt"), "utf8"),
+        );
+        const savedStat = yield* Effect.promise(() => NodeFs.lstat(path.join(cwd, "existing.txt")));
+        expect(saved).toBe("after\n");
+        expect(savedStat.isFile()).toBe(true);
+      }),
+    );
+
+    it.effect("preserves exact permissions when replacement creation is masked by umask", () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return;
+
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const absolutePath = path.join(cwd, "mode-preserved.txt");
+        yield* writeTextFile(cwd, "mode-preserved.txt", "before\n");
+        yield* Effect.promise(() => NodeFs.chmod(absolutePath, 0o664));
+
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => process.umask(0o077)),
+          () =>
+            workspaceFileSystem.writeFile({
+              cwd,
+              relativePath: "mode-preserved.txt",
+              contents: "after\n",
+            }),
+          (previousUmask) =>
+            Effect.sync(() => {
+              process.umask(previousUmask);
+            }),
+        );
+
+        const saved = yield* Effect.promise(() => NodeFs.readFile(absolutePath, "utf8"));
+        const savedStat = yield* Effect.promise(() => NodeFs.stat(absolutePath));
+        expect(saved).toBe("after\n");
+        expect(savedStat.mode & 0o777).toBe(0o664);
+      }),
+    );
+
+    it.effect("rejects dangling symlink write targets", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outside = yield* makeTempDir;
+        const missingOutsideTarget = path.join(outside, "missing.txt");
+        yield* Effect.promise(() =>
+          NodeFs.symlink(missingOutsideTarget, path.join(cwd, "dangling.txt")),
+        );
+
+        const error = yield* workspaceFileSystem
+          .writeFile({ cwd, relativePath: "dangling.txt", contents: "must not escape\n" })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("workspaceFileSystem.writeFile failed");
+        const outsideStat = yield* Effect.promise(() =>
+          NodeFs.stat(missingOutsideTarget).catch(() => null),
+        );
+        const danglingStat = yield* Effect.promise(() =>
+          NodeFs.lstat(path.join(cwd, "dangling.txt")),
+        );
+        expect(outsideStat).toBeNull();
+        expect(danglingStat.isSymbolicLink()).toBe(true);
       }),
     );
   });

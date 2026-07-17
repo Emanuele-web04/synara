@@ -38,6 +38,8 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
+  listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
+  reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
   subscribeShell: "orchestration.subscribeShell",
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -184,14 +186,12 @@ export const DroidProviderStartOptions = Schema.Struct({
 export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
-  serverPassword: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
 });
 
 export const KiloProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
-  serverPassword: Schema.optional(TrimmedNonEmptyString),
 });
 
 export const PiProviderStartOptions = Schema.Struct({
@@ -273,8 +273,6 @@ export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PINNED_PROJECTS = 3;
-const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
-const PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS = 35_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
 export const THREAD_NOTES_MAX_CHARS = 16_384;
@@ -319,28 +317,6 @@ export const ChatAssistantSelectionAttachment = Schema.Struct({
 });
 export type ChatAssistantSelectionAttachment = typeof ChatAssistantSelectionAttachment.Type;
 
-const UploadChatImageAttachment = Schema.Struct({
-  type: Schema.Literal("image"),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
-  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
-  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
-  dataUrl: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS),
-  ),
-});
-export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
-
-export const UploadChatFileAttachment = Schema.Struct({
-  type: Schema.Literal("file"),
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
-  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
-  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
-  dataUrl: TrimmedNonEmptyString.check(
-    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS),
-  ),
-});
-export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
-
 export const UploadChatAssistantSelectionAttachment = Schema.Struct({
   type: Schema.Literal("assistant-selection"),
   assistantMessageId: MessageId,
@@ -359,13 +335,22 @@ const ChatAttachmentList = Schema.Array(ChatAttachment).check(
   Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
 );
 const UploadChatAttachment = Schema.Union([
-  UploadChatImageAttachment,
-  UploadChatFileAttachment,
+  ChatImageAttachment,
+  ChatFileAttachment,
   UploadChatAssistantSelectionAttachment,
 ]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 const UploadChatAttachmentList = Schema.Array(UploadChatAttachment).check(
   Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+);
+const TurnMessageContentCheck = Schema.makeFilter(
+  (input: { readonly text: string; readonly attachments: ReadonlyArray<unknown> }) =>
+    input.text.trim().length > 0 ||
+    input.attachments.length > 0 ||
+    new SchemaIssue.InvalidValue(Option.some(input.text), {
+      message: "Turn input must include text or attachments.",
+    }),
+  { identifier: "TurnMessageContent" },
 );
 
 export const ProjectScriptIcon = Schema.Literals([
@@ -671,6 +656,37 @@ export const ThreadMarkers = Schema.Array(ThreadMarker).check(
 );
 export type ThreadMarkers = typeof ThreadMarkers.Type;
 
+export const ProjectionPendingInteractionKind = Schema.Literals(["approval", "userInput"]);
+export type ProjectionPendingInteractionKind = typeof ProjectionPendingInteractionKind.Type;
+
+export const ProjectionPendingInteractionStatus = Schema.Literals([
+  "pending",
+  "responding",
+  "confirmed",
+  "retryable",
+  "uncertain",
+]);
+export type ProjectionPendingInteractionStatus = typeof ProjectionPendingInteractionStatus.Type;
+
+export const ProjectionPendingInteractionDecision = Schema.NullOr(ProviderApprovalDecision);
+export type ProjectionPendingInteractionDecision = typeof ProjectionPendingInteractionDecision.Type;
+
+/** Unresolved provider interaction settlement exposed to thread-detail consumers. */
+export const OrchestrationPendingInteraction = Schema.Struct({
+  interactionKind: ProjectionPendingInteractionKind,
+  requestId: ApprovalRequestId,
+  threadId: ThreadId,
+  turnId: Schema.NullOr(TurnId),
+  lifecycleGeneration: Schema.NullOr(TrimmedNonEmptyString),
+  status: ProjectionPendingInteractionStatus,
+  decision: ProjectionPendingInteractionDecision,
+  responseCommandId: Schema.NullOr(CommandId),
+  responseRequestedAt: Schema.NullOr(IsoDateTime),
+  createdAt: IsoDateTime,
+  resolvedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationPendingInteraction = typeof OrchestrationPendingInteraction.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -733,6 +749,7 @@ export const OrchestrationThread = Schema.Struct({
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
+  pendingInteractions: Schema.optional(Schema.Array(OrchestrationPendingInteraction)),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });
@@ -1185,11 +1202,11 @@ export const ThreadTurnStartCommand = Schema.Struct({
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
-    text: Schema.String,
+    text: Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
     attachments: ChatAttachmentList,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
-  }),
+  }).check(TurnMessageContentCheck),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   reviewTarget: Schema.optional(ProviderReviewTarget),
@@ -1215,11 +1232,11 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
-    text: Schema.String,
+    text: Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
     attachments: UploadChatAttachmentList,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
-  }),
+  }).check(TurnMessageContentCheck),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   reviewTarget: Schema.optional(ProviderReviewTarget),
@@ -1266,6 +1283,7 @@ const ThreadApprovalRespondCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
   createdAt: IsoDateTime,
 });
@@ -1275,6 +1293,7 @@ const ThreadUserInputRespondCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   answers: ProviderUserInputAnswers,
   createdAt: IsoDateTime,
 });
@@ -1806,6 +1825,7 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
 export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
   createdAt: IsoDateTime,
 });
@@ -1813,6 +1833,7 @@ export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
 const ThreadUserInputResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   answers: ProviderUserInputAnswers,
   createdAt: IsoDateTime,
 });
@@ -2178,12 +2199,6 @@ const ProjectionCheckpointRow = Schema.Struct({
 });
 export type ProjectionCheckpointRow = typeof ProjectionCheckpointRow.Type;
 
-export const ProjectionPendingApprovalStatus = Schema.Literals(["pending", "resolved"]);
-export type ProjectionPendingApprovalStatus = typeof ProjectionPendingApprovalStatus.Type;
-
-export const ProjectionPendingApprovalDecision = Schema.NullOr(ProviderApprovalDecision);
-export type ProjectionPendingApprovalDecision = typeof ProjectionPendingApprovalDecision.Type;
-
 export const DispatchResult = Schema.Struct({
   sequence: NonNegativeInt,
 });
@@ -2233,6 +2248,65 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
+
+export const ProviderDeliveryReconciliationOutcome = Schema.Literals([
+  "accepted",
+  "safe_retry",
+  "abandon",
+]);
+export type ProviderDeliveryReconciliationOutcome =
+  typeof ProviderDeliveryReconciliationOutcome.Type;
+
+export const ProviderDeliveryBlockingEvidence = Schema.Struct({
+  consumerName: Schema.String,
+  eventSequence: NonNegativeInt,
+  eventId: EventId,
+  eventType: Schema.String,
+  occurredAt: IsoDateTime,
+  threadId: ThreadId,
+  state: Schema.Literals(["dead", "uncertain"]),
+  attemptCount: NonNegativeInt,
+  lastError: Schema.NullOr(Schema.String),
+  updatedAt: IsoDateTime,
+  lastReconciliationOutcome: Schema.NullOr(ProviderDeliveryReconciliationOutcome),
+  lastReconciledAt: Schema.NullOr(IsoDateTime),
+  lastReconciledBy: Schema.NullOr(Schema.String),
+  lastReconciliationNote: Schema.NullOr(Schema.String),
+});
+export type ProviderDeliveryBlockingEvidence = typeof ProviderDeliveryBlockingEvidence.Type;
+
+export const OrchestrationListProviderDeliveryBlockersInput = Schema.Struct({
+  threadId: Schema.optional(ThreadId),
+  limit: Schema.optional(PositiveInt),
+});
+export type OrchestrationListProviderDeliveryBlockersInput =
+  typeof OrchestrationListProviderDeliveryBlockersInput.Type;
+
+export const OrchestrationListProviderDeliveryBlockersResult = Schema.Array(
+  ProviderDeliveryBlockingEvidence,
+);
+export type OrchestrationListProviderDeliveryBlockersResult =
+  typeof OrchestrationListProviderDeliveryBlockersResult.Type;
+
+export const OrchestrationReconcileProviderDeliveryInput = Schema.Struct({
+  eventSequence: NonNegativeInt,
+  threadId: ThreadId,
+  expectedState: Schema.Literals(["dead", "uncertain"]),
+  outcome: ProviderDeliveryReconciliationOutcome,
+  note: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
+});
+export type OrchestrationReconcileProviderDeliveryInput =
+  typeof OrchestrationReconcileProviderDeliveryInput.Type;
+
+export const OrchestrationReconcileProviderDeliveryResult = Schema.Struct({
+  eventSequence: NonNegativeInt,
+  threadId: ThreadId,
+  outcome: ProviderDeliveryReconciliationOutcome,
+  state: Schema.Literals(["retry", "succeeded", "dead", "uncertain"]),
+  reconciledAt: IsoDateTime,
+});
+export type OrchestrationReconcileProviderDeliveryResult =
+  typeof OrchestrationReconcileProviderDeliveryResult.Type;
 
 export const OrchestrationSubscribeShellInput = Schema.Struct({});
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
@@ -2293,6 +2367,14 @@ export const OrchestrationRpcSchemas = {
   replayEvents: {
     input: OrchestrationReplayEventsInput,
     output: OrchestrationReplayEventsResult,
+  },
+  listProviderDeliveryBlockers: {
+    input: OrchestrationListProviderDeliveryBlockersInput,
+    output: OrchestrationListProviderDeliveryBlockersResult,
+  },
+  reconcileProviderDelivery: {
+    input: OrchestrationReconcileProviderDeliveryInput,
+    output: OrchestrationReconcileProviderDeliveryResult,
   },
   subscribeShell: {
     input: OrchestrationSubscribeShellInput,

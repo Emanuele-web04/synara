@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadId } from "@synara/contracts";
+import { ThreadId, WS_STREAM_LIMITS } from "@synara/contracts";
 import { useStore } from "./store";
 import {
   getRetainedThreadDetailIdsSnapshot,
   resetRetainedThreadDetailSubscriptionsForTests,
+  resolveThreadDetailSubscriptionLeaseIds,
   retainThreadDetailSubscription,
-  subscribeRetainedThreadDetailIdChanges,
 } from "./threadDetailSubscriptionRetention";
 
 describe("threadDetailSubscriptionRetention", () => {
@@ -32,6 +32,22 @@ describe("threadDetailSubscriptionRetention", () => {
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([threadId]);
   });
 
+  it("makes each retain handle idempotent so one caller cannot release another lease", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-idempotent");
+    const releaseOne = retainThreadDetailSubscription(threadId);
+    const releaseTwo = retainThreadDetailSubscription(threadId);
+
+    releaseOne();
+    releaseOne();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([threadId]);
+
+    releaseTwo();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+  });
+
   it("evicts a released thread after the retention timeout", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-2");
@@ -44,22 +60,6 @@ describe("threadDetailSubscriptionRetention", () => {
     vi.advanceTimersByTime(15 * 60 * 1000);
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
-  });
-
-  it("notifies imperative listeners when retained ids change", () => {
-    vi.useFakeTimers();
-    const threadId = ThreadId.makeUnsafe("thread-listener");
-    const snapshots: ThreadId[][] = [];
-    const unsubscribe = subscribeRetainedThreadDetailIdChanges((threadIds) => {
-      snapshots.push([...threadIds]);
-    });
-
-    const release = retainThreadDetailSubscription(threadId);
-    release();
-    vi.advanceTimersByTime(15 * 60 * 1000);
-    unsubscribe();
-
-    expect(snapshots).toEqual([[threadId], []]);
   });
 
   it("cancels eviction when a thread is retained again before timeout", () => {
@@ -77,6 +77,19 @@ describe("threadDetailSubscriptionRetention", () => {
 
     secondRelease();
     vi.advanceTimersByTime(15 * 60 * 1000);
+
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+  });
+
+  it("does not postpone idle eviction when unrelated store state changes", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-stable-deadline");
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+
+    vi.advanceTimersByTime(14 * 60 * 1000);
+    useStore.setState({ threadsHydrated: !useStore.getState().threadsHydrated });
+    vi.advanceTimersByTime(60 * 1000);
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
   });
@@ -145,6 +158,47 @@ describe("threadDetailSubscriptionRetention", () => {
       release();
     }
 
-    expect(getRetainedThreadDetailIdsSnapshot().length).toBeLessThanOrEqual(32);
+    expect(getRetainedThreadDetailIdsSnapshot().length).toBeLessThanOrEqual(
+      WS_STREAM_LIMITS.threadPerClient,
+    );
+  });
+
+  it("prioritizes visible leases and stays within connection admission", () => {
+    const visible = [ThreadId.makeUnsafe("visible-1"), ThreadId.makeUnsafe("visible-2")];
+    const retained = Array.from({ length: WS_STREAM_LIMITS.threadPerClient }, (_, index) =>
+      ThreadId.makeUnsafe(`retained-${index}`),
+    );
+
+    expect(
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds: visible,
+        retainedThreadIds: retained,
+        serverThreadIds: new Set(retained),
+      }),
+    ).toEqual([
+      ...visible,
+      ...retained.slice(0, WS_STREAM_LIMITS.threadPerClient - visible.length),
+    ]);
+  });
+
+  it("releases normalized detail when an idle lease is evicted", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-detail-eviction");
+    useStore.setState({
+      messageIdsByThreadId: { [threadId]: [] },
+      messageByThreadId: { [threadId]: {} },
+      activityIdsByThreadId: { [threadId]: [] },
+      activityByThreadId: { [threadId]: {} },
+    });
+
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    const state = useStore.getState();
+    expect(state.messageIdsByThreadId?.[threadId]).toBeUndefined();
+    expect(state.messageByThreadId?.[threadId]).toBeUndefined();
+    expect(state.activityIdsByThreadId?.[threadId]).toBeUndefined();
+    expect(state.activityByThreadId?.[threadId]).toBeUndefined();
   });
 });

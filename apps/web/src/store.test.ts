@@ -5,6 +5,7 @@
 import {
   ApprovalRequestId,
   CheckpointRef,
+  CommandId,
   EventId,
   MessageId,
   OrchestrationProposedPlanId,
@@ -28,6 +29,7 @@ import {
   applyOrchestrationEvents,
   applyOrchestrationEventsHotPath,
   collapseProjectsExcept,
+  evictThreadDetailFromClientState,
   markThreadUnread,
   renameProjectLocally,
   removeDeletedProjectFromClientState,
@@ -40,6 +42,7 @@ import {
   syncServerThreadDetailHotPath,
   type AppState,
 } from "./store";
+import { getThreadsFromState } from "./threadDerivation";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -126,14 +129,47 @@ function makeActivity(overrides: {
 }
 
 function makeState(thread: Thread): AppState {
+  const {
+    session,
+    latestTurn,
+    pendingSourceProposedPlan,
+    messages,
+    activities,
+    proposedPlans,
+    turnDiffSummaries,
+    ...shell
+  } = thread;
   return {
     spaces: [],
     projects: [makeProject()],
-    threads: [thread],
     sidebarThreadSummaryById: {},
     threadsHydrated: true,
+    threadIds: [thread.id],
+    threadShellById: { [thread.id]: shell },
+    threadSessionById: { [thread.id]: session },
+    threadTurnStateById: { [thread.id]: { latestTurn, pendingSourceProposedPlan } },
+    messageIdsByThreadId: { [thread.id]: messages.map((message) => message.id) },
+    messageByThreadId: {
+      [thread.id]: Object.fromEntries(messages.map((message) => [message.id, message])),
+    },
+    activityIdsByThreadId: { [thread.id]: activities.map((activity) => activity.id) },
+    activityByThreadId: {
+      [thread.id]: Object.fromEntries(activities.map((activity) => [activity.id, activity])),
+    },
+    proposedPlanIdsByThreadId: { [thread.id]: proposedPlans.map((plan) => plan.id) },
+    proposedPlanByThreadId: {
+      [thread.id]: Object.fromEntries(proposedPlans.map((plan) => [plan.id, plan])),
+    },
+    turnDiffIdsByThreadId: { [thread.id]: turnDiffSummaries.map((summary) => summary.turnId) },
+    turnDiffSummaryByThreadId: {
+      [thread.id]: Object.fromEntries(
+        turnDiffSummaries.map((summary) => [summary.turnId, summary]),
+      ),
+    },
   };
 }
+
+const threadsOf = getThreadsFromState;
 
 function makeProject(
   overrides: Partial<AppState["projects"][number]> = {},
@@ -434,7 +470,7 @@ describe("store pure functions", () => {
 
     const next = markThreadUnread(initialState, ThreadId.makeUnsafe("thread-1"));
 
-    const updatedThread = next.threads[0];
+    const updatedThread = threadsOf(next)[0];
     expect(updatedThread).toBeDefined();
     expect(updatedThread?.lastVisitedAt).toBe("2026-02-25T12:29:59.999Z");
     expect(Date.parse(updatedThread?.lastVisitedAt ?? "")).toBeLessThan(
@@ -471,7 +507,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+    expect(threadsOf(next)[0]?.branch).toBe("feature/semantic-branch");
   });
 
   it("preserves message mention references from read-model snapshots", () => {
@@ -497,7 +533,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+    expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
   });
@@ -520,7 +556,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+    expect(threadsOf(next)[0]?.messages[0]?.mentions).toEqual([
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
   });
@@ -536,7 +572,7 @@ describe("store pure functions", () => {
       branch: "synara/abc123ef",
     });
 
-    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+    expect(threadsOf(next)[0]?.branch).toBe("feature/semantic-branch");
   });
 
   it("preserves optimistic createBranchFlowCompleted during stale read-model syncs", () => {
@@ -574,7 +610,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
+    expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(true);
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
   });
 
@@ -605,8 +641,8 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.branch).toBe("feature/new-name");
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(false);
+    expect(threadsOf(next)[0]?.branch).toBe("feature/new-name");
+    expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(false);
   });
 
   it("stores server-provided sidebar metadata on hydrated threads", () => {
@@ -623,7 +659,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]).toMatchObject({
+    expect(threadsOf(next)[0]).toMatchObject({
       latestUserMessageAt: "2026-02-27T00:03:00.000Z",
       hasPendingApprovals: true,
       hasPendingUserInput: true,
@@ -658,7 +694,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.latestUserMessageAt).toBeUndefined();
+    expect(threadsOf(next)[0]?.latestUserMessageAt).toBeUndefined();
     expect(next.sidebarThreadSummaryById["thread-1"]?.latestUserMessageAt).toBe(
       "2026-02-27T00:03:00.000Z",
     );
@@ -693,8 +729,8 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.error).toBe("provider crashed");
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.error).toBe("provider crashed");
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
       state: "error",
       completedAt: "2026-02-27T00:02:00.000Z",
@@ -736,7 +772,7 @@ describe("store pure functions", () => {
         }),
       ]);
 
-      expect(next.threads[0]?.latestTurn).toMatchObject({
+      expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
         turnId: TurnId.makeUnsafe("turn-running"),
         state: expectedState,
         completedAt: "2026-02-27T00:02:00.000Z",
@@ -773,7 +809,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
       state: "running",
       completedAt: null,
@@ -785,7 +821,6 @@ describe("store pure functions", () => {
       {
         spaces: [],
         projects: [],
-        threads: [],
         sidebarThreadSummaryById: {},
         threadsHydrated: false,
       },
@@ -836,7 +871,6 @@ describe("store pure functions", () => {
           updatedAt: "2026-02-27T00:00:00.000Z",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -890,7 +924,6 @@ describe("store pure functions", () => {
       {
         spaces: [],
         projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
-        threads: [],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       },
@@ -950,11 +983,11 @@ describe("store pure functions", () => {
 
     expect(deletedState.deletedProjectIdsById?.[projectId]).toBe(true);
     expect(deletedState.projects).toEqual([]);
-    expect(deletedState.threads).toEqual([]);
+    expect(threadsOf(deletedState)).toEqual([]);
     expect(afterStaleShellSnapshot.projects).toEqual([]);
-    expect(afterStaleShellSnapshot.threads).toEqual([]);
+    expect(threadsOf(afterStaleShellSnapshot)).toEqual([]);
     expect(afterStaleReadModel.projects).toEqual([]);
-    expect(afterStaleReadModel.threads).toEqual([]);
+    expect(threadsOf(afterStaleReadModel)).toEqual([]);
   });
 
   it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
@@ -969,7 +1002,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/shared-root",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -1020,7 +1052,6 @@ describe("store pure functions", () => {
             cwd: "/tmp/project-other",
           }),
         ],
-        threads: [initialThread, untouchedThread],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       },
@@ -1060,7 +1091,7 @@ describe("store pure functions", () => {
     expect(next.projects.map((project) => project.id)).toEqual([
       ProjectId.makeUnsafe("project-other"),
     ]);
-    expect(next.threads.map((thread) => thread.id)).toEqual([
+    expect(threadsOf(next).map((thread) => thread.id)).toEqual([
       ThreadId.makeUnsafe("thread-project-2"),
     ]);
     expect(next.threadIds).toEqual([ThreadId.makeUnsafe("thread-project-2")]);
@@ -1164,13 +1195,13 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.session).toMatchObject({
+    expect(threadsOf(next)[0]?.session).toMatchObject({
       status: "closed",
       orchestrationStatus: "stopped",
       activeTurnId: undefined,
       updatedAt: "2026-02-27T00:02:00.000Z",
     });
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
       state: "interrupted",
       requestedAt: "2026-02-27T00:01:00.000Z",
@@ -1202,7 +1233,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
       state: "running",
       requestedAt: "2026-02-27T00:01:00.000Z",
@@ -1241,8 +1272,8 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.pendingSourceProposedPlan).toEqual(sourceProposedPlan);
-    expect(next.threads[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
+    expect(threadsOf(next)[0]?.pendingSourceProposedPlan).toEqual(sourceProposedPlan);
+    expect(threadsOf(next)[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
   });
 
   it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
@@ -1287,7 +1318,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.messages).toMatchObject([
+    expect(threadsOf(next)[0]?.messages).toMatchObject([
       {
         id: assistantId,
         text: "Hello world",
@@ -1330,7 +1361,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.messages).toMatchObject([
+    expect(threadsOf(next)[0]?.messages).toMatchObject([
       {
         id: userId,
         text: "edited prompt",
@@ -1372,7 +1403,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]).toMatchObject({
+    expect(threadsOf(next)[0]).toMatchObject({
       title: "New title",
       branch: "synara/app-startup-crash",
       worktreePath: "/tmp/project/.worktrees/app-startup-crash",
@@ -1405,13 +1436,13 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
+    expect(threadsOf(next)[0]?.createBranchFlowCompleted).toBe(true);
   });
 
   it("preserves pinnedMessages and notes through the normalized read-model projection", () => {
     // Regression: the normalized ThreadShell projection used to omit pinnedMessages/notes, so a
     // read-model sync would reconstruct the thread without them — pins clicked in the sidebar
-    // never surfaced in the Environment panel. `next.threads[0]` reads back through
+    // never surfaced in the Environment panel. `threadsOf(next)[0]` reads back through
     // getThreadsFromState (the shell projection), so this asserts the fields survive the round trip.
     const messageId = MessageId.makeUnsafe("assistant-pin-1");
     const pinnedMessages = [
@@ -1427,8 +1458,8 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("remember to rerun typecheck");
+    expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(threadsOf(next)[0]?.notes).toBe("remember to rerun typecheck");
   });
 
   it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
@@ -1452,8 +1483,8 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("scratch");
+    expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(threadsOf(next)[0]?.notes).toBe("scratch");
   });
 
   it("applies live pinned-message operation events without replacing the whole list", () => {
@@ -1501,7 +1532,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.pinnedMessages).toEqual([
+    expect(threadsOf(next)[0]?.pinnedMessages).toEqual([
       {
         messageId: firstMessageId,
         label: "Follow up",
@@ -1509,7 +1540,7 @@ describe("store pure functions", () => {
         pinnedAt: "2026-02-27T00:03:00.000Z",
       },
     ]);
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
+    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
   });
 
   it("preserves threadMarkers through the normalized read-model projection", () => {
@@ -1535,7 +1566,7 @@ describe("store pure functions", () => {
       ),
     );
 
-    expect(next.threads[0]?.threadMarkers).toEqual([marker]);
+    expect(threadsOf(next)[0]?.threadMarkers).toEqual([marker]);
   });
 
   it("applies live thread marker operation events without replacing the whole list", () => {
@@ -1598,7 +1629,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.threadMarkers).toEqual([
+    expect(threadsOf(next)[0]?.threadMarkers).toEqual([
       {
         id: markerId,
         messageId,
@@ -1613,7 +1644,7 @@ describe("store pure functions", () => {
         updatedAt: "2026-02-27T00:03:15.000Z",
       },
     ]);
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
+    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
   });
 
   it("does not let a sidebar shell upsert clobber pinnedMessages/notes from the detail path", () => {
@@ -1670,8 +1701,8 @@ describe("store pure functions", () => {
       },
     });
 
-    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
-    expect(next.threads[0]?.notes).toBe("keep me");
+    expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(threadsOf(next)[0]?.notes).toBe("keep me");
   });
 
   it("updates turn diffs and latest turn immediately from live events", () => {
@@ -1705,8 +1736,8 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.turnDiffSummaries).toHaveLength(1);
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.turnDiffSummaries).toHaveLength(1);
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-1"),
       state: "completed",
       completedAt: "2026-02-27T00:02:00.000Z",
@@ -1742,7 +1773,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
+    expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
   });
 
   it("keeps an active turn running when an interim provider diff placeholder arrives", () => {
@@ -1772,8 +1803,8 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.turnDiffSummaries).toHaveLength(1);
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.turnDiffSummaries).toHaveLength(1);
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-1"),
       state: "running",
       completedAt: null,
@@ -1807,7 +1838,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.latestTurn).toMatchObject({
+    expect(threadsOf(next)[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-1"),
       state: "completed",
       completedAt: "2026-02-27T00:01:30.000Z",
@@ -1845,10 +1876,10 @@ describe("store pure functions", () => {
     // latestTurn is only replaced when turnIds match, so turn-1 stays intact
     // and its real assistantMessageId is preserved (no bleed-through from the
     // turn-2 null payload).
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
-    expect(next.threads[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
+    expect(threadsOf(next)[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+    expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
 
-    const turn2Summary = next.threads[0]?.turnDiffSummaries.find(
+    const turn2Summary = threadsOf(next)[0]?.turnDiffSummaries.find(
       (entry) => entry.turnId === TurnId.makeUnsafe("turn-2"),
     );
     expect(turn2Summary?.assistantMessageId ?? null).toBeNull();
@@ -1873,7 +1904,7 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.turnDiffSummaries[0]?.files).toEqual([
+    expect(threadsOf(next)[0]?.turnDiffSummaries[0]?.files).toEqual([
       { path: "CLAUDE.md", kind: "modified", additions: 1, deletions: 2 },
     ]);
   });
@@ -1970,18 +2001,18 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
-    expect(next.threads[0]?.messages.map((message) => message.id)).toEqual([
+    expect(threadsOf(next)[0]?.pendingSourceProposedPlan).toBeUndefined();
+    expect(threadsOf(next)[0]?.messages.map((message) => message.id)).toEqual([
       MessageId.makeUnsafe("user-1"),
       MessageId.makeUnsafe("assistant-1"),
     ]);
-    expect(next.threads[0]?.proposedPlans.map((plan) => plan.id)).toEqual([
+    expect(threadsOf(next)[0]?.proposedPlans.map((plan) => plan.id)).toEqual([
       OrchestrationProposedPlanId.makeUnsafe("plan-1"),
     ]);
-    expect(next.threads[0]?.activities.map((activity) => activity.id)).toEqual([
+    expect(threadsOf(next)[0]?.activities.map((activity) => activity.id)).toEqual([
       EventId.makeUnsafe("activity-1"),
     ]);
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+    expect(threadsOf(next)[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
 
   it("rolls back conversation state from an edited user message", () => {
@@ -2073,17 +2104,17 @@ describe("store pure functions", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.messages.map((message) => message.id)).toEqual([
+    expect(threadsOf(next)[0]?.messages.map((message) => message.id)).toEqual([
       MessageId.makeUnsafe("user-1"),
       MessageId.makeUnsafe("assistant-1"),
     ]);
-    expect(next.threads[0]?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
+    expect(threadsOf(next)[0]?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
       TurnId.makeUnsafe("turn-1"),
     ]);
-    expect(next.threads[0]?.proposedPlans).toEqual([]);
-    expect(next.threads[0]?.activities).toEqual([]);
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
-    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+    expect(threadsOf(next)[0]?.proposedPlans).toEqual([]);
+    expect(threadsOf(next)[0]?.activities).toEqual([]);
+    expect(threadsOf(next)[0]?.pendingSourceProposedPlan).toBeUndefined();
+    expect(threadsOf(next)[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
 
   it("reorderProjects moves a project to a target index", () => {
@@ -2115,7 +2146,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/project-3",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -2147,7 +2177,6 @@ describe("store pure functions", () => {
           expanded: false,
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -2179,7 +2208,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/project-2",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -2210,7 +2238,6 @@ describe("store pure functions", () => {
           cwd: "/tmp/project-2",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -2238,6 +2265,42 @@ describe("store pure functions", () => {
 });
 
 describe("store read model sync", () => {
+  it("evicts high-cardinality thread detail while preserving its shell and sidebar summary", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const hydrated = syncServerReadModel(
+      makeState(makeThread({ id: threadId })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          messages: [
+            {
+              id: MessageId.makeUnsafe("message-1"),
+              role: "assistant",
+              text: "cached transcript",
+              attachments: [],
+              createdAt: "2026-02-27T00:00:00.000Z",
+              updatedAt: "2026-02-27T00:00:00.000Z",
+              streaming: false,
+              source: "native",
+              dispatchMode: "queue",
+              turnId: null,
+            },
+          ],
+        }),
+      ),
+    );
+    const shell = hydrated.threadShellById?.[threadId];
+    const summary = hydrated.sidebarThreadSummaryById[threadId];
+
+    const evicted = evictThreadDetailFromClientState(hydrated, threadId);
+
+    expect(evicted.threadShellById?.[threadId]).toBe(shell);
+    expect(evicted.sidebarThreadSummaryById[threadId]).toBe(summary);
+    expect(evicted.messageIdsByThreadId?.[threadId]).toBeUndefined();
+    expect(evicted.messageByThreadId?.[threadId]).toBeUndefined();
+    expect(threadsOf(evicted).find((thread) => thread.id === threadId)?.messages).toEqual([]);
+  });
+
   it("adds the desktop bridge token to server attachment preview URLs", () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
     const testWindow = {
@@ -2281,7 +2344,7 @@ describe("store read model sync", () => {
     try {
       const next = syncServerReadModel(initialState, readModel);
 
-      expect(next.threads[0]?.messages[0]?.attachments?.[0]).toMatchObject({
+      expect(threadsOf(next)[0]?.messages[0]?.attachments?.[0]).toMatchObject({
         previewUrl: "http://127.0.0.1:53036/attachments/thread-1-image?token=desktop-secret",
       });
     } finally {
@@ -2312,8 +2375,8 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.error).toBeNull();
-    expect(next.threads[0]?.session?.lastError).toBeUndefined();
+    expect(threadsOf(next)[0]?.error).toBeNull();
+    expect(threadsOf(next)[0]?.session?.lastError).toBeUndefined();
   });
 
   it("reconciles snapshot state even when thread updatedAt matches a prior live event", () => {
@@ -2344,9 +2407,9 @@ describe("store read model sync", () => {
       ),
     );
 
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
-    expect(next.threads[0]?.latestTurn).toBeNull();
-    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
+    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
+    expect(threadsOf(next)[0]?.latestTurn).toBeNull();
+    expect(threadsOf(next)[0]?.pendingSourceProposedPlan).toBeUndefined();
   });
 
   it("preserves claude model slugs without an active session", () => {
@@ -2362,7 +2425,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.model).toBe("claude-opus-4-6");
+    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-opus-4-6");
   });
 
   it("resolves claude aliases when session provider is claudeAgent", () => {
@@ -2387,7 +2450,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.model).toBe("claude-sonnet-5");
+    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-sonnet-5");
   });
 
   it("preserves OpenCode as the active session provider", () => {
@@ -2412,8 +2475,8 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.provider).toBe("opencode");
-    expect(next.threads[0]?.session?.provider).toBe("opencode");
+    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("opencode");
+    expect(threadsOf(next)[0]?.session?.provider).toBe("opencode");
   });
 
   it("preserves Pi as the active session provider", () => {
@@ -2438,8 +2501,8 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.provider).toBe("pi");
-    expect(next.threads[0]?.session?.provider).toBe("pi");
+    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("pi");
+    expect(threadsOf(next)[0]?.session?.provider).toBe("pi");
   });
 
   it("preserves exact OpenCode thread model slugs from the read model", () => {
@@ -2455,7 +2518,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.model).toBe("openai/gpt-5.4");
+    expect(threadsOf(next)[0]?.modelSelection.model).toBe("openai/gpt-5.4");
   });
 
   it("preserves exact OpenCode project default model slugs from the read model", () => {
@@ -2488,7 +2551,7 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects[0]?.updatedAt).toBe("2026-02-27T00:00:00.000Z");
-    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
+    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
   });
 
   it("preserves a newer live assistant intro when a hot-path snapshot lags behind", () => {
@@ -2582,7 +2645,7 @@ describe("store read model sync", () => {
       }),
     );
 
-    const nextThread = next.threads.find((thread) => thread.id === threadId);
+    const nextThread = threadsOf(next).find((thread) => thread.id === threadId);
     expect(nextThread?.messages.find((message) => message.id === assistantId)?.text).toBe(
       "I'll start by scanning the repo.",
     );
@@ -2892,7 +2955,6 @@ describe("store read model sync", () => {
     const initialState: AppState = {
       ...makeState(makeThread()),
       threadIds: [],
-      threads: [],
       sidebarThreadSummaryById: {},
     };
 
@@ -2944,9 +3006,9 @@ describe("store read model sync", () => {
       }),
     );
 
-    expect(next.threads.find((thread) => thread.id === threadId)?.createBranchFlowCompleted).toBe(
-      true,
-    );
+    expect(
+      threadsOf(next).find((thread) => thread.id === threadId)?.createBranchFlowCompleted,
+    ).toBe(true);
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
   });
 
@@ -2978,7 +3040,7 @@ describe("store read model sync", () => {
     ]);
 
     expect(next.sidebarThreadSummaryById["thread-1"]).toBe(previousSummary);
-    expect(next.threads[0]?.messages.at(-1)).toMatchObject({
+    expect(threadsOf(next)[0]?.messages.at(-1)).toMatchObject({
       id: MessageId.makeUnsafe("assistant-streaming"),
       text: "streaming delta",
       streaming: true,
@@ -3022,8 +3084,8 @@ describe("store read model sync", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.activities).toHaveLength(1);
-    expect(next.threads[0]?.activities[0]?.payload).toEqual(richActivity.payload);
+    expect(threadsOf(next)[0]?.activities).toHaveLength(1);
+    expect(threadsOf(next)[0]?.activities[0]?.payload).toEqual(richActivity.payload);
     expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
     expect(Object.keys(next.activityByThreadId?.[threadId] ?? {})).toEqual(["activity-command"]);
   });
@@ -3066,8 +3128,8 @@ describe("store read model sync", () => {
       ),
     ]);
 
-    expect(next.threads[0]?.activities).toHaveLength(1);
-    expect(next.threads[0]?.activities[0]).toMatchObject({
+    expect(threadsOf(next)[0]?.activities).toHaveLength(1);
+    expect(threadsOf(next)[0]?.activities[0]).toMatchObject({
       id: activityId,
       sequence: 2,
       payload: {
@@ -3105,14 +3167,14 @@ describe("store read model sync", () => {
     );
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
-    expect(batched.threads[0]?.activities).toEqual(sequential.threads[0]?.activities);
+    expect(threadsOf(batched)[0]?.activities).toEqual(threadsOf(sequential)[0]?.activities);
     expect(batched.activityIdsByThreadId?.[threadId]).toEqual(
       sequential.activityIdsByThreadId?.[threadId],
     );
     expect(batched.activityByThreadId?.[threadId]).toEqual(
       sequential.activityByThreadId?.[threadId],
     );
-    expect(batched.threads[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
+    expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
   });
 
   it("replaces provider-local activity sequences with durable orchestration sequences", () => {
@@ -3143,10 +3205,12 @@ describe("store read model sync", () => {
     );
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
-    expect(sequential.threads[0]?.activities.map((activity) => activity.sequence)).toEqual([
+    expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
       40, 41,
     ]);
-    expect(batched.threads[0]?.activities.map((activity) => activity.sequence)).toEqual([40, 41]);
+    expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
+      40, 41,
+    ]);
   });
 
   it("keeps batched activity timestamps equivalent when a generic duplicate is discarded", () => {
@@ -3210,8 +3274,8 @@ describe("store read model sync", () => {
     );
     const batched = applyOrchestrationEventsHotPath(initialState, events);
 
-    expect(batched.threads[0]).toEqual(sequential.threads[0]);
-    expect(batched.threads[0]?.updatedAt).toBe("2026-07-09T00:00:01.000Z");
+    expect(threadsOf(batched)[0]).toEqual(threadsOf(sequential)[0]);
+    expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:01.000Z");
   });
 
   it("keeps richer activity payloads when duplicate events arrive with generic data", () => {
@@ -3251,8 +3315,8 @@ describe("store read model sync", () => {
       }),
     ]);
 
-    expect(next.threads[0]?.activities).toHaveLength(1);
-    expect(next.threads[0]?.activities[0]).toBe(richActivity);
+    expect(threadsOf(next)[0]?.activities).toHaveLength(1);
+    expect(threadsOf(next)[0]?.activities[0]).toBe(richActivity);
     expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
   });
 
@@ -3289,7 +3353,7 @@ describe("store read model sync", () => {
       ),
     );
 
-    expect(next.threads[0]?.activities).toEqual([richActivity]);
+    expect(threadsOf(next)[0]?.activities).toEqual([richActivity]);
     expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
     expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
   });
@@ -3309,9 +3373,9 @@ describe("store read model sync", () => {
       makeReadModel(makeReadModelThread({ activities })),
     );
 
-    expect(next.threads[0]?.activities).toHaveLength(500);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
-    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
+    expect(threadsOf(next)[0]?.activities).toHaveLength(500);
+    expect(threadsOf(next)[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
+    expect(threadsOf(next)[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
     expect(next.activityIdsByThreadId?.[threadId]).toHaveLength(500);
     expect(next.activityIdsByThreadId?.[threadId]?.[0]).toBe("activity-5");
   });
@@ -3339,9 +3403,9 @@ describe("store read model sync", () => {
       makeReadModel(makeReadModelThread({ activities })),
     );
 
-    expect(next.threads[0]?.activities).toHaveLength(501);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("approval-old"));
-    expect(next.threads[0]?.activities[1]?.id).toBe(EventId.makeUnsafe("activity-5"));
+    expect(threadsOf(next)[0]?.activities).toHaveLength(501);
+    expect(threadsOf(next)[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("approval-old"));
+    expect(threadsOf(next)[0]?.activities[1]?.id).toBe(EventId.makeUnsafe("activity-5"));
   });
 
   it("does not keep resolved interaction activities outside the latest activity window", () => {
@@ -3374,12 +3438,12 @@ describe("store read model sync", () => {
       makeReadModel(makeReadModelThread({ activities })),
     );
 
-    expect(next.threads[0]?.activities).toHaveLength(500);
-    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
-    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
+    expect(threadsOf(next)[0]?.activities).toHaveLength(500);
+    expect(threadsOf(next)[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
+    expect(threadsOf(next)[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
   });
 
-  it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {
+  it("uses durable user-input settlement without fabricating a resolved activity", () => {
     const initialState = syncServerReadModel(
       makeState(
         makeThread({
@@ -3408,6 +3472,22 @@ describe("store read model sync", () => {
       ),
       makeReadModel(
         makeReadModelThread({
+          hasPendingUserInput: true,
+          pendingInteractions: [
+            {
+              interactionKind: "userInput",
+              requestId: ApprovalRequestId.makeUnsafe("request-1"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              turnId: null,
+              lifecycleGeneration: "generation-1",
+              status: "pending",
+              decision: null,
+              responseCommandId: null,
+              responseRequestedAt: null,
+              createdAt: "2026-02-27T00:00:30.000Z",
+              resolvedAt: null,
+            },
+          ],
           activities: [
             makeActivity({
               id: "activity-user-input-requested",
@@ -3416,6 +3496,7 @@ describe("store read model sync", () => {
               summary: "Need more input",
               payload: {
                 requestId: "request-1",
+                lifecycleGeneration: "generation-1",
                 questions: [
                   {
                     id: "q1",
@@ -3433,25 +3514,68 @@ describe("store read model sync", () => {
     );
 
     const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.user-input-response-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: ApprovalRequestId.makeUnsafe("request-1"),
-        answers: {
-          q1: "yes",
+      makeDomainEvent(
+        "thread.user-input-response-requested",
+        {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          requestId: ApprovalRequestId.makeUnsafe("request-1"),
+          answers: {
+            q1: "yes",
+          },
+          lifecycleGeneration: "generation-1",
+          createdAt: "2026-02-27T00:01:00.000Z",
         },
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
+        {
+          commandId: CommandId.makeUnsafe("command-user-input-response"),
+        },
+      ),
     ]);
 
-    expect(next.threads[0]?.hasPendingUserInput).toBe(false);
+    expect(threadsOf(next)[0]?.hasPendingUserInput).toBe(false);
+    expect(threadsOf(next)[0]?.pendingInteractions?.[0]?.status).toBe("responding");
+    expect(threadsOf(next)[0]?.pendingInteractions?.[0]?.responseCommandId).toBe(
+      CommandId.makeUnsafe("command-user-input-response"),
+    );
     expect(
-      next.threads[0]?.activities.some(
-        (activity) =>
-          activity.kind === "user-input.resolved" &&
-          (activity.payload as Record<string, unknown>).requestId === "request-1",
-      ),
-    ).toBe(true);
+      threadsOf(next)[0]?.activities.some((activity) => activity.kind === "user-input.resolved"),
+    ).toBe(false);
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingUserInput).toBe(false);
+
+    const retryable = applyOrchestrationEvents(next, [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: makeActivity({
+          id: "activity-user-input-retryable",
+          kind: "provider.user-input.respond.failed",
+          payload: {
+            requestId: "request-1",
+            lifecycleGeneration: "generation-1",
+            responseCommandId: "command-user-input-response",
+            settlementStatus: "retryable",
+          },
+          sequence: 3,
+        }),
+      }),
+    ]);
+    expect(threadsOf(retryable)[0]?.pendingInteractions?.[0]?.status).toBe("retryable");
+    expect(threadsOf(retryable)[0]?.hasPendingUserInput).toBe(true);
+
+    const confirmed = applyOrchestrationEvents(retryable, [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: makeActivity({
+          id: "activity-user-input-confirmed",
+          kind: "user-input.resolved",
+          payload: {
+            requestId: "request-1",
+            lifecycleGeneration: "generation-1",
+          },
+          sequence: 4,
+        }),
+      }),
+    ]);
+    expect(threadsOf(confirmed)[0]?.pendingInteractions).toEqual([]);
+    expect(threadsOf(confirmed)[0]?.hasPendingUserInput).toBe(false);
   });
 
   it("clears pending approval summary state when an approval response is requested", () => {
@@ -3477,6 +3601,22 @@ describe("store read model sync", () => {
       ),
       makeReadModel(
         makeReadModelThread({
+          hasPendingApprovals: true,
+          pendingInteractions: [
+            {
+              interactionKind: "approval",
+              requestId: ApprovalRequestId.makeUnsafe("request-1"),
+              threadId: ThreadId.makeUnsafe("thread-1"),
+              turnId: null,
+              lifecycleGeneration: "generation-1",
+              status: "pending",
+              decision: null,
+              responseCommandId: null,
+              responseRequestedAt: null,
+              createdAt: "2026-02-27T00:00:30.000Z",
+              resolvedAt: null,
+            },
+          ],
           activities: [
             makeActivity({
               id: "activity-approval-requested",
@@ -3486,6 +3626,7 @@ describe("store read model sync", () => {
               tone: "approval",
               payload: {
                 requestId: "request-1",
+                lifecycleGeneration: "generation-1",
                 requestKind: "command",
               },
               sequence: 1,
@@ -3496,15 +3637,23 @@ describe("store read model sync", () => {
     );
 
     const next = applyOrchestrationEvents(initialState, [
-      makeDomainEvent("thread.approval-response-requested", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        requestId: ApprovalRequestId.makeUnsafe("request-1"),
-        decision: "accept",
-        createdAt: "2026-02-27T00:01:00.000Z",
-      }),
+      makeDomainEvent(
+        "thread.approval-response-requested",
+        {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          requestId: ApprovalRequestId.makeUnsafe("request-1"),
+          lifecycleGeneration: "generation-1",
+          decision: "accept",
+          createdAt: "2026-02-27T00:01:00.000Z",
+        },
+        {
+          commandId: CommandId.makeUnsafe("command-approval-response"),
+        },
+      ),
     ]);
 
-    expect(next.threads[0]?.hasPendingApprovals).toBe(false);
+    expect(threadsOf(next)[0]?.hasPendingApprovals).toBe(false);
+    expect(threadsOf(next)[0]?.pendingInteractions?.[0]?.status).toBe("responding");
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingApprovals).toBe(false);
   });
 
@@ -3528,7 +3677,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:07:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
@@ -3545,9 +3694,9 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads).toHaveLength(1);
-    expect(next.threads[0]?.id).toBe("thread-archived");
-    expect(next.threads[0]?.archivedAt).toBe("2026-02-27T00:05:00.000Z");
+    expect(threadsOf(next)).toHaveLength(1);
+    expect(threadsOf(next)[0]?.id).toBe("thread-archived");
+    expect(threadsOf(next)[0]?.archivedAt).toBe("2026-02-27T00:05:00.000Z");
     expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
       "2026-02-27T00:05:00.000Z",
     );
@@ -3573,10 +3722,10 @@ describe("store read model sync", () => {
           deletedAt: "2026-02-27T00:06:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
-    expect(next.threads).toHaveLength(0);
+    expect(threadsOf(next)).toHaveLength(0);
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
@@ -3606,7 +3755,7 @@ describe("store read model sync", () => {
         session: null,
       }),
     );
-    expect(afterStaleSnapshot.threads).toHaveLength(0);
+    expect(threadsOf(afterStaleSnapshot)).toHaveLength(0);
     expect(afterStaleSnapshot.threadShellById?.[threadId]).toBeUndefined();
   });
 
@@ -3624,7 +3773,7 @@ describe("store read model sync", () => {
 
     const next = removeDeletedThreadFromClientState(initialState, threadId);
 
-    expect(next.threads).toHaveLength(0);
+    expect(threadsOf(next)).toHaveLength(0);
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
@@ -3669,7 +3818,7 @@ describe("store read model sync", () => {
     );
 
     expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
-    expect(next.threads).toHaveLength(0);
+    expect(threadsOf(next)).toHaveLength(0);
     expect(next.threadIds).not.toContain(threadId);
     expect(next.threadShellById?.[threadId]).toBeUndefined();
     expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
@@ -3718,7 +3867,7 @@ describe("store read model sync", () => {
     );
 
     expect(removedState.deletedThreadIdsById?.[threadId]).toBeUndefined();
-    expect(next.threads).toHaveLength(1);
+    expect(threadsOf(next)).toHaveLength(1);
     expect(next.threadIds).toContain(threadId);
     expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
   });
@@ -3770,7 +3919,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:03:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
@@ -3778,7 +3927,7 @@ describe("store read model sync", () => {
       updatedAt: "2026-02-27T00:03:00.000Z",
     });
     expect(next.threadShellById?.[threadId]?.title).toBe("Renamed title");
-    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed title");
+    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe("Renamed title");
   });
 
   it("updates sidebar summaries when a hot-path session starts running", () => {
@@ -3809,7 +3958,7 @@ describe("store read model sync", () => {
           },
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById[threadId]?.session).toMatchObject({
@@ -3851,7 +4000,7 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:07:00.000Z",
         }),
       ],
-      { updateThreadArray: false },
+      { updateSidebarSummary: true },
     );
 
     expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
@@ -3879,7 +4028,6 @@ describe("store read model sync", () => {
           cwd: "/tmp/project-1",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -3933,7 +4081,6 @@ describe("store read model sync", () => {
           cwd: "/tmp/project-2",
         }),
       ],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
@@ -4040,7 +4187,6 @@ describe("store read model sync", () => {
             localName: "synara",
           }),
         ],
-        threads: [makeThread()],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       }));
@@ -4098,7 +4244,6 @@ describe("store read model sync", () => {
             cwd: "/tmp/project",
           }),
         ],
-        threads: [makeThread()],
         sidebarThreadSummaryById: {},
         threadsHydrated: true,
       }));
@@ -4143,9 +4288,9 @@ describe("store read model sync", () => {
     } satisfies OrchestrationReadModel;
 
     const hydratedState = syncServerReadModel(makeState(makeThread()), readModel);
-    const thread = hydratedState.threads[0];
+    const thread = threadsOf(hydratedState)[0];
     const next = syncServerReadModel(hydratedState, readModel);
 
-    expect(next.threads[0]).toBe(thread);
+    expect(threadsOf(next)[0]).toBe(thread);
   });
 });

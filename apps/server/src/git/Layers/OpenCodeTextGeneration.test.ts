@@ -16,7 +16,10 @@ import {
   type OpenCodeRuntimeShape,
 } from "../../provider/opencodeRuntime.ts";
 import { OpenCodeTextGeneration } from "../Services/TextGeneration.ts";
-import { OpenCodeTextGenerationServiceLive } from "./OpenCodeTextGeneration.ts";
+import {
+  makeOpenCodeTextGenerationServiceLive,
+  OpenCodeTextGenerationServiceLive,
+} from "./OpenCodeTextGeneration.ts";
 
 const runtimeMock = {
   state: {
@@ -163,7 +166,7 @@ const OpenCodeTextGenerationTestLayer = Layer.mergeAll(
 
 const OpenCodeTextGenerationExistingServerTestLayer = Layer.mergeAll(
   NodeServices.layer,
-  OpenCodeTextGenerationServiceLive.pipe(
+  makeOpenCodeTextGenerationServiceLive(() => Effect.succeed("secret-password")).pipe(
     Layer.provide(OpenCodeTextGenerationExistingServerConfigLayer),
     Layer.provide(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
     Layer.provide(NodeServices.layer),
@@ -501,7 +504,6 @@ it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
           providerOptions: {
             opencode: {
               serverUrl: "http://127.0.0.1:9999",
-              serverPassword: "secret-password",
             },
           },
         });
@@ -514,7 +516,6 @@ it.layer(OpenCodeTextGenerationExistingServerTestLayer)(
           providerOptions: {
             opencode: {
               serverUrl: "http://127.0.0.1:9999",
-              serverPassword: "secret-password",
             },
           },
         });

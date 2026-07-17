@@ -103,6 +103,7 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      closeRuntimeEvents: Effect.void,
       streamEvents: Stream.empty,
     };
 
@@ -162,6 +163,7 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      closeRuntimeEvents: Effect.void,
       streamEvents: Stream.empty,
     };
 

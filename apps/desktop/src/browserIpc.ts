@@ -21,31 +21,7 @@ import type {
 } from "@synara/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
-
-export const BROWSER_IPC_CHANNELS = {
-  state: "desktop:browser-state",
-  open: "desktop:browser-open",
-  close: "desktop:browser-close",
-  hide: "desktop:browser-hide",
-  getState: "desktop:browser-get-state",
-  setBounds: "desktop:browser-set-bounds",
-  attachWebview: "desktop:browser-attach-webview",
-  detachWebview: "desktop:browser-detach-webview",
-  requestOpenPanel: "desktop:browser-use-request-open-panel",
-  copyLink: "desktop:browser-copy-link",
-  requestCopyLink: "desktop:browser-request-copy-link",
-  copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
-  captureScreenshot: "desktop:browser-capture-screenshot",
-  executeCdp: "desktop:browser-execute-cdp",
-  navigate: "desktop:browser-navigate",
-  reload: "desktop:browser-reload",
-  goBack: "desktop:browser-go-back",
-  goForward: "desktop:browser-go-forward",
-  newTab: "desktop:browser-new-tab",
-  closeTab: "desktop:browser-close-tab",
-  selectTab: "desktop:browser-select-tab",
-  openDevTools: "desktop:browser-open-devtools",
-} as const;
+import { BROWSER_IPC_CHANNELS } from "./ipcChannels";
 
 // Pushes the latest browser state snapshot to the renderer shell.
 export function sendBrowserState(
