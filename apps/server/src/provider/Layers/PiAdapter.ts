@@ -34,6 +34,7 @@ import {
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   ProviderAdapterRequestError,
@@ -78,6 +79,7 @@ type PiAgentRuntime = Awaited<ReturnType<PiCodingAgentModule["createAgentSession
 let piCodingAgentModulePromise: Promise<PiCodingAgentModule> | undefined;
 
 interface PiSessionContext {
+  harnessPolicyDelivered?: boolean;
   runtime: PiAgentRuntime;
   modelRegistry: PiModelRegistry;
   session: ProviderSession;
@@ -1916,8 +1918,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             resumeCursor: getSessionFile(context.runtime.session),
           };
         }
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: false,
+        });
+        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         void context.runtime.session
-          .prompt(payload.text, payload.images.length > 0 ? { images: payload.images } : undefined)
+          .prompt(providerText, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
             completePromptRejection(context, turnId, cause);
           });
@@ -1932,6 +1939,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         const payload = yield* buildPromptPayload(input);
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider: PROVIDER,
+          scopedGatewayConnectionAvailable: false,
+        });
+        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
@@ -1939,7 +1951,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         if (context.runtime.session.isStreaming) {
           yield* Effect.tryPromise({
-            try: () => context.runtime.session.steer(payload.text, payload.images),
+            try: () => context.runtime.session.steer(providerText, payload.images),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -1951,7 +1963,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         } else {
           void context.runtime.session
             .prompt(
-              payload.text,
+              providerText,
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
             .catch((cause) => {

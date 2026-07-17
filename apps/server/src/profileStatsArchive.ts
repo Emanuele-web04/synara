@@ -51,6 +51,7 @@ interface TokenActivityRow {
   // selection applies as the fallback.
   readonly provider: string | null;
   readonly model: string | null;
+  readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
 }
 
@@ -291,7 +292,11 @@ export function aggregateThreadTokenRows(
         ? total
         : Math.max(0, total - previousCumulativeTotal);
     previousCumulativeTotal = total;
-    if (delta <= 0 || row.createdAt === null) {
+    if (
+      delta <= 0 ||
+      row.createdAt === null ||
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+    ) {
       continue;
     }
     const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
@@ -324,7 +329,11 @@ export function aggregateThreadTokenRows(
         : Math.max(0, total - previousUsedTotal);
     previousUsedTotal = total;
     previousUsedProviderModelKey = providerModelKey;
-    if (delta <= 0 || row.createdAt === null) {
+    if (
+      delta <= 0 ||
+      row.createdAt === null ||
+      (row.dispatchOrigin != null && row.dispatchOrigin !== "user")
+    ) {
       continue;
     }
     addTokenSnapshotRow(tokensByKey, {
@@ -521,10 +530,13 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       const projectId = thread.projectId ?? null;
 
       const turnEventRows = yield* sql<TurnEventRow>`
-        SELECT payload_json AS payloadJson
-        FROM orchestration_events
-        WHERE event_type = 'thread.turn-start-requested'
-          AND COALESCE(json_extract(payload_json, '$.threadId'), stream_id) = ${threadId}
+        SELECT e.payload_json AS payloadJson
+        FROM orchestration_events e
+        LEFT JOIN projection_thread_messages m
+          ON m.message_id = json_extract(e.payload_json, '$.messageId')
+        WHERE e.event_type = 'thread.turn-start-requested'
+          AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${threadId}
+          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
       `;
       // Same counters and per-turn attribution as the live
       // profileStats.queryTokenActivity: both token counters come back raw so
@@ -540,11 +552,18 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
           tm.provider AS provider,
           tm.model AS model,
+          pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt
         FROM projection_thread_activities a
         LEFT JOIN turn_model tm
           ON tm.thread_id = a.thread_id
          AND tm.turn_id = a.turn_id
+        LEFT JOIN projection_turns pt
+          ON pt.thread_id = a.thread_id
+         AND pt.turn_id = a.turn_id
+        LEFT JOIN projection_thread_messages pm
+          ON pm.thread_id = pt.thread_id
+         AND pm.message_id = pt.pending_message_id
         WHERE a.thread_id = ${threadId}
           AND a.kind = 'context-window.updated'
           AND COALESCE(
@@ -567,6 +586,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND role = 'user'
           AND source = 'native'
+          AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
         ORDER BY created_at ASC, message_id ASC
       `;
 
@@ -604,6 +624,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           WHERE thread_id = ${threadId}
             AND role = 'user'
             AND source = 'native'
+            AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
         `;
         yield* Effect.forEach(
           turnRows,

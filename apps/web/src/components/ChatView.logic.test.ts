@@ -1796,7 +1796,11 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
 });
 
 describe("resolveQueuedSteerGateTransition", () => {
-  const armedGate = { sawInterruptGap: false, gapStartedAt: null };
+  const armedGate = {
+    sawInterruptGap: false,
+    gapStartedAt: null,
+    armedActiveTurnId: "turn-original",
+  };
   const now = 1_000_000;
 
   it("holds without expiry while the original turn is still running", () => {
@@ -1804,13 +1808,40 @@ describe("resolveQueuedSteerGateTransition", () => {
       gate: armedGate,
       phase: "running",
       sessionErrored: false,
+      activeTurnId: "turn-original",
       now,
     });
     expect(transition).toEqual({
       kind: "hold",
-      gate: { sawInterruptGap: false, gapStartedAt: null },
+      gate: armedGate,
       expiresInMs: null,
     });
+  });
+
+  it("adopts the live turn id when the gate was armed before the projection caught up", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: false, gapStartedAt: null, armedActiveTurnId: null },
+      phase: "running",
+      sessionErrored: false,
+      activeTurnId: "turn-original",
+      now,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: armedGate,
+      expiresInMs: null,
+    });
+  });
+
+  it("clears when the active turn id flips without an observed idle gap", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: armedGate,
+      phase: "running",
+      sessionErrored: false,
+      activeTurnId: "turn-steered",
+      now,
+    });
+    expect(transition).toEqual({ kind: "clear" });
   });
 
   it("starts the gap timer when the interrupt lands and the phase leaves running", () => {
@@ -1818,34 +1849,37 @@ describe("resolveQueuedSteerGateTransition", () => {
       gate: armedGate,
       phase: "ready",
       sessionErrored: false,
+      activeTurnId: null,
       now,
     });
     expect(transition).toEqual({
       kind: "hold",
-      gate: { sawInterruptGap: true, gapStartedAt: now },
+      gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
       expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS,
     });
   });
 
   it("keeps counting down from the original gap start on re-evaluation", () => {
     const transition = resolveQueuedSteerGateTransition({
-      gate: { sawInterruptGap: true, gapStartedAt: now },
+      gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
       phase: "ready",
       sessionErrored: false,
+      activeTurnId: null,
       now: now + 5_000,
     });
     expect(transition).toEqual({
       kind: "hold",
-      gate: { sawInterruptGap: true, gapStartedAt: now },
+      gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
       expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS - 5_000,
     });
   });
 
   it("clears once the steered turn starts running after the gap", () => {
     const transition = resolveQueuedSteerGateTransition({
-      gate: { sawInterruptGap: true, gapStartedAt: now },
+      gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
       phase: "running",
       sessionErrored: false,
+      activeTurnId: "turn-steered",
       now: now + 1_000,
     });
     expect(transition).toEqual({ kind: "clear" });
@@ -1853,9 +1887,10 @@ describe("resolveQueuedSteerGateTransition", () => {
 
   it("fails open when the steered turn never starts within the timeout", () => {
     const transition = resolveQueuedSteerGateTransition({
-      gate: { sawInterruptGap: true, gapStartedAt: now },
+      gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
       phase: "ready",
       sessionErrored: false,
+      activeTurnId: null,
       now: now + QUEUED_STEER_GATE_TIMEOUT_MS,
     });
     expect(transition).toEqual({ kind: "clear" });
@@ -1867,14 +1902,16 @@ describe("resolveQueuedSteerGateTransition", () => {
         gate: armedGate,
         phase: "ready",
         sessionErrored: true,
+        activeTurnId: null,
         now,
       }),
     ).toEqual({ kind: "clear" });
     expect(
       resolveQueuedSteerGateTransition({
-        gate: { sawInterruptGap: true, gapStartedAt: now },
+        gate: { ...armedGate, sawInterruptGap: true, gapStartedAt: now },
         phase: "disconnected",
         sessionErrored: false,
+        activeTurnId: null,
         now,
       }),
     ).toEqual({ kind: "clear" });

@@ -120,24 +120,24 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
   yield* sql`
     INSERT INTO projection_thread_messages (
       message_id, thread_id, turn_id, role, text, skills_json, mentions_json,
-      is_streaming, source, created_at, updated_at
+      is_streaming, source, dispatch_origin, created_at, updated_at
     )
     VALUES
       (
         'message-keep-1', 'thread-keep', 'turn-keep-1', 'user',
         'keep one', NULL, NULL,
-        0, 'native', '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:00.000Z'
+        0, 'native', 'user', '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:00.000Z'
       ),
       (
         'message-purge-1', 'thread-purge', 'turn-purge-1', 'user',
         'Use /check-code here',
         '[{"name":"check-code","path":"/skills/check-code/SKILL.md"}]', NULL,
-        0, 'native', '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'
+        0, 'native', 'user', '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'
       ),
       (
         'message-purge-2', 'thread-purge', 'turn-purge-2', 'user',
         'purge two', NULL, '[{"name":"reviewer","path":"agent://reviewer"}]',
-        0, 'native', '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
+        0, 'native', 'agent', '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
       )
   `;
 
@@ -232,19 +232,19 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
     )
     VALUES
       (
-        'thread-keep', 'turn-keep-1', NULL, NULL, 'completed',
+        'thread-keep', 'turn-keep-1', 'message-keep-1', NULL, 'completed',
         '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:10.000Z',
         '2026-06-13T08:06:00.000Z', 1,
         'refs/historical/checkpoints/dGhyZWFkLWtlZXA/turn/1', 'captured', '[]'
       ),
       (
-        'thread-purge', 'turn-purge-1', NULL, NULL, 'completed',
+        'thread-purge', 'turn-purge-1', 'message-purge-1', NULL, 'completed',
         '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:10.000Z',
         '2026-06-13T09:06:00.000Z', 1,
         'refs/historical/checkpoints/dGhyZWFkLXB1cmdl/turn/1', 'captured', '[]'
       ),
       (
-        'thread-purge', 'turn-purge-2', NULL, NULL, 'completed',
+        'thread-purge', 'turn-purge-2', 'message-purge-2', NULL, 'completed',
         '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:10.000Z',
         '2026-06-14T10:06:00.000Z', 2,
         'provider-diff:event-purge-2', 'captured', '[]'
@@ -323,6 +323,40 @@ describe("ProfileStatsArchive", () => {
         model: "claude-haiku-4-5",
         tokens: 1000,
       },
+    ]);
+  });
+
+  it("computes cumulative deltas across agent turns before excluding their usage", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 1_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "user",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 2_500,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "agent",
+        createdAt: "2026-06-13T12:01:00.000Z",
+      },
+      {
+        totalProcessedTokens: 3_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5.5",
+        dispatchOrigin: "user",
+        createdAt: "2026-06-13T12:02:00.000Z",
+      },
+    ]);
+
+    expect(rows.map(({ createdAt, tokens }) => ({ createdAt, tokens }))).toEqual([
+      { createdAt: "2026-06-13T12:00:00.000Z", tokens: 1_000 },
+      { createdAt: "2026-06-13T12:02:00.000Z", tokens: 500 },
     ]);
   });
 

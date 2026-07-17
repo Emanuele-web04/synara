@@ -5,6 +5,7 @@
 
 import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 
 import {
   isGrokContextCompactionToolCall,
@@ -13,7 +14,18 @@ import {
   parseXaiLanguageModelDescriptors,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
+  takeGrokSynaraHarnessPolicyTextPart,
 } from "./GrokAdapter.ts";
+
+describe("Grok Synara harness policy", () => {
+  it("delivers private scoped host context once", () => {
+    const state: { harnessPolicyDelivered?: boolean } = {};
+    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)?.text).toContain(
+      SYNARA_HARNESS_POLICY_MARKER,
+    );
+    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)).toBeNull();
+  });
+});
 
 describe("GrokAdapter runtime event scoping", () => {
   it("makes reused ACP assistant segment ids unique per DP turn", () => {

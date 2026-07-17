@@ -1140,6 +1140,66 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 
+  it("preserves Synara tool calls when a separate creation recap is present", () => {
+    const createTool = workEntry(
+      "synara-create-tool",
+      "2026-01-01T00:00:01Z",
+      "Synara created threads",
+    );
+    const creationRecap: TimelineEntry = {
+      id: "entry-synara-create-recap",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:02Z",
+      entry: {
+        id: "synara-create-recap",
+        createdAt: "2026-01-01T00:00:02Z",
+        label: "Created 2 Synara threads",
+        tone: "info",
+        synaraThreadCreation: {
+          operationId: "gateway:create:two",
+          requestedCount: 2,
+          createdCount: 2,
+          threads: [
+            {
+              threadId: "thread-1",
+              title: "First",
+              provider: "codex",
+              model: "gpt-5.6-terra",
+              environment: "local",
+              status: "task_dispatched",
+            },
+            {
+              threadId: "thread-2",
+              title: "Second",
+              provider: "claudeAgent",
+              model: "claude-sonnet-5",
+              environment: "local",
+              status: "task_dispatched",
+            },
+          ],
+        },
+      },
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        createTool,
+        creationRecap,
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "final",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual([
+      "work:synara-create-tool",
+      "work:synara-create-recap",
+    ]);
+  });
+
   const worktreeSetupSnapshot = (): WorktreeSetupSnapshot => ({
     steps: [
       { id: "create-worktree", label: "Creating branch and worktree", status: "done" },

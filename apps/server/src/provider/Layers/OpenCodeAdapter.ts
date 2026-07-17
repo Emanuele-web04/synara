@@ -39,6 +39,7 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
 import { KiloAdapter, type KiloAdapterShape } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
@@ -126,6 +127,7 @@ interface OpenCodeTurnSnapshot {
 }
 
 interface OpenCodeSessionContext {
+  harnessPolicyDelivered?: boolean;
   session: ProviderSession;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
@@ -3850,6 +3852,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             issue: `${adapterConfig.displayName} turns require text input or at least one attachment.`,
           });
         }
+        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
+          provider,
+          scopedGatewayConnectionAvailable: false,
+        });
+        const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
 
         const agent =
           input.modelSelection?.provider === provider
@@ -3911,7 +3918,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
               noReply: false,
-              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+              parts: [
+                ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
+                ...fileParts,
+              ],
             },
           });
           if (snapshotWatchdogBaseline.canStartWatchdog) {
@@ -3930,7 +3940,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               model: parsedModel,
               ...(context.activeAgent ? { agent: context.activeAgent } : {}),
               ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+              parts: [
+                ...(providerText ? [{ type: "text" as const, text: providerText }] : []),
+                ...fileParts,
+              ],
             },
           });
           // OpenCode lacks Kilo's prompt-accepted hard-fail watchdog, but it still

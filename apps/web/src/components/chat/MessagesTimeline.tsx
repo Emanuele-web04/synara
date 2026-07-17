@@ -72,6 +72,8 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
+import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
@@ -106,11 +108,15 @@ import {
 } from "./MessagesTimeline.logic";
 import {
   deriveReadableCommandDisplay,
+  deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
   resolveCommandVisualKind,
+  sanitizeSynaraMcpToolPreview,
+  type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { SynaraLogo } from "../SynaraLogo";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import {
   formatAgentActivityEntryPreview,
@@ -225,6 +231,12 @@ export interface MessagesTimelineController {
 // target agent-task rows specifically; both render the shared central robot glyph.
 const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
+// Synara mark sized/toned like the other tool-row glyphs: `text-current` beats
+// the logo's built-in `text-foreground` so the row's muted tone applies.
+const SynaraToolIcon: LucideIcon = ({ className, ...props }) => (
+  <SynaraLogo {...props} className={cn("text-current", className)} />
+);
+
 // Keeps the origin/steer marker visually attached to the whole sent-message stack.
 // Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
 // which the timelineHeight estimator also uses — keep presentation-only concerns here.
@@ -233,6 +245,7 @@ const USER_TURN_MARKER_PRESENTATION: Record<
   { readonly Icon: LucideIcon; readonly label: string }
 > = {
   automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  agent: { Icon: BotIcon, label: "Sent by agent" },
   steer: { Icon: SteerIcon, label: "Steering conversation" },
 };
 
@@ -400,6 +413,8 @@ interface MessagesTimelineProps {
   threadMarkers?: readonly ThreadMarker[];
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
+  /** Provenance for a conversation created from another Synara task. */
+  crossTaskOrigin?: CrossTaskOrigin | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -458,6 +473,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onTogglePinMessage,
   threadMarkers = [],
   enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
+  crossTaskOrigin = null,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -618,10 +634,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const firstUserMessageId = useMemo(() => {
+    for (const row of rows) {
+      if (row.kind === "message" && row.message.role === "user") {
+        return row.message.id;
+      }
+    }
+    return null;
+  }, [rows]);
   const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -629,6 +654,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -636,6 +662,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       threadMarkersByMessageId,
     }),
     [
+      crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
       expandedCollapsedWork,
@@ -643,6 +670,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedFileListByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      firstUserMessageId,
       highlightedMessageId,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
@@ -961,7 +989,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "work" &&
         (() => {
           const groupId = row.id;
-          const groupedEntries = row.groupedEntries;
+          // Creation milestones are reserved for the end-of-turn recap card.
+          // The provider's actual Synara MCP tool rows remain visible here.
+          const groupedEntries = row.groupedEntries.filter(
+            (workEntry) => !workEntry.synaraThreadCreation,
+          );
+          if (groupedEntries.length === 0) {
+            return null;
+          }
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
@@ -1071,156 +1106,166 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             pastedTextCount: renderedPastedTexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
+          const showCrossTaskOrigin =
+            crossTaskOrigin !== null && row.message.id === firstUserMessageId;
           return (
-            <div className="flex w-full justify-end">
-              <div
-                className={cn(
-                  "group flex flex-col items-end gap-px",
-                  isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
-                )}
-              >
-                {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <UserDispatchModeChip
-                  dispatchMode={row.message.dispatchMode}
-                  dispatchOrigin={row.message.dispatchOrigin}
-                  hasLeadingMedia={hasLeadingMedia}
+            <div className="flex w-full flex-col gap-3">
+              {showCrossTaskOrigin ? (
+                <CrossTaskOriginLabel
+                  origin={crossTaskOrigin}
+                  {...(onOpenThread ? { onOpenSourceThread: onOpenThread } : {})}
                 />
-                {renderedAssistantSelections.length > 0 && (
-                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
-                    <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
-                  </div>
-                )}
-                {renderedFileComments.length > 0 && (
-                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
-                    <FileCommentsSummaryChip comments={renderedFileComments} />
-                  </div>
-                )}
-                {renderedPastedTexts.length > 0 && (
-                  <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
-                    {renderedPastedTexts.map((pasted) => (
-                      <UserMessagePastedTextCard
-                        key={pasted.index}
-                        text={pasted.text}
-                        metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
-                      />
-                    ))}
-                  </div>
-                )}
-                {userFiles.length > 0 && (
-                  <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
-                    {userFiles.map((file) => (
-                      <FileAttachmentChip key={file.id} file={file} />
-                    ))}
-                  </div>
-                )}
-                {userImages.length > 0 && (
-                  <div
-                    className={cn(
-                      "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
-                      showUserText && "mb-1",
-                    )}
-                  >
-                    {userImages.map((image) => (
-                      <UserImageAttachmentThumbnail
-                        key={image.id}
-                        image={image}
-                        userImages={userImages}
-                        onImageExpand={onImageExpand}
-                        onTimelineImageLoad={
-                          isTailContentRow ? scrollTailExpansionToEnd : ignoreTimelineImageLoad
-                        }
-                        resolvedTheme={resolvedTheme}
-                      />
-                    ))}
-                  </div>
-                )}
-                {isEditingThisMessage ? (
-                  <UserMessageEditForm
-                    key={row.message.id}
-                    initialValue={displayedUserMessage.copyText}
-                    disabled={isSubmittingThisEdit || isRevertingCheckpoint}
-                    chatTypographyStyle={userMessageTypographyStyle}
-                    onCancel={cancelUserMessageEdit}
-                    onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+              ) : null}
+              <div className="flex w-full justify-end">
+                <div
+                  className={cn(
+                    "group flex flex-col items-end gap-px",
+                    isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
+                  )}
+                >
+                  {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
+                  <UserDispatchModeChip
+                    dispatchMode={row.message.dispatchMode}
+                    dispatchOrigin={row.message.dispatchOrigin}
+                    hasLeadingMedia={hasLeadingMedia}
                   />
-                ) : showUserText ? (
-                  <div
-                    className={cn(
-                      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
-                      USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-                      bubbleIsChipOnly
-                        ? "py-0.5 px-3"
-                        : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
-                    )}
-                  >
-                    <UserMessageCollapsibleText
-                      text={userMessageText}
-                      expanded={userMessageExpanded}
-                      chatFontSizePx={normalizedChatFontSizePx}
-                      onToggle={() => {
-                        setExpandedUserMessagesById((previous) => ({
-                          ...previous,
-                          [row.message.id]: !(previous[row.message.id] ?? false),
-                        }));
-                      }}
-                    >
-                      <UserMessageBody
-                        text={userMessageText}
-                        mentionReferences={row.message.mentions ?? []}
-                        terminalContexts={terminalContexts}
-                        chatTypographyStyle={userMessageTypographyStyle}
-                        resolvedTheme={resolvedTheme}
-                        markdownCwd={markdownCwd}
-                      />
-                    </UserMessageCollapsibleText>
-                  </div>
-                ) : null}
-                {!isEditingThisMessage && (
-                  <div
-                    className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
-                    style={chatMessageFooterStyle}
-                  >
-                    <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      {displayedUserMessage.copyText && (
-                        <MessageCopyButton
-                          text={displayedUserMessage.copyText}
-                          className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                        />
-                      )}
-                      {showEditUserMessage && (
-                        <MessageActionButton
-                          label="Edit message"
-                          tooltip="Edit and resend"
-                          disabled={isRevertingCheckpoint}
-                          className={cn(
-                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
-                            "disabled:text-muted-foreground/35",
-                          )}
-                          onClick={() => startUserMessageEdit(row.message.id)}
-                        >
-                          <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                        </MessageActionButton>
-                      )}
-                      {canRevertAgentWork ? (
-                        <MessageActionButton
-                          label="Revert to this message"
-                          tooltip="Revert to this message"
-                          disabled={isRevertingCheckpoint || isWorking}
-                          className={cn(
-                            MESSAGE_HOVER_REVEAL_CLASS_NAME,
-                            "disabled:text-muted-foreground/35",
-                          )}
-                          onClick={() => onRevertUserMessage(row.message.id)}
-                        >
-                          <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                        </MessageActionButton>
-                      ) : null}
+                  {renderedAssistantSelections.length > 0 && (
+                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                      <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
                     </div>
-                  </div>
-                )}
+                  )}
+                  {renderedFileComments.length > 0 && (
+                    <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                      <FileCommentsSummaryChip comments={renderedFileComments} />
+                    </div>
+                  )}
+                  {renderedPastedTexts.length > 0 && (
+                    <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                      {renderedPastedTexts.map((pasted) => (
+                        <UserMessagePastedTextCard
+                          key={pasted.index}
+                          text={pasted.text}
+                          metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {userFiles.length > 0 && (
+                    <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                      {userFiles.map((file) => (
+                        <FileAttachmentChip key={file.id} file={file} />
+                      ))}
+                    </div>
+                  )}
+                  {userImages.length > 0 && (
+                    <div
+                      className={cn(
+                        "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
+                        showUserText && "mb-1",
+                      )}
+                    >
+                      {userImages.map((image) => (
+                        <UserImageAttachmentThumbnail
+                          key={image.id}
+                          image={image}
+                          userImages={userImages}
+                          onImageExpand={onImageExpand}
+                          onTimelineImageLoad={
+                            isTailContentRow ? scrollTailExpansionToEnd : ignoreTimelineImageLoad
+                          }
+                          resolvedTheme={resolvedTheme}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {isEditingThisMessage ? (
+                    <UserMessageEditForm
+                      key={row.message.id}
+                      initialValue={displayedUserMessage.copyText}
+                      disabled={isSubmittingThisEdit || isRevertingCheckpoint}
+                      chatTypographyStyle={userMessageTypographyStyle}
+                      onCancel={cancelUserMessageEdit}
+                      onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+                    />
+                  ) : showUserText ? (
+                    <div
+                      className={cn(
+                        "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+                        USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+                        bubbleIsChipOnly
+                          ? "py-0.5 px-3"
+                          : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+                      )}
+                    >
+                      <UserMessageCollapsibleText
+                        text={userMessageText}
+                        expanded={userMessageExpanded}
+                        chatFontSizePx={normalizedChatFontSizePx}
+                        onToggle={() => {
+                          setExpandedUserMessagesById((previous) => ({
+                            ...previous,
+                            [row.message.id]: !(previous[row.message.id] ?? false),
+                          }));
+                        }}
+                      >
+                        <UserMessageBody
+                          text={userMessageText}
+                          mentionReferences={row.message.mentions ?? []}
+                          terminalContexts={terminalContexts}
+                          chatTypographyStyle={userMessageTypographyStyle}
+                          resolvedTheme={resolvedTheme}
+                          markdownCwd={markdownCwd}
+                        />
+                      </UserMessageCollapsibleText>
+                    </div>
+                  ) : null}
+                  {!isEditingThisMessage && (
+                    <div
+                      className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
+                      style={chatMessageFooterStyle}
+                    >
+                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                        {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        {displayedUserMessage.copyText && (
+                          <MessageCopyButton
+                            text={displayedUserMessage.copyText}
+                            className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                          />
+                        )}
+                        {showEditUserMessage && (
+                          <MessageActionButton
+                            label="Edit message"
+                            tooltip="Edit and resend"
+                            disabled={isRevertingCheckpoint}
+                            className={cn(
+                              MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                              "disabled:text-muted-foreground/35",
+                            )}
+                            onClick={() => startUserMessageEdit(row.message.id)}
+                          >
+                            <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          </MessageActionButton>
+                        )}
+                        {canRevertAgentWork ? (
+                          <MessageActionButton
+                            label="Revert to this message"
+                            tooltip="Revert to this message"
+                            disabled={isRevertingCheckpoint || isWorking}
+                            className={cn(
+                              MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                              "disabled:text-muted-foreground/35",
+                            )}
+                            onClick={() => onRevertUserMessage(row.message.id)}
+                          >
+                            <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          </MessageActionButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -1233,8 +1278,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
-            const toolEntries = workEntries.filter((entry) => entry.tone === "tool");
-            const statusEntries = workEntries.filter((entry) => entry.tone !== "tool");
+            const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
+            const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
+            const statusEntries = displayEntries.filter((entry) => entry.tone !== "tool");
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
             const toolExpanded =
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
@@ -1324,7 +1370,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ]
             .filter((value): value is string => Boolean(value))
             .join(" • ");
-          const collapsedTurnItems = row.collapsedTurnItems;
+          const allTurnWorkEntries = [
+            ...(row.leadingWorkEntries ?? []),
+            ...(row.inlineWorkEntries ?? []),
+            ...(row.collapsedTurnItems ?? []).flatMap((item) =>
+              item.kind === "work" ? [item.entry] : [],
+            ),
+          ];
+          const synaraThreadCreationRecaps = [
+            ...new Map(
+              allTurnWorkEntries.flatMap((entry) =>
+                entry.synaraThreadCreation
+                  ? [[entry.synaraThreadCreation.operationId, entry.synaraThreadCreation] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
+          const collapsedTurnItems = row.collapsedTurnItems?.filter(
+            (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
+          );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
@@ -1565,6 +1629,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ) : null}
                   </div>
                 )}
+                {!row.assistantTurnInProgress && row.showAssistantCopyButton
+                  ? synaraThreadCreationRecaps.map((creation) => (
+                      <div key={creation.operationId} className="mt-2 mb-4">
+                        <SynaraThreadCreationCard
+                          creation={creation}
+                          {...(onOpenThread
+                            ? {
+                                onOpenThread: (createdThreadId) =>
+                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                              }
+                            : {})}
+                        />
+                      </div>
+                    ))
+                  : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
@@ -2752,6 +2831,29 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
+// Synara's own agent-gateway tools (synara_list_threads, synara_create_thread,
+// ...) get the Synara mark instead of the generic MCP glyph. Providers report
+// the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
+// agents surface the bare tool name (synara_*), and Codex reports server/tool
+// pairs that the label humanizer renders as "Synara: ...".
+function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
+  if (workEntry.toolStatus) return workEntry.toolStatus;
+  return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
+    ? "running"
+    : "completed";
+}
+
+function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
+  return (
+    deriveSynaraMcpToolTitle({
+      toolName: workEntry.toolName,
+      title: workEntry.toolTitle,
+      fallbackLabel: workEntry.label,
+      status: toolWorkEntryStatus(workEntry),
+    }) !== null
+  );
+}
+
 // Render command, agent-task, file-change, and file-read rows at the tighter
 // compact density so every tool-call line shares one height regardless of whether
 // it carries a disclosure chevron.
@@ -2786,6 +2888,15 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  const synaraTitle = deriveSynaraMcpToolTitle({
+    toolName: workEntry.toolName,
+    title: workEntry.toolTitle,
+    fallbackLabel: workEntry.label,
+    status: toolWorkEntryStatus(workEntry),
+  });
+  if (synaraTitle) {
+    return synaraTitle;
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
@@ -2962,17 +3073,34 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
-  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
+  const isSynaraToolRow = !isGitHubToolRow && isSynaraToolCall(workEntry);
+  const isMcpToolRow =
+    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
+  const LeftIcon = isGitHubToolRow
+    ? GitHubIcon
+    : isSynaraToolRow
+      ? SynaraToolIcon
+      : isMcpToolRow
+        ? McpIcon
+        : EntryIcon;
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
-      : isMcpToolRow
-        ? "mcp"
-        : undefined;
+      : isSynaraToolRow
+        ? "synara"
+        : isMcpToolRow
+          ? "mcp"
+          : undefined;
   const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
+  const rawPreview = workEntryPreview(workEntry);
+  const preview = isSynaraToolRow
+    ? sanitizeSynaraMcpToolPreview({
+        preview: rawPreview,
+        heading,
+        status: toolWorkEntryStatus(workEntry),
+      })
+    : rawPreview;
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : isReasoningUpdateWorkEntry(workEntry) && preview

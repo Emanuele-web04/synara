@@ -234,9 +234,144 @@ function ensureCodexOverlaySymlink(input: {
   linkOrCopyCodexOverlayEntry(input);
 }
 
+export function appendCodexConfigSection(config: string, section: string): string {
+  const trimmedSection = section.trim();
+  if (!trimmedSection) {
+    return config;
+  }
+  if (config.includes(trimmedSection.split("\n")[0] ?? trimmedSection)) {
+    return config;
+  }
+  const base = config.trimEnd();
+  return base.length > 0 ? `${base}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
+}
+
+export const SYNARA_MANAGED_CODEX_CONFIG_BEGIN = "# >>> synara managed config >>>";
+export const SYNARA_MANAGED_CODEX_CONFIG_END = "# <<< synara managed config <<<";
+
+export function extractManagedCodexConfigSection(config: string): string | undefined {
+  const begin = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_BEGIN);
+  if (begin === -1) {
+    return undefined;
+  }
+  const contentStart = begin + SYNARA_MANAGED_CODEX_CONFIG_BEGIN.length;
+  const end = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_END, contentStart);
+  if (end === -1) {
+    return undefined;
+  }
+  const content = config.slice(contentStart, end).trim();
+  return content.length > 0 ? content : undefined;
+}
+
+function normalizeTomlTableHeaderName(line: string): string | undefined {
+  const match = /^\s*\[\s*(.*?)\s*\]\s*(?:#.*)?$/.exec(line);
+  if (!match) {
+    return undefined;
+  }
+  const tableName = match[1];
+  if (tableName === undefined) {
+    return undefined;
+  }
+  return tableName
+    .split(".")
+    .map((part) => part.trim())
+    .join(".");
+}
+
+function findTomlTableHeader(config: string, header: string) {
+  const target = normalizeTomlTableHeaderName(header);
+  if (!target) {
+    return undefined;
+  }
+  let offset = 0;
+  for (const rawLine of config.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (normalizeTomlTableHeaderName(line) === target) {
+      return { index: offset, end: offset + line.length };
+    }
+    offset += rawLine.length + 1;
+  }
+  return undefined;
+}
+
+function findNextTomlTableHeaderIndex(config: string, start: number): number {
+  const tail = config.slice(start);
+  let offset = 0;
+  for (const rawLine of tail.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (normalizeTomlTableHeaderName(line) !== undefined) {
+      return start + offset;
+    }
+    offset += rawLine.length + 1;
+  }
+  return config.length;
+}
+
+export function configHasTomlTableHeader(config: string, header: string): boolean {
+  return findTomlTableHeader(config, header) !== undefined;
+}
+
+function splitTomlTables(snippet: string): string[] {
+  const tables: string[] = [];
+  let current: string[] = [];
+  for (const line of snippet.split("\n")) {
+    if (/^\s*\[/.test(line) && current.length > 0) {
+      tables.push(current.join("\n").trim());
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) {
+    tables.push(current.join("\n").trim());
+  }
+  return tables.filter((table) => table.length > 0);
+}
+
+export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
+  if (!envVarName) {
+    return config;
+  }
+  const headerMatch = findTomlTableHeader(config, "[shell_environment_policy]");
+  if (!headerMatch) {
+    return config;
+  }
+  const tableStart = headerMatch.end;
+  const tableEnd = findNextTomlTableHeaderIndex(config, tableStart);
+  const tableBody = config.slice(tableStart, tableEnd);
+  const quotedVar = JSON.stringify(envVarName);
+
+  if (tableBody.includes(quotedVar) || tableBody.includes(`'${envVarName}'`)) {
+    return config;
+  }
+
+  const excludePattern = /(^\s*exclude\s*=\s*\[)/m;
+  const excludeMatch = excludePattern.exec(tableBody);
+  if (excludeMatch) {
+    const insertAt = tableStart + excludeMatch.index + excludeMatch[0].length;
+    return `${config.slice(0, insertAt)}${quotedVar}, ${config.slice(insertAt)}`;
+  }
+
+  return `${config.slice(0, tableStart)}\nexclude = [${quotedVar}]${config.slice(tableStart)}`;
+}
+
+function appendManagedCodexConfigSection(config: string, section: string): string {
+  const tables = splitTomlTables(section.trim()).filter((table) => {
+    const header = table.split("\n")[0]?.trim();
+    return header === undefined || !configHasTomlTableHeader(config, header);
+  });
+  if (tables.length === 0) {
+    return config;
+  }
+  return appendCodexConfigSection(
+    config,
+    `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
+  );
+}
+
 function prepareSynaraCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly appendConfigToml?: string;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
@@ -277,11 +412,21 @@ function prepareSynaraCodexHomeOverlay(input: {
       ...readSynaraConfigSuppressions(suppressionMarkerPath),
     ]),
   ].slice(0, MAX_CONFIG_SUPPRESSION_SECTIONS);
-  writeFileSync(
-    path.join(overlayHomePath, "config.toml"),
-    disableCodexConfigSections(sourceConfig, suppressedSections, true),
-    "utf8",
-  );
+  const overlayConfigPath = path.join(overlayHomePath, "config.toml");
+  let overlayConfig = disableCodexConfigSections(sourceConfig, suppressedSections, true);
+  const managedSection =
+    input.appendConfigToml ??
+    (existsSync(overlayConfigPath)
+      ? extractManagedCodexConfigSection(readFileSync(overlayConfigPath, "utf8"))
+      : undefined);
+  if (managedSection) {
+    overlayConfig = appendManagedCodexConfigSection(overlayConfig, managedSection);
+    const tokenEnvVar = /bearer_token_env_var\s*=\s*"([^"]+)"/.exec(managedSection)?.[1];
+    if (tokenEnvVar) {
+      overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
+    }
+  }
+  writeFileSync(overlayConfigPath, overlayConfig, "utf8");
   writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   return overlayHomePath;
@@ -293,12 +438,14 @@ export function buildCodexProcessEnv(
     readonly homePath?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
+    readonly appendConfigToml?: string;
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
   const overlayHomePath = prepareSynaraCodexHomeOverlay({
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
   });
   const effectiveEnv =
     overlayHomePath || input.homePath

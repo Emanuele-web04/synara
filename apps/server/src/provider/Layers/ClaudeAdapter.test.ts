@@ -21,10 +21,15 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Layer, Random, Stream } from "effect";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  buildEmbeddedClaudeSystemPromptAppend,
+  makeClaudeAdapterLive,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -305,6 +310,21 @@ function autoCompactWindowFromOptions(options: ClaudeQueryOptions | undefined): 
 const THREAD_ID = ThreadId.makeUnsafe("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.makeUnsafe("thread-claude-resume");
 
+describe("Claude Synara harness policy", () => {
+  it("advertises scoped MCP additively when credentials are available", () => {
+    const text = buildEmbeddedClaudeSystemPromptAppend(true);
+    assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
+    assert.include(text, "Use the synara_* tools");
+    assert.notInclude(text, "Synara MCP control is unavailable");
+  });
+
+  it("stays truthful when scoped MCP credentials are absent", () => {
+    const text = buildEmbeddedClaudeSystemPromptAppend(false);
+    assert.include(text, SYNARA_HARNESS_POLICY_MARKER);
+    assert.include(text, "Synara MCP control is unavailable");
+  });
+});
+
 describe("ClaudeAdapterLive", () => {
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
@@ -366,16 +386,20 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
-      assert.deepEqual(createInput?.options.systemPrompt, {
-        type: "preset",
-        preset: "claude_code",
-        append: [
-          "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
-          "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
-          "Treat the current working directory as the active workspace for the task.",
-          "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
-        ].join("\n"),
-      });
+      const systemPrompt = createInput?.options.systemPrompt;
+      if (
+        systemPrompt === undefined ||
+        typeof systemPrompt === "string" ||
+        Array.isArray(systemPrompt) ||
+        systemPrompt.type !== "preset"
+      ) {
+        return assert.fail("Expected Claude preset system prompt.");
+      }
+      assert.equal(systemPrompt.preset, "claude_code");
+      assert.include(systemPrompt.append ?? "", SYNARA_HARNESS_POLICY_MARKER);
+      assert.include(systemPrompt.append ?? "", "Synara is the host and harness");
+      // This characterization harness intentionally omits gateway credentials.
+      assert.include(systemPrompt.append ?? "", "Synara MCP control is unavailable");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

@@ -5,6 +5,7 @@ import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 import {
   type OpenCodeCliModelDescriptor,
   OpenCodeRuntimeError,
@@ -1624,6 +1625,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
 
     expect(runtime.promptCalls).toHaveLength(1);
+    const firstPromptText = (
+      runtime.promptCalls[0]?.parts as ReadonlyArray<{ readonly text?: string }> | undefined
+    )?.[0]?.text;
+    expect(firstPromptText).toContain(SYNARA_HARNESS_POLICY_MARKER);
+    expect(firstPromptText).toContain("Synara MCP control is unavailable");
     expect(runtime.promptCalls[0]).toMatchObject({
       model: {
         providerID: "openai",

@@ -1,20 +1,24 @@
 // FILE: userTurnMarker.ts
 // Purpose: Single predicate for the marker chip above a sent user message
-// ("Sent via Automation" / "Steering conversation"). Shared by the transcript
+// ("Sent via Automation" / "Sent by agent" / "Steering conversation"). Shared by the transcript
 // renderer (MessagesTimeline) and the row-height estimator (timelineHeight) so
 // what gets rendered and what gets measured can never drift apart.
 // Layer: web chat feature (pure logic, no I/O).
 
-// Automation-dispatched turns take precedence over the steer marker; a turn is
-// never both (automations always dispatch with dispatchMode "queue").
-export type UserTurnMarkerKind = "automation" | "steer";
+// Server-dispatched turns (automation runs, agent gateway tools) take
+// precedence over the steer marker so the origin stays visible even for
+// steered dispatches.
+export type UserTurnMarkerKind = "automation" | "agent" | "steer";
 
 export function resolveUserTurnMarker(message: {
   readonly dispatchMode?: "queue" | "steer" | undefined;
-  readonly dispatchOrigin?: "user" | "automation" | undefined;
+  readonly dispatchOrigin?: "user" | "automation" | "agent" | undefined;
 }): UserTurnMarkerKind | null {
   if (message.dispatchOrigin === "automation") {
     return "automation";
+  }
+  if (message.dispatchOrigin === "agent") {
+    return "agent";
   }
   if (message.dispatchMode === "steer") {
     return "steer";

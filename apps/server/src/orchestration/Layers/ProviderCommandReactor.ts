@@ -16,6 +16,7 @@ import {
   type ProviderReviewTarget,
   type ProviderStartOptions,
   type ProviderSkillReference,
+  type ProviderTurnStartResult,
   type OrchestrationSession,
   type OrchestrationProjectShell,
   type OrchestrationThread,
@@ -346,11 +347,22 @@ const make = Effect.gen(function* () {
   >();
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
-  // Threads with a drained queued turn whose `thread.turn-start-requested` has
-  // been dispatched into the engine but not yet processed by the worker. While
-  // set, recovery drains and terminal-event drains must hold off so two queued
-  // turns are never promoted at once.
-  const pendingQueuedDispatchThreads = new Set<string>();
+  // Provider sessions with a drained queued turn whose promotion is in flight.
+  // The reservation survives provider startup and binds to the exact turn that
+  // must settle before another queue can drain, preventing late terminal events
+  // from promoting overlapping work.
+  // Keyed by the session-owning thread id (child subagent threads share the
+  // parent session, so per-child keys would allow overlapping promotions on
+  // one session); the queued thread + message pair identifies the promoted
+  // command, while object identity protects a replacement reservation for a
+  // retry of that same command.
+  type PendingQueuedDispatch = {
+    readonly queuedThreadId: string;
+    readonly messageId: string;
+    releaseOnTurnId?: TurnId;
+    pendingTerminalTurnIds?: Set<TurnId>;
+  };
+  const pendingQueuedDispatchBySessionThread = new Map<string, PendingQueuedDispatch>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
   // Fresh sessions that cannot inherit native conversation state need one
   // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
@@ -614,12 +626,19 @@ const make = Effect.gen(function* () {
   // directions (queueing after the turn already settled, or dispatching while
   // a turn is still live). Adapters clear `activeTurnId` synchronously with
   // emitting `turn.completed`/`turn.aborted`, so this check is authoritative.
-  const hasLiveProviderTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
+  // Child subagent threads share their parent's provider session, so the
+  // lookup must resolve to the session-owning thread — a raw child-id lookup
+  // would always miss and drain queued child messages into a live turn.
+  const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const providerThread = yield* resolveProviderSessionThread(threadId);
+    const sessionThreadId = providerThread?.id ?? threadId;
     const session = yield* providerService
       .listSessions()
-      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === threadId)));
-    return session?.status === "running" && session.activeTurnId !== undefined;
+      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
+    return session?.status === "running" ? session.activeTurnId : undefined;
   });
+  const hasLiveProviderTurn = (threadId: ThreadId) =>
+    resolveLiveProviderTurnId(threadId).pipe(Effect.map((turnId) => turnId !== undefined));
 
   const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
     `${threadId}:${messageId}`;
@@ -1264,17 +1283,18 @@ const make = Effect.gen(function* () {
       input.threadId,
     );
     let pendingContextBootstrapAttempt: PendingContextBootstrapAttempt | undefined;
+    let startedTurn: ProviderTurnStartResult | undefined;
 
     if (input.reviewTarget !== undefined) {
       yield* capturePreTurnBaselines;
-      yield* providerService
+      startedTurn = yield* providerService
         .startReview({
           threadId: input.threadId,
           target: input.reviewTarget,
         })
         .pipe(Effect.onError(() => cancelPendingStudioBaseline));
     } else if (input.dispatchMode === "steer") {
-      yield* providerService.steerTurn({
+      startedTurn = yield* providerService.steerTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
         ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -1372,6 +1392,7 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      startedTurn = sentTurn;
       if (pendingContextBootstrapAttempt) {
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
@@ -1414,6 +1435,7 @@ const make = Effect.gen(function* () {
       rollbackContextBootstrapThreadIds.delete(input.threadId);
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
+    return startedTurn;
   });
 
   const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
@@ -1664,156 +1686,210 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
-    // This turn start (queued promotion or direct decider dispatch) is now
-    // being handled on the serialized worker, so the in-flight marker set by
-    // the drain path has served its purpose.
-    pendingQueuedDispatchThreads.delete(event.payload.threadId);
-    const key = turnStartKeyForEvent(event);
-    if (yield* hasHandledTurnStartRecently(key)) {
-      return;
-    }
+    const sessionThreadId =
+      (yield* resolveProviderSessionThread(event.payload.threadId))?.id ?? event.payload.threadId;
+    const matchesEvent = (entry: PendingQueuedDispatch | undefined) =>
+      entry?.queuedThreadId === (event.payload.threadId as string) &&
+      entry.messageId === event.payload.messageId;
+    const reservationAtStart = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+    const isPendingQueuedDispatch = matchesEvent(reservationAtStart);
+    const ownsReservation = (entry: PendingQueuedDispatch | undefined) =>
+      isPendingQueuedDispatch && entry === reservationAtStart;
+    const clearPendingQueuedDispatch = Effect.sync(() => {
+      if (ownsReservation(pendingQueuedDispatchBySessionThread.get(sessionThreadId))) {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+      }
+    });
+    const bindPendingQueuedDispatchToTurn = Effect.fnUntraced(function* (turnId: TurnId) {
+      const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+      if (reservation === undefined || !ownsReservation(reservation)) {
+        return;
+      }
+      reservation.releaseOnTurnId = turnId;
+      const completedBeforeBinding = reservation.pendingTerminalTurnIds?.has(turnId);
+      delete reservation.pendingTerminalTurnIds;
+      if (completedBeforeBinding) {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+        yield* drainQueuedTurnsForSession(event.payload.threadId);
+      }
+    });
+    try {
+      const key = turnStartKeyForEvent(event);
+      if (yield* hasHandledTurnStartRecently(key)) {
+        return;
+      }
 
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
-      return;
-    }
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (!thread) {
+        return;
+      }
 
-    const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
-    if (!message || message.role !== "user") {
-      yield* appendProviderFailureActivity({
-        threadId: event.payload.threadId,
-        kind: "provider.turn.start.failed",
-        summary: "Provider turn start failed",
-        detail: `User message '${event.payload.messageId}' was not found for turn start request.`,
-        turnId: null,
-        createdAt: event.payload.createdAt,
-      });
-      return;
-    }
-
-    // The decider routes turn starts from the projected session, which can lag
-    // the runtime: a message dispatched right as another turn begins (e.g. the
-    // gap between a steer interrupt and the steered turn's start) would race a
-    // live provider turn. Codex steers ride the live turn natively; everything
-    // else re-queues and is promoted when the live turn settles.
-    const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
-    const isCodexSteer = event.payload.dispatchMode === "steer" && providerName === "codex";
-    if (!isCodexSteer && (yield* hasLiveProviderTurn(event.payload.threadId))) {
-      yield* enqueueQueuedTurnStart(event.payload);
-      if (event.payload.dispatchMode === "steer") {
-        // Preserve steer semantics: jump the queue (enqueue unshifts steers)
-        // and ask the live turn to stop so the steer dispatches next.
-        yield* interruptProviderTurn({
+      const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
+      if (!message || message.role !== "user") {
+        yield* appendProviderFailureActivity({
           threadId: event.payload.threadId,
+          kind: "provider.turn.start.failed",
+          summary: "Provider turn start failed",
+          detail: `User message '${event.payload.messageId}' was not found for turn start request.`,
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        });
+        return;
+      }
+
+      // The decider routes turn starts from the projected session, which can lag
+      // the runtime: a message dispatched right as another turn begins (e.g. the
+      // gap between a steer interrupt and the steered turn's start) would race a
+      // live provider turn. Codex steers ride the live turn natively; everything
+      // else re-queues and is promoted when the live turn settles.
+      const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
+      const liveTurnId = yield* resolveLiveProviderTurnId(event.payload.threadId);
+      const hasLiveTurn = liveTurnId !== undefined;
+      // Steering is only meaningful against a live turn. The projection can
+      // lag the runtime in the other direction too (turn already settled but
+      // still projected as running), so recheck live state and dispatch a
+      // settled codex "steer" as a normal queued turn — the native steer path
+      // would skip the turn-start checkpoint.
+      const isCodexSteer =
+        event.payload.dispatchMode === "steer" && providerName === "codex" && hasLiveTurn;
+      if (!isCodexSteer && hasLiveTurn) {
+        yield* enqueueQueuedTurnStart(event.payload);
+        // The promotion raced another live turn and was re-queued. Release
+        // only when that exact blocking turn settles, not on any late
+        // terminal event for the shared provider session.
+        yield* bindPendingQueuedDispatchToTurn(liveTurnId);
+        if (event.payload.dispatchMode === "steer") {
+          // Preserve steer semantics: jump the queue (enqueue unshifts steers)
+          // and ask the live turn to stop so the steer dispatches next.
+          yield* interruptProviderTurn({
+            threadId: event.payload.threadId,
+            createdAt: event.payload.createdAt,
+          });
+        }
+        return;
+      }
+
+      // Surface the upcoming work immediately: provider session init can take
+      // seconds (e.g. Cursor), and without an early status the thread reads as
+      // idle until the runtime's first event. Mirrors the message-edit-resend
+      // path. Never touches a live session — a steer turn on a running Codex
+      // session must keep its running state and activeTurnId. Keeps the existing
+      // session's runtimeMode: ensureSessionForThread detects mode changes by
+      // comparing against it, and adopting the requested mode here would mask
+      // the restart.
+      if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
+        yield* setThreadSession({
+          threadId: event.payload.threadId,
+          session: {
+            threadId: event.payload.threadId,
+            status: "starting",
+            providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+            runtimeMode:
+              thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: event.payload.createdAt,
+          },
           createdAt: event.payload.createdAt,
         });
       }
-      return;
-    }
 
-    // Surface the upcoming work immediately: provider session init can take
-    // seconds (e.g. Cursor), and without an early status the thread reads as
-    // idle until the runtime's first event. Mirrors the message-edit-resend
-    // path. Never touches a live session — a steer turn on a running Codex
-    // session must keep its running state and activeTurnId. Keeps the existing
-    // session's runtimeMode: ensureSessionForThread detects mode changes by
-    // comparing against it, and adopting the requested mode here would mask
-    // the restart.
-    if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
-      yield* setThreadSession({
+      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
         threadId: event.payload.threadId,
-        session: {
-          threadId: event.payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          runtimeMode:
-            thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: event.payload.createdAt,
-        },
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        messageId: message.id,
+        messageText: message.text,
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        ...(event.payload.providerOptions !== undefined
+          ? { providerOptions: event.payload.providerOptions }
+          : {}),
+      }).pipe(Effect.forkScoped);
+      yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
+        threadId: event.payload.threadId,
+        messageId: message.id,
+        messageText: message.text,
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        ...(event.payload.providerOptions !== undefined
+          ? { providerOptions: event.payload.providerOptions }
+          : {}),
+      }).pipe(Effect.forkScoped);
+      // Only a codex steer against a genuinely live turn keeps steer
+      // semantics; anything else that reaches direct dispatch runs as a
+      // normal queued turn (with its turn-start checkpoint).
+      const immediateDispatchMode =
+        event.payload.dispatchMode === "steer" && !isCodexSteer
+          ? "queue"
+          : event.payload.dispatchMode;
+      const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
+
+      const startedTurn = yield* dispatchTurnForThread({
+        threadId: event.payload.threadId,
+        messageId: message.id,
+        messageText: message.text,
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(message.skills !== undefined ? { skills: message.skills } : {}),
+        ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        ...(event.payload.providerOptions !== undefined
+          ? { providerOptions: event.payload.providerOptions }
+          : {}),
+        ...(event.payload.runtimeMode !== undefined
+          ? { runtimeMode: event.payload.runtimeMode }
+          : {}),
+        ...(event.payload.reviewTarget !== undefined
+          ? { reviewTarget: event.payload.reviewTarget }
+          : {}),
+        interactionMode: event.payload.interactionMode,
+        dispatchMode: immediateDispatchMode,
         createdAt: event.payload.createdAt,
-      });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const detail = Cause.pretty(cause);
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Provider turn start failed",
+              detail,
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            });
+            yield* setThreadSessionError({
+              threadId: event.payload.threadId,
+              runtimeMode: event.payload.runtimeMode,
+              detail,
+              createdAt: event.payload.createdAt,
+            });
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
+      );
+      if (startedTurn && isPendingQueuedDispatch) {
+        yield* bindPendingQueuedDispatchToTurn(startedTurn.turnId);
+      }
+    } finally {
+      const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+      if (
+        isPendingQueuedDispatch &&
+        reservation !== undefined &&
+        ownsReservation(reservation) &&
+        reservation.releaseOnTurnId === undefined &&
+        !(yield* hasQueuedTurnStart(event.payload.threadId, event.payload.messageId)) &&
+        !(yield* hasLiveProviderTurn(event.payload.threadId))
+      ) {
+        yield* clearPendingQueuedDispatch;
+        yield* drainQueuedTurnsForSession(event.payload.threadId);
+      }
     }
-
-    yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-      threadId: event.payload.threadId,
-      branch: thread.branch,
-      worktreePath: thread.worktreePath,
-      messageId: message.id,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
-      ...(event.payload.providerOptions !== undefined
-        ? { providerOptions: event.payload.providerOptions }
-        : {}),
-    }).pipe(Effect.forkScoped);
-    yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
-      threadId: event.payload.threadId,
-      messageId: message.id,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
-      ...(event.payload.providerOptions !== undefined
-        ? { providerOptions: event.payload.providerOptions }
-        : {}),
-    }).pipe(Effect.forkScoped);
-    const immediateDispatchMode =
-      event.payload.dispatchMode === "steer" &&
-      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
-        ? "queue"
-        : event.payload.dispatchMode;
-    const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
-
-    yield* dispatchTurnForThread({
-      threadId: event.payload.threadId,
-      messageId: message.id,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(message.skills !== undefined ? { skills: message.skills } : {}),
-      ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
-      ...(event.payload.providerOptions !== undefined
-        ? { providerOptions: event.payload.providerOptions }
-        : {}),
-      ...(event.payload.runtimeMode !== undefined
-        ? { runtimeMode: event.payload.runtimeMode }
-        : {}),
-      ...(event.payload.reviewTarget !== undefined
-        ? { reviewTarget: event.payload.reviewTarget }
-        : {}),
-      interactionMode: event.payload.interactionMode,
-      dispatchMode: immediateDispatchMode,
-      createdAt: event.payload.createdAt,
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.gen(function* () {
-          const detail = Cause.pretty(cause);
-          yield* appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.turn.start.failed",
-            summary: "Provider turn start failed",
-            detail,
-            turnId: null,
-            createdAt: event.payload.createdAt,
-          });
-          yield* setThreadSessionError({
-            threadId: event.payload.threadId,
-            runtimeMode: event.payload.runtimeMode,
-            detail,
-            createdAt: event.payload.createdAt,
-          });
-          yield* drainQueuedTurnsForThread(event.payload.threadId);
-        }),
-      ),
-      Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
-    );
   });
 
   const processTurnQueued = Effect.fnUntraced(function* (
@@ -1832,7 +1908,11 @@ const make = Effect.gen(function* () {
 
   // Promote the next queued message only after the active provider turn settles.
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    if (drainingQueuedTurns.has(threadId) || pendingQueuedDispatchThreads.has(threadId)) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    if (
+      drainingQueuedTurns.has(threadId) ||
+      pendingQueuedDispatchBySessionThread.has(sessionThreadId)
+    ) {
       return;
     }
     drainingQueuedTurns.add(threadId);
@@ -1841,7 +1921,10 @@ const make = Effect.gen(function* () {
       if (!nextQueuedTurn) {
         return;
       }
-      pendingQueuedDispatchThreads.add(threadId);
+      pendingQueuedDispatchBySessionThread.set(sessionThreadId, {
+        queuedThreadId: threadId,
+        messageId: nextQueuedTurn.messageId,
+      });
       yield* orchestrationEngine
         .dispatch({
           type: "thread.turn.dispatch-queued",
@@ -1870,17 +1953,55 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           // A failed promotion must not leave the in-flight marker behind, or
-          // every future drain for this thread would be blocked forever.
-          Effect.onError(() => Effect.sync(() => pendingQueuedDispatchThreads.delete(threadId))),
+          // every future drain for this session would be blocked forever.
+          Effect.onError(() =>
+            Effect.sync(() => pendingQueuedDispatchBySessionThread.delete(sessionThreadId)),
+          ),
         );
     } finally {
       drainingQueuedTurns.delete(threadId);
     }
   });
 
+  const drainQueuedTurnsForSession = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    const queuedThreadIds = new Set<ThreadId>([threadId]);
+    for (const queuedThreadId of [...queuedTurnStartsByThread.keys()]) {
+      const queuedThread = ThreadId.makeUnsafe(queuedThreadId);
+      const providerThread = yield* resolveProviderSessionThread(queuedThread);
+      const queuedSessionThreadId = providerThread?.id ?? queuedThread;
+      if (queuedSessionThreadId === sessionThreadId) {
+        queuedThreadIds.add(queuedThread);
+      }
+    }
+    for (const queuedThreadId of queuedThreadIds) {
+      yield* drainQueuedTurnsForThread(queuedThreadId);
+    }
+  });
+
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     observePendingContextBootstrapTerminalEvent(event);
-    yield* drainQueuedTurnsForThread(event.threadId);
+    const sessionThreadId =
+      (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
+    const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
+    if (reservation) {
+      if (reservation.releaseOnTurnId === undefined) {
+        const terminalTurnIds = reservation.pendingTerminalTurnIds ?? new Set<TurnId>();
+        if (event.turnId !== undefined) {
+          terminalTurnIds.add(event.turnId);
+        }
+        reservation.pendingTerminalTurnIds = terminalTurnIds;
+        return;
+      }
+      if (reservation.releaseOnTurnId !== event.turnId) {
+        return;
+      }
+      pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+    }
+    // Child subagent threads queue under their own id but share the parent's
+    // provider session, and terminal runtime events carry the session-owning
+    // thread id — drain every queue bound to this session.
+    yield* drainQueuedTurnsForSession(event.threadId);
   });
 
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {
@@ -2276,7 +2397,13 @@ const make = Effect.gen(function* () {
     queuedTurnStartsByThread.delete(thread.id);
     yield* clearEditResendTurnStartKeysForThread(thread.id);
     drainingQueuedTurns.delete(thread.id);
-    pendingQueuedDispatchThreads.delete(thread.id);
+    // Reservations are keyed by session-owning thread but may belong to a
+    // stopping child's queued message; drop both directions.
+    for (const [sessionThreadId, reservation] of pendingQueuedDispatchBySessionThread) {
+      if (sessionThreadId === (thread.id as string) || reservation.queuedThreadId === thread.id) {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+      }
+    }
     clearPendingContextBootstraps(thread.id);
     suppressContextBootstrapOnNextStartThreadIds.add(thread.id);
 
