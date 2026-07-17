@@ -216,6 +216,11 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
+    'mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"',
+    "Expected the x64 macOS matrix lane to preserve a distinct updater manifest for merging.",
+  );
+  assertContains(
+    workflow,
     "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}",
     "Expected macOS signing admission to pin the post-build Team ID.",
   );
