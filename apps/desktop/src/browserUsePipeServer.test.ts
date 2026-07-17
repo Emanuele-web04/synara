@@ -182,19 +182,60 @@ describe("browser-use pipe RPC compatibility", () => {
     });
   });
 
-  it("replaces oversized replies with a bounded RPC error", async () => {
-    await withPipeServer({ maxQueuedOutputBytes: 1 }, async (socket) => {
+  it("preserves successful RPC outcomes when their replies exceed the queue budget", async () => {
+    let executeCalls = 0;
+    const browserManager = {
+      getBrowserUseSnapshot: () => ({
+        threadId: "thread-1",
+        state: {
+          open: true,
+          activeTabId: "tab-1",
+          tabs: [
+            {
+              id: "tab-1",
+              title: "Tab",
+              url: "about:blank",
+              lastCommittedUrl: null,
+            },
+          ],
+        },
+      }),
+      executeCdp: async () => {
+        executeCalls += 1;
+        return { payload: "x".repeat(1_024) };
+      },
+    };
+
+    await withPipeServer({ maxQueuedOutputBytes: 1, browserManager }, async (socket) => {
+      const info = await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "codex-session-1" },
+      });
+      expect(info).toMatchObject({ id: 1, result: { type: "iab" } });
+
+      const tabs = await request(socket, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getTabs",
+        params: { session_id: "codex-session-1" },
+      });
+      const tabId = (tabs.result as Array<{ id: number }>)[0]?.id;
+
       await expect(
         request(socket, {
           jsonrpc: "2.0",
-          id: 1,
-          method: "getInfo",
-          params: { session_id: "codex-session-1" },
+          id: 3,
+          method: "executeCdp",
+          params: {
+            session_id: "codex-session-1",
+            target: { tabId },
+            method: "Runtime.evaluate",
+          },
         }),
-      ).resolves.toMatchObject({
-        id: 1,
-        error: { message: "Browser-use output capacity exceeded" },
-      });
+      ).resolves.toMatchObject({ id: 3, result: { payload: "x".repeat(1_024) } });
+      expect(executeCalls).toBe(1);
       expect(socket.destroyed).toBe(false);
     });
   });

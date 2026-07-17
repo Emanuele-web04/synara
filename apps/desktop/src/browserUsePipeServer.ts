@@ -623,17 +623,16 @@ export class BrowserUsePipeServer {
   ): BrowserUseWriteResult {
     const { socket } = client;
     if (socket.destroyed || socket.writableEnded) return "closed";
-    let frame = encodeBrowserUseFrame(message);
+    const frame = encodeBrowserUseFrame(message);
     if (!allowBoundedOverflow && socket.writableLength + frame.length > this.maxQueuedOutputBytes) {
       const requestId = asObject(message)?.id;
       if (typeof requestId !== "string" && typeof requestId !== "number") {
         return "overflow";
       }
-      frame = encodeBrowserUseFrame({
-        jsonrpc: "2.0",
-        id: requestId,
-        error: { code: 1, message: "Browser-use output capacity exceeded" },
-      });
+      // A completed RPC response must preserve the handler's actual outcome. Replacing a
+      // successful response here would make a browser action look failed after it already ran.
+      // The in-flight request cap bounds how many such response frames can be queued, while
+      // unsolicited notifications remain subject to the strict output budget above.
     }
     const didAccept = socket.write(frame);
     if (!didAccept && !client.outputBackpressured) {
