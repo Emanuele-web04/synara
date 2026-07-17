@@ -28,6 +28,13 @@ interface AcpEventStamp {
   readonly createdAt: string;
 }
 
+export function stampAcpRuntimeEventLifecycleGeneration(
+  event: ProviderRuntimeEvent,
+  lifecycleGeneration: string | undefined,
+): ProviderRuntimeEvent {
+  return lifecycleGeneration === undefined ? event : { ...event, lifecycleGeneration };
+}
+
 type AcpCanonicalRequestType = Extract<
   CanonicalRequestType,
   "exec_command_approval" | "file_read_approval" | "file_change_approval" | "unknown"

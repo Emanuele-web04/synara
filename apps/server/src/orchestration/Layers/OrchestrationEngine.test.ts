@@ -9,7 +9,7 @@ import {
   type OrchestrationEvent,
 } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime, Queue, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -19,6 +19,7 @@ import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -50,8 +51,12 @@ async function createOrchestrationSystem() {
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+  const managedAttachmentRepository = await runtime.runPromise(
+    Effect.service(ManagedAttachmentRepository),
+  );
   return {
     engine,
+    managedAttachmentRepository,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -62,6 +67,119 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it("quiesces normal admission while draining reserved lifecycle commands", async () => {
+    const system = await createOrchestrationSystem();
+    const createdAt = now();
+    const threadId = ThreadId.makeUnsafe("thread-engine-quiesce");
+
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-engine-quiesce-project"),
+        projectId: asProjectId("project-engine-quiesce"),
+        title: "Engine quiesce",
+        workspaceRoot: "/tmp/engine-quiesce",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-engine-quiesce-thread"),
+        threadId,
+        projectId: asProjectId("project-engine-quiesce"),
+        title: "Engine quiesce thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    await system.run(system.engine.quiesce);
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-engine-quiesce-normal"),
+          threadId,
+          title: "Rejected after quiesce",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandAdmissionError",
+      reason: "stopped",
+    });
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.makeUnsafe("cmd-engine-quiesce-control"),
+          threadId,
+          createdAt,
+        }),
+      ),
+    ).resolves.toMatchObject({ sequence: expect.any(Number) });
+    await system.run(system.engine.drain);
+    await system.run(system.engine.stop);
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("cmd-engine-stopped-control"),
+          threadId,
+          createdAt,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandAdmissionError",
+      reason: "stopped",
+    });
+
+    await system.dispose();
+  });
+
+  it("returns the original result for an equal retry and rejects unequal command-ID reuse", async () => {
+    const system = await createOrchestrationSystem();
+    const command = {
+      type: "project.create" as const,
+      commandId: CommandId.makeUnsafe("cmd-fingerprint-retry"),
+      projectId: asProjectId("project-fingerprint-retry"),
+      title: "Fingerprint project",
+      workspaceRoot: "/tmp/project-fingerprint-retry",
+      defaultModelSelection: null,
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+
+    const first = await system.run(system.engine.dispatch(command));
+    await expect(system.run(system.engine.dispatch({ ...command }))).resolves.toEqual(first);
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...command,
+          title: "Different command content",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandIdentityCollisionError",
+      commandId: command.commandId,
+    });
+
+    const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));
+    expect(
+      Array.from(events).filter((event) => event.commandId === command.commandId),
+    ).toHaveLength(1);
+    await system.dispose();
+  });
+
   it("returns deterministic read models for repeated reads", async () => {
     const createdAt = now();
     const system = await createOrchestrationSystem();
@@ -119,6 +237,167 @@ describe("OrchestrationEngine", () => {
     const readModelA = await system.run(engine.getReadModel());
     const readModelB = await system.run(engine.getReadModel());
     expect(readModelB).toEqual(readModelA);
+    await system.dispose();
+  });
+
+  it("returns the original sequence for equal retries and rejects unequal command-id reuse", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const command = {
+      type: "project.create" as const,
+      commandId: CommandId.makeUnsafe("cmd-project-command-identity"),
+      projectId: asProjectId("project-command-identity"),
+      title: "Original identity",
+      workspaceRoot: "/tmp/project-command-identity",
+      defaultModelSelection: null,
+      createdAt: now(),
+    };
+
+    const accepted = await system.run(engine.dispatch(command));
+    await expect(system.run(engine.dispatch(command))).resolves.toEqual(accepted);
+    await expect(
+      system.run(engine.dispatch({ ...command, title: "Different identity" })),
+    ).rejects.toThrow("Command identity collision");
+
+    const events = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(Effect.map((chunk) => Array.from(chunk))),
+    );
+    expect(events).toHaveLength(1);
+    expect((await system.run(engine.getReadModel())).projects[0]?.title).toBe("Original identity");
+    await system.dispose();
+  });
+
+  it("claims managed attachments atomically and rejects attachment changes on an accepted retry", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const threadId = ThreadId.makeUnsafe("thread-managed-attachment");
+    const commandId = CommandId.makeUnsafe("cmd-managed-attachment-turn");
+    const messageId = asMessageId("msg-managed-attachment");
+    const principal = { ownerKind: "session" as const, ownerId: "session-a" };
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-managed-attachment-project"),
+        projectId: asProjectId("project-managed-attachment"),
+        title: "Managed attachment project",
+        workspaceRoot: "/tmp/project-managed-attachment",
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-managed-attachment-thread"),
+        threadId,
+        projectId: asProjectId("project-managed-attachment"),
+        title: "Managed attachment thread",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const repository = system.managedAttachmentRepository;
+    const stage = async (attachmentId: string) => {
+      const reserved = await system.run(
+        repository.reserve({
+          attachmentId,
+          ownerThreadId: threadId,
+          ownerKind: principal.ownerKind,
+          ownerId: principal.ownerId,
+          kind: "image",
+          originalName: `${attachmentId}.png`,
+          mimeType: "image/png",
+          reservedBytes: 1,
+          relativePath: `objects/aa/${attachmentId}.png`,
+          now: createdAt,
+        }),
+      );
+      expect(reserved.status).toBe("reserved");
+      await system.run(
+        repository.finalizeStaged({
+          attachmentId,
+          ownerThreadId: threadId,
+          ownerKind: principal.ownerKind,
+          ownerId: principal.ownerId,
+          sizeBytes: 1,
+          sha256: "a".repeat(64),
+          stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+          now: createdAt,
+        }),
+      );
+    };
+    const firstAttachmentId = "att_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const secondAttachmentId = "att_v2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    await stage(firstAttachmentId);
+    await stage(secondAttachmentId);
+
+    const command = {
+      type: "thread.turn.start" as const,
+      commandId,
+      threadId,
+      message: {
+        messageId,
+        role: "user" as const,
+        text: "inspect",
+        attachments: [
+          {
+            type: "image" as const,
+            id: firstAttachmentId,
+            name: "client-value-is-not-authoritative.png",
+            mimeType: "image/png",
+            sizeBytes: 1,
+          },
+        ],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required" as const,
+      createdAt,
+    };
+    const accepted = await system.run(engine.dispatch(command, { attachmentPrincipal: principal }));
+    await expect(
+      system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
+    ).resolves.toEqual(accepted);
+
+    const editResendClaim = await system.run(
+      repository.claimForAcceptedTurn({
+        attachmentIds: [firstAttachmentId],
+        ownerThreadId: threadId,
+        ownerKind: principal.ownerKind,
+        ownerId: principal.ownerId,
+        commandId: "cmd-attachment-edit-resend",
+        messageId,
+        now: new Date().toISOString(),
+      }),
+    );
+    expect(editResendClaim.status).toBe("claimed");
+    await expect(
+      system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
+    ).resolves.toEqual(accepted);
+
+    await expect(
+      system.run(
+        engine.dispatch(
+          {
+            ...command,
+            message: {
+              ...command.message,
+              attachments: [{ ...command.message.attachments[0]!, id: secondAttachmentId }],
+            },
+          },
+          { attachmentPrincipal: principal },
+        ),
+      ),
+    ).rejects.toThrow("Command identity collision");
+
+    const claimed = await system.run(repository.findClaimedForCommand({ commandId }));
+    expect(claimed.map((attachment) => attachment.attachmentId)).toEqual([firstAttachmentId]);
     await system.dispose();
   });
 
@@ -337,6 +616,9 @@ describe("OrchestrationEngine", () => {
         nextSequence += 1;
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
+      },
+      getHighWaterSequence() {
+        return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
@@ -563,6 +845,9 @@ describe("OrchestrationEngine", () => {
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
       },
+      getHighWaterSequence() {
+        return Effect.succeed(events.at(-1)?.sequence ?? 0);
+      },
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
       },
@@ -670,6 +955,9 @@ describe("OrchestrationEngine", () => {
         nextSequence += 1;
         events.push(savedEvent);
         return Effect.succeed(savedEvent);
+      },
+      getHighWaterSequence() {
+        return Effect.succeed(events.at(-1)?.sequence ?? 0);
       },
       readFromSequence(sequenceExclusive) {
         return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
@@ -794,7 +1082,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("schedules one deferred projection catch-up after a deferred projection failure", async () => {
+  it("retries deferred projection catch-up while idle until it recovers", async () => {
     let bootstrapCalls = 0;
     let deferredCalls = 0;
     let resolveRecoveryBootstrap: (() => void) | null = null;
@@ -803,11 +1091,20 @@ describe("OrchestrationEngine", () => {
     });
 
     const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
-      bootstrap: Effect.sync(() => {
+      bootstrap: Effect.suspend(() => {
         bootstrapCalls += 1;
-        if (bootstrapCalls === 2) {
+        if (bootstrapCalls === 2 || bootstrapCalls === 3) {
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "test.deferredProjectionBootstrap",
+              detail: "deferred projection bootstrap failed transiently",
+            }),
+          );
+        }
+        if (bootstrapCalls === 4) {
           resolveRecoveryBootstrap?.();
         }
+        return Effect.void;
       }),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
@@ -892,7 +1189,58 @@ describe("OrchestrationEngine", () => {
 
     expect(result.sequence).toBe(4);
     expect(deferredCalls).toBeGreaterThanOrEqual(1);
-    expect(bootstrapCalls).toBe(2);
+    expect(bootstrapCalls).toBe(4);
+    await vi.waitFor(async () => {
+      expect(await runtime.runPromise(engine.getProjectionCatchUpStatus)).toEqual({
+        state: "healthy",
+        inFlight: false,
+        retryAttempts: 0,
+        lastFailure: null,
+      });
+    });
+
+    await runtime.dispose();
+  });
+
+  it("restores the repair backup when rebuilt projectors do not reach the captured fence", async () => {
+    const nonAdvancingProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.void,
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEvent: () => Effect.void,
+      projectDeferredEvent: () => Effect.void,
+    };
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(
+          Layer.succeed(OrchestrationProjectionPipeline, nonAdvancingProjectionPipeline),
+        ),
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    const createdAt = now();
+
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-repair-fence"),
+        projectId: asProjectId("project-repair-fence"),
+        title: "Repair Fence Project",
+        workspaceRoot: "/tmp/project-repair-fence",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    const beforeRepair = await runtime.runPromise(engine.getReadModel());
+
+    await expect(runtime.runPromise(engine.repairState())).rejects.toThrow(
+      "did not reach captured event fence 1",
+    );
+    await expect(runtime.runPromise(engine.getReadModel())).resolves.toEqual(beforeRepair);
 
     await runtime.dispose();
   });

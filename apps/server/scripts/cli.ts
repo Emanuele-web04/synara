@@ -59,23 +59,16 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
   }
 });
 
-interface PublishIconBackup {
-  readonly targetPath: string;
-  readonly backupPath: string;
-}
-
 const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(function* (
   repoRoot: string,
-  serverDir: string,
+  stagedPackageDir: string,
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const backups: PublishIconBackup[] = [];
 
   for (const override of PUBLISH_ICON_OVERRIDES) {
     const sourcePath = path.join(repoRoot, override.sourceRelativePath);
-    const targetPath = path.join(serverDir, override.targetRelativePath);
-    const backupPath = `${targetPath}.publish-bak`;
+    const targetPath = path.join(stagedPackageDir, override.targetRelativePath);
 
     if (!(yield* fs.exists(sourcePath))) {
       return yield* new CliError({
@@ -88,25 +81,10 @@ const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(functio
       });
     }
 
-    yield* fs.copyFile(targetPath, backupPath);
     yield* fs.copyFile(sourcePath, targetPath);
-    backups.push({ targetPath, backupPath });
   }
 
-  yield* Effect.log("[cli] Applied publish icon overrides to dist/client");
-  return backups as ReadonlyArray<PublishIconBackup>;
-});
-
-const restorePublishIconOverrides = Effect.fn("restorePublishIconOverrides")(function* (
-  backups: ReadonlyArray<PublishIconBackup>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  for (const backup of backups) {
-    if (!(yield* fs.exists(backup.backupPath))) {
-      continue;
-    }
-    yield* fs.rename(backup.backupPath, backup.targetPath);
-  }
+  yield* Effect.log("[cli] Applied publish icon overrides inside the isolated package stage");
 });
 
 const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")(function* (
@@ -197,11 +175,13 @@ const publishCmd = Command.make(
       const fs = yield* FileSystem.FileSystem;
       const repoRoot = yield* RepoRoot;
       const serverDir = path.join(repoRoot, "apps/server");
-      const packageJsonPath = path.join(serverDir, "package.json");
-      const backupPath = `${packageJsonPath}.bak`;
 
       // Assert build assets exist
-      for (const relPath of ["dist/index.mjs", "dist/client/index.html"]) {
+      for (const relPath of [
+        "dist/index.mjs",
+        "dist/restoreMigrationBackup.mjs",
+        "dist/client/index.html",
+      ]) {
         const abs = path.join(serverDir, relPath);
         if (!(yield* fs.exists(abs))) {
           return yield* new CliError({
@@ -210,66 +190,74 @@ const publishCmd = Command.make(
         }
       }
 
-      yield* Effect.acquireUseRelease(
-        // Acquire: backup package.json, resolve catalog: deps, strip devDependencies/scripts
-        Effect.gen(function* () {
-          // Resolve catalog dependencies before any file mutations. If this throws,
-          // acquire fails and no release hook runs, so filesystem must still be untouched.
-          const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
-          const pkg = {
-            name: serverPackageJson.name,
-            repository: serverPackageJson.repository,
-            bin: serverPackageJson.bin,
-            type: serverPackageJson.type,
-            version,
-            engines: serverPackageJson.engines,
-            files: serverPackageJson.files,
-            dependencies: serverPackageJson.dependencies as Record<string, unknown>,
-          };
+      const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
+      const pkg = {
+        name: serverPackageJson.name,
+        license: serverPackageJson.license,
+        repository: serverPackageJson.repository,
+        bin: serverPackageJson.bin,
+        type: serverPackageJson.type,
+        version,
+        engines: serverPackageJson.engines,
+        files: serverPackageJson.files,
+        dependencies: resolveCatalogDependencies(
+          serverPackageJson.dependencies as Record<string, unknown>,
+          resolveRootWorkspaceCatalog(),
+          "apps/server dependencies",
+        ),
+      };
 
-          pkg.dependencies = resolveCatalogDependencies(
-            pkg.dependencies,
-            resolveRootWorkspaceCatalog(),
-            "apps/server dependencies",
-          );
+      const stagedPackageDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-cli-publish-",
+      });
+      yield* fs.copy(path.join(serverDir, "dist"), path.join(stagedPackageDir, "dist"));
+      for (const binTarget of Object.values(pkg.bin)) {
+        if (typeof binTarget !== "string" || !binTarget.startsWith("dist/")) {
+          return yield* new CliError({
+            message: `CLI bin target must stay inside the staged dist directory: ${String(binTarget)}`,
+          });
+        }
+        const stagedBinPath = path.join(stagedPackageDir, binTarget);
+        if (!(yield* fs.exists(stagedBinPath))) {
+          return yield* new CliError({ message: `Missing staged CLI bin target: ${binTarget}` });
+        }
+        const stagedBin = yield* fs.readFileString(stagedBinPath);
+        if (!stagedBin.startsWith("#!/usr/bin/env node\n")) {
+          return yield* new CliError({
+            message: `Staged CLI bin target is missing its Node shebang: ${binTarget}`,
+          });
+        }
+        yield* fs.chmod(stagedBinPath, 0o755);
+      }
+      yield* applyPublishIconOverrides(repoRoot, stagedPackageDir);
+      yield* fs.writeFileString(
+        path.join(stagedPackageDir, "package.json"),
+        `${JSON.stringify(pkg, null, 2)}\n`,
+      );
+      const stagedRootEntries = (yield* fs.readDirectory(stagedPackageDir)).sort();
+      if (
+        stagedRootEntries.length !== 2 ||
+        stagedRootEntries[0] !== "dist" ||
+        stagedRootEntries[1] !== "package.json"
+      ) {
+        return yield* new CliError({
+          message: `Unexpected CLI publish-stage entries: ${stagedRootEntries.join(", ")}`,
+        });
+      }
 
-          const original = yield* fs.readFileString(packageJsonPath);
-          yield* fs.writeFileString(backupPath, original);
-          yield* fs.writeFileString(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
-          yield* Effect.log("[cli] Resolved package.json for publish");
+      const args = ["publish", "--access", config.access, "--tag", config.tag];
+      if (config.provenance) args.push("--provenance");
+      if (config.dryRun) args.push("--dry-run");
 
-          const iconBackups = yield* applyPublishIconOverrides(repoRoot, serverDir);
-          return { iconBackups };
+      yield* Effect.log(`[cli] Running from isolated stage: npm ${args.join(" ")}`);
+      yield* runCommand(
+        ChildProcess.make("npm", [...args], {
+          cwd: stagedPackageDir,
+          stdout: config.verbose ? "inherit" : "ignore",
+          stderr: "inherit",
+          // Windows needs shell mode to resolve .cmd shims.
+          shell: process.platform === "win32",
         }),
-        // Use: npm publish
-        () =>
-          Effect.gen(function* () {
-            const args = ["publish", "--access", config.access, "--tag", config.tag];
-            if (config.provenance) args.push("--provenance");
-            if (config.dryRun) args.push("--dry-run");
-
-            yield* Effect.log(`[cli] Running: npm ${args.join(" ")}`);
-            yield* runCommand(
-              ChildProcess.make("npm", [...args], {
-                cwd: serverDir,
-                stdout: config.verbose ? "inherit" : "ignore",
-                stderr: "inherit",
-                // Windows needs shell mode to resolve .cmd shims.
-                shell: process.platform === "win32",
-              }),
-            );
-          }),
-        // Release: restore
-        (resource: { readonly iconBackups: ReadonlyArray<PublishIconBackup> }) =>
-          Effect.gen(function* () {
-            yield* restorePublishIconOverrides(resource.iconBackups).pipe(
-              Effect.catch((error) =>
-                Effect.logError(`[cli] Failed to restore publish icon overrides: ${String(error)}`),
-              ),
-            );
-            yield* fs.rename(backupPath, packageJsonPath);
-            if (config.verbose) yield* Effect.log("[cli] Restored original package.json");
-          }),
       );
     }),
 ).pipe(Command.withDescription("Publish the server package to npm."));

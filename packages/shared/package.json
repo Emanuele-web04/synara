@@ -40,6 +40,10 @@
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
     },
+    "./windowsCertificate": {
+      "types": "./src/windowsCertificate.ts",
+      "import": "./src/windowsCertificate.ts"
+    },
     "./codexConfig": {
       "types": "./src/codexConfig.ts",
       "import": "./src/codexConfig.ts"
@@ -144,6 +148,22 @@
       "types": "./src/localPreviewFiles.ts",
       "import": "./src/localPreviewFiles.ts"
     },
+    "./binaryTransfer": {
+      "types": "./src/binaryTransfer.ts",
+      "import": "./src/binaryTransfer.ts"
+    },
+    "./outboundHttpPolicy": {
+      "types": "./src/outboundHttpPolicy.ts",
+      "import": "./src/outboundHttpPolicy.ts"
+    },
+    "./outboundHttp": {
+      "types": "./src/outboundHttp.ts",
+      "import": "./src/outboundHttp.ts"
+    },
+    "./chatGptVoiceTranscription": {
+      "types": "./src/chatGptVoiceTranscription.ts",
+      "import": "./src/chatGptVoiceTranscription.ts"
+    },
     "./composerSlashCommands": {
       "types": "./src/composerSlashCommands.ts",
       "import": "./src/composerSlashCommands.ts"
@@ -160,9 +180,21 @@
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
     },
+    "./providerMetadata": {
+      "types": "./src/providerMetadata.ts",
+      "import": "./src/providerMetadata.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"
+    },
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./src/cli.ts"
+    },
+    "./migrationRecovery": {
+      "types": "./src/migrationRecovery.ts",
+      "import": "./src/migrationRecovery.ts"
     }
   },
   "scripts": {

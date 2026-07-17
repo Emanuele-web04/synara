@@ -43,6 +43,14 @@ export class SessionCredentialError extends Data.TaggedError("SessionCredentialE
   readonly cause?: unknown;
 }> {}
 
+export class SessionCapacityError extends Data.TaggedError("SessionCapacityError")<{
+  readonly message: string;
+  readonly scope: "connections" | "websocket-tickets";
+  readonly limit: number;
+  readonly active: number;
+  readonly retryAfterSeconds: number;
+}> {}
+
 export interface SessionCredentialServiceShape {
   readonly cookieName: string;
   readonly issue: (input?: {
@@ -58,7 +66,7 @@ export interface SessionCredentialServiceShape {
     input?: { readonly ttl?: Duration.Duration },
   ) => Effect.Effect<
     { readonly token: string; readonly expiresAt: DateTime.DateTime },
-    SessionCredentialError
+    SessionCredentialError | SessionCapacityError
   >;
   readonly verifyWebSocketToken: (
     token: string,
@@ -72,8 +80,10 @@ export interface SessionCredentialServiceShape {
   readonly revokeAllExcept: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<number, SessionCredentialError>;
-  readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
-  readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
+  readonly runAuthenticatedConnection: <A, E, R>(
+    sessionId: AuthSessionId,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | SessionCredentialError | SessionCapacityError, R>;
 }
 
 export class SessionCredentialService extends ServiceMap.Service<

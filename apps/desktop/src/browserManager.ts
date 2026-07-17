@@ -11,7 +11,6 @@ import {
   clipboard,
   nativeImage,
   session,
-  shell,
   webContents as electronWebContents,
   WebContentsView,
 } from "electron";
@@ -45,7 +44,7 @@ import {
   resolveCopyableBrowserTabUrl,
 } from "@synara/shared/browserSession";
 
-const BROWSER_SESSION_PARTITION = "persist:synara-browser";
+export const BROWSER_SESSION_PARTITION = "persist:synara-browser";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
@@ -418,14 +417,13 @@ export class DesktopBrowserManager {
       webContents.removeListener("before-input-event", closeOnInput);
     });
 
-    // Auth providers can chain popups (provider -> consent). Keep nested windows inside the
-    // shared session too, and send genuine external (non-web) URLs to the OS browser.
+    // Auth providers can chain web popups (provider -> consent). Page-controlled custom
+    // schemes are denied here: browser content must never launch an OS handler implicitly.
     webContents.setWindowOpenHandler((details) => {
       const { url } = details;
       const isWebUrl =
         url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
       if (!isWebUrl) {
-        void shell.openExternal(url);
         return { action: "deny" };
       }
 
@@ -1542,7 +1540,6 @@ export class DesktopBrowserManager {
       const isWebUrl =
         url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
       if (!isWebUrl) {
-        void shell.openExternal(url);
         return { action: "deny" };
       }
 

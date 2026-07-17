@@ -36,6 +36,9 @@ function normalizeHostForComparison(host: string): string {
 // Same-origin is trusted for local loopback, explicitly configured hosts, and
 // wildcard binds where remote-reachable auth/session policy is the real gate.
 function isTrustedRequestOriginHost(requestOrigin: string, config: ServerConfigShape): boolean {
+  if (config.publicUrl && !isLoopbackHost(config.host)) {
+    return false;
+  }
   let requestHost: string;
   try {
     requestHost = new URL(requestOrigin).hostname;
@@ -63,6 +66,7 @@ export function isTrustedAppOrigin(input: {
 }) {
   return (
     !input.origin ||
+    input.origin === input.config.publicUrl?.origin ||
     (input.origin === input.requestOrigin &&
       isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
     input.origin === input.config.devUrl?.origin ||
@@ -90,4 +94,23 @@ export function shouldRejectUntrustedRequestOrigin(input: {
       config: input.config,
     })
   );
+}
+
+export function shouldRejectAuthMutationOrigin(input: {
+  readonly rawOrigin: string | ReadonlyArray<string> | undefined;
+  readonly requestOrigin: string;
+  readonly config: ServerConfigShape;
+  readonly credentialSource: "bearer" | "cookie";
+}) {
+  if (input.rawOrigin === undefined) {
+    return input.credentialSource !== "bearer";
+  }
+  return shouldRejectUntrustedRequestOrigin(input);
+}
+
+/** Remote-reachable sockets always require a real authenticated session. */
+export function requiresWebSocketAuthentication(
+  config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">,
+): boolean {
+  return Boolean(config.authToken) || Boolean(config.publicUrl) || !isLoopbackHost(config.host);
 }

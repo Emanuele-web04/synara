@@ -30,6 +30,7 @@ import { CliConfig, recordStartupHeartbeat, synaraCli, type CliConfigShape } fro
 
 const start = vi.fn(() => undefined);
 const stop = vi.fn(() => undefined);
+const openBrowser = vi.fn((_target: string) => Effect.void);
 let resolvedConfig: ServerConfigShape | null = null;
 const serverStart = Effect.acquireRelease(
   Effect.gen(function* () {
@@ -47,6 +48,10 @@ function makeTempHome(prefix = "synara-main-test-"): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempHomes.add(directory);
   return directory;
+}
+
+function permissionMode(filePath: string): number {
+  return fs.statSync(filePath).mode & 0o777;
 }
 
 // Shared service layer used by this CLI test suite.
@@ -67,7 +72,7 @@ const testLayer = Layer.mergeAll(
     stopSignal: Effect.void,
   } satisfies ServerShape),
   Layer.succeed(Open, {
-    openBrowser: (_target: string) => Effect.void,
+    openBrowser,
     openInEditor: () => Effect.void,
   } satisfies OpenShape),
   AnalyticsService.layerTest,
@@ -119,7 +124,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         "--port",
         "4010",
         "--host",
-        "0.0.0.0",
+        "::1",
         "--home-dir",
         flagHome,
         "--dev-url",
@@ -132,12 +137,14 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4010);
-      assert.equal(resolvedConfig?.host, "0.0.0.0");
+      assert.equal(resolvedConfig?.host, "::1");
       assert.equal(resolvedConfig?.baseDir, flagHome);
       assert.equal(resolvedConfig?.stateDir, path.join(flagHome, "dev"));
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
+      assert.equal(resolvedConfig?.publicUrl, undefined);
+      assert.equal(resolvedConfig?.allowInsecureRemote, false);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
@@ -154,6 +161,48 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
+  it.effect("creates fresh local state directories with private permissions", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return;
+      const homeDir = makeTempHome("synara-main-private-fresh-");
+
+      yield* runCli(["--home-dir", homeDir]);
+
+      const stateDir = path.join(homeDir, "userdata");
+      for (const directoryPath of [
+        stateDir,
+        path.join(stateDir, "secrets"),
+        path.join(stateDir, "attachments"),
+        path.join(stateDir, "logs"),
+        path.join(stateDir, "logs", "provider"),
+        path.join(stateDir, "logs", "terminals"),
+      ]) {
+        assert.equal(permissionMode(directoryPath), 0o700);
+      }
+      assert.equal(permissionMode(path.join(stateDir, "logs", "server.log")), 0o600);
+    }),
+  );
+
+  it.effect("repairs permissions for an upgraded local state directory", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return;
+      const homeDir = makeTempHome("synara-main-private-upgrade-");
+      const stateDir = path.join(homeDir, "userdata");
+      const attachmentDir = path.join(stateDir, "attachments");
+      const attachmentPath = path.join(attachmentDir, "existing.bin");
+      fs.mkdirSync(attachmentDir, { recursive: true, mode: 0o755 });
+      fs.writeFileSync(attachmentPath, "existing", { mode: 0o644 });
+      fs.chmodSync(stateDir, 0o755);
+      fs.chmodSync(attachmentDir, 0o755);
+
+      yield* runCli(["--home-dir", homeDir]);
+
+      assert.equal(permissionMode(stateDir), 0o700);
+      assert.equal(permissionMode(attachmentDir), 0o700);
+      assert.equal(permissionMode(attachmentPath), 0o600);
+    }),
+  );
+
   it.effect("uses env fallbacks when flags are not provided", () =>
     Effect.gen(function* () {
       const envHome = makeTempHome("synara-main-env-");
@@ -161,7 +210,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       yield* runCli([], {
         SYNARA_MODE: "desktop",
         SYNARA_PORT: "4999",
-        SYNARA_HOST: "100.88.10.4",
+        SYNARA_HOST: "127.0.0.1",
         SYNARA_HOME: envHome,
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         SYNARA_NO_BROWSER: "true",
@@ -171,7 +220,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4999);
-      assert.equal(resolvedConfig?.host, "100.88.10.4");
+      assert.equal(resolvedConfig?.host, "127.0.0.1");
       assert.equal(resolvedConfig?.baseDir, envHome);
       assert.equal(resolvedConfig?.stateDir, path.join(envHome, "dev"));
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
@@ -196,7 +245,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "web");
       assert.equal(resolvedConfig?.port, 4666);
-      assert.equal(resolvedConfig?.host, undefined);
+      assert.equal(resolvedConfig?.host, "127.0.0.1");
     }),
   );
 
@@ -211,7 +260,32 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("uses dynamic port discovery in web mode when port is omitted", () =>
+  it.effect("lets explicit negative boolean flags override true environment values", () =>
+    Effect.gen(function* () {
+      yield* runCli(
+        [
+          "--browser",
+          "--no-auto-bootstrap-project-from-cwd",
+          "--no-log-provider-events",
+          "--no-log-websocket-events",
+        ],
+        {
+          SYNARA_MODE: "desktop",
+          SYNARA_NO_BROWSER: "true",
+          SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "true",
+          SYNARA_LOG_PROVIDER_EVENTS: "true",
+          SYNARA_LOG_WS_EVENTS: "true",
+        },
+      );
+
+      assert.equal(resolvedConfig?.noBrowser, false);
+      assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
+      assert.equal(resolvedConfig?.logProviderEvents, false);
+      assert.equal(resolvedConfig?.logWebSocketEvents, false);
+    }),
+  );
+
+  it.effect("uses loopback and dynamic port discovery in web mode by default", () =>
     Effect.gen(function* () {
       findAvailablePort.mockImplementation((_preferred: number) => Effect.succeed(5444));
       yield* runCli([]);
@@ -220,6 +294,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.port, 5444);
       assert.equal(resolvedConfig?.mode, "web");
+      assert.equal(resolvedConfig?.host, "127.0.0.1");
     }),
   );
 
@@ -238,16 +313,194 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("allows overriding desktop host with --host", () =>
+  it.effect("allows authenticated non-loopback exposure only with explicit insecure opt-in", () =>
     Effect.gen(function* () {
-      yield* runCli(["--host", "0.0.0.0"], {
-        SYNARA_MODE: "desktop",
-        SYNARA_NO_BROWSER: "true",
-      });
+      yield* runCli(
+        ["--host", "0.0.0.0", "--auth-token", "remote-secret", "--allow-insecure-remote"],
+        {
+          SYNARA_MODE: "desktop",
+          SYNARA_NO_BROWSER: "true",
+        },
+      );
 
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.host, "0.0.0.0");
+      assert.equal(resolvedConfig?.allowInsecureRemote, true);
+    }),
+  );
+
+  it.effect("honors insecure remote opt-in from the environment when the CLI flag is absent", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--host", "0.0.0.0", "--auth-token", "remote-secret"], {
+        SYNARA_ALLOW_INSECURE_REMOTE: "true",
+        SYNARA_NO_BROWSER: "true",
+      });
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.allowInsecureRemote, true);
+    }),
+  );
+
+  it.effect("lets an explicit insecure-remote negative override an enabled environment", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli(
+          ["--host", "0.0.0.0", "--auth-token", "remote-secret", "--no-allow-insecure-remote"],
+          {
+            SYNARA_ALLOW_INSECURE_REMOTE: "true",
+            SYNARA_NO_BROWSER: "true",
+          },
+        ),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /Refusing plaintext remote access/);
+    }),
+  );
+
+  it.effect("refuses authenticated plaintext remote exposure without an explicit opt-in", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli(["--host", "0.0.0.0", "--auth-token", "remote-secret"]),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /Refusing plaintext remote access/);
+    }),
+  );
+
+  it.effect("uses the HTTPS public origin for remote startup pairing", () =>
+    Effect.gen(function* () {
+      yield* runCli(
+        [
+          "--host",
+          "0.0.0.0",
+          "--auth-token",
+          "remote-secret",
+          "--public-url",
+          "https://synara.example.test",
+        ],
+        { SYNARA_NO_BROWSER: "false" },
+      );
+
+      assert.equal(resolvedConfig?.publicUrl?.origin, "https://synara.example.test");
+      assert.equal(openBrowser.mock.calls.length, 1);
+      assert.match(
+        openBrowser.mock.calls[0]?.[0] ?? "",
+        /^https:\/\/synara\.example\.test\/pair#token=/,
+      );
+    }),
+  );
+
+  it.effect("supports the HTTPS public origin through environment configuration", () =>
+    Effect.gen(function* () {
+      yield* runCli([], {
+        SYNARA_HOST: "192.168.1.50",
+        SYNARA_AUTH_TOKEN: "remote-secret",
+        SYNARA_PUBLIC_URL: "https://synara.example.test",
+      });
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.publicUrl?.origin, "https://synara.example.test");
+      assert.equal(resolvedConfig?.allowInsecureRemote, false);
+    }),
+  );
+
+  it.effect("issues pairing through an HTTPS public origin that proxies to loopback", () =>
+    Effect.gen(function* () {
+      yield* runCli(
+        [
+          "--host",
+          "127.0.0.1",
+          "--auth-token",
+          "proxy-secret",
+          "--public-url",
+          "https://proxy.example.test",
+        ],
+        { SYNARA_NO_BROWSER: "false" },
+      );
+
+      assert.equal(openBrowser.mock.calls.length, 1);
+      assert.match(
+        openBrowser.mock.calls[0]?.[0] ?? "",
+        /^https:\/\/proxy\.example\.test\/pair#token=/,
+      );
+    }),
+  );
+
+  it.effect("refuses a dev URL exposed through an HTTPS proxy on loopback", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli([
+          "--host",
+          "127.0.0.1",
+          "--auth-token",
+          "proxy-secret",
+          "--public-url",
+          "https://proxy.example.test",
+          "--dev-url",
+          "http://localhost:5173",
+        ]),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /cannot be combined with VITE_DEV_SERVER_URL/);
+    }),
+  );
+
+  it.effect("rejects non-root or non-HTTPS public URLs", () =>
+    Effect.gen(function* () {
+      for (const publicUrl of ["http://synara.example.test", "https://synara.example.test/app"]) {
+        const error = yield* Effect.flip(
+          runCli(["--host", "0.0.0.0", "--auth-token", "remote-secret", "--public-url", publicUrl]),
+        );
+        assert.match(String(error), /must be an HTTPS root origin/);
+      }
+      assert.equal(start.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("refuses non-loopback exposure without authentication", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli(["--host", "0.0.0.0"], {
+          SYNARA_MODE: "web",
+          SYNARA_NO_BROWSER: "true",
+        }),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.equal(resolvedConfig, null);
+      assert.match(String(error), /Refusing to bind Synara to non-loopback host 0\.0\.0\.0/);
+    }),
+  );
+
+  it.effect("refuses authenticated non-loopback exposure with a dev URL", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli(
+          [
+            "--host",
+            "0.0.0.0",
+            "--auth-token",
+            "remote-secret",
+            "--dev-url",
+            "http://localhost:5173",
+          ],
+          {
+            SYNARA_MODE: "web",
+            SYNARA_NO_BROWSER: "true",
+          },
+        ),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.equal(resolvedConfig, null);
+      assert.match(
+        String(error),
+        /Remote server binds cannot be combined with VITE_DEV_SERVER_URL/,
+      );
     }),
   );
 
@@ -265,6 +518,19 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, true);
       assert.equal(resolvedConfig?.logProviderEvents, true);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
+    }),
+  );
+
+  it.effect("rejects invalid boolean environment values instead of treating them as absent", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        runCli([], {
+          SYNARA_LOG_PROVIDER_EVENTS: "sometimes",
+        }),
+      );
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /Failed to read environment configuration/);
     }),
   );
 

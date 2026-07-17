@@ -176,11 +176,26 @@ import {
   StatsGetProfileTokenStatsResult,
 } from "./stats";
 import { WS_METHODS } from "./ws";
+import {
+  WS_BOOTSTRAP_METHOD,
+  WsBootstrapNegotiateInput,
+  WsBootstrapNegotiateResult,
+  WsCompatibilityError,
+} from "./wsCompatibility";
 
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
+  code: Schema.optional(Schema.String),
+  retryable: Schema.optional(Schema.Boolean),
+  retryAfterMs: Schema.optional(Schema.Number),
 }) {}
+
+export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {
+  payload: WsBootstrapNegotiateInput,
+  success: WsBootstrapNegotiateResult,
+  error: WsCompatibilityError,
+});
 
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -238,6 +253,24 @@ export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   success: OrchestrationRpcSchemas.replayEvents.output,
   error: WsRpcError,
 });
+
+export const WsOrchestrationListProviderDeliveryBlockersRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
+  {
+    payload: OrchestrationRpcSchemas.listProviderDeliveryBlockers.input,
+    success: OrchestrationRpcSchemas.listProviderDeliveryBlockers.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationReconcileProviderDeliveryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
+  {
+    payload: OrchestrationRpcSchemas.reconcileProviderDelivery.input,
+    success: OrchestrationRpcSchemas.reconcileProviderDelivery.output,
+    error: WsRpcError,
+  },
+);
 
 export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
@@ -869,7 +902,9 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
-export const WsRpcGroup = RpcGroup.make(
+export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
+
+export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
@@ -878,6 +913,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsOrchestrationListProviderDeliveryBlockersRpc,
+  WsOrchestrationReconcileProviderDeliveryRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
@@ -976,3 +1013,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsSubscribeAutomationEventsRpc,
 );
+
+/** @deprecated Use WsFeatureRpcGroup. Bootstrap is intentionally a separate endpoint/group. */
+export const WsRpcGroup = WsFeatureRpcGroup;

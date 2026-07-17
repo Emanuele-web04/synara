@@ -9,6 +9,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+
 export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
 export const LEGACY_CURSOR_AGENT_BINARY = "agent";
 export const CURSOR_EDITOR_BINARY = "cursor";
@@ -259,8 +261,9 @@ export function buildCursorAgentCommand(
 export function buildCursorAgentHeadlessEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    ...CURSOR_AGENT_HEADLESS_PROBE_ENV,
-  };
+  return buildProviderChildEnvironment({
+    provider: "cursor",
+    baseEnv: env,
+    overrides: CURSOR_AGENT_HEADLESS_PROBE_ENV,
+  });
 }

@@ -16,18 +16,42 @@ import type {
   OrchestrationReadModel,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Effect, Scope, Stream } from "effect";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type {
   OrchestrationEventStoreError,
   ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import type { ManagedAttachmentPrincipal } from "../../managedAttachmentPrincipal.ts";
+
+export interface OrchestrationDispatchContext {
+  readonly attachmentPrincipal?: ManagedAttachmentPrincipal;
+}
+
+export interface OrchestrationProjectionCatchUpStatus {
+  readonly state: "healthy" | "degraded";
+  readonly inFlight: boolean;
+  readonly retryAttempts: number;
+  readonly lastFailure: string | null;
+}
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
  */
 export interface OrchestrationEngineShape {
+  /** Reject new normal mutations while retaining reserved lifecycle progress. */
+  readonly quiesce: Effect.Effect<void>;
+
+  /** Resolve after every command admitted before the current idle fence settles. */
+  readonly drain: Effect.Effect<void>;
+
+  /** Reject all admission, drain queued commands, and stop the command worker. */
+  readonly stop: Effect.Effect<void>;
+
+  /** Current deferred-projection recovery state for health and diagnostics. */
+  readonly getProjectionCatchUpStatus: Effect.Effect<OrchestrationProjectionCatchUpStatus>;
+
   /**
    * Replay persisted orchestration events from an exclusive sequence cursor.
    *
@@ -37,6 +61,25 @@ export interface OrchestrationEngineShape {
   readonly readEvents: (
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Read a durable, inclusive high-water-fenced event range for transport catch-up. */
+  readonly readEventsThrough: (
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Capture the durable orchestration event-log high-water sequence. */
+  readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /**
+   * Register a domain-event subscriber before returning its stream. Transport
+   * snapshot handshakes use this exact attachment boundary to close replay gaps.
+   */
+  readonly subscribeDomainEvents: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
 
   /**
    * Read the command-oriented in-memory model used by orchestration tests and
@@ -56,6 +99,7 @@ export interface OrchestrationEngineShape {
    */
   readonly dispatch: (
     command: OrchestrationCommand,
+    context?: OrchestrationDispatchContext,
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**

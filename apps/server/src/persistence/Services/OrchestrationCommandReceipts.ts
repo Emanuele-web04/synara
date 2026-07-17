@@ -12,6 +12,7 @@ import {
   NonNegativeInt,
   OrchestrationAggregateKind,
   OrchestrationCommandReceiptStatus,
+  PositiveInt,
   ProjectId,
   ThreadId,
 } from "@synara/contracts";
@@ -20,7 +21,9 @@ import type { Effect } from "effect";
 
 import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 
-export const OrchestrationCommandReceipt = Schema.Struct({
+const CommandFingerprint = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/));
+
+const ReceiptFields = {
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
   aggregateId: Schema.Union([ProjectId, ThreadId]),
@@ -28,8 +31,21 @@ export const OrchestrationCommandReceipt = Schema.Struct({
   resultSequence: NonNegativeInt,
   status: OrchestrationCommandReceiptStatus,
   error: Schema.NullOr(Schema.String),
+} as const;
+
+export const OrchestrationCommandReceipt = Schema.Struct({
+  ...ReceiptFields,
+  fingerprintVersion: Schema.NullOr(PositiveInt),
+  commandFingerprint: Schema.NullOr(CommandFingerprint),
 });
 export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Type;
+
+export const NewOrchestrationCommandReceipt = Schema.Struct({
+  ...ReceiptFields,
+  fingerprintVersion: PositiveInt,
+  commandFingerprint: CommandFingerprint,
+});
+export type NewOrchestrationCommandReceipt = typeof NewOrchestrationCommandReceipt.Type;
 
 export const GetByCommandIdInput = Schema.Struct({
   commandId: CommandId,
@@ -41,13 +57,14 @@ export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
  */
 export interface OrchestrationCommandReceiptRepositoryShape {
   /**
-   * Insert or replace a command receipt row.
+   * Insert a command receipt without replacing an existing command identity.
    *
-   * Upserts by `commandId` for idempotent command-result tracking.
+   * Returns `false` when `commandId` already exists; callers must compare the stored
+   * fingerprint and must never overwrite its original result.
    */
-  readonly upsert: (
-    receipt: OrchestrationCommandReceipt,
-  ) => Effect.Effect<void, OrchestrationCommandReceiptRepositoryError>;
+  readonly insert: (
+    receipt: NewOrchestrationCommandReceipt,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
 
   /**
    * Read a command receipt by command id.

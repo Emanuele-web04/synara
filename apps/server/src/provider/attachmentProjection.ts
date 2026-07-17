@@ -6,7 +6,7 @@
 import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from "@synara/contracts";
 import { formatBytes } from "@synara/shared/formatBytes";
 
-import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { resolveProviderAttachmentPath } from "./providerAttachmentPaths.ts";
 
 function isProjectedFileAttachment(
   attachment: ChatAttachment,
@@ -41,7 +41,7 @@ export function buildFileAttachmentsPromptBlock(input: {
     if (!isProjectedFileAttachment(attachment, input.include, input.includeImage)) {
       continue;
     }
-    const attachmentPath = resolveAttachmentPath({
+    const attachmentPath = resolveProviderAttachmentPath({
       attachmentsDir: input.attachmentsDir,
       attachment,
     });

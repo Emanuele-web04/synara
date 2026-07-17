@@ -9,6 +9,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import { MIGRATION_035_PAGE_SIZE } from "./035_NormalizeLegacyModelSelectionOptions.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 const decodeModelSelection = Schema.decodeUnknownSync(ModelSelection);
@@ -18,6 +19,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const now = "2026-05-05T14:39:18.000Z";
+      const pagedRowCount = MIGRATION_035_PAGE_SIZE * 2 + 1;
 
       yield* runMigrations({ toMigrationInclusive: 34 });
 
@@ -208,6 +210,123 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         )
       `;
 
+      const pagedSelectionJson = JSON.stringify({
+        instanceId: "codex",
+        model: "gpt-5.5",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      });
+      const pagedEventPayloadJson = JSON.stringify({
+        threadId: "thread-page-fixture",
+        projectId: "project-page-fixture",
+        title: "Paged fixture",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.5",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      yield* sql`
+        WITH RECURSIVE fixture(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM fixture WHERE value < ${pagedRowCount}
+        )
+        INSERT INTO projection_projects (
+          project_id,
+          kind,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        SELECT
+          printf('project-page-%04d', value),
+          'project',
+          printf('Paged Project %04d', value),
+          printf('/tmp/project-page-%04d', value),
+          ${pagedSelectionJson},
+          '[]',
+          ${now},
+          ${now},
+          NULL
+        FROM fixture
+      `;
+      yield* sql`
+        WITH RECURSIVE fixture(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM fixture WHERE value < ${pagedRowCount}
+        )
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          env_mode,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        SELECT
+          printf('thread-page-%04d', value),
+          printf('project-page-%04d', value),
+          printf('Paged Thread %04d', value),
+          ${pagedSelectionJson},
+          'full-access',
+          'default',
+          'local',
+          ${now},
+          ${now},
+          NULL
+        FROM fixture
+      `;
+      yield* sql`
+        WITH RECURSIVE fixture(value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT value + 1 FROM fixture WHERE value < ${pagedRowCount}
+        )
+        INSERT INTO orchestration_events (
+          event_id,
+          aggregate_kind,
+          stream_id,
+          stream_version,
+          event_type,
+          occurred_at,
+          command_id,
+          causation_event_id,
+          correlation_id,
+          actor_kind,
+          payload_json,
+          metadata_json
+        )
+        SELECT
+          printf('event-page-%04d', value),
+          'thread',
+          printf('thread-page-%04d', value),
+          0,
+          'thread.created',
+          ${now},
+          printf('command-page-%04d', value),
+          NULL,
+          NULL,
+          'server',
+          ${pagedEventPayloadJson},
+          '{}'
+        FROM fixture
+      `;
+
       yield* runMigrations();
 
       const projectRows = yield* sql<{ readonly defaultModelSelection: string }>`
@@ -229,6 +348,21 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         SELECT payload_json AS "payloadJson"
         FROM orchestration_events
         ORDER BY sequence ASC
+      `;
+      const pagedProjectRows = yield* sql<{ readonly modelSelection: string }>`
+        SELECT default_model_selection_json AS "modelSelection"
+        FROM projection_projects
+        WHERE project_id = ${`project-page-${String(pagedRowCount).padStart(4, "0")}`}
+      `;
+      const pagedThreadRows = yield* sql<{ readonly modelSelection: string }>`
+        SELECT model_selection_json AS "modelSelection"
+        FROM projection_threads
+        WHERE thread_id = ${`thread-page-${String(pagedRowCount).padStart(4, "0")}`}
+      `;
+      const pagedEventRows = yield* sql<{ readonly payloadJson: string }>`
+        SELECT payload_json AS "payloadJson"
+        FROM orchestration_events
+        WHERE event_id = ${`event-page-${String(pagedRowCount).padStart(4, "0")}`}
       `;
 
       const projectSelection = JSON.parse(projectRows[0]!.defaultModelSelection) as unknown;
@@ -274,6 +408,30 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
         provider: "codex",
         model: "gpt-5.5",
         options: { reasoningEffort: "xhigh" },
+      });
+      assert.deepStrictEqual(
+        decodeModelSelection(JSON.parse(pagedProjectRows[0]!.modelSelection) as unknown),
+        {
+          provider: "codex",
+          model: "gpt-5.5",
+          options: { reasoningEffort: "high" },
+        },
+      );
+      assert.deepStrictEqual(
+        decodeModelSelection(JSON.parse(pagedThreadRows[0]!.modelSelection) as unknown),
+        {
+          provider: "codex",
+          model: "gpt-5.5",
+          options: { reasoningEffort: "high" },
+        },
+      );
+      const pagedEventPayload = JSON.parse(pagedEventRows[0]!.payloadJson) as {
+        readonly modelSelection: unknown;
+      };
+      assert.deepStrictEqual(decodeModelSelection(pagedEventPayload.modelSelection), {
+        provider: "codex",
+        model: "gpt-5.5",
+        options: { reasoningEffort: "high" },
       });
     }),
   );

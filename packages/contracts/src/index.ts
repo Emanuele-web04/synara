@@ -9,6 +9,7 @@ export * from "./providerRuntime";
 export * from "./model";
 export * from "./agentMentions";
 export * from "./ws";
+export * from "./wsCompatibility";
 export * from "./keybindings";
 export * from "./server";
 export * from "./stats";

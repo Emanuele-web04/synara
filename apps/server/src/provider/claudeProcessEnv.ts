@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 import OS from "node:os";
 import nodePath from "node:path";
 
+import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+
 const CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
@@ -139,7 +141,7 @@ export function buildClaudeProcessEnv(input?: {
     input?.hasClaudeCliCredentials ?? hasUsableClaudeCliCredentials(credentialInput);
 
   if (!hasLocalClaudeAuth || hasClaudeExternalAuthEnv(env)) {
-    return env;
+    return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
   }
 
   // Claude gives direct request credentials precedence over local OAuth. Drop stale
@@ -147,5 +149,5 @@ export function buildClaudeProcessEnv(input?: {
   for (const key of CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS) {
     delete env[key];
   }
-  return env;
+  return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
 }

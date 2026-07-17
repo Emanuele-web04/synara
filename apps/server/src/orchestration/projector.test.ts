@@ -1572,4 +1572,103 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints[0]?.turnId).toBe("turn-100");
     expect(thread?.checkpoints.at(-1)?.turnId).toBe("turn-599");
   });
+
+  it("uses accepted event order for destructive revert fallback despite clock skew", async () => {
+    const createdAt = "2026-07-14T12:00:00.000Z";
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-skewed-revert",
+          occurredAt: createdAt,
+          commandId: "cmd-create-skewed-revert",
+          payload: {
+            threadId: "thread-skewed-revert",
+            projectId: "project-1",
+            title: "Skewed revert",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const messageEvent = (input: {
+      readonly sequence: number;
+      readonly messageId: string;
+      readonly role: "user" | "assistant";
+      readonly createdAt: string;
+    }) =>
+      makeEvent({
+        sequence: input.sequence,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-skewed-revert",
+        occurredAt: input.createdAt,
+        commandId: `cmd-${input.messageId}`,
+        payload: {
+          threadId: "thread-skewed-revert",
+          messageId: input.messageId,
+          role: input.role,
+          text: input.messageId,
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        },
+      });
+    const events = [
+      messageEvent({
+        sequence: 2,
+        messageId: "accepted-first-user",
+        role: "user",
+        createdAt: "2026-07-14T12:00:10.000Z",
+      }),
+      messageEvent({
+        sequence: 3,
+        messageId: "accepted-first-assistant",
+        role: "assistant",
+        createdAt: "2026-07-14T12:00:11.000Z",
+      }),
+      messageEvent({
+        sequence: 4,
+        messageId: "accepted-second-user-older-clock",
+        role: "user",
+        createdAt: "2026-07-14T11:59:00.000Z",
+      }),
+      messageEvent({
+        sequence: 5,
+        messageId: "accepted-second-assistant-older-clock",
+        role: "assistant",
+        createdAt: "2026-07-14T11:59:01.000Z",
+      }),
+      makeEvent({
+        sequence: 6,
+        type: "thread.reverted",
+        aggregateKind: "thread",
+        aggregateId: "thread-skewed-revert",
+        occurredAt: "2026-07-14T12:00:12.000Z",
+        commandId: "cmd-revert-skewed",
+        payload: { threadId: "thread-skewed-revert", turnCount: 1 },
+      }),
+    ];
+    const reverted = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
+      Promise.resolve(afterCreate),
+    );
+
+    expect(reverted.threads[0]?.messages.map((message) => message.id)).toEqual([
+      "accepted-first-user",
+      "accepted-first-assistant",
+    ]);
+  });
 });

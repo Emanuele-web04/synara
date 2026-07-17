@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, Exit, Layer, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +20,8 @@ import {
 } from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
 import { createLocalPreviewGrant } from "./localImageFiles";
+import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
+import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 
 const tempDirs: string[] = [];
 
@@ -106,7 +107,8 @@ function makeFakeServerAuth(): ServerAuthShape {
     listClientSessions: () => Effect.succeed([]),
     revokeClientSession: () => Effect.succeed(true),
     revokeOtherClientSessions: () => Effect.succeed(1),
-    authenticateHttpRequest: () => Effect.succeed(session),
+    logoutSession: () => Effect.succeed(true),
+    authenticateHttpRequest: () => Effect.succeed({ ...session, credentialSource: "cookie" }),
     authenticateWebSocketUpgrade: () => Effect.succeed(session),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () => Effect.succeed("http://127.0.0.1:3773/pair#token=PAIRINGTOKEN"),
@@ -131,14 +133,17 @@ async function withEffectServer(
             },
             { port: 0, host: "127.0.0.1" },
           );
-          const httpApp = yield* HttpRouter.toHttpEffect(routeLayer);
+          const httpApp = yield* routeLayer === localImageEffectRouteLayer
+            ? HttpRouter.toHttpEffect(localImageEffectRouteLayer)
+            : HttpRouter.toHttpEffect(attachmentsEffectRouteLayer);
           yield* httpServer.serve(httpApp);
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
               Layer.succeed(ServerAuth, makeFakeServerAuth()),
-              NodeServices.layer,
+              ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+              NodeHttpServer.layerHttpServices,
             ),
           ),
         ),
@@ -181,14 +186,9 @@ describe("localImageEffectRouteLayer", () => {
   it("serves an absolute local image outside the workspace for file-panel previews", async () => {
     const workspace = makeTempDir("synara-effect-image-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
-    const externalRoot = path.join(
-      process.cwd(),
-      `.test-local-preview-${process.pid}-${Date.now()}`,
-    );
-    tempDirs.push(externalRoot);
-    mkdirSync(externalRoot, { recursive: true });
-    const imagePath = path.join(externalRoot, "downloads-image.png");
-    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const externalRoot = makeTempDir("synara-effect-external-preview-");
+    const imagePath = path.join(externalRoot, "downloads-file.pdf");
+    writeFileSync(imagePath, Buffer.from("%PDF-1.7"));
     const config = makeServerConfig({ cwd: workspace });
 
     const grant = await createLocalPreviewGrant({ requestedPath: imagePath });
@@ -197,7 +197,7 @@ describe("localImageEffectRouteLayer", () => {
       const params = new URLSearchParams({ path: imagePath, cwd: workspace, grant: grant.grant });
       const response = await fetch(`${origin}/api/local-image?${params}`);
       expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(response.headers.get("content-type")).toContain("application/pdf");
 
       params.delete("grant");
       const ungrantedResponse = await fetch(`${origin}/api/local-image?${params}`);
@@ -318,7 +318,8 @@ describe("attachmentsEffectRouteLayer", () => {
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("image/png");
-      expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
     });
   });

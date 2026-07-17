@@ -46,6 +46,7 @@ const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
@@ -106,34 +107,27 @@ function normalizeConfiguredMergeBranch(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function normalizeNumstatPath(rawPath: string): string {
-  const renameArrowIndex = rawPath.indexOf(" => ");
-  if (renameArrowIndex < 0) return rawPath;
-
-  const compactRenameMatch = /^(.*)\{[^{}]* => ([^{}]*)\}(.*)$/.exec(rawPath);
-  if (compactRenameMatch) {
-    const [, prefix = "", targetSegment = "", suffix = ""] = compactRenameMatch;
-    const normalized = `${prefix}${targetSegment}${suffix}`.trim();
-    return normalized.length > 0 ? normalized : rawPath;
-  }
-
-  const normalized = rawPath.slice(renameArrowIndex + " => ".length).trim();
-  return normalized.length > 0 ? normalized : rawPath;
-}
-
 function parseNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
   const entries: Array<WorkingTreeFileStat> = [];
-  for (const line of stdout.split(/\r?\n/g)) {
-    if (line.trim().length === 0) continue;
-    const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
-    const rawPath =
-      pathParts.length > 1 ? (pathParts.at(-1) ?? "").trim() : pathParts.join("\t").trim();
-    if (rawPath.length === 0) continue;
+  const records = stdout.split("\0");
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] ?? "";
+    if (record.length === 0) continue;
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab < 0 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (firstTab < 0 || secondTab < 0) continue;
+    const addedRaw = record.slice(0, firstTab);
+    const deletedRaw = record.slice(firstTab + 1, secondTab);
+    let filePath = record.slice(secondTab + 1);
+    if (filePath.length === 0) {
+      index += 2;
+      filePath = records[index] ?? "";
+    }
+    if (filePath.length === 0) continue;
     const added = Number.parseInt(addedRaw ?? "0", 10);
     const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const normalizedPath = normalizeNumstatPath(rawPath);
     entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
+      path: filePath,
       insertions: Number.isFinite(added) ? added : 0,
       deletions: Number.isFinite(deleted) ? deleted : 0,
     });
@@ -178,26 +172,37 @@ function hasNodeErrorCode(cause: unknown, code: string): boolean {
   );
 }
 
-function parsePorcelainPath(line: string): string | null {
-  if (line.startsWith("? ") || line.startsWith("! ")) {
-    const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
+function porcelainPathAfterFields(record: string, fieldCount: number): string | null {
+  let offset = 0;
+  for (let field = 0; field < fieldCount; field += 1) {
+    offset = record.indexOf(" ", offset);
+    if (offset < 0) return null;
+    offset += 1;
   }
-
-  if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
-    return null;
-  }
-
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
-  }
-
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
+  const filePath = record.slice(offset);
   return filePath.length > 0 ? filePath : null;
+}
+
+function parsePorcelainV2Records(stdout: string): Array<{ record: string; path: string | null }> {
+  const rawRecords = stdout.split("\0");
+  const records: Array<{ record: string; path: string | null }> = [];
+  for (let index = 0; index < rawRecords.length; index += 1) {
+    const record = rawRecords[index] ?? "";
+    if (record.length === 0) continue;
+    const path =
+      record.startsWith("? ") || record.startsWith("! ")
+        ? record.slice(2)
+        : record.startsWith("1 ")
+          ? porcelainPathAfterFields(record, 8)
+          : record.startsWith("2 ")
+            ? porcelainPathAfterFields(record, 9)
+            : record.startsWith("u ")
+              ? porcelainPathAfterFields(record, 10)
+              : null;
+    records.push({ record, path });
+    if (record.startsWith("2 ")) index += 1;
+  }
+  return records;
 }
 
 function countTextLines(contents: Uint8Array): number {
@@ -841,6 +846,65 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         Effect.map((result) => result.stdout),
       );
 
+    const repositoryMutationLocks = new Map<string, Semaphore.Semaphore>();
+    const repositoryMutationCounts = new Map<string, number>();
+    const repositoryMutationMapLock = yield* Semaphore.make(1);
+    const resolveRepositoryMutationKey = (cwd: string) =>
+      executeGit("GitCore.withMutation.commonDir", cwd, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ]).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((commonDir) =>
+          Effect.tryPromise(() => nodeFs.realpath(nodePath.resolve(cwd, commonDir))),
+        ),
+        Effect.catch(() =>
+          Effect.tryPromise(() => nodeFs.realpath(cwd)).pipe(
+            Effect.catch(() => Effect.succeed(nodePath.resolve(cwd))),
+          ),
+        ),
+      );
+    const withMutation: GitCoreShape["withMutation"] = (cwd, effect) =>
+      Effect.gen(function* () {
+        const key = yield* resolveRepositoryMutationKey(cwd);
+        const lock = yield* repositoryMutationMapLock.withPermit(
+          Effect.gen(function* () {
+            const count = repositoryMutationCounts.get(key) ?? 0;
+            if (count >= MAX_QUEUED_REPOSITORY_MUTATIONS) {
+              return yield* new GitCommandError({
+                operation: "GitCore.withMutation",
+                command: "repository mutation queue",
+                cwd,
+                detail: "Repository mutation queue is full.",
+              });
+            }
+            let existing = repositoryMutationLocks.get(key);
+            if (!existing) {
+              existing = yield* Semaphore.make(1);
+              repositoryMutationLocks.set(key, existing);
+            }
+            repositoryMutationCounts.set(key, count + 1);
+            return existing;
+          }),
+        );
+        return yield* lock.withPermit(effect).pipe(
+          Effect.ensuring(
+            repositoryMutationMapLock.withPermit(
+              Effect.sync(() => {
+                const remaining = (repositoryMutationCounts.get(key) ?? 1) - 1;
+                if (remaining <= 0) {
+                  repositoryMutationCounts.delete(key);
+                  repositoryMutationLocks.delete(key);
+                } else {
+                  repositoryMutationCounts.set(key, remaining);
+                }
+              }),
+            ),
+          ),
+        );
+      });
+
     const readMoveAwareWorkingTreeSummary = (
       cwd: string,
     ): Effect.Effect<WorkingTreeStatSummary | null, never> =>
@@ -884,7 +948,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           const numstatStdout = yield* executeGit(
             "GitCore.statusDetails.moveAwareNumstat",
             cwd,
-            ["diff", "--cached", "--numstat", "--find-renames"],
+            ["diff", "--cached", "--numstat", "-z", "--find-renames"],
             {
               env: tempIndexEnv,
               allowNonZeroExit: true,
@@ -1340,6 +1404,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           "status",
           "--porcelain=2",
           "--branch",
+          "-z",
         ]).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
         if (statusStdout === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
@@ -1356,7 +1421,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const changedFilesWithoutNumstat = new Set<string>();
         const untrackedFilesWithoutNumstat = new Set<string>();
 
-        for (const line of statusStdout.split(/\r?\n/g)) {
+        for (const { record: line, path: pathValue } of parsePorcelainV2Records(statusStdout)) {
           if (line.startsWith("# branch.head ")) {
             const value = line.slice("# branch.head ".length).trim();
             branch = value.startsWith("(") ? null : value;
@@ -1374,14 +1439,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             behindCount = parsed.behind;
             continue;
           }
-          if (line.trim().length > 0 && !line.startsWith("#")) {
+          if (!line.startsWith("#")) {
             hasWorkingTreeChanges = true;
             const statusCode =
               line.startsWith("1 ") || line.startsWith("2 ") ? line.slice(2, 4) : "";
             if (statusCode.includes("D")) {
               hasTrackedDeletion = true;
             }
-            const pathValue = parsePorcelainPath(line);
             if (pathValue) {
               changedFilesWithoutNumstat.add(pathValue);
               if (line.startsWith("? ")) {
@@ -1456,11 +1520,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         const numstatOutputs = yield* Effect.all(
           [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
+            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat", "-z"]),
             runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
               "diff",
               "--cached",
               "--numstat",
+              "-z",
             ]),
           ],
           { concurrency: "unbounded" },
@@ -2525,7 +2590,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     const stashDrop: GitCoreShape["stashDrop"] = (input) =>
-      executeGit("GitCore.stashDrop", input.cwd, ["stash", "drop"], {
+      executeGit("GitCore.stashDrop", input.cwd, ["stash", "drop", input.stashRef], {
         timeoutMs: 10_000,
         fallbackErrorMessage: "git stash drop failed",
       }).pipe(Effect.asVoid);
@@ -2654,6 +2719,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     return {
+      withMutation,
       execute,
       status,
       statusDetails,

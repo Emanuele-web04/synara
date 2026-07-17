@@ -3,10 +3,18 @@
 // Layer: Web test utility
 // Exports: helpers for request parsing plus Exit/Chunk/Pong responses.
 
-import type { OrchestrationReadModel, OrchestrationShellSnapshot } from "@synara/contracts";
+import {
+  WS_BOOTSTRAP_METHOD,
+  WS_PROTOCOL_EPOCH,
+  WS_PROTOCOL_MAX_REVISION,
+  WS_SERVER_CAPABILITIES,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
+} from "@synara/contracts";
 
 export interface EffectRpcWebSocketClient {
   readonly send: (data: string) => void;
+  readonly url?: URL;
 }
 
 export interface EffectRpcRequest {
@@ -42,6 +50,17 @@ export function readEffectRpcClientMessage(
   }
 
   if (frame._tag === "Request" && typeof frame.id === "string" && typeof frame.tag === "string") {
+    if (frame.tag === WS_BOOTSTRAP_METHOD) {
+      sendEffectRpcExit(client, frame.id, {
+        protocolEpoch: WS_PROTOCOL_EPOCH,
+        negotiatedRevision: WS_PROTOCOL_MAX_REVISION,
+        serverBuild: "browser-test",
+        serverInstanceId: "browser-test-server",
+        capabilities: [...WS_SERVER_CAPABILITIES],
+      });
+      return { kind: "handled" };
+    }
+
     return {
       kind: "request",
       request: {

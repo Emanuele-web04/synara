@@ -99,3 +99,13 @@ export function scopeAcpToolCallStateForTurn(
     },
   };
 }
+
+export function acceptAcpPlanUpdate(
+  context: { activeTurnId: TurnId | undefined; lastPlanFingerprint: string | undefined },
+  payload: unknown,
+): boolean {
+  const fingerprint = `${context.activeTurnId ?? "no-turn"}:${JSON.stringify(payload)}`;
+  if (context.lastPlanFingerprint === fingerprint) return false;
+  context.lastPlanFingerprint = fingerprint;
+  return true;
+}

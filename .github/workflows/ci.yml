@@ -76,14 +76,17 @@ jobs:
           cd apps/web
           ./node_modules/.bin/playwright install --with-deps chromium
 
-      # Non-blocking: the ChatView geometry parity tests currently fail on headless
-      # Linux (they were never exercised in CI while the runner queue was dead).
-      # Keep the suite running for signal; make this blocking again once the
-      # Linux-rendering failures are fixed.
-      - name: Browser test
-        continue-on-error: true
+      - name: Browser test (stable)
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser
+        run: bun run --cwd apps/web test:browser:stable
+
+      # Pixel/font/layout comparisons are tracked explicitly in
+      # apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
+      # All untagged browser tests run in the blocking stable step above.
+      - name: Browser test (Linux geometry quarantine)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: bun run --cwd apps/web test:browser:geometry
 
       - name: Build desktop pipeline
         run: bun run build:desktop

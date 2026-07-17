@@ -64,6 +64,8 @@ const makeConfigLayer = () =>
         ...derived,
         staticDir: undefined,
         devUrl: undefined,
+        publicUrl: undefined,
+        allowInsecureRemote: false,
         noBrowser: true,
         authToken: undefined,
         autoBootstrapProjectFromCwd: false,

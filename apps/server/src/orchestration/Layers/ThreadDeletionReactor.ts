@@ -1,5 +1,5 @@
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, Layer, Stream } from "effect";
 
 import { ProfileStatsArchive } from "../../profileStatsArchive";
@@ -17,6 +17,9 @@ type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }
 // Crash recovery / backfill: threads soft-deleted before the purge could run
 // (or before purge existed) are archived and purged shortly after startup.
 const PURGE_STARTUP_SWEEP_DELAY_MS = 60 * 1000;
+const THREAD_DELETION_REACTOR_CAPACITY = 64;
+const PURGE_FENCE_RETRY_ATTEMPTS = 20;
+const PURGE_FENCE_RETRY_DELAY_MS = 100;
 
 const MISSING_PROVIDER_BINDING_DETAIL = "no persisted provider binding exists";
 
@@ -119,6 +122,20 @@ const make = Effect.gen(function* () {
       threadId,
     });
 
+  const waitForThreadPurgeFence = Effect.fn(function* (
+    threadId: ThreadDeletedEvent["payload"]["threadId"],
+  ) {
+    for (let attempt = 0; attempt < PURGE_FENCE_RETRY_ATTEMPTS; attempt += 1) {
+      const fenced = yield* profileStatsArchive.hasThreadPurgeFence({ threadId });
+      if (!fenced) return true;
+      yield* Effect.sleep(PURGE_FENCE_RETRY_DELAY_MS);
+    }
+    yield* Effect.logWarning("thread deletion retained unresolved provider delivery evidence", {
+      threadId,
+    });
+    return false;
+  });
+
   // Retention deletes only hide the thread (its rows keep feeding profile
   // stats directly). Explicit deletes snapshot the stat aggregates and then
   // hard-delete the thread's rows so disk space is actually reclaimed.
@@ -126,21 +143,26 @@ const make = Effect.gen(function* () {
     if (event.commandId?.startsWith(THREAD_RETENTION_COMMAND_ID_PREFIX)) {
       return Effect.void;
     }
-    return profileStatsArchive
-      .purgeThreadWithStatsSnapshot({ threadId: event.payload.threadId })
-      .pipe(
-        Effect.flatMap((purged) =>
-          purged ? refreshCommandReadModelAfterPurge(event.payload.threadId) : Effect.void,
-        ),
-        Effect.catch((error) =>
-          // A failed purge leaves the thread soft-deleted; the startup sweep
-          // retries it on the next boot.
-          Effect.logWarning("thread deletion cleanup skipped stats archive purge", {
-            threadId: event.payload.threadId,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        ),
-      );
+    return waitForThreadPurgeFence(event.payload.threadId).pipe(
+      Effect.flatMap((canPurge) =>
+        canPurge
+          ? profileStatsArchive.purgeThreadWithStatsSnapshot({
+              threadId: event.payload.threadId,
+            })
+          : Effect.succeed(false),
+      ),
+      Effect.flatMap((purged) =>
+        purged ? refreshCommandReadModelAfterPurge(event.payload.threadId) : Effect.void,
+      ),
+      Effect.catch((error) =>
+        // A failed purge leaves the thread soft-deleted; the startup sweep
+        // retries it on the next boot.
+        Effect.logWarning("thread deletion cleanup skipped stats archive purge", {
+          threadId: event.payload.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
   };
 
   const cleanupThreadBeforePurge = Effect.fn(function* (
@@ -177,42 +199,56 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadDeletedSafely);
-
-  const start: ThreadDeletionReactorShape["start"] = Effect.fn(function* () {
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.deleted") {
-          return Effect.void;
-        }
-        return worker.enqueue(event);
-      }),
-    );
-    yield* Effect.forkScoped(
-      Effect.sleep(PURGE_STARTUP_SWEEP_DELAY_MS).pipe(
-        Effect.flatMap(() =>
-          profileStatsArchive.purgeSoftDeletedManualThreads({
-            beforePurge: (threadId) => cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)),
-          }),
-        ),
-        Effect.tap((purgedCount) =>
-          purgedCount > 0 ? refreshCommandReadModelAfterPurge("startup-sweep") : Effect.void,
-        ),
-        Effect.flatMap((purgedCount) =>
-          purgedCount > 0
-            ? Effect.logInfo("purged soft-deleted threads after stats archive snapshot", {
-                purgedCount,
-              })
-            : Effect.void,
-        ),
-        Effect.catch((error) =>
-          Effect.logWarning("startup purge sweep for deleted threads failed", {
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        ),
-      ),
-    );
+  const worker = yield* makeDrainableWorker(processThreadDeletedSafely, {
+    capacity: THREAD_DELETION_REACTOR_CAPACITY,
   });
+
+  const start: ThreadDeletionReactorShape["start"] = Effect.fn(() =>
+    startDrainableWorkerProducers(
+      worker,
+      Effect.gen(function* () {
+        yield* Effect.forkScoped(
+          Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+            if (event.type !== "thread.deleted") {
+              return Effect.void;
+            }
+            return worker.enqueue(event);
+          }),
+        );
+        yield* Effect.forkScoped(
+          Effect.sleep(PURGE_STARTUP_SWEEP_DELAY_MS).pipe(
+            Effect.flatMap(() =>
+              profileStatsArchive.purgeSoftDeletedManualThreads({
+                beforePurge: (threadId) =>
+                  cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)).pipe(
+                    Effect.flatMap((cleaned) =>
+                      cleaned
+                        ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId))
+                        : Effect.succeed(false),
+                    ),
+                  ),
+              }),
+            ),
+            Effect.tap((purgedCount) =>
+              purgedCount > 0 ? refreshCommandReadModelAfterPurge("startup-sweep") : Effect.void,
+            ),
+            Effect.flatMap((purgedCount) =>
+              purgedCount > 0
+                ? Effect.logInfo("purged soft-deleted threads after stats archive snapshot", {
+                    purgedCount,
+                  })
+                : Effect.void,
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("startup purge sweep for deleted threads failed", {
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
 
   return {
     start,

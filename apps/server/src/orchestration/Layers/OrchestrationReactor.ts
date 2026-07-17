@@ -16,10 +16,13 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const studioOutputReactor = yield* StudioOutputReactor;
 
   const start: OrchestrationReactorShape["start"] = Effect.gen(function* () {
-    yield* providerRuntimeIngestion.start;
-    yield* providerCommandReactor.start;
-    yield* checkpointReactor.start;
     yield* studioOutputReactor.start;
+    yield* checkpointReactor.start;
+    yield* providerRuntimeIngestion.start;
+    // Install every runtime observer before provider command dispatch can
+    // begin. Reverse-order finalization then drains provider commands first,
+    // runtime ingestion second, checkpoints third, and Studio output last.
+    yield* providerCommandReactor.start;
   });
 
   return {

@@ -57,13 +57,26 @@ function ToolDetailsTimeline() {
   );
 }
 
+function createTimelineHost(): HTMLDivElement {
+  const host = document.createElement("div");
+  host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
+  document.body.append(host);
+  return host;
+}
+
+async function settleLayout(): Promise<void> {
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
 describe("MessagesTimeline tool details", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
   it("opens and closes command details with the shared disclosure motion", async () => {
-    const screen = await render(<ToolDetailsTimeline />);
+    const host = createTimelineHost();
+    const screen = await render(<ToolDetailsTimeline />, { container: host });
     const originalRequestAnimationFrame = window.requestAnimationFrame;
     const originalCancelAnimationFrame = window.cancelAnimationFrame;
     const pendingFrames: Array<FrameRequestCallback | null> = [];
@@ -130,10 +143,13 @@ describe("MessagesTimeline tool details", () => {
       await expect
         .poll(() => document.querySelector("[data-tool-details-inline='true']"))
         .toBeNull();
+      await settleLayout();
     } finally {
       window.requestAnimationFrame = originalRequestAnimationFrame;
       window.cancelAnimationFrame = originalCancelAnimationFrame;
       await screen.unmount();
+      host.remove();
+      await settleLayout();
     }
   });
 });

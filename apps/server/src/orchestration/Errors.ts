@@ -52,6 +52,18 @@ export class OrchestrationCommandPreviouslyRejectedError extends Schema.TaggedEr
   }
 }
 
+export class OrchestrationCommandIdentityCollisionError extends Schema.TaggedErrorClass<OrchestrationCommandIdentityCollisionError>()(
+  "OrchestrationCommandIdentityCollisionError",
+  {
+    commandId: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Command identity collision (${this.commandId}): ${this.detail}`;
+  }
+}
+
 export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandTimeoutError>()(
   "OrchestrationCommandTimeoutError",
   {
@@ -63,6 +75,23 @@ export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<Or
 ) {
   override get message(): string {
     return `Orchestration command timed out (${this.commandType}, ${this.commandId}) after ${this.timeoutMs}ms`;
+  }
+}
+
+export class OrchestrationCommandAdmissionError extends Schema.TaggedErrorClass<OrchestrationCommandAdmissionError>()(
+  "OrchestrationCommandAdmissionError",
+  {
+    commandId: Schema.String,
+    commandType: Schema.String,
+    capacity: Schema.Number,
+    reservedCapacity: Schema.Number,
+    reason: Schema.Literals(["overloaded", "stopped"]),
+  },
+) {
+  override get message(): string {
+    return this.reason === "stopped"
+      ? `Orchestration command admission is stopped (${this.commandType}, ${this.commandId})`
+      : `Orchestration command queue is overloaded (${this.commandType}, ${this.commandId}); capacity ${this.capacity}, reserved ${this.reservedCapacity}`;
   }
 }
 
@@ -108,8 +137,10 @@ export class OrchestrationListenerCallbackError extends Schema.TaggedErrorClass<
 
 export type OrchestrationDispatchError =
   | ProjectionRepositoryError
+  | OrchestrationCommandAdmissionError
   | OrchestrationCommandInvariantError
   | OrchestrationCommandInternalError
+  | OrchestrationCommandIdentityCollisionError
   | OrchestrationCommandPreviouslyRejectedError
   | OrchestrationCommandTimeoutError
   | OrchestrationProjectorDecodeError

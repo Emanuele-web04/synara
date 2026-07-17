@@ -24,7 +24,11 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  makeClaudeAdapterLive,
+  type ClaudeAdapterLiveOptions,
+  type ClaudeOwnedProcess,
+} from "./ClaudeAdapter.ts";
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -1629,6 +1633,7 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
+        lifecycleGeneration: "generation-claude-a",
         runtimeMode: "full-access",
       });
 
@@ -1654,6 +1659,10 @@ describe("ClaudeAdapterLive", () => {
           "turn.completed",
           "session.exited",
         ],
+      );
+      assert.equal(
+        runtimeEvents.every((event) => event.lifecycleGeneration === "generation-claude-a"),
+        true,
       );
 
       const turnCompleted = runtimeEvents[4];
@@ -1738,6 +1747,64 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("retains Claude session ownership until subprocess-tree exit is proven", () => {
+    const query = new FakeClaudeQuery();
+    let proveExit: (() => void) | undefined;
+    const exitProof = new Promise<void>((resolve) => {
+      proveExit = resolve;
+    });
+    let teardownCalls = 0;
+    const ownedProcess = {
+      pid: 73_311,
+      exitCode: 0,
+      signalCode: null,
+    } as unknown as ClaudeOwnedProcess;
+    const layer = makeClaudeAdapterLive({
+      spawnClaudeCodeProcess: () => ownedProcess,
+      teardownProcessTree: async () => {
+        teardownCalls += 1;
+        await exitProof;
+        return { escalated: false, signalErrors: [] };
+      },
+      createQuery: (input) => {
+        input.options.spawnClaudeCodeProcess?.({
+          command: "claude",
+          args: [],
+          env: {},
+          signal: new AbortController().signal,
+        });
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const stopping = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.equal(query.closeCalls, 1);
+      assert.equal(teardownCalls, 1);
+      assert.equal((yield* adapter.listSessions()).length, 1);
+
+      proveExit?.();
+      yield* Fiber.join(stopping);
+      assert.equal((yield* adapter.listSessions()).length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
     );
   });
 
@@ -3963,87 +4030,83 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect(
-    "supports rollbackThread by trimming in-memory turns and preserving earlier turns",
-    () => {
-      const harness = makeHarness();
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
+  it.effect("reports Claude rollback as restart-owned instead of mutating only local turns", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
 
-        const firstTurn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "first",
-          attachments: [],
-        });
+      const firstTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
 
-        const firstCompletedFiber = yield* Stream.filter(
-          adapter.streamEvents,
-          (event) => event.type === "turn.completed",
-        ).pipe(Stream.runHead, Effect.forkChild);
+      const firstCompletedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
 
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-rollback",
-          uuid: "result-first",
-        } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-rollback",
+        uuid: "result-first",
+      } as unknown as SDKMessage);
 
-        const firstCompleted = yield* Fiber.join(firstCompletedFiber);
-        assert.equal(firstCompleted._tag, "Some");
-        if (firstCompleted._tag === "Some" && firstCompleted.value.type === "turn.completed") {
-          assert.equal(String(firstCompleted.value.turnId), String(firstTurn.turnId));
-        }
+      const firstCompleted = yield* Fiber.join(firstCompletedFiber);
+      assert.equal(firstCompleted._tag, "Some");
+      if (firstCompleted._tag === "Some" && firstCompleted.value.type === "turn.completed") {
+        assert.equal(String(firstCompleted.value.turnId), String(firstTurn.turnId));
+      }
 
-        const secondTurn = yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "second",
-          attachments: [],
-        });
+      const secondTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "second",
+        attachments: [],
+      });
 
-        const secondCompletedFiber = yield* Stream.filter(
-          adapter.streamEvents,
-          (event) => event.type === "turn.completed",
-        ).pipe(Stream.runHead, Effect.forkChild);
+      const secondCompletedFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runHead, Effect.forkChild);
 
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-rollback",
-          uuid: "result-second",
-        } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-rollback",
+        uuid: "result-second",
+      } as unknown as SDKMessage);
 
-        const secondCompleted = yield* Fiber.join(secondCompletedFiber);
-        assert.equal(secondCompleted._tag, "Some");
-        if (secondCompleted._tag === "Some" && secondCompleted.value.type === "turn.completed") {
-          assert.equal(String(secondCompleted.value.turnId), String(secondTurn.turnId));
-        }
+      const secondCompleted = yield* Fiber.join(secondCompletedFiber);
+      assert.equal(secondCompleted._tag, "Some");
+      if (secondCompleted._tag === "Some" && secondCompleted.value.type === "turn.completed") {
+        assert.equal(String(secondCompleted.value.turnId), String(secondTurn.turnId));
+      }
 
-        const threadBeforeRollback = yield* adapter.readThread(session.threadId);
-        assert.equal(threadBeforeRollback.turns.length, 2);
+      const threadBeforeRollback = yield* adapter.readThread(session.threadId);
+      assert.equal(threadBeforeRollback.turns.length, 2);
 
-        const rolledBack = yield* adapter.rollbackThread(session.threadId, 1);
-        assert.equal(rolledBack.turns.length, 1);
-        assert.equal(rolledBack.turns[0]?.id, firstTurn.turnId);
+      const rolledBack = yield* Effect.exit(adapter.rollbackThread(session.threadId, 1));
+      assert.ok(Exit.isFailure(rolledBack));
 
-        const threadAfterRollback = yield* adapter.readThread(session.threadId);
-        assert.equal(threadAfterRollback.turns.length, 1);
-        assert.equal(threadAfterRollback.turns[0]?.id, firstTurn.turnId);
-      }).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
-      );
-    },
-  );
+      const threadAfterRollback = yield* adapter.readThread(session.threadId);
+      assert.equal(threadAfterRollback.turns.length, 2);
+      assert.equal(threadAfterRollback.turns[0]?.id, firstTurn.turnId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("updates model on sendTurn when model override is provided", () => {
     const harness = makeHarness();
@@ -4374,7 +4437,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps the current Claude session when replacement spawn fails", () => {
+  it.effect("leaves no Claude runtime when replacement spawn fails", () => {
     const harness = makeMultiQueryHarness({ failCreateAt: 1 });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -4401,9 +4464,9 @@ describe("ClaudeAdapterLive", () => {
       );
 
       assert.ok(Exit.isFailure(replacement));
-      assert.equal(firstQuery.closeCalls, 0);
-      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
-      assert.equal((yield* adapter.listSessions()).length, 1);
+      assert.equal(firstQuery.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      assert.equal((yield* adapter.listSessions()).length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

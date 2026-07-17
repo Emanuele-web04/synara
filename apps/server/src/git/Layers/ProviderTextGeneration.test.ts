@@ -189,7 +189,6 @@ describe("ProviderTextGenerationLive", () => {
             opencode: {
               binaryPath: "/custom/bin/opencode",
               serverUrl: "http://127.0.0.1:4096",
-              serverPassword: "secret",
             },
           },
         });
@@ -211,7 +210,6 @@ describe("ProviderTextGenerationLive", () => {
           opencode: {
             binaryPath: "/custom/bin/opencode",
             serverUrl: "http://127.0.0.1:4096",
-            serverPassword: "secret",
           },
         },
       }),

@@ -18,32 +18,44 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and studio output reactors", async () => {
+  it("starts runtime observers before provider command dispatch can begin", async () => {
     const started: string[] = [];
+    const stopped: string[] = [];
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
         Layer.provideMerge(
           Layer.succeed(ProviderRuntimeIngestionService, {
-            start: Effect.sync(() => {
-              started.push("provider-runtime-ingestion");
-            }),
+            start: Effect.acquireRelease(
+              Effect.sync(() => {
+                started.push("provider-runtime-ingestion");
+              }),
+              () => Effect.sync(() => stopped.push("provider-runtime-ingestion")),
+            ),
             drain: Effect.void,
           }),
         ),
         Layer.provideMerge(
           Layer.succeed(ProviderCommandReactor, {
-            start: Effect.sync(() => {
-              started.push("provider-command-reactor");
-            }),
+            start: Effect.acquireRelease(
+              Effect.sync(() => {
+                started.push("provider-command-reactor");
+              }),
+              () => Effect.sync(() => stopped.push("provider-command-reactor")),
+            ),
             drain: Effect.void,
+            listBlockingDeliveries: () => Effect.succeed([]),
+            reconcileDelivery: () => Effect.succeed(null),
           }),
         ),
         Layer.provideMerge(
           Layer.succeed(CheckpointReactor, {
-            start: Effect.sync(() => {
-              started.push("checkpoint-reactor");
-            }),
+            start: Effect.acquireRelease(
+              Effect.sync(() => {
+                started.push("checkpoint-reactor");
+              }),
+              () => Effect.sync(() => stopped.push("checkpoint-reactor")),
+            ),
             drain: Effect.void,
           }),
         ),
@@ -51,9 +63,12 @@ describe("OrchestrationReactor", () => {
           Layer.succeed(StudioOutputReactor, {
             captureBaselineBeforeTurn: () => Effect.void,
             cancelPendingTurnBaseline: () => Effect.void,
-            start: Effect.sync(() => {
-              started.push("studio-output-reactor");
-            }),
+            start: Effect.acquireRelease(
+              Effect.sync(() => {
+                started.push("studio-output-reactor");
+              }),
+              () => Effect.sync(() => stopped.push("studio-output-reactor")),
+            ),
             drain: Effect.void,
           }),
         ),
@@ -65,12 +80,18 @@ describe("OrchestrationReactor", () => {
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
 
     expect(started).toEqual([
+      "studio-output-reactor",
+      "checkpoint-reactor",
       "provider-runtime-ingestion",
       "provider-command-reactor",
-      "checkpoint-reactor",
-      "studio-output-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));
+    expect(stopped).toEqual([
+      "provider-command-reactor",
+      "provider-runtime-ingestion",
+      "checkpoint-reactor",
+      "studio-output-reactor",
+    ]);
   });
 });

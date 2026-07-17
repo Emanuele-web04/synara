@@ -52,6 +52,7 @@ export type ProviderSession = typeof ProviderSession.Type;
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderKind),
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
@@ -130,6 +131,7 @@ export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
@@ -137,6 +139,7 @@ export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput
 export const ProviderRespondToUserInputInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   answers: ProviderUserInputAnswers,
 });
 export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputInput.Type;
@@ -156,6 +159,7 @@ export const ProviderEvent = Schema.Struct({
   itemId: Schema.optional(ProviderItemId),
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   providerThreadId: Schema.optional(TrimmedNonEmptyString),
   providerParentThreadId: Schema.optional(TrimmedNonEmptyString),
   textDelta: Schema.optional(Schema.String),

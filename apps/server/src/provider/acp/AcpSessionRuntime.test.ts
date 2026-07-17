@@ -1,13 +1,77 @@
 import { describe, expect, it } from "vitest";
 
-import { Effect } from "effect";
+import { Deferred, Effect, Exit, Scope } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
   assistantItemId,
   decodeSetSessionConfigOptionResponse,
+  makeAcpIncomingFrameGuard,
   sessionConfigOptionsFromSetup,
+  teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
+
+describe("makeAcpIncomingFrameGuard", () => {
+  const encode = (value: string) => new TextEncoder().encode(value);
+
+  it("enforces the frame budget across split chunks and resets it at newline boundaries", () => {
+    const guard = makeAcpIncomingFrameGuard(5);
+
+    expect(guard(encode("123"))).toBeUndefined();
+    expect(guard(encode("45\n12345\n"))).toBeUndefined();
+    expect(guard(encode("1\n"))).toBeUndefined();
+  });
+
+  it("rejects an oversized unterminated frame", () => {
+    const guard = makeAcpIncomingFrameGuard(5);
+
+    expect(guard(encode("123"))).toBeUndefined();
+    const error = guard(encode("456"));
+    expect(error?._tag).toBe("AcpTransportError");
+    expect(error?.detail).toContain("5-byte limit");
+  });
+});
+
+describe("teardownAcpChildProcess", () => {
+  it("keeps ACP scope closure pending until the owned root exit settles", async () => {
+    const processExited = Deferred.makeUnsafe<number>();
+    const exitCode = Deferred.await(processExited);
+    let observeTeardown!: (input: {
+      readonly rootPid: number;
+      readonly rootExited: Promise<unknown>;
+    }) => void;
+    const teardownStarted = new Promise<{
+      readonly rootPid: number;
+      readonly rootExited: Promise<unknown>;
+    }>((resolve) => {
+      observeTeardown = resolve;
+    });
+    const scope = await Effect.runPromise(Scope.make("sequential"));
+
+    await Effect.runPromise(
+      Effect.addFinalizer(() =>
+        teardownAcpChildProcess({ pid: 4_242, exitCode }, async (input) => {
+          observeTeardown(input);
+          await input.rootExited;
+          return { escalated: false, signalErrors: [] };
+        }),
+      ).pipe(Effect.provideService(Scope.Scope, scope)),
+    );
+
+    let scopeClosed = false;
+    const closing = Effect.runPromise(Scope.close(scope, Exit.void)).then(() => {
+      scopeClosed = true;
+    });
+    const teardown = await teardownStarted;
+    expect(teardown.rootPid).toBe(4_242);
+    await Promise.resolve();
+    expect(scopeClosed).toBe(false);
+
+    Deferred.doneUnsafe(processExited, Effect.succeed(0));
+    await closing;
+    expect(scopeClosed).toBe(true);
+  });
+});
 
 describe("assistantItemId", () => {
   // Format contract only — distinct runtimeInstanceId wiring is covered by

@@ -8,6 +8,8 @@ import type { ServerConfigShape } from "./config";
 import {
   isTrustedAppOrigin,
   normalizeCorsOrigin,
+  requiresWebSocketAuthentication,
+  shouldRejectAuthMutationOrigin,
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 
@@ -81,6 +83,28 @@ describe("trustedOrigins", () => {
     ).toBe(true);
   });
 
+  it("trusts only the HTTPS public origin for browser traffic in proxy-backed remote mode", () => {
+    const remoteConfig = {
+      ...config,
+      host: "0.0.0.0",
+      publicUrl: new URL("https://synara.example.test/"),
+    };
+    expect(
+      isTrustedAppOrigin({
+        origin: "https://synara.example.test",
+        requestOrigin: "http://synara.example.test",
+        config: remoteConfig,
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedAppOrigin({
+        origin: "http://192.168.1.50:3773",
+        requestOrigin: "http://192.168.1.50:3773",
+        config: remoteConfig,
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes desktop origins with trailing slashes", () => {
     expect(normalizeCorsOrigin("synara://app/")).toBe("synara://app");
   });
@@ -121,5 +145,86 @@ describe("trustedOrigins", () => {
         config: { ...config, host: "0.0.0.0" },
       }),
     ).toBe(false);
+  });
+
+  it("requires websocket authentication for every non-loopback exposure", () => {
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      requiresWebSocketAuthentication({ host: "::1", authToken: undefined, publicUrl: undefined }),
+    ).toBe(false);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "0.0.0.0",
+        authToken: undefined,
+        publicUrl: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({ host: "::", authToken: undefined, publicUrl: undefined }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "192.168.1.50",
+        authToken: undefined,
+        publicUrl: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: "secret",
+        publicUrl: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      requiresWebSocketAuthentication({
+        host: "127.0.0.1",
+        authToken: undefined,
+        publicUrl: new URL("https://synara.example.test/"),
+      }),
+    ).toBe(true);
+  });
+
+  it("requires browser mutations to have a trusted origin or explicit bearer provenance", () => {
+    expect(
+      shouldRejectAuthMutationOrigin({
+        rawOrigin: undefined,
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+        credentialSource: "cookie",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRejectAuthMutationOrigin({
+        rawOrigin: undefined,
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+        credentialSource: "bearer",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRejectAuthMutationOrigin({
+        rawOrigin: "http://localhost:5173",
+        requestOrigin: "http://127.0.0.1:58090",
+        config,
+        credentialSource: "cookie",
+      }),
+    ).toBe(false);
+    for (const rawOrigin of ["null", "not a url", "https://example.test"]) {
+      expect(
+        shouldRejectAuthMutationOrigin({
+          rawOrigin,
+          requestOrigin: "http://127.0.0.1:58090",
+          config,
+          credentialSource: "bearer",
+        }),
+      ).toBe(true);
+    }
   });
 });
