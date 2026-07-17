@@ -5,8 +5,6 @@ import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-const DEV_USER_DATA_DIR_NAME = "synara-dev";
-const PROD_USER_DATA_DIR_NAME = "synara";
 const BRIDGE_PROFILE_MANIFEST_FILE_NAME = "synara-profile-seed.json";
 const CANONICAL_BROWSER_PARTITION_NAME = "synara-browser";
 const BROWSER_PARTITION_SEED_ENTRY_GROUPS = [
@@ -53,12 +51,9 @@ export function resolveDesktopAppDataBase(input?: {
 
 export function resolveDesktopUserDataPath(input: {
   readonly appDataBase: string;
-  readonly isDevelopment: boolean;
+  readonly userDataDirectoryName: string;
 }): string {
-  return Path.join(
-    input.appDataBase,
-    input.isDevelopment ? DEV_USER_DATA_DIR_NAME : PROD_USER_DATA_DIR_NAME,
-  );
+  return Path.join(input.appDataBase, input.userDataDirectoryName);
 }
 
 function readBridgeProfileSourcePath(targetPath: string): string | null {
