@@ -13,13 +13,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { synaraBundleId } from "@synara/shared/desktopIdentity";
+import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
-const APP_BUNDLE_ID = synaraBundleId(isDevelopment);
+const desktopFlavor = resolveSynaraDesktopFlavor({
+  isDevelopment,
+  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+});
+const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const APP_DISPLAY_NAME = desktopIdentity.displayName;
+const APP_BUNDLE_ID = desktopIdentity.bundleId;
 const LAUNCHER_VERSION = 2;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
