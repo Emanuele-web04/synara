@@ -6,6 +6,7 @@ import type {
   ModelSelection,
   MessageDispatchOrigin,
   OrchestrationMessageSource,
+  OrchestrationPendingInteraction,
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
@@ -232,6 +233,7 @@ export interface Thread extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
@@ -268,6 +270,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
 

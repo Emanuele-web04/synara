@@ -517,7 +517,8 @@ export function BranchToolbarBranchSelector({
     setIsDroppingStash(true);
     runBranchAction(async () => {
       try {
-        await api.git.stashDrop({ cwd: dialog.cwd });
+        if (!dialog.info) return;
+        await api.git.stashDrop({ cwd: dialog.cwd, stashRef: dialog.info.stashRef });
         setStashDiscardDialog(null);
       } finally {
         setIsDroppingStash(false);

@@ -232,10 +232,12 @@ describe("TerminalManager", () => {
       processKillGraceMs?: number;
       maxRetainedInactiveSessions?: number;
       ptyAdapter?: FakePtyAdapter;
+      prepareLogs?: (logsDir: string) => void;
     } = {},
   ) {
     const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-terminal-"));
     tempDirs.push(logsDir);
+    options.prepareLogs?.(logsDir);
     const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
     const manager = new TerminalManagerRuntime({
       logsDir,
@@ -430,6 +432,40 @@ describe("TerminalManager", () => {
 
     manager.dispose();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "creates terminal history with private permissions",
+    async () => {
+      const { manager, ptyAdapter, logsDir } = makeManager();
+      await manager.open(openInput());
+      ptyAdapter.processes[0]?.emitData("private history\n");
+      const historyPath = historyLogPath(logsDir);
+      await waitFor(() => fs.existsSync(historyPath));
+
+      expect(fs.statSync(logsDir).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(historyPath).mode & 0o777).toBe(0o600);
+
+      manager.dispose();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "repairs existing terminal history permissions on first open",
+    async () => {
+      const { manager, logsDir } = makeManager(5, {
+        prepareLogs: (directoryPath) => {
+          fs.chmodSync(directoryPath, 0o755);
+          fs.writeFileSync(historyLogPath(directoryPath), "existing history\n", { mode: 0o644 });
+        },
+      });
+
+      expect(fs.statSync(logsDir).mode & 0o777).toBe(0o700);
+      await manager.open(openInput());
+      expect(fs.statSync(historyLogPath(logsDir)).mode & 0o777).toBe(0o600);
+
+      manager.dispose();
+    },
+  );
 
   it("keeps pty reads paused until renderer output ACKs drain", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -1059,6 +1095,9 @@ describe("TerminalManager", () => {
     expect(fs.existsSync(nextPath)).toBe(true);
     expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
     expect(fs.existsSync(legacyPath)).toBe(false);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(nextPath).mode & 0o777).toBe(0o600);
+    }
 
     manager.dispose();
   });

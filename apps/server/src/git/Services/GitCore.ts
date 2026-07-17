@@ -157,6 +157,11 @@ export interface GitPublishBranchInput {
  * GitCoreShape - Service API for low-level Git repository interactions.
  */
 export interface GitCoreShape {
+  /** Serialize one complete mutation saga by canonical repository common directory. */
+  readonly withMutation: <A, E, R>(
+    cwd: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | GitCommandError, R>;
   /**
    * Execute a raw Git command.
    */
@@ -329,9 +334,7 @@ export interface GitCoreShape {
     input: GitStashAndCheckoutInput,
   ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError, Scope.Scope>;
 
-  /**
-   * Drop the latest stash entry.
-   */
+  /** Drop the stash entry the caller inspected. */
   readonly stashDrop: (input: GitStashDropInput) => Effect.Effect<void, GitCommandError>;
 
   /**

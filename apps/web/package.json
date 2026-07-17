@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:browser:stable": "vitest run --config vitest.browser.stable.config.ts",
+    "test:browser:geometry": "vitest run --config vitest.browser.geometry.config.ts",
     "test:browser:install": "playwright install --with-deps chromium",
     "measure:lcp": "node scripts/measure-lcp.mjs"
   },
@@ -72,13 +74,13 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.0",
-    "@vitest/browser-playwright": "^4.0.18",
+    "@vitest/browser-playwright": "^4.1.10",
     "babel-plugin-react-compiler": "^19.0.0-beta-e552027-20250112",
     "msw": "2.12.11",
     "playwright": "^1.58.2",
     "tailwindcss": "^4.0.0",
     "typescript": "catalog:",
-    "vite": "^8.0.0",
+    "vite": "^8.1.4",
     "vitest": "catalog:",
     "vitest-browser-react": "^2.0.5"
   }

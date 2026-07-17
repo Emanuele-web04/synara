@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ApprovalRequestId,
   ProviderKind,
+  ThreadId,
   type OrchestrationEvent,
   type OrchestrationThread,
 } from "@synara/contracts";
@@ -30,11 +31,11 @@ import { TextGeneration, type TextGenerationShape } from "../src/git/Services/Te
 import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
-import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
+import { ProjectionPendingInteractionRepositoryLive } from "../src/persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
-import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
+import { ProjectionPendingInteractionRepository } from "../src/persistence/Services/ProjectionPendingInteractions.ts";
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
@@ -170,7 +171,6 @@ export interface OrchestrationIntegrationHarness {
   readonly providerService: ProviderService["Service"];
   readonly checkpointStore: CheckpointStore["Service"];
   readonly checkpointRepository: ProjectionCheckpointRepository["Service"];
-  readonly pendingApprovalRepository: ProjectionPendingApprovalRepository["Service"];
   readonly waitForThread: (
     threadId: string,
     predicate: (thread: OrchestrationThread) => boolean,
@@ -181,17 +181,20 @@ export interface OrchestrationIntegrationHarness {
     timeoutMs?: number,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, never>;
   readonly waitForPendingApproval: (
+    threadId: string,
     requestId: string,
     predicate: (row: {
-      readonly status: "pending" | "resolved";
+      readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
       readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+      readonly lifecycleGeneration: string | null;
       readonly resolvedAt: string | null;
     }) => boolean,
     timeoutMs?: number,
   ) => Effect.Effect<
     {
-      readonly status: "pending" | "resolved";
+      readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
       readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+      readonly lifecycleGeneration: string | null;
       readonly resolvedAt: string | null;
     },
     never
@@ -293,7 +296,7 @@ export const makeOrchestrationIntegrationHarness = (
       orchestrationLayer,
       OrchestrationProjectionSnapshotQueryLive,
       ProjectionCheckpointRepositoryLive,
-      ProjectionPendingApprovalRepositoryLive,
+      ProjectionPendingInteractionRepositoryLive,
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusLive,
@@ -354,9 +357,9 @@ export const makeOrchestrationIntegrationHarness = (
       "load ProjectionCheckpointRepository service",
       () => runtime.runPromise(Effect.service(ProjectionCheckpointRepository)),
     ).pipe(Effect.orDie);
-    const pendingApprovalRepository = yield* tryRuntimePromise(
-      "load ProjectionPendingApprovalRepository service",
-      () => runtime.runPromise(Effect.service(ProjectionPendingApprovalRepository)),
+    const pendingInteractionRepository = yield* tryRuntimePromise(
+      "load ProjectionPendingInteractionRepository service",
+      () => runtime.runPromise(Effect.service(ProjectionPendingInteractionRepository)),
     ).pipe(Effect.orDie);
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
       runtime.runPromise(Effect.service(RuntimeReceiptBus)),
@@ -404,13 +407,18 @@ export const makeOrchestrationIntegrationHarness = (
       );
 
     const waitForPendingApproval: OrchestrationIntegrationHarness["waitForPendingApproval"] = (
+      threadId,
       requestId,
       predicate,
       timeoutMs,
     ) =>
       waitFor(
-        pendingApprovalRepository
-          .getByRequestId({ requestId: ApprovalRequestId.makeUnsafe(requestId) })
+        pendingInteractionRepository
+          .getByIdentity({
+            threadId: ThreadId.makeUnsafe(threadId),
+            interactionKind: "approval",
+            requestId: ApprovalRequestId.makeUnsafe(requestId),
+          })
           .pipe(
             Effect.map((row) =>
               Option.match(row, {
@@ -418,6 +426,7 @@ export const makeOrchestrationIntegrationHarness = (
                 onSome: (value) => ({
                   status: value.status,
                   decision: value.decision,
+                  lifecycleGeneration: value.lifecycleGeneration,
                   resolvedAt: value.resolvedAt,
                 }),
               }),
@@ -426,16 +435,18 @@ export const makeOrchestrationIntegrationHarness = (
         (
           row,
         ): row is {
-          readonly status: "pending" | "resolved";
+          readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
           readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+          readonly lifecycleGeneration: string | null;
           readonly resolvedAt: string | null;
         } => row !== null && predicate(row),
         `pending approval '${requestId}'`,
         timeoutMs,
       ) as Effect.Effect<
         {
-          readonly status: "pending" | "resolved";
+          readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
           readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+          readonly lifecycleGeneration: string | null;
           readonly resolvedAt: string | null;
         },
         never
@@ -500,7 +511,6 @@ export const makeOrchestrationIntegrationHarness = (
       providerService,
       checkpointStore,
       checkpointRepository,
-      pendingApprovalRepository,
       waitForThread,
       waitForDomainEvent,
       waitForPendingApproval,

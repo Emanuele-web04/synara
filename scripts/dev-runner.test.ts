@@ -8,6 +8,8 @@ import { Effect } from "effect";
 import {
   createDevRunnerEnv,
   findFirstAvailableOffset,
+  readDevRunnerBooleanEnvironment,
+  resolveDevRunnerBooleanOverrides,
   resolveModePortOffsets,
   resolveOffset,
 } from "./dev-runner.ts";
@@ -25,6 +27,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       "SYNARA_HOME",
       "SYNARA_NO_BROWSER",
       "SYNARA_AUTH_TOKEN",
+      "SYNARA_PUBLIC_URL",
+      "SYNARA_ALLOW_INSECURE_REMOTE",
       "SYNARA_HOST",
       "SYNARA_LOG_WS_EVENTS",
       "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
@@ -68,6 +72,64 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     );
   });
 
+  describe("boolean precedence", () => {
+    const absent = { positive: undefined, negative: undefined };
+
+    it("uses environment values only when the CLI flag is absent", () => {
+      assert.deepStrictEqual(
+        resolveDevRunnerBooleanOverrides(
+          {
+            noBrowser: absent,
+            autoBootstrapProjectFromCwd: absent,
+            logWebSocketEvents: absent,
+          },
+          {
+            noBrowser: true,
+            autoBootstrapProjectFromCwd: false,
+            logWebSocketEvents: true,
+          },
+        ),
+        {
+          noBrowser: true,
+          autoBootstrapProjectFromCwd: false,
+          logWebSocketEvents: true,
+        },
+      );
+    });
+
+    it("keeps explicit false values instead of treating them as absent", () => {
+      assert.deepStrictEqual(
+        resolveDevRunnerBooleanOverrides(
+          {
+            noBrowser: { positive: undefined, negative: true },
+            autoBootstrapProjectFromCwd: { positive: false, negative: undefined },
+            logWebSocketEvents: { positive: undefined, negative: true },
+          },
+          {
+            noBrowser: true,
+            autoBootstrapProjectFromCwd: true,
+            logWebSocketEvents: true,
+          },
+        ),
+        {
+          noBrowser: false,
+          autoBootstrapProjectFromCwd: false,
+          logWebSocketEvents: false,
+        },
+      );
+    });
+
+    it.effect("rejects invalid boolean environment values", () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          readDevRunnerBooleanEnvironment({ SYNARA_LOG_WS_EVENTS: "sometimes" }),
+        );
+
+        assert.match(String(error), /Failed to read boolean development-runner configuration/);
+      }),
+    );
+  });
+
   describe("createDevRunnerEnv", () => {
     it.effect("defaults SYNARA_HOME to ~/.synara when not provided", () =>
       Effect.gen(function* () {
@@ -87,6 +149,30 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara"));
+        assert.equal(env.SYNARA_HOST, "127.0.0.1");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:3773");
+      }),
+    );
+
+    it.effect("normalizes bracketed IPv6 hosts for listen and client URL syntax", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          synaraHome: undefined,
+          authToken: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: "[::1]",
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.SYNARA_HOST, "::1");
+        assert.equal(env.VITE_WS_URL, "ws://[::1]:3773");
       }),
     );
 
@@ -109,11 +195,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-synara"));
         assert.equal(env.SYNARA_PORT, "4222");
-        assert.equal(env.VITE_WS_URL, "ws://[::1]:4222");
         assert.equal(env.SYNARA_NO_BROWSER, "1");
         assert.equal(env.SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
         assert.equal(env.SYNARA_LOG_WS_EVENTS, "1");
         assert.equal(env.SYNARA_HOST, "0.0.0.0");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:4222");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
       }),
     );

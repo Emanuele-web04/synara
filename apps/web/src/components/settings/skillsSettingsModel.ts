@@ -5,6 +5,7 @@
 
 import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
 import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
+import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
 
 export interface SkillOriginInfo {
   readonly label: string;
@@ -49,18 +50,6 @@ export const ORIGIN_SECTION_ORDER = [
   "agents",
   "project",
 ] as const;
-export const PROVIDER_STACK_ORDER: readonly ProviderKind[] = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "antigravity",
-  "grok",
-  "droid",
-  "kilo",
-  "opencode",
-  "pi",
-] as const;
-
 export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
   switch (scope) {
     case "synara":
@@ -111,7 +100,7 @@ export function providerDisplayName(provider: ProviderKind): string {
 
 export function sortProviderStack(providers: ReadonlyArray<ProviderKind>): ProviderKind[] {
   return [...providers].sort(
-    (left, right) => PROVIDER_STACK_ORDER.indexOf(left) - PROVIDER_STACK_ORDER.indexOf(right),
+    (left, right) => DEFAULT_PROVIDER_ORDER.indexOf(left) - DEFAULT_PROVIDER_ORDER.indexOf(right),
   );
 }
 

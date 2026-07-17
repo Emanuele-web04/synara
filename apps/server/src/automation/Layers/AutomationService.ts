@@ -19,8 +19,10 @@ import {
   type AutomationUpdateInput,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderStartOptions,
   type ThreadEnvironmentMode,
 } from "@synara/contracts";
+import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -260,11 +262,17 @@ function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAll
   return capabilities;
 }
 
-function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
+function makePermissionSnapshot(
+  definition: AutomationDefinition,
+  now: string,
+  settingsRevision?: number,
+  providerOptions?: ProviderStartOptions,
+) {
   return {
     provider: definition.modelSelection.provider,
+    ...(settingsRevision !== undefined ? { settingsRevision } : {}),
     modelSelection: definition.modelSelection,
-    ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
     completionPolicyVersion: completionPolicyVersionForDefinition(definition),
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
@@ -1078,15 +1086,7 @@ export const AutomationServiceLive = Layer.effect(
               yield* publish({ type: "run-upserted", run: failed });
               return yield* Effect.fail(error);
             }
-            const withResult = yield* automationRepository
-              .markRunResult({
-                id: failed.id,
-                result: resultForRunStatus("failed", { summary, now: failedAt }),
-                updatedAt: failedAt,
-              })
-              .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-            yield* publish({ type: "run-upserted", run: withResult });
-            yield* maybeStopLoop(withResult, "failed", failedAt);
+            yield* publishRunResult(failed, "failed", failedAt, summary, true);
             return yield* Effect.fail(error);
           }).pipe(Effect.catch(() => Effect.fail(error))),
         ),
@@ -1109,6 +1109,42 @@ export const AutomationServiceLive = Layer.effect(
     // occurrences dedupe via INSERT OR IGNORE on (automationId, scheduledFor), so createRun
     // may return a pre-existing row (inserted === false); callers count + dispatch only
     // fresh runs, and the schedule is only advanced once the run has durably succeeded.
+    const pendingRunInput = (
+      definition: AutomationDefinition,
+      trigger: AutomationRun["trigger"],
+      scheduledFor: string,
+      now: string,
+      options: { readonly threadIdOverride?: ThreadId | null } = {},
+      settingsRevision?: number,
+      providerOptions?: ProviderStartOptions,
+    ) => {
+      const runId = makeAutomationRunId();
+      const ids = deriveAutomationRunIds(runId);
+      return {
+        id: runId,
+        automationId: definition.id,
+        projectId: definition.projectId,
+        threadId:
+          "threadIdOverride" in options
+            ? options.threadIdOverride
+            : definition.mode === "heartbeat"
+              ? definition.targetThreadId
+              : ids.threadId,
+        messageId: ids.messageId,
+        threadCreateCommandId: definition.mode === "heartbeat" ? null : ids.threadCreateCommandId,
+        turnStartCommandId: ids.turnStartCommandId,
+        trigger,
+        scheduledFor,
+        permissionSnapshot: makePermissionSnapshot(
+          definition,
+          now,
+          settingsRevision,
+          providerOptions,
+        ),
+        now,
+      };
+    };
+
     const createPendingRun = (
       definition: AutomationDefinition,
       trigger: AutomationRun["trigger"],
@@ -1117,33 +1153,53 @@ export const AutomationServiceLive = Layer.effect(
       options: { readonly threadIdOverride?: ThreadId | null } = {},
     ) =>
       Effect.gen(function* () {
-        const runId = makeAutomationRunId();
-        const ids = deriveAutomationRunIds(runId);
-        const threadId =
-          "threadIdOverride" in options
-            ? options.threadIdOverride
-            : definition.mode === "heartbeat"
-              ? definition.targetThreadId
-              : ids.threadId;
+        const settings = yield* serverSettings.getSnapshot;
+        const input = pendingRunInput(
+          definition,
+          trigger,
+          scheduledFor,
+          now,
+          options,
+          settings.revision,
+          providerStartOptionsFromServerSettings(settings.settings),
+        );
         const run = yield* automationRepository
-          .createRun({
-            id: runId,
-            automationId: definition.id,
-            projectId: definition.projectId,
-            threadId,
-            messageId: ids.messageId,
-            threadCreateCommandId:
-              definition.mode === "heartbeat" ? null : ids.threadCreateCommandId,
-            turnStartCommandId: ids.turnStartCommandId,
-            trigger,
-            scheduledFor,
-            permissionSnapshot: makePermissionSnapshot(definition, now),
-            now,
-          })
+          .createRun(input)
           .pipe(Effect.mapError(toServiceError("Failed to create automation run.")));
         yield* publish({ type: "run-upserted", run });
-        return { run, inserted: run.id === runId };
+        return { run, inserted: run.id === input.id };
       });
+
+    const claimPendingRun = (
+      definition: AutomationDefinition,
+      trigger: AutomationRun["trigger"],
+      scheduledFor: string,
+      now: string,
+      scheduleAdvance?: { readonly nextRunAt: string | null; readonly disable: boolean },
+    ) =>
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSnapshot;
+        return yield* automationRepository.createRunAndIncrementDefinition(
+          pendingRunInput(
+            definition,
+            trigger,
+            scheduledFor,
+            now,
+            {},
+            settings.revision,
+            providerStartOptionsFromServerSettings(settings.settings),
+          ),
+          scheduleAdvance,
+        );
+      }).pipe(
+        Effect.mapError(toServiceError("Failed to claim automation run.")),
+        Effect.tap((run) =>
+          Option.match(run, {
+            onNone: () => Effect.void,
+            onSome: (claimed) => publish({ type: "run-upserted", run: claimed }),
+          }),
+        ),
+      );
 
     // Recovery may find a durable run + thread without the queued turn row; retire it so
     // future heartbeat ticks and scheduled occurrences are not blocked forever.
@@ -1623,6 +1679,34 @@ export const AutomationServiceLive = Layer.effect(
         ),
       );
 
+    const publishRunResult = (
+      run: AutomationRun,
+      status: AutomationRunStatus,
+      now: string,
+      summary?: string | null,
+      evaluateStop = false,
+      interruptBeforePublish = false,
+    ) =>
+      automationRepository
+        .markRunResult({
+          id: run.id,
+          result: resultForRunStatus(status, {
+            ...(summary !== undefined ? { summary } : {}),
+            now,
+          }),
+          updatedAt: now,
+        })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to update automation run result.")),
+          Effect.tap((updated) =>
+            interruptBeforePublish ? interruptRunBestEffort(updated, now) : Effect.void,
+          ),
+          Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
+          Effect.tap((updated) =>
+            evaluateStop ? maybeStopLoop(updated, status, now) : Effect.void,
+          ),
+        );
+
     const reconcileThread: AutomationServiceShape["reconcileThread"] = ({ threadId }) =>
       Effect.gen(function* () {
         const runOption = yield* automationRepository
@@ -1658,17 +1742,12 @@ export const AutomationServiceLive = Layer.effect(
                 updatedAt: now,
               })
               .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
-            const withResult = yield* automationRepository
-              .markRunResult({
-                id: updated.id,
-                result: resultForRunStatus("waiting-for-approval", {
-                  summary: "Automation run is waiting for input or approval.",
-                  now,
-                }),
-                updatedAt: now,
-              })
-              .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-            yield* publish({ type: "run-upserted", run: withResult });
+            yield* publishRunResult(
+              updated,
+              "waiting-for-approval",
+              now,
+              "Automation run is waiting for input or approval.",
+            );
           }
           return;
         }
@@ -1718,38 +1797,31 @@ export const AutomationServiceLive = Layer.effect(
             .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
         } else if (turn.state === "error") {
           const summary = errorMessage(shell.session?.lastError ?? "Automation turn failed.");
-          updated = yield* automationRepository
+          const failed = yield* automationRepository
             .markRunFailed({
               id: run.id,
               error: summary,
               finishedAt: now,
             })
             .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
-          updated = yield* automationRepository
-            .markRunResult({
-              id: updated.id,
-              result: resultForRunStatus("failed", { summary, now }),
-              updatedAt: now,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
+          yield* publishRunResult(failed, "failed", now, summary, true);
+          return;
         } else {
-          updated = yield* automationRepository
+          const interrupted = yield* automationRepository
             .markRunInterrupted({
               id: run.id,
               turnId: turn.turnId,
               finishedAt: now,
             })
             .pipe(Effect.mapError(toServiceError("Failed to update automation run.")));
-          updated = yield* automationRepository
-            .markRunResult({
-              id: updated.id,
-              result: resultForRunStatus("interrupted", {
-                summary: "Automation run was interrupted.",
-                now,
-              }),
-              updatedAt: now,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
+          yield* publishRunResult(
+            interrupted,
+            "interrupted",
+            now,
+            "Automation run was interrupted.",
+            true,
+          );
+          return;
         }
 
         yield* publish({ type: "run-upserted", run: updated });
@@ -1767,15 +1839,7 @@ export const AutomationServiceLive = Layer.effect(
           yield* publish({ type: "run-upserted", run: failed });
           return;
         }
-        const withResult = yield* automationRepository
-          .markRunResult({
-            id: failed.id,
-            result: resultForRunStatus("failed", { summary, now }),
-            updatedAt: now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-        yield* publish({ type: "run-upserted", run: withResult });
-        yield* maybeStopLoop(withResult, "failed", now);
+        yield* publishRunResult(failed, "failed", now, summary, true);
       });
 
     const reconcileActiveRun = (run: AutomationRun, now: string) =>
@@ -1817,65 +1881,75 @@ export const AutomationServiceLive = Layer.effect(
         Effect.asVoid,
       );
 
-    const recoverPendingRuns: AutomationServiceShape["recoverPendingRuns"] = () =>
-      automationRepository.listRecoverableRuns({ limit: 200 }).pipe(
-        Effect.mapError(toServiceError("Failed to list recoverable automation runs.")),
-        Effect.flatMap((runs) =>
-          Effect.forEach(
-            runs,
-            (run) => {
-              const now = isoNow();
-              const threadId = run.threadId;
-              if (!threadId) {
-                // Orphaned before any thread was created (crash between create and dispatch).
-                return interruptRunForRecovery(run, now).pipe(
-                  Effect.mapError(toServiceError("Failed to recover automation run.")),
-                  Effect.asVoid,
-                  Effect.catch((error) =>
-                    Effect.logWarning("automation orphaned-run recovery failed", {
-                      automationId: run.automationId,
-                      runId: run.id,
-                      error: recoveryErrorMessage(error),
-                    }),
-                  ),
-                );
-              }
-              return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
-                Effect.mapError(toServiceError("Failed to load automation thread state.")),
-                Effect.flatMap((shellOption) =>
-                  Option.isNone(shellOption)
+    const recoverRun = (run: AutomationRun) => {
+      const now = isoNow();
+      const threadId = run.threadId;
+      if (!threadId) {
+        // Orphaned before any thread was created (crash between create and dispatch).
+        return interruptRunForRecovery(run, now).pipe(
+          Effect.mapError(toServiceError("Failed to recover automation run.")),
+          Effect.asVoid,
+          Effect.catch((error) =>
+            Effect.logWarning("automation orphaned-run recovery failed", {
+              automationId: run.automationId,
+              runId: run.id,
+              error: recoveryErrorMessage(error),
+            }),
+          ),
+        );
+      }
+      return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+        Effect.mapError(toServiceError("Failed to load automation thread state.")),
+        Effect.flatMap((shellOption) =>
+          Option.isNone(shellOption)
+            ? interruptRunForRecovery(run, now).pipe(
+                Effect.mapError(toServiceError("Failed to recover automation run.")),
+                Effect.asVoid,
+              )
+            : resolveRunTurn(run, shellOption.value).pipe(
+                Effect.flatMap((turn) =>
+                  turn === null
                     ? interruptRunForRecovery(run, now).pipe(
                         Effect.mapError(toServiceError("Failed to recover automation run.")),
                         Effect.asVoid,
                       )
-                    : resolveRunTurn(run, shellOption.value).pipe(
-                        Effect.flatMap((turn) =>
-                          turn === null
-                            ? interruptRunForRecovery(run, now).pipe(
-                                Effect.mapError(
-                                  toServiceError("Failed to recover automation run."),
-                                ),
-                                Effect.asVoid,
-                              )
-                            : reconcileThread({ threadId }),
-                        ),
-                      ),
+                    : reconcileThread({ threadId }),
                 ),
-                Effect.catch((error) =>
-                  Effect.logWarning("automation pending-run recovery failed", {
-                    automationId: run.automationId,
-                    runId: run.id,
-                    error: recoveryErrorMessage(error),
-                  }),
-                ),
-              );
-            },
-            { concurrency: 1 },
-          ),
+              ),
         ),
+        Effect.catch((error) =>
+          Effect.logWarning("automation pending-run recovery failed", {
+            automationId: run.automationId,
+            runId: run.id,
+            error: recoveryErrorMessage(error),
+          }),
+        ),
+      );
+    };
+
+    const recoverPendingRuns: AutomationServiceShape["recoverPendingRuns"] = () => {
+      const recoverPage = (after?: AutomationRun): Effect.Effect<void, AutomationServiceError> =>
+        automationRepository
+          .listRecoverableRuns({
+            limit: 200,
+            ...(after ? { afterCreatedAt: after.createdAt, afterRunId: after.id } : {}),
+          })
+          .pipe(
+            Effect.mapError(toServiceError("Failed to list recoverable automation runs.")),
+            Effect.flatMap((runs) =>
+              Effect.forEach(runs, recoverRun, { concurrency: 1 }).pipe(
+                Effect.flatMap(() =>
+                  runs.length === 200 ? recoverPage(runs[runs.length - 1]) : Effect.void,
+                ),
+              ),
+            ),
+          );
+
+      return recoverPage().pipe(
         Effect.flatMap(() => enqueuePendingCompletionEvaluations()),
         Effect.asVoid,
       );
+    };
 
     const list: AutomationServiceShape["list"] = (input = {}) =>
       automationRepository
@@ -1981,19 +2055,14 @@ export const AutomationServiceLive = Layer.effect(
           yield* publish({ type: "run-upserted", run });
           return run;
         }
-        const withResult = yield* automationRepository
-          .markRunResult({
-            id: run.id,
-            result: resultForRunStatus("cancelled", {
-              summary: "Automation run was cancelled.",
-              now,
-            }),
-            updatedAt: now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-        yield* interruptRunBestEffort(withResult, now);
-        yield* publish({ type: "run-upserted", run: withResult });
-        return withResult;
+        return yield* publishRunResult(
+          run,
+          "cancelled",
+          now,
+          "Automation run was cancelled.",
+          false,
+          true,
+        );
       });
 
     const deleteAutomation: AutomationServiceShape["delete"] = (input) =>
@@ -2103,23 +2172,15 @@ export const AutomationServiceLive = Layer.effect(
           }
         }
         const runnableDefinition = yield* restartExhaustedBoundedDefinition(definition, now);
-        const { run, inserted } = yield* createPendingRun(
-          runnableDefinition,
-          { type: "manual" },
-          now,
-          now,
-        );
-        if (!inserted) {
+        const claimedRun = yield* claimPendingRun(runnableDefinition, { type: "manual" }, now, now);
+        if (Option.isNone(claimedRun)) {
           return yield* Effect.fail(
             new AutomationServiceError({
-              message: "This thread already has a run in progress.",
+              message: "Automation run capacity or iteration limit was reached.",
             }),
           );
         }
-        yield* automationRepository
-          .incrementDefinitionIterationCount({ id: runnableDefinition.id, now })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
-        return yield* dispatchRun(runnableDefinition, run, now);
+        return yield* dispatchRun(runnableDefinition, claimedRun.value, now);
       });
 
     const cancelRun: AutomationServiceShape["cancelRun"] = (input) =>
@@ -2144,15 +2205,7 @@ export const AutomationServiceLive = Layer.effect(
         const skipped = yield* automationRepository
           .markRunSkipped({ id: run.id, reason, finishedAt: now })
           .pipe(Effect.mapError(toServiceError("Failed to skip automation run.")));
-        const withResult = yield* automationRepository
-          .markRunResult({
-            id: skipped.id,
-            result: resultForRunStatus("skipped", { summary: reason, now }),
-            updatedAt: now,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation run result.")));
-        yield* publish({ type: "run-upserted", run: withResult });
-        return withResult;
+        return yield* publishRunResult(skipped, "skipped", now, reason);
       });
 
     const advanceScheduledDefinition = (
@@ -2236,26 +2289,26 @@ export const AutomationServiceLive = Layer.effect(
           }
         }
 
-        const { run, inserted } = yield* createPendingRun(
+        const claimedRun = yield* claimPendingRun(
           definition,
           { type: "scheduled" },
           scheduledFor,
           now,
+          {
+            nextRunAt,
+            disable: definition.schedule.type === "once" && nextRunAt === null,
+          },
         );
-        // The run is now durable, so it is safe to advance the schedule even if dispatch fails.
-        yield* advanceScheduledDefinition(definition, nextRunAt, now);
+        yield* publishDefinition(definition.id);
 
-        if (!inserted) {
+        if (Option.isNone(claimedRun)) {
           // This scheduled occurrence already had a durable row (e.g. a run interrupted by a
           // crash before the schedule advanced). Don't re-dispatch or double-count it; the
           // occurrence is already recorded and the schedule has now moved past it.
           return Option.none<AutomationRunNowResult>();
         }
 
-        yield* automationRepository
-          .incrementDefinitionIterationCount({ id: definition.id, now })
-          .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
-
+        const run = claimedRun.value;
         const result = yield* dispatchRun(definition, run, now).pipe(
           Effect.catch(() =>
             automationRepository.getRunById({ id: run.id }).pipe(

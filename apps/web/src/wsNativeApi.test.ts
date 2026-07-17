@@ -26,6 +26,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
+const disposeMock = vi.fn();
 const showContextMenuFallbackMock =
   vi.fn<
     <T extends string>(
@@ -65,9 +66,16 @@ vi.mock("./wsTransport", () => {
       onStateChange() {
         return () => undefined;
       }
+      onCompatibilityIssue() {
+        return () => undefined;
+      }
       getLatestPush(channel: string) {
         return latestPushByChannel.get(channel) ?? null;
       }
+      getState() {
+        return "open" as const;
+      }
+      dispose = disposeMock;
     },
   };
 });
@@ -116,6 +124,7 @@ const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
 beforeEach(() => {
   vi.resetModules();
   requestMock.mockReset();
+  disposeMock.mockReset();
   showContextMenuFallbackMock.mockReset();
   subscribeMock.mockClear();
   channelListeners.clear();
@@ -302,14 +311,14 @@ describe("wsNativeApi", () => {
             enabled: true,
             binaryPath: "kilo",
             serverUrl: "",
-            serverPassword: "",
+            serverPasswordConfigured: false,
             customModels: [],
           },
           opencode: {
             enabled: true,
             binaryPath: "opencode",
             serverUrl: "",
-            serverPassword: "",
+            serverPasswordConfigured: false,
             experimentalWebSockets: false,
             customModels: [],
           },
@@ -338,7 +347,9 @@ describe("wsNativeApi", () => {
     const onActionProgress = vi.fn();
 
     api.terminal.onEvent(onTerminalEvent);
-    api.orchestration.onDomainEvent(onDomainEvent);
+    expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
+    const unsubscribeDomainEvent = api.orchestration.onDomainEvent(onDomainEvent);
+    expect(channelListeners.get(ORCHESTRATION_WS_CHANNELS.domainEvent)?.size).toBe(1);
     api.git.onActionProgress(onActionProgress);
 
     const terminalEvent = {
@@ -386,6 +397,8 @@ describe("wsNativeApi", () => {
     expect(onTerminalEvent).toHaveBeenCalledWith(terminalEvent);
     expect(onDomainEvent).toHaveBeenCalledTimes(1);
     expect(onDomainEvent).toHaveBeenCalledWith(orchestrationEvent);
+    unsubscribeDomainEvent();
+    expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
     expect(onActionProgress).toHaveBeenCalledTimes(1);
     expect(onActionProgress).toHaveBeenCalledWith({
       actionId: "action-1",
@@ -654,6 +667,29 @@ describe("wsNativeApi", () => {
     expect(result).toMatchObject({ authenticated: true, sessionMethod: "browser-session-cookie" });
   });
 
+  it("logs out over HTTP and disposes the authenticated websocket transport", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ revoked: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await expect(api.server.logoutAuthSession()).resolves.toEqual({ revoked: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/logout",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+      }),
+    );
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses no client timeout for git.runStackedAction", async () => {
     requestMock.mockResolvedValue({
       action: "commit",
@@ -687,6 +723,36 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
       threadId: "thread-1",
       toTurnCount: 1,
+    });
+  });
+
+  it("forwards provider delivery inspection and reconciliation", async () => {
+    requestMock.mockResolvedValue([]);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.orchestration.listProviderDeliveryBlockers({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      limit: 10,
+    });
+    await api.orchestration.reconcileProviderDelivery({
+      eventSequence: 42,
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      expectedState: "uncertain",
+      outcome: "safe_retry",
+      note: "The provider confirms it did not accept the command.",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
+      { threadId: "thread-1", limit: 10 },
+    );
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, {
+      eventSequence: 42,
+      threadId: "thread-1",
+      expectedState: "uncertain",
+      outcome: "safe_retry",
+      note: "The provider confirms it did not accept the command.",
     });
   });
 
@@ -808,6 +874,42 @@ describe("wsNativeApi", () => {
       sampleRateHz: 24_000,
       durationMs: 1000,
     });
+    expect(requestMock).not.toHaveBeenCalledWith(
+      WS_METHODS.serverTranscribeVoice,
+      expect.anything(),
+    );
+  });
+
+  it("uses the bounded HTTP upload instead of WebSocket RPC for browser voice", async () => {
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const result = await api.server.transcribeVoice({
+      provider: "codex",
+      cwd: "/repo",
+      audioBase64: "AQID",
+      mimeType: "audio/wav",
+      sampleRateHz: 24_000,
+      durationMs: 1000,
+    });
+
+    expect(result).toEqual({ text: "hello" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/voice/transcribe?"),
+      expect.objectContaining({ method: "POST", body: Uint8Array.from([1, 2, 3]) }),
+    );
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
       expect.anything(),

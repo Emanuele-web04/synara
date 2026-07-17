@@ -11,6 +11,114 @@ const layer = it.layer(
 );
 
 layer("ProjectionThreadMessageRepository", (it) => {
+  it.effect("orders messages by server sequence instead of caller timestamp", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.makeUnsafe("thread-causal-message-order");
+      const write = (input: {
+        readonly messageId: string;
+        readonly sequence: number;
+        readonly createdAt: string;
+      }) =>
+        repository.upsert({
+          messageId: MessageId.makeUnsafe(input.messageId),
+          threadId,
+          turnId: null,
+          role: "user",
+          text: input.messageId,
+          isStreaming: false,
+          source: "native",
+          sequence: input.sequence,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        });
+
+      yield* write({
+        messageId: "accepted-first",
+        sequence: 10,
+        createdAt: "2026-07-14T12:00:10.000Z",
+      });
+      yield* write({
+        messageId: "accepted-second-with-older-clock",
+        sequence: 11,
+        createdAt: "2026-07-14T11:59:00.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.deepStrictEqual(
+        rows.map((row) => [row.messageId, row.sequence]),
+        [
+          [MessageId.makeUnsafe("accepted-first"), 10],
+          [MessageId.makeUnsafe("accepted-second-with-older-clock"), 11],
+        ],
+      );
+      assert.strictEqual(
+        yield* repository.getLatestUserMessageAt({ threadId }),
+        "2026-07-14T11:59:00.000Z",
+      );
+    }),
+  );
+
+  it.effect("keeps equal provider message IDs independent across threads", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const messageId = MessageId.makeUnsafe("shared-provider-message");
+      const threadA = ThreadId.makeUnsafe("thread-message-scope-a");
+      const threadB = ThreadId.makeUnsafe("thread-message-scope-b");
+      const createdAt = "2026-07-14T00:00:00.000Z";
+
+      const write = (input: {
+        readonly threadId: ThreadId;
+        readonly text: string;
+        readonly attachmentId?: string;
+        readonly updatedAt?: string;
+      }) =>
+        repository.upsert({
+          messageId,
+          threadId: input.threadId,
+          turnId: null,
+          role: "assistant",
+          text: input.text,
+          ...(input.attachmentId
+            ? {
+                attachments: [
+                  {
+                    type: "file" as const,
+                    id: input.attachmentId,
+                    name: `${input.attachmentId}.txt`,
+                    mimeType: "text/plain",
+                    sizeBytes: 1,
+                  },
+                ],
+              }
+            : {}),
+          isStreaming: false,
+          source: "native",
+          createdAt,
+          updatedAt: input.updatedAt ?? createdAt,
+        });
+
+      yield* write({ threadId: threadA, text: "thread A", attachmentId: "attachment-a" });
+      yield* write({ threadId: threadB, text: "thread B", attachmentId: "attachment-b" });
+      yield* write({
+        threadId: threadA,
+        text: "thread A updated",
+        updatedAt: "2026-07-14T00:00:01.000Z",
+      });
+
+      const storedA = yield* repository.getByThreadAndMessageId({ threadId: threadA, messageId });
+      const storedB = yield* repository.getByThreadAndMessageId({ threadId: threadB, messageId });
+      assert.strictEqual(storedA._tag, "Some");
+      assert.strictEqual(storedB._tag, "Some");
+      if (storedA._tag === "Some" && storedB._tag === "Some") {
+        assert.strictEqual(storedA.value.text, "thread A updated");
+        assert.strictEqual(storedA.value.attachments?.[0]?.id, "attachment-a");
+        assert.strictEqual(storedB.value.text, "thread B");
+        assert.strictEqual(storedB.value.attachments?.[0]?.id, "attachment-b");
+      }
+    }),
+  );
+
   it.effect("preserves existing attachments when upsert omits attachments", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;

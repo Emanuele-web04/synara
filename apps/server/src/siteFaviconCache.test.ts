@@ -3,9 +3,27 @@
 //          underpins domain-level dedup (every URL on a site shares one cache key).
 // Layer: Server utility tests
 
-import { describe, expect, it } from "vitest";
+import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeFaviconHost, tryParseHost } from "./siteFaviconCache";
+import {
+  clearSiteFaviconCache,
+  normalizeFaviconHost,
+  resolveFavicon,
+  tryParseHost,
+} from "./siteFaviconCache";
+
+const imageResponse: OutboundHttpResponse = {
+  status: 200,
+  headers: new Headers({ "content-type": "image/png" }),
+  body: new Uint8Array([1, 2, 3]),
+  url: "https://www.google.com/favicon.png",
+};
+
+afterEach(() => {
+  clearSiteFaviconCache();
+  vi.restoreAllMocks();
+});
 
 describe("normalizeFaviconHost", () => {
   it("lower-cases the host", () => {
@@ -40,5 +58,39 @@ describe("tryParseHost", () => {
 
   it("returns null for empty input", () => {
     expect(tryParseHost("   ")).toBeNull();
+  });
+});
+
+describe("resolveFavicon", () => {
+  it("uses the shared bounded outbound policy", async () => {
+    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue(imageResponse);
+
+    const favicon = await resolveFavicon("example.com");
+
+    expect(favicon.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(request.mock.calls[0]?.[0].policy).toMatchObject({
+      service: "site-favicon",
+      allowedOrigins: ["https://www.google.com"],
+      maxResponseBytes: 512 * 1024,
+      requirePublicAddress: true,
+    });
+  });
+
+  it("pins the direct fallback to the requested public origin", async () => {
+    const request = vi
+      .spyOn(outboundHttp, "request")
+      .mockResolvedValueOnce({ ...imageResponse, status: 404, body: new Uint8Array() })
+      .mockResolvedValueOnce({ ...imageResponse, status: 404, body: new Uint8Array() })
+      .mockResolvedValueOnce({
+        ...imageResponse,
+        url: "https://example.org/favicon.ico",
+      });
+
+    await resolveFavicon("example.org");
+
+    expect(request.mock.calls[2]?.[0]).toMatchObject({
+      url: "https://example.org/favicon.ico",
+      policy: { allowedOrigins: ["https://example.org"] },
+    });
   });
 });
