@@ -790,6 +790,56 @@ describe("applyCursorAcpModelSelection", () => {
     ]);
   });
 
+  it("maps Cursor's namespaced Grok CLI id to the unprefixed ACP model value", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "default[]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            {
+              value: "grok-4.5[effort=high,fast=true]",
+              name: "Cursor Grok 4.5",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "cursor-grok-4.5",
+        options: { reasoningEffort: "high", fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.5[effort=high,fast=true]",
+      },
+    ]);
+  });
+
   it("keeps OpenAI CLI 1M context in the ACP model value so unsupported variants fail instead of falling back", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
