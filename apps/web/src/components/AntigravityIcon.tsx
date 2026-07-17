@@ -118,7 +118,7 @@ export function AntigravityBrandIcon(props: SVGProps<SVGSVGElement>) {
           [-5.40727, -6.39238, 14.3639, 16.9254, 2.1376],
         ].map(([x, y, width, height, deviation], index) => (
           <filter
-            key={`${x}:${y}:${width}:${height}:${deviation}`}
+            key={filterIds[index]}
             id={filterIds[index]}
             x={x}
             y={y}
