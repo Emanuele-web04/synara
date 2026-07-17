@@ -20,7 +20,7 @@ export type ProviderModelPrefetchSettings = Pick<
   | "defaultProvider"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
-  | "geminiBinaryPath"
+  | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
   | "kiloBinaryPath"
@@ -79,10 +79,11 @@ export function providerModelsPrefetchQueryOptions(input: {
         binaryPath: settings.cursorBinaryPath || null,
         apiEndpoint: settings.cursorApiEndpoint || null,
       });
-    case "gemini":
+    case "antigravity":
       return providerModelsQueryOptions({
-        provider: "gemini",
-        binaryPath: settings.geminiBinaryPath || null,
+        provider: "antigravity",
+        binaryPath: settings.antigravityBinaryPath || null,
+        cwd,
       });
     case "grok":
       return providerModelsQueryOptions({

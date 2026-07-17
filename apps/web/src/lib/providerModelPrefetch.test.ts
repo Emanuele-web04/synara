@@ -7,7 +7,6 @@ import type { ProviderKind } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AppSettings } from "../appSettings";
 import {
   prefetchProviderModelsForNewThread,
   providerModelsPrefetchQueryOptions,
@@ -28,7 +27,7 @@ function makeSettings(
     defaultProvider: "codex",
     cursorBinaryPath: "",
     cursorApiEndpoint: "",
-    geminiBinaryPath: "",
+    antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
     kiloBinaryPath: "",
@@ -108,46 +107,60 @@ describe("providerModelsPrefetchQueryOptions", () => {
     const settings = makeSettings({
       cursorBinaryPath: "/bin/agent",
       cursorApiEndpoint: "https://api.example",
+      antigravityBinaryPath: "/bin/antigravity",
       openCodeBinaryPath: "/bin/opencode",
       piBinaryPath: "/bin/pi",
       piAgentDir: "/tmp/pi-agent",
     });
 
-    expect(
-      providerModelsPrefetchQueryOptions({
-        provider: "cursor",
-        settings,
-      }).queryKey,
-    ).toEqual(
+    const cursorOptions = providerModelsPrefetchQueryOptions({
+      provider: "cursor",
+      settings,
+    });
+    expect(cursorOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("cursor", "/bin/agent", "https://api.example", null, null),
     );
 
-    expect(
-      providerModelsPrefetchQueryOptions({
-        provider: "opencode",
-        settings,
-        cwd: "/tmp/project",
-      }).queryKey,
-    ).toEqual(
+    const openCodeOptions = providerModelsPrefetchQueryOptions({
+      provider: "opencode",
+      settings,
+      cwd: "/tmp/project",
+    });
+    expect(openCodeOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/tmp/project"),
     );
 
-    expect(
-      providerModelsPrefetchQueryOptions({
-        provider: "pi",
-        settings,
-        cwd: "/tmp/project",
-      }).queryKey,
-    ).toEqual(
+    const piOptions = providerModelsPrefetchQueryOptions({
+      provider: "pi",
+      settings,
+      cwd: "/tmp/project",
+    });
+    expect(piOptions.queryKey).toEqual(
       providerDiscoveryQueryKeys.models("pi", "/bin/pi", null, "/tmp/pi-agent", "/tmp/project"),
     );
 
-    expect(
-      providerModelsPrefetchQueryOptions({
-        provider: "codex",
-        settings,
-      }).queryKey,
-    ).toEqual(providerDiscoveryQueryKeys.models("codex", null, null, null, null));
+    const antigravityOptions = providerModelsPrefetchQueryOptions({
+      provider: "antigravity",
+      settings,
+      cwd: "/tmp/project",
+    });
+    expect(antigravityOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models(
+        "antigravity",
+        "/bin/antigravity",
+        null,
+        null,
+        "/tmp/project",
+      ),
+    );
+
+    const codexOptions = providerModelsPrefetchQueryOptions({
+      provider: "codex",
+      settings,
+    });
+    expect(codexOptions.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("codex", null, null, null, null),
+    );
   });
 });
 
@@ -155,13 +168,12 @@ describe("prefetchProviderModelsForNewThread", () => {
   it("prefetches models and agents for the resolved provider", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
-    const settings = makeSettings({
-      kiloBinaryPath: "/bin/kilo",
-    }) as AppSettings;
 
     prefetchProviderModelsForNewThread(queryClient, {
       provider: "kilo" satisfies ProviderKind,
-      settings,
+      settings: makeSettings({
+        kiloBinaryPath: "/bin/kilo",
+      }),
       cwd: "/tmp/project",
     });
 
