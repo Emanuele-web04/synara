@@ -11,7 +11,13 @@ import {
 } from "node:child_process";
 import * as Path from "node:path";
 
+import {
+  matchesDistinguishedName,
+  parseDistinguishedName,
+} from "@synara/shared/windowsCertificate";
 import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
+
+export { parseDistinguishedName } from "@synara/shared/windowsCertificate";
 
 type Logger = {
   info?(message: string): void;
@@ -128,85 +134,6 @@ function runPowerShell(
   });
 }
 
-export function parseDistinguishedName(seq: string): Map<string, string> {
-  let quoted = false;
-  let key: string | null = null;
-  let token = "";
-  let nextNonSpace = 0;
-  const result = new Map<string, string>();
-  const trimmed = seq.trim();
-
-  for (let i = 0; i <= trimmed.length; i += 1) {
-    if (i === trimmed.length) {
-      if (key !== null) {
-        result.set(key, token);
-      }
-      break;
-    }
-    const ch = trimmed[i];
-    if (quoted) {
-      if (ch === '"') {
-        quoted = false;
-        continue;
-      }
-    } else {
-      if (ch === '"') {
-        quoted = true;
-        continue;
-      }
-      if (ch === "\\") {
-        i += 1;
-        const ord = Number.parseInt(trimmed.slice(i, i + 2), 16);
-        if (Number.isNaN(ord)) {
-          token += trimmed[i] ?? "";
-        } else {
-          i += 1;
-          token += String.fromCharCode(ord);
-        }
-        continue;
-      }
-      if (key === null && ch === "=") {
-        key = token;
-        token = "";
-        continue;
-      }
-      if (ch === "," || ch === ";" || ch === "+") {
-        if (key !== null) {
-          result.set(key, token);
-        }
-        key = null;
-        token = "";
-        continue;
-      }
-    }
-    if (ch === " " && !quoted) {
-      if (token.length === 0) {
-        continue;
-      }
-      if (i > nextNonSpace) {
-        let j = i;
-        while (trimmed[j] === " ") {
-          j += 1;
-        }
-        nextNonSpace = j;
-      }
-      if (
-        nextNonSpace >= trimmed.length ||
-        trimmed[nextNonSpace] === "," ||
-        trimmed[nextNonSpace] === ";" ||
-        (key === null && trimmed[nextNonSpace] === "=") ||
-        (key !== null && trimmed[nextNonSpace] === "+")
-      ) {
-        i = nextNonSpace - 1;
-        continue;
-      }
-    }
-    token += ch;
-  }
-
-  return result;
-}
-
 function parseSignatureOutput(out: string): Record<string, unknown> {
   const data = JSON.parse(out) as Record<string, unknown>;
   delete data.PrivateKey;
@@ -275,10 +202,6 @@ export async function verifyWindowsUpdateCodeSignature(
         typeof data.SignerCertificate === "object" && data.SignerCertificate !== null
           ? (data.SignerCertificate as Record<string, unknown>)
           : null;
-      const subject =
-        typeof signerCertificate?.Subject === "string"
-          ? parseDistinguishedName(signerCertificate.Subject)
-          : new Map<string, string>();
 
       const normalizedUpdateFile = Path.win32.normalize(unescapedTempUpdateFile);
       if (typeof data.Path !== "string" || data.Path.length === 0) {
@@ -300,13 +223,11 @@ export async function verifyWindowsUpdateCodeSignature(
         );
       }
 
+      const signerSubject =
+        typeof signerCertificate?.Subject === "string" ? signerCertificate.Subject : "";
       for (const name of publisherNames) {
-        const dn = parseDistinguishedName(name);
-        if (dn.has("CN") && dn.size >= 2) {
-          const keys = Array.from(dn.keys());
-          if (keys.every((key) => dn.get(key) === subject.get(key))) {
-            return null;
-          }
+        if (matchesDistinguishedName(name, signerSubject)) {
+          return null;
         }
       }
     }
@@ -325,7 +246,7 @@ export async function verifyWindowsUpdateCodeSignature(
 
 export function resolveWindowsUpdatePublisherNames(
   feedPublisherNames: ReadonlyArray<string>,
-  embeddedPublisherSubjects: ReadonlyArray<string> | null,
+  embeddedPublisherSubjects: ReadonlyArray<string> | null | undefined,
 ): string[] {
   return (embeddedPublisherSubjects ?? feedPublisherNames)
     .map((name) => name.trim())
@@ -339,7 +260,7 @@ export function hardenElectronUpdater(
   updaterModule: UpdaterModule,
   updater: unknown,
   platform: NodeJS.Platform = process.platform,
-  embeddedPublisherSubjects: ReadonlyArray<string> | null = [],
+  embeddedPublisherSubjects?: ReadonlyArray<string> | null,
 ): void {
   if (platform !== "win32") {
     return;

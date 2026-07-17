@@ -16,6 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { matchesDistinguishedName } from "@synara/shared/windowsCertificate";
+
 export type ReleaseArtifactPlatform = "linux" | "mac" | "win";
 
 export interface ReleaseArtifactProvenanceInput {
@@ -337,7 +339,10 @@ function verifyWindowsSignatures(
         `${executable.fileName} publisher ${String(signature.Publisher)} does not match expected ${expectedPublisher}.`,
       );
     }
-    if (signature.Subject !== expectedSubjectDn) {
+    if (
+      typeof signature.Subject !== "string" ||
+      !matchesDistinguishedName(expectedSubjectDn, signature.Subject)
+    ) {
       throw new Error(
         `${executable.fileName} subject ${String(signature.Subject)} does not match expected ${expectedSubjectDn}.`,
       );
@@ -369,7 +374,7 @@ function verifyWindowsSignatures(
     checks: [
       "Get-AuthenticodeSignature Status=Valid",
       "publisher exact match",
-      "subject DN exact match",
+      "subject DN field match",
     ],
   };
 }

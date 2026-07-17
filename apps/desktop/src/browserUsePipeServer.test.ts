@@ -35,6 +35,12 @@ async function connect(pipePath: string): Promise<Socket> {
 }
 
 async function request(socket: Socket, message: unknown): Promise<Record<string, unknown>> {
+  const response = readMessage(socket);
+  socket.write(encodeRequest(message));
+  return await response;
+}
+
+async function readMessage(socket: Socket): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
     let pending = Buffer.alloc(0);
     const onData = (chunk: Buffer) => {
@@ -52,18 +58,29 @@ async function request(socket: Socket, message: unknown): Promise<Record<string,
     };
     socket.on("data", onData);
     socket.once("error", onError);
-    socket.write(encodeRequest(message));
   });
 }
 
 async function withPipeServer(
-  options: { maxInFlightRequests?: number; maxQueuedOutputBytes?: number },
+  options: {
+    maxInFlightRequests?: number;
+    maxQueuedOutputBytes?: number;
+    browserManager?: unknown;
+  },
   run: (socket: Socket) => Promise<void>,
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "synara-browser-pipe-test-"));
   const pipePath = join(directory, "browser.sock");
-  const browserManager = { getBrowserUseSnapshot: () => null } as never;
-  const server = new BrowserUsePipeServer(browserManager, { pipePath, ...options });
+  const browserManager = options.browserManager ?? { getBrowserUseSnapshot: () => null };
+  const server = new BrowserUsePipeServer(browserManager as never, {
+    pipePath,
+    ...(options.maxInFlightRequests !== undefined
+      ? { maxInFlightRequests: options.maxInFlightRequests }
+      : {}),
+    ...(options.maxQueuedOutputBytes !== undefined
+      ? { maxQueuedOutputBytes: options.maxQueuedOutputBytes }
+      : {}),
+  });
   await server.start();
   const socket = await connect(pipePath);
   try {
@@ -178,6 +195,78 @@ describe("browser-use pipe RPC compatibility", () => {
         id: 1,
         error: { message: "Browser-use output capacity exceeded" },
       });
+      expect(socket.destroyed).toBe(false);
+    });
+  });
+
+  it("signals CDP detachment instead of silently dropping notifications at capacity", async () => {
+    let cdpListener: ((event: { method: string; params?: unknown }) => void) | null = null;
+    let disposeCalls = 0;
+    const browserManager = {
+      getBrowserUseSnapshot: () => ({
+        threadId: "thread-1",
+        state: {
+          open: true,
+          activeTabId: "tab-1",
+          tabs: [
+            {
+              id: "tab-1",
+              title: "Tab",
+              url: "about:blank",
+              lastCommittedUrl: null,
+            },
+          ],
+        },
+      }),
+      attachBrowserUseTab: async () => {},
+      subscribeToCdpEvents: (
+        _target: unknown,
+        listener: (event: { method: string; params?: unknown }) => void,
+      ) => {
+        cdpListener = listener;
+        return () => {
+          cdpListener = null;
+          disposeCalls += 1;
+        };
+      },
+    };
+
+    await withPipeServer({ maxQueuedOutputBytes: 256, browserManager }, async (socket) => {
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getInfo",
+        params: { session_id: "codex-session-1" },
+      });
+      const tabs = await request(socket, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getTabs",
+        params: { session_id: "codex-session-1" },
+      });
+      const tabId = (tabs.result as Array<{ id: number }>)[0]?.id;
+      await request(socket, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "attach",
+        params: { session_id: "codex-session-1", tabId },
+      });
+
+      const notification = readMessage(socket);
+      cdpListener?.({
+        method: "Network.dataReceived",
+        params: { payload: "x".repeat(1_024) },
+      });
+
+      await expect(notification).resolves.toMatchObject({
+        method: "onCDPEvent",
+        params: {
+          source: { tabId },
+          method: "Inspector.detached",
+          params: { reason: "Browser-use output capacity exceeded" },
+        },
+      });
+      expect(disposeCalls).toBe(1);
       expect(socket.destroyed).toBe(false);
     });
   });

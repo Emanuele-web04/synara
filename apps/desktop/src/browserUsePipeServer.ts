@@ -26,6 +26,7 @@ const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
 export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
 
 type BrowserUseRpcId = string | number;
+type BrowserUseWriteResult = "written" | "overflow" | "closed";
 
 interface BrowserUseRpcRequest {
   id?: BrowserUseRpcId;
@@ -47,6 +48,7 @@ interface BrowserUseClient {
   inFlightRequests: number;
   codexSessionId: string | null;
   outputBackpressured: boolean;
+  cdpOutputOverflowed: boolean;
   boundThreadId: ThreadId | null;
   selectedTrackedTabId: number | null;
   disposeCdpListener: (() => void) | null;
@@ -256,6 +258,7 @@ export class BrowserUsePipeServer {
       inFlightRequests: 0,
       codexSessionId: null,
       outputBackpressured: false,
+      cdpOutputOverflowed: false,
       boundThreadId: null,
       selectedTrackedTabId: null,
       disposeCdpListener: null,
@@ -271,6 +274,7 @@ export class BrowserUsePipeServer {
     client.disposeCdpListener?.();
     client.disposeCdpListener = null;
     client.outputBackpressured = false;
+    client.cdpOutputOverflowed = false;
     this.sockets.delete(client.socket);
     this.clientBySocket.delete(client.socket);
     for (const [id, tracked] of this.trackedTabById) {
@@ -531,6 +535,8 @@ export class BrowserUsePipeServer {
     const tracked = this.resolveTrackedTabForClient(client, params);
     client.selectedTrackedTabId = tracked.id;
     client.disposeCdpListener?.();
+    client.disposeCdpListener = null;
+    client.cdpOutputOverflowed = false;
     await this.browserManager.attachBrowserUseTab({
       threadId: tracked.threadId,
       tabId: tracked.tabId,
@@ -541,7 +547,8 @@ export class BrowserUsePipeServer {
         tabId: tracked.tabId,
       },
       (event) => {
-        this.writeToClient(client, {
+        if (client.cdpOutputOverflowed) return;
+        const result = this.writeToClient(client, {
           jsonrpc: "2.0",
           method: "onCDPEvent",
           params: {
@@ -552,15 +559,23 @@ export class BrowserUsePipeServer {
             ...(event.params !== undefined ? { params: event.params } : {}),
           },
         });
+        if (result === "overflow") {
+          this.signalCdpOutputOverflow(client, tracked.id);
+        }
       },
     );
-    client.disposeCdpListener = dispose;
+    if (client.cdpOutputOverflowed) {
+      dispose();
+    } else {
+      client.disposeCdpListener = dispose;
+    }
     return {};
   }
 
   private async detachForClient(client: BrowserUseClient): Promise<Record<string, never>> {
     client.disposeCdpListener?.();
     client.disposeCdpListener = null;
+    client.cdpOutputOverflowed = false;
     return {};
   }
 
@@ -581,14 +596,38 @@ export class BrowserUsePipeServer {
     } satisfies BrowserExecuteCdpInput);
   }
 
-  private writeToClient(client: BrowserUseClient, message: unknown): void {
+  private signalCdpOutputOverflow(client: BrowserUseClient, trackedTabId: number): void {
+    if (client.cdpOutputOverflowed) return;
+    client.cdpOutputOverflowed = true;
+    client.disposeCdpListener?.();
+    client.disposeCdpListener = null;
+    this.writeToClient(
+      client,
+      {
+        jsonrpc: "2.0",
+        method: "onCDPEvent",
+        params: {
+          source: { tabId: trackedTabId },
+          method: "Inspector.detached",
+          params: { reason: "Browser-use output capacity exceeded" },
+        },
+      },
+      true,
+    );
+  }
+
+  private writeToClient(
+    client: BrowserUseClient,
+    message: unknown,
+    allowBoundedOverflow = false,
+  ): BrowserUseWriteResult {
     const { socket } = client;
-    if (socket.destroyed) return;
+    if (socket.destroyed || socket.writableEnded) return "closed";
     let frame = encodeBrowserUseFrame(message);
-    if (socket.writableLength + frame.length > this.maxQueuedOutputBytes) {
+    if (!allowBoundedOverflow && socket.writableLength + frame.length > this.maxQueuedOutputBytes) {
       const requestId = asObject(message)?.id;
       if (typeof requestId !== "string" && typeof requestId !== "number") {
-        return;
+        return "overflow";
       }
       frame = encodeBrowserUseFrame({
         jsonrpc: "2.0",
@@ -605,5 +644,6 @@ export class BrowserUsePipeServer {
         if (!socket.destroyed) socket.resume();
       });
     }
+    return "written";
   }
 }

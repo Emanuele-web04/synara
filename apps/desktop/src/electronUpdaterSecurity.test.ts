@@ -232,6 +232,23 @@ describe("electronUpdaterSecurity", () => {
     expect(oldVerifier).not.toHaveBeenCalled();
   });
 
+  it("falls back to feed publisher DNs when no embedded override is supplied", async () => {
+    const updater = {
+      verifyUpdateCodeSignature: vi.fn(
+        async (_publisherNames: string[], _updateFile: string) => "old verifier",
+      ),
+    };
+
+    hardenElectronUpdater({ BaseUpdater: class {} }, updater, "win32");
+
+    const result = await updater.verifyUpdateCodeSignature(
+      ["CN=Feed Publisher, O=Acme Tools"],
+      "C:\\Temp\\SynaraSetup.exe",
+    );
+    expect(result).not.toContain("no valid embedded publisher subject DN");
+    expect(result).toContain("signature verification could not be completed");
+  });
+
   it("fails closed before invoking the verifier when the packaged publisher pin is absent", async () => {
     const updater = {
       verifyUpdateCodeSignature: vi.fn(
