@@ -5,12 +5,19 @@
 // Exports: normalizeCorsOrigin, isTrustedAppOrigin,
 //          shouldRejectUntrustedRequestOrigin
 
-import { SYNARA_DESKTOP_ORIGIN } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_CANARY_DESKTOP_ORIGIN,
+  SYNARA_DESKTOP_ORIGIN,
+} from "@synara/shared/desktopIdentity";
 
 import type { ServerConfigShape } from "./config";
 import { isLoopbackHost, isWildcardHost } from "./startupAccess";
 
 export const DESKTOP_APP_CORS_ORIGIN = SYNARA_DESKTOP_ORIGIN;
+export const DESKTOP_APP_CORS_ORIGINS: ReadonlySet<string> = new Set([
+  SYNARA_DESKTOP_ORIGIN,
+  SYNARA_CANARY_DESKTOP_ORIGIN,
+]);
 
 export function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined) {
   const value = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
@@ -18,8 +25,9 @@ export function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | 
   if (!trimmed || trimmed === "null") {
     return null;
   }
-  if (trimmed.replace(/\/+$/, "") === DESKTOP_APP_CORS_ORIGIN) {
-    return DESKTOP_APP_CORS_ORIGIN;
+  const normalizedDesktopOrigin = trimmed.replace(/\/+$/, "");
+  if (DESKTOP_APP_CORS_ORIGINS.has(normalizedDesktopOrigin)) {
+    return normalizedDesktopOrigin;
   }
   try {
     const origin = new URL(trimmed).origin;
@@ -70,7 +78,7 @@ export function isTrustedAppOrigin(input: {
     (input.origin === input.requestOrigin &&
       isTrustedRequestOriginHost(input.requestOrigin, input.config)) ||
     input.origin === input.config.devUrl?.origin ||
-    input.origin === DESKTOP_APP_CORS_ORIGIN
+    DESKTOP_APP_CORS_ORIGINS.has(input.origin)
   );
 }
 
