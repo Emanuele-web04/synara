@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCanaryArgs, resolveCanaryPaths } from "./canary";
+import { parseCanaryArgs, resolveCanaryPaths, resolveCanaryRef } from "./canary";
 
 describe("canary tooling", () => {
   it("keeps managed source and Canary data separate from Stable", () => {
@@ -32,11 +32,19 @@ describe("canary tooling", () => {
   });
 
   it("tracks main by default and accepts a stacked PR ref", () => {
-    expect(parseCanaryArgs(["update"])).toEqual({ command: "update", ref: "main" });
+    expect(parseCanaryArgs(["update"])).toEqual({ command: "update", ref: null });
     expect(parseCanaryArgs(["setup", "--ref", "codex/synara-canary"])).toEqual({
       command: "setup",
       ref: "codex/synara-canary",
     });
+  });
+
+  it("keeps updating the selected stacked ref until explicitly moved to main", () => {
+    expect(resolveCanaryRef(parseCanaryArgs(["setup"]), null)).toBe("main");
+    expect(resolveCanaryRef(parseCanaryArgs(["update"]), "codex/synara-canary")).toBe(
+      "codex/synara-canary",
+    );
+    expect(resolveCanaryRef(parseCanaryArgs(["update", "--ref", "main"]), "old-ref")).toBe("main");
   });
 
   it("rejects unsupported commands and incomplete refs", () => {

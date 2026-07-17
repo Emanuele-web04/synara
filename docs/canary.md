@@ -35,6 +35,13 @@ While this change is still a stacked PR, it can be tested explicitly from its re
 bun run canary:setup -- --ref codex/synara-canary
 ```
 
+Later `canary:update` calls keep using that tracked ref automatically. After this PR lands on `main`,
+switch the installation to the normal channel once:
+
+```bash
+bun run canary:update -- --ref main
+```
+
 ## Operations
 
 ```bash

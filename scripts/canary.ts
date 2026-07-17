@@ -27,7 +27,7 @@ interface CanaryState {
 
 interface ParsedCanaryArgs {
   readonly command: CanaryCommand;
-  readonly ref: string;
+  readonly ref: string | null;
 }
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -64,7 +64,7 @@ export function parseCanaryArgs(argv: ReadonlyArray<string>): ParsedCanaryArgs {
   ) {
     throw new Error(`Unknown Canary command: ${rawCommand}`);
   }
-  let ref = DEFAULT_REF;
+  let ref: string | null = null;
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--ref") {
@@ -77,6 +77,10 @@ export function parseCanaryArgs(argv: ReadonlyArray<string>): ParsedCanaryArgs {
     throw new Error(`Unknown Canary argument: ${String(argument)}`);
   }
   return { command: rawCommand as CanaryCommand, ref };
+}
+
+export function resolveCanaryRef(input: ParsedCanaryArgs, trackedRef: string | null): string {
+  return input.ref ?? (input.command === "update" ? trackedRef : null) ?? DEFAULT_REF;
 }
 
 function run(command: string, args: ReadonlyArray<string>, cwd: string): void {
@@ -354,7 +358,7 @@ function printStatus(paths: CanaryPaths): void {
 
 export function runCanaryCommand(input: ParsedCanaryArgs, paths = resolveCanaryPaths()): void {
   if (input.command === "setup" || input.command === "update") {
-    updateCanary(paths, input.ref);
+    updateCanary(paths, resolveCanaryRef(input, readState(paths)?.trackedRef ?? null));
     return;
   }
   if (input.command === "start") {
