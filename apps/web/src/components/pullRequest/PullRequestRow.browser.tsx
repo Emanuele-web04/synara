@@ -37,6 +37,13 @@ function makeEntry(isPinned: boolean): PullRequestListEntry {
     reviewDecision: null,
     viewerReviewRequested: false,
     isPinned,
+    projectContexts: [
+      {
+        projectId: "project-1" as PullRequestListEntry["projectId"],
+        projectTitle: "Project One",
+        isPinned,
+      },
+    ],
     mergeability: "unknown",
     labels: [],
   };
@@ -178,6 +185,32 @@ describe("PullRequestRow pin control", () => {
     expect(page.getByRole("button", { name: "Pin pull request #42 in Project One" })).toBeVisible();
   });
 
+  it("summarizes shared repository rows without implying one owning project", async () => {
+    const entry = makeEntry(false);
+    await render(
+      <PullRequestRow
+        entry={{
+          ...entry,
+          projectContexts: [
+            ...(entry.projectContexts ?? []),
+            {
+              projectId: "project-2" as PullRequestListEntry["projectId"],
+              projectTitle: "Project Two",
+              isPinned: false,
+            },
+          ],
+        }}
+        selected={false}
+        showProjectTitle
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(page.getByText("2 projects")).toBeVisible();
+    expect(page.getByRole("button", { name: "Pin pull request #42 in 2 projects" })).toBeVisible();
+  });
+
   it("keeps scoped rows minimal", async () => {
     await render(
       <PullRequestRow
@@ -190,6 +223,21 @@ describe("PullRequestRow pin control", () => {
 
     expect(document.body.textContent).not.toContain("Project One");
     expect(page.getByRole("button", { name: "Pin pull request #42" })).toBeVisible();
+  });
+
+  it("restores focus by remote identity when aggregate project context changes", async () => {
+    const entry = makeEntry(false);
+    await render(
+      <PullRequestRow entry={entry} selected={false} onClick={vi.fn()} onTogglePinned={vi.fn()} />,
+    );
+
+    expect(
+      focusPullRequestRow(document, {
+        ...entry,
+        projectId: "different-project" as PullRequestListEntry["projectId"],
+      }),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("data-pull-request-number")).toBe("42");
   });
 
   it("returns focus to the selected row when the focused dock closes", async () => {

@@ -140,6 +140,21 @@ export function readFileAsDataUrl(file: File): Promise<string> {
       reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
+      const nativeMessage =
+        reader.error instanceof Error && reader.error.message.trim().length > 0
+          ? reader.error.message
+          : null;
+      if (
+        nativeMessage &&
+        /could not be found at the time an operation was processed/i.test(nativeMessage)
+      ) {
+        reject(
+          new Error(
+            `Could not read '${file.name || "item"}'. Paths with spaces or special characters may need a path mention (@\"…\") instead of a file attachment.`,
+          ),
+        );
+        return;
+      }
       reject(reader.error ?? new Error("Failed to read attachment."));
     });
     reader.readAsDataURL(file);
@@ -181,19 +196,14 @@ export function resolvePromptEffortFromModelSelection(
   modelSelection: ModelSelection,
 ): string | null {
   switch (modelSelection.provider) {
+    case "antigravity":
+      return null;
     case "codex":
       return modelSelection.options?.reasoningEffort ?? null;
     case "claudeAgent":
       return modelSelection.options?.effort ?? null;
     case "cursor":
       return modelSelection.options?.reasoningEffort ?? null;
-    case "gemini":
-      return (
-        modelSelection.options?.thinkingLevel ??
-        (modelSelection.options?.thinkingBudget !== undefined
-          ? String(modelSelection.options.thinkingBudget)
-          : null)
-      );
     case "grok":
     case "droid":
       return modelSelection.options?.reasoningEffort ?? null;

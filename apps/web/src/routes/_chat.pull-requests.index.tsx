@@ -4,7 +4,10 @@ import type {
   PullRequestListEntry,
   PullRequestState,
 } from "@synara/contracts";
-import { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
+import {
+  coalescePullRequestListEntries,
+  isValidGitHubRepositoryNameWithOwner,
+} from "@synara/shared/githubRepository";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
@@ -35,6 +38,7 @@ import {
   groupPullRequestEntriesByInvolvement,
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
+  pullRequestPinToggleInputs,
 } from "~/components/pullRequest/pullRequestList.logic";
 import {
   PullRequestFilterPillGroup,
@@ -242,13 +246,16 @@ function PullRequestsRouteView() {
   const entries = useMemo(
     () =>
       orderPullRequestEntriesPinnedFirst(
-        filterPullRequestEntriesByInvolvement(
-          activeListData?.entries ?? [],
-          activeListData?.viewer ?? listQuery.data?.viewer,
-          search.involvement,
-        ).filter((entry) => matchesPullRequestSearchQuery(entry, query)),
+        coalescePullRequestListEntries(
+          filterPullRequestEntriesByInvolvement(
+            activeListData?.entries ?? [],
+            activeListData?.viewer ?? listQuery.data?.viewer,
+            search.involvement,
+          ).filter((entry) => matchesPullRequestSearchQuery(entry, query)),
+          { preferredProjectId: search.selectedProjectId },
+        ),
       ),
-    [activeListData, listQuery.data?.viewer, query, search.involvement],
+    [activeListData, listQuery.data?.viewer, query, search.involvement, search.selectedProjectId],
   );
   const grouped = useMemo(
     () =>
@@ -332,24 +339,19 @@ function PullRequestsRouteView() {
     [updateSearch],
   );
   const handleTogglePinned = useCallback(
-    (entry: PullRequestListEntry) =>
-      mutatePin(
-        {
-          projectId: entry.projectId,
-          repository: entry.repository,
-          number: entry.number,
-          isPinned: !entry.isPinned,
-        },
-        {
+    (entry: PullRequestListEntry) => {
+      for (const input of pullRequestPinToggleInputs(entry, search.projectId === undefined)) {
+        mutatePin(input, {
           onError: (error) =>
             toastManager.add({
               type: "error",
               title: "Could not update pull request pin",
               description: error instanceof Error ? error.message : "The pin could not be saved.",
             }),
-        },
-      ),
-    [mutatePin],
+        });
+      }
+    },
+    [mutatePin, search.projectId],
   );
   const refreshBlocked = refreshMutation.isPending || activeActionCount > 0;
   const handleManualRefresh = useCallback(() => {

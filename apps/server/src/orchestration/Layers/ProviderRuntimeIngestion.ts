@@ -307,10 +307,14 @@ function reasoningSummaryBufferKey(
   event: ProviderRuntimeEvent,
   threadId = event.threadId,
 ): string | null {
-  if (event.provider !== "codex" || !event.itemId) {
+  if ((event.provider !== "codex" && event.provider !== "antigravity") || !event.itemId) {
     return null;
   }
-  if (event.type === "content.delta" && event.payload.streamKind === "reasoning_summary_text") {
+  if (
+    event.type === "content.delta" &&
+    (event.payload.streamKind === "reasoning_summary_text" ||
+      (event.provider === "antigravity" && event.payload.streamKind === "reasoning_text"))
+  ) {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
   }
   if (
@@ -366,7 +370,7 @@ function withBufferedReasoningSummary(
 ): ProviderRuntimeEvent {
   if (
     event.type !== "item.completed" ||
-    event.provider !== "codex" ||
+    (event.provider !== "codex" && event.provider !== "antigravity") ||
     event.payload.itemType !== "reasoning" ||
     readableReasoningDetail(event.payload.detail)
   ) {
@@ -985,12 +989,12 @@ function runtimeEventToActivities(
       ? { sequence: eventWithSequence.sessionSequence }
       : {};
   })();
-  // Codex only renders completed reasoning items with a readable summary.
+  // Codex and Antigravity only render completed reasoning items with a readable summary.
   // Empty starts/completions are private/encrypted reasoning boundaries, not
   // transcript rows. Waiting for the authoritative completion also avoids
   // per-token activity writes and transcript height churn.
   if (
-    event.provider === "codex" &&
+    (event.provider === "codex" || event.provider === "antigravity") &&
     event.type === "item.completed" &&
     event.payload.itemType === "reasoning" &&
     event.itemId !== undefined &&
@@ -2892,7 +2896,8 @@ const make = Effect.gen(function* () {
       if (
         reasoningSummaryKey &&
         event.type === "content.delta" &&
-        event.payload.streamKind === "reasoning_summary_text" &&
+        (event.payload.streamKind === "reasoning_summary_text" ||
+          (event.provider === "antigravity" && event.payload.streamKind === "reasoning_text")) &&
         event.payload.delta.length > 0
       ) {
         yield* appendBufferedReasoningSummary(reasoningSummaryKey, event);

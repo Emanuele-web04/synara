@@ -7,7 +7,15 @@
 // Exports: PullRequestListGroupKey, PullRequestListGroup, grouping, pinned ordering,
 //          involvement/search filters, identity, and badge helpers
 
-import type { PullRequestInvolvement, PullRequestListEntry } from "@synara/contracts";
+import type {
+  PullRequestInvolvement,
+  PullRequestListEntry,
+  PullRequestSetPinnedInput,
+} from "@synara/contracts";
+import {
+  pullRequestListProjectContexts,
+  pullRequestListRepositoryIdentity,
+} from "@synara/shared/githubRepository";
 
 export type PullRequestListGroupKey = "pinned" | "reviewRequested" | "authored" | "others";
 
@@ -24,12 +32,34 @@ const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   others: "Others",
 };
 
-function pullRequestIdentity(entry: PullRequestListEntry): string {
-  return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
+export function pullRequestListEntryKey(entry: PullRequestListEntry): string {
+  return pullRequestListRepositoryIdentity(entry);
 }
 
-export function pullRequestListEntryKey(entry: PullRequestListEntry): string {
-  return `${entry.projectId}:${pullRequestIdentity(entry)}`;
+/** In a project-scoped view a pin owns that project. In the aggregate view the one visible toggle
+ * applies consistently across every associated project. */
+export function pullRequestPinToggleInputs(
+  entry: PullRequestListEntry,
+  aggregate: boolean,
+): PullRequestSetPinnedInput[] {
+  if (!aggregate) {
+    return [
+      {
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+        isPinned: !entry.isPinned,
+      },
+    ];
+  }
+  return pullRequestListProjectContexts(entry)
+    .filter((context) => !entry.isPinned || context.isPinned)
+    .map((context) => ({
+      projectId: context.projectId,
+      repository: entry.repository,
+      number: entry.number,
+      isPinned: !entry.isPinned,
+    }));
 }
 
 // The list is fetched once per state as the "all" involvement superset; the Reviewing and
@@ -66,8 +96,9 @@ export function matchesPullRequestSearchQuery(
 }
 
 export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {
-  return new Set(entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestIdentity))
-    .size;
+  return new Set(
+    entries.filter((entry) => entry.viewerReviewRequested).map(pullRequestListRepositoryIdentity),
+  ).size;
 }
 
 /** Stable partition used by ungrouped tabs after an optimistic pin toggle. */

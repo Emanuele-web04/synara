@@ -36,6 +36,13 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     reviewDecision: null,
     viewerReviewRequested: false,
     isPinned: false,
+    projectContexts: [
+      {
+        projectId: "project-1" as PullRequestListEntry["projectId"],
+        projectTitle: "Project One",
+        isPinned: false,
+      },
+    ],
     mergeability: "unknown",
     labels: [],
     ...overrides,

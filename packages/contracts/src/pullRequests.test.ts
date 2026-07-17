@@ -45,6 +45,7 @@ describe("PullRequestListEntry", () => {
     // The fixture deliberately omits both fields — this is what an older server sends.
     const decoded = decodeListEntry(listEntry());
     expect(decoded.isPinned).toBe(false);
+    expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),

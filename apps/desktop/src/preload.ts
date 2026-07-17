@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { DesktopBridge } from "@synara/contracts";
 import { BROWSER_IPC_CHANNELS } from "./browserIpc";
 import {
@@ -45,6 +45,15 @@ function getDesktopWsUrl(): string | null {
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getWsUrl: getDesktopWsUrl,
+  // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
+  getPathForFile: (file: File) => {
+    try {
+      const path = webUtils.getPathForFile(file);
+      return typeof path === "string" && path.trim().length > 0 ? path : null;
+    } catch {
+      return null;
+    }
+  },
   pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
   saveFile: (input) => ipcRenderer.invoke(SAVE_FILE_CHANNEL, input),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),

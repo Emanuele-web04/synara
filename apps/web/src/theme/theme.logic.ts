@@ -140,6 +140,12 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const THEME_SHARE_PREFIX = "codex-theme-v1:";
 const CONTRAST_CURVE_BELOW_BASELINE = 0.7;
 const CONTRAST_CURVE_ABOVE_BASELINE = 2;
+// Keep Codex's original curve anchors even though Synara presets start at zero.
+// This makes the new default render exactly like manually moving the old slider to zero.
+const CONTRAST_CURVE_BASELINE: Record<ThemeVariant, number> = {
+  dark: 60,
+  light: 45,
+};
 const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.16,
   light: 0.04,
@@ -233,7 +239,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
 export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> = {
   dark: {
     accent: "#339cff",
-    contrast: 60,
+    contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#ffffff",
     opaqueWindows: false,
@@ -246,7 +252,7 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
   },
   light: {
     accent: "#339cff",
-    contrast: 45,
+    contrast: 0,
     fonts: { code: null, ui: null },
     ink: "#1a1c1f",
     opaqueWindows: false,
@@ -1181,7 +1187,7 @@ function buildSurfaceUnder(
   ink: RgbColor,
   variant: ThemeVariant,
 ): string {
-  const baseline = DEFAULT_CHROME_THEME_BY_VARIANT[variant].contrast;
+  const baseline = CONTRAST_CURVE_BASELINE[variant];
   const mixAmount =
     SURFACE_UNDER_BASE_ALPHA[variant] +
     (theme.contrast - baseline) * SURFACE_UNDER_CONTRAST_STEP[variant];
@@ -1212,7 +1218,7 @@ function buildComposerFocusBorder(
 }
 
 function normalizeContrastStrength(value: number, variant: ThemeVariant): number {
-  const baseline = DEFAULT_CHROME_THEME_BY_VARIANT[variant].contrast;
+  const baseline = CONTRAST_CURVE_BASELINE[variant];
   const baselineRatio = baseline / 100;
   const curvedValue = value / 100 + ((value - baseline) / 60) * CONTRAST_CURVE_BELOW_BASELINE;
 

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.5.5 - 2026-07-17
+
+### Added
+
+- Added Antigravity CLI as a first-class provider, including installation and authentication guidance, runtime model and reasoning-effort discovery, session creation and resume, streaming text and reasoning, tool and plan events, approvals, usage reporting, cancellation, and restart recovery.
+- Added dedicated Antigravity branding across provider setup and selection, with stable SVG filter identifiers for predictable rendering.
+- Added shared parsing and normalization for desktop file and folder drops so paths containing spaces, parentheses, encoded characters, or multiple items become valid composer mentions.
+
+### Changed
+
+- Reworked live-turn settlement to follow the owning provider session, preventing transcript chrome from remaining active after a turn has already completed.
+- Optimized chat reconciliation and event projection to reduce repeated scans and redundant updates during active conversations and sidebar-driven state changes.
+- Coalesced pull-request entries through shared list logic and unified picker popup interactions across the workspace.
+- Replaced Pierre-branded side-panel diff headers with Synara's shared visual chrome.
+- Retired the legacy Gemini keybinding and updated provider documentation for Antigravity.
+- Reset bundled theme seeds consistently so shipped theme changes apply predictably without disturbing user-created themes.
+- Bumped Synara release package versions to `0.5.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed WebSocket RPC requests remaining unsettled after close, timeout, send failure, or reconnect boundaries.
+- Fixed working indicators and live-turn UI becoming stuck when provider runtime events and session completion arrived in different orders.
+- Fixed dropped paths with spaces or parentheses being split, escaped incorrectly, or omitted from chat and Kanban task composers.
+- Fixed Cursor model-discovery failures taking down the picker or discarding usable cached and independently discovered model choices.
+- Fixed pull-request list typing under `exactOptionalPropertyTypes` and reduced duplicate list state across project contexts.
+- Fixed Antigravity SVG filter keys relying on floating-point geometry strings instead of the stable generated filter identifiers.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,192 files.
+- `bun run lint` passed with 202 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed and retained the pinned dependency set while noting `@pierre/diffs@1.2.12` is newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks in 8m19s; web passed 219 files, CLI passed 169 files / 1,863 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed. No targeted reruns were required.
+
 ## 0.5.4 - 2026-07-15
 
 ### Added

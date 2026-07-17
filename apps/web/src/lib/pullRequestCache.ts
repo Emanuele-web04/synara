@@ -1,19 +1,31 @@
 import type {
   ProjectId,
   PullRequestDetailInput,
+  PullRequestProjectContext,
   PullRequestSetPinnedInput,
   PullRequestState,
   PullRequestsListResult,
 } from "@synara/contracts";
+import {
+  coalescePullRequestListEntries,
+  pullRequestListEntryHasProject,
+  pullRequestListProjectContexts,
+  pullRequestListProjectPin,
+  pullRequestListRepositoryIdentity,
+  updatePullRequestListEntryProjectPin,
+} from "@synara/shared/githubRepository";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { PULL_REQUEST_STATES } from "./pullRequestQueryOptions";
 
 export type PullRequestListCacheEntry = {
   projectId: ProjectId;
+  projectTitle?: string;
   repository: string;
   number: number;
   isPinned: boolean;
+  headBranch?: string;
+  projectContexts?: ReadonlyArray<PullRequestProjectContext>;
   state?: PullRequestState;
   isDraft?: boolean;
 };
@@ -48,15 +60,35 @@ export function pullRequestIdentityKey(
   return JSON.stringify([input.projectId, input.repository.toLowerCase(), input.number]);
 }
 
-export function matchesPullRequestIdentity(
-  entry: Pick<PullRequestListCacheEntry, "projectId" | "repository" | "number">,
+export function pullRequestRemoteIdentityKey(
+  input: Pick<PullRequestDetailInput, "repository" | "number">,
+): string {
+  return pullRequestListRepositoryIdentity(input);
+}
+
+function matchesPullRequestRemoteIdentity(
+  entry: Pick<PullRequestListCacheEntry, "repository" | "number">,
+  input: Pick<PullRequestDetailInput, "repository" | "number">,
+): boolean {
+  return pullRequestRemoteIdentityKey(entry) === pullRequestRemoteIdentityKey(input);
+}
+
+function matchesPullRequestPinIdentity(
+  entry: PullRequestListCacheEntry,
   input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
 ): boolean {
   return (
-    entry.projectId === input.projectId &&
-    entry.repository.toLowerCase() === input.repository.toLowerCase() &&
-    entry.number === input.number
+    matchesPullRequestRemoteIdentity(entry, input) &&
+    pullRequestListEntryHasProject(entry, input.projectId)
   );
+}
+
+function updateEntryProjectPin(
+  entry: PullRequestListCacheEntry,
+  projectId: ProjectId,
+  isPinned: boolean,
+): PullRequestListCacheEntry {
+  return updatePullRequestListEntryProjectPin(entry, projectId, isPinned);
 }
 
 export function isPullRequestListQueryKey(queryKey: QueryKey): boolean {
@@ -93,7 +125,7 @@ export function listScopesContainingPullRequest(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    if (!data?.entries.some((entry) => matchesPullRequestIdentity(entry, input))) continue;
+    if (!data?.entries.some((entry) => matchesPullRequestPinIdentity(entry, input))) continue;
     const scope = pullRequestListQueryScope(queryKey);
     if (scope) scopes.set(scopeKey(scope), scope);
   }
@@ -111,9 +143,7 @@ export function listScopesContainingPullRequestRepository(
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
     const coversRepository = data?.entries.some(
-      (entry) =>
-        entry.projectId === input.projectId &&
-        entry.repository.toLowerCase() === input.repository.toLowerCase(),
+      (entry) => entry.repository.toLowerCase() === input.repository.toLowerCase(),
     );
     if (!coversRepository) continue;
     const scope = pullRequestListQueryScope(queryKey);
@@ -181,7 +211,7 @@ export function optimisticallyPatchPullRequestActionFieldsInListCaches(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    const match = data?.entries.find((entry) => matchesPullRequestIdentity(entry, input));
+    const match = data?.entries.find((entry) => matchesPullRequestRemoteIdentity(entry, input));
     if (!match) continue;
     rollbackByQuery.push({
       queryKey,
@@ -195,7 +225,7 @@ export function optimisticallyPatchPullRequestActionFieldsInListCaches(
         ? {
             ...current,
             entries: current.entries.map((entry) =>
-              matchesPullRequestIdentity(entry, input) ? { ...entry, ...entryPatch } : entry,
+              matchesPullRequestRemoteIdentity(entry, input) ? { ...entry, ...entryPatch } : entry,
             ),
           }
         : current,
@@ -216,7 +246,7 @@ export function rollbackPullRequestActionFieldsInListCaches(input: {
         ? {
             ...current,
             entries: current.entries.map((entry) => {
-              if (!matchesPullRequestIdentity(entry, input.identity)) return entry;
+              if (!matchesPullRequestRemoteIdentity(entry, input.identity)) return entry;
               const ownedRollback: PullRequestActionListPatch = {};
               if (
                 input.optimisticPatch.state !== undefined &&
@@ -253,7 +283,9 @@ export function patchPullRequestPinInListCaches(
         ? {
             ...current,
             entries: current.entries.map((entry) =>
-              matchesPullRequestIdentity(entry, input) ? { ...entry, isPinned } : entry,
+              matchesPullRequestPinIdentity(entry, input)
+                ? updateEntryProjectPin(entry, input.projectId, isPinned)
+                : entry,
             ),
           }
         : current,
@@ -269,16 +301,19 @@ export function optimisticallyPatchPullRequestPinInListCaches(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    const match = data?.entries.find((entry) => matchesPullRequestIdentity(entry, input));
+    const match = data?.entries.find((entry) => matchesPullRequestPinIdentity(entry, input));
     if (!match) continue;
-    rollbackByQuery.push({ queryKey, previousIsPinned: match.isPinned });
+    rollbackByQuery.push({
+      queryKey,
+      previousIsPinned: pullRequestListProjectPin(match, input.projectId)!,
+    });
     queryClient.setQueryData<PullRequestListCache>(queryKey, (current) =>
       current
         ? {
             ...current,
             entries: current.entries.map((entry) =>
-              matchesPullRequestIdentity(entry, input)
-                ? { ...entry, isPinned: input.isPinned }
+              matchesPullRequestPinIdentity(entry, input)
+                ? updateEntryProjectPin(entry, input.projectId, input.isPinned)
                 : entry,
             ),
           }
@@ -300,9 +335,9 @@ export function patchOwnedPullRequestPinInCache(input: {
       ? {
           ...current,
           entries: current.entries.map((entry) =>
-            matchesPullRequestIdentity(entry, input.identity) &&
-            entry.isPinned === input.expectedIsPinned
-              ? { ...entry, isPinned: input.nextIsPinned }
+            matchesPullRequestPinIdentity(entry, input.identity) &&
+            pullRequestListProjectPin(entry, input.identity.projectId) === input.expectedIsPinned
+              ? updateEntryProjectPin(entry, input.identity.projectId, input.nextIsPinned)
               : entry,
           ),
         }
@@ -316,32 +351,75 @@ export function preserveProtectedPinValues(
   protectedIdentities: ReadonlySet<string>,
 ): PullRequestsListResult {
   if (!current || protectedIdentities.size === 0) return result;
-  // PullRequestListCache is the minimal structural view used for reads, but at runtime the
-  // caches hold full wire entries (server results) — safe to re-insert them into the result.
   type ResultEntry = PullRequestsListResult["entries"][number];
-  const currentEntryByIdentity = new Map<string, ResultEntry>();
-  for (const entry of current.entries as unknown as ReadonlyArray<ResultEntry>) {
-    const identityKey = pullRequestIdentityKey(entry);
-    if (protectedIdentities.has(identityKey)) {
-      currentEntryByIdentity.set(identityKey, entry);
-    }
-  }
-  const resultIdentities = new Set(result.entries.map(pullRequestIdentityKey));
+  const currentEntries = current.entries as unknown as ReadonlyArray<ResultEntry>;
+  const currentByRemoteIdentity = new Map(
+    currentEntries.map((entry) => [pullRequestRemoteIdentityKey(entry), entry] as const),
+  );
+  const resultRemoteIdentities = new Set(result.entries.map(pullRequestRemoteIdentityKey));
+  const missingProtectedPinnedEntries = currentEntries.filter((entry) => {
+    if (resultRemoteIdentities.has(pullRequestRemoteIdentityKey(entry))) return false;
+    return pullRequestListProjectContexts(entry).some(
+      (context) =>
+        context.isPinned &&
+        protectedIdentities.has(
+          pullRequestIdentityKey({
+            projectId: context.projectId,
+            repository: entry.repository,
+            number: entry.number,
+          }),
+        ),
+    );
+  });
   return {
     ...result,
-    // Reconcile both the owned field and list membership. The targeted pin refetch may finish
-    // before an older forced snapshot, so preserve current absence after unpin and retain a
-    // currently pinned recovered-only row when the stale result omitted it. Missing pinned rows
-    // stay ahead of the remote snapshot, matching the server's pinned-first ordering.
     entries: [
-      ...[...currentEntryByIdentity].flatMap(([identityKey, entry]) =>
-        entry.isPinned && !resultIdentities.has(identityKey) ? [entry] : [],
-      ),
+      ...missingProtectedPinnedEntries,
       ...result.entries.flatMap((entry) => {
-        const identityKey = pullRequestIdentityKey(entry);
-        if (!protectedIdentities.has(identityKey)) return [entry];
-        const currentEntry = currentEntryByIdentity.get(identityKey);
-        return currentEntry ? [{ ...entry, isPinned: currentEntry.isPinned }] : [];
+        const currentEntry = currentByRemoteIdentity.get(pullRequestRemoteIdentityKey(entry));
+        const contexts = pullRequestListProjectContexts(entry);
+        const protectedContexts = contexts.filter((context) =>
+          protectedIdentities.has(
+            pullRequestIdentityKey({
+              projectId: context.projectId,
+              repository: entry.repository,
+              number: entry.number,
+            }),
+          ),
+        );
+        if (!currentEntry) {
+          if (protectedContexts.length === 0) return [entry];
+          // A missing current row is an acknowledged unpin of recovered-only data. Retain an
+          // aggregate row only when it still represents an unprotected project context.
+          if (protectedContexts.length === contexts.length) return [];
+          return [
+            protectedContexts.reduce(
+              (next, context) =>
+                updatePullRequestListEntryProjectPin(next, context.projectId, false),
+              entry,
+            ),
+          ];
+        }
+        const hasAggregateContexts =
+          (entry.projectContexts?.length ?? 0) > 0 ||
+          (currentEntry.projectContexts?.length ?? 0) > 0;
+        const mergedEntry = hasAggregateContexts
+          ? coalescePullRequestListEntries([entry, currentEntry], {
+              preferredProjectId: entry.projectId,
+            })[0]!
+          : entry;
+        return [
+          pullRequestListProjectContexts(currentEntry).reduce((next, context) => {
+            const identityKey = pullRequestIdentityKey({
+              projectId: context.projectId,
+              repository: entry.repository,
+              number: entry.number,
+            });
+            return protectedIdentities.has(identityKey)
+              ? updatePullRequestListEntryProjectPin(next, context.projectId, context.isPinned)
+              : next;
+          }, mergedEntry),
+        ];
       }),
     ],
   };
@@ -359,12 +437,12 @@ export function preserveProtectedActionValues(
 ): PullRequestsListResult {
   if (!current || protectedFieldsByIdentity.size === 0) return result;
   const currentByIdentity = new Map(
-    current.entries.map((entry) => [pullRequestIdentityKey(entry), entry] as const),
+    current.entries.map((entry) => [pullRequestRemoteIdentityKey(entry), entry] as const),
   );
   return {
     ...result,
     entries: result.entries.map((entry) => {
-      const identityKey = pullRequestIdentityKey(entry);
+      const identityKey = pullRequestRemoteIdentityKey(entry);
       const protectedFields = protectedFieldsByIdentity.get(identityKey);
       const currentEntry = currentByIdentity.get(identityKey);
       if (!protectedFields || !currentEntry) return entry;

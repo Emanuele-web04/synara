@@ -42,3 +42,15 @@ export function parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(
   const nameWithOwner = `${owner}/${repository}`;
   return isValidGitHubRepositoryNameWithOwner(nameWithOwner) ? nameWithOwner : null;
 }
+
+// Repository-level pull-request identity and local-project association helpers live in their own
+// module, but are exposed through this established GitHub subpath so dev servers do not need a
+// restart when the helper set grows.
+export {
+  coalescePullRequestListEntries,
+  pullRequestListEntryHasProject,
+  pullRequestListProjectContexts,
+  pullRequestListProjectPin,
+  pullRequestListRepositoryIdentity,
+  updatePullRequestListEntryProjectPin,
+} from "./pullRequestList";

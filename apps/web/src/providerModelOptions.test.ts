@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildModelSelection,
+  buildNextProviderOptions,
   buildProviderOptionPatch,
   formatProviderModelOptionName,
   groupProviderModelOptions,
@@ -16,6 +18,21 @@ import {
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
+
+describe("Antigravity model options", () => {
+  it("keeps the base model and effort as separate selection fields", () => {
+    const options = buildNextProviderOptions("antigravity", undefined, {
+      reasoningEffort: "high",
+    });
+
+    expect(options).toEqual({ reasoningEffort: "high" });
+    expect(buildModelSelection("antigravity", "Gemini 3.5 Flash", options)).toEqual({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+  });
+});
 
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
@@ -47,6 +64,27 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "antigravity",
+        staticOptions: [
+          { slug: "Gemini 3.5 Flash", name: "Gemini 3.5 Flash" },
+          { slug: "Claude Sonnet 4.6", name: "Claude Sonnet 4.6" },
+          { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+        ],
+        dynamicModels: [
+          { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+          { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+        ],
+      }),
+    ).toEqual([
+      { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+      { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+      { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+    ]);
+  });
+
   it("preserves runtime descriptions without inventing them for custom models", () => {
     const options = mergeDynamicModelOptions({
       provider: "droid",
@@ -129,16 +167,7 @@ describe("providerModelCostMultiplierLabel", () => {
 });
 
 describe("buildProviderOptionPatch", () => {
-  it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
-    expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
-      thinkingBudget: 512,
-    });
-    expect(buildProviderOptionPatch("gemini", "thinkingLevel", "HIGH")).toEqual({
-      thinkingLevel: "HIGH",
-    });
-  });
-
-  it("passes through non-Gemini option ids unchanged", () => {
+  it("passes through option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
     });

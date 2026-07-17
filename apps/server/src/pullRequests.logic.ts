@@ -116,6 +116,13 @@ export function buildPullRequestListEntry(input: {
     reviewDecision: pullRequest.reviewDecision,
     viewerReviewRequested: input.viewerReviewRequested,
     isPinned: input.isPinned,
+    projectContexts: [
+      {
+        projectId: input.project.id,
+        projectTitle: input.project.title,
+        isPinned: input.isPinned,
+      },
+    ],
     mergeability: pullRequest.mergeability,
     labels: pullRequest.labels,
   };

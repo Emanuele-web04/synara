@@ -106,6 +106,45 @@ function makeDependencies(input: {
 }
 
 describe("PullRequestService", () => {
+  it("returns one repository-level row for projects sharing a repository", async () => {
+    const projectA = makeProject("project-list-a", "List A", "/tmp/list-a");
+    const projectB = makeProject("project-list-b", "feature-1", "/tmp/list-b");
+    const base = createGitHubCliWithFakeGh().service;
+    let listReads = 0;
+    const github: GitHubCliShape = {
+      ...base,
+      listRepositoryPullRequests: () =>
+        Effect.sync(() => {
+          listReads += 1;
+          return makeBatch([makeItem(1)]);
+        }),
+    };
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [projectA, projectB],
+              repositories: new Map([
+                [projectA.id, "acme/shared"],
+                [projectB.id, "acme/shared"],
+              ]),
+              github,
+            }),
+          );
+          return yield* service.list({ state: "open", involvement: "authored" });
+        }),
+      ),
+    );
+
+    expect(listReads).toBe(1);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.projectId).toBe(projectB.id);
+    expect(result.entries[0]?.projectContexts).toHaveLength(2);
+    expect(result.repositoryBatches).toHaveLength(1);
+  });
+
   it("counts review requests once for projects sharing a repository without loading rich rows", async () => {
     const projectA = makeProject("project-count-a", "Count A", "/tmp/count-a");
     const projectB = makeProject("project-count-b", "Count B", "/tmp/count-b");
@@ -470,7 +509,7 @@ describe("PullRequestService", () => {
     ).toEqual([projectA.id]);
   });
 
-  it("fans one bounded lookup out to every project sharing the pinned PR", async () => {
+  it("fans one bounded lookup into one visible row for a shared pinned PR", async () => {
     const projects = Array.from({ length: PULL_REQUEST_PIN_RECOVERY_LIMIT + 6 }, (_, index) =>
       makeProject(`project-shared-${index}`, `Shared ${index}`, `/tmp/shared-${index}`),
     );
@@ -505,7 +544,8 @@ describe("PullRequestService", () => {
     );
 
     expect(itemLookups).toBe(1);
-    expect(result.entries.filter((entry) => entry.number === 99)).toHaveLength(projects.length);
+    expect(result.entries.filter((entry) => entry.number === 99)).toHaveLength(1);
+    expect(result.entries.find((entry) => entry.number === 99)?.isPinned).toBe(true);
     expect(result.errors.some((error) => error.message.includes("recovery was limited"))).toBe(
       false,
     );

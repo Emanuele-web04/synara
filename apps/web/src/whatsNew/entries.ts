@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.5",
+    date: "Jul 17",
+    features: [
+      {
+        id: "antigravity-provider",
+        title: "Antigravity joins Synara",
+        description:
+          "Connect the Antigravity CLI as a first-class coding agent, with discovered models, reasoning controls, streaming activity, approvals, and resumable conversations.",
+        details:
+          "The new provider adapter covers installation and authentication guidance, model and effort discovery, session creation and resume, tool and plan events, permission requests, usage reporting, cancellation, and restart recovery. Synara also includes dedicated Antigravity branding throughout provider setup and selection.",
+      },
+      {
+        id: "steadier-live-turns",
+        title: "Live turns settle cleanly",
+        description:
+          "Working indicators and streamed turn chrome no longer linger after the underlying provider session has already finished.",
+        details:
+          "Turn settlement now follows the owning session lifecycle, while WebSocket RPC requests resolve or reject across close, timeout, send failure, and reconnect paths. This keeps pending UI state from becoming stuck during partial streams or interrupted connections.",
+      },
+      {
+        id: "faster-chat-updates",
+        title: "Active chats stay lighter",
+        description:
+          "Conversation updates do less repeated reconciliation work, keeping busy transcripts and sidebar-driven changes more responsive.",
+        details:
+          "Chat state now avoids redundant scans and projections during live updates, bundled theme seeds reset consistently, and common transcript behavior remains on the simpler rendering path without introducing new measurement loops.",
+      },
+      {
+        id: "reliable-path-drops",
+        title: "Dropped paths become reliable mentions",
+        description:
+          "Drop files and folders whose names contain spaces or parentheses into the composer without losing or mangling the path.",
+        details:
+          "Desktop path payloads are parsed and normalized through shared composer logic, then preserved as mentions across chat and Kanban task creation. Focused coverage includes encoded paths, multiple drops, punctuation, send normalization, and unsupported payloads.",
+      },
+      {
+        id: "resilient-model-pickers",
+        title: "Provider failures stay contained",
+        description:
+          "A failed Cursor model refresh no longer takes down the model picker or discards usable choices from other discovery sources.",
+        details:
+          "Model-catalog queries retain successful and cached data when one Cursor discovery path fails, while pull-request data is coalesced through shared list logic and picker popups use a unified interaction model. Diff headers now use Synara's own visual chrome for a more consistent workspace.",
+      },
+    ],
+  },
+  {
     version: "0.5.4",
     date: "Jul 15",
     features: [

@@ -110,7 +110,7 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" || provider === "gemini" || provider === "pi"
+  return provider === "claudeAgent" || provider === "antigravity" || provider === "pi"
     ? "text-foreground"
     : fallbackClassName;
 }
@@ -184,7 +184,7 @@ type ProviderModelMenuItemsProps = {
 };
 
 // Renders only the popup body of the provider/model picker. Designed to be
-// dropped into any MenuPopup or MenuSubPopup so the same selection logic can
+// dropped into any shared picker popup or submenu so the same selection logic can
 // be reused by the standalone picker and the combined composer trait picker.
 export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   props: ProviderModelMenuItemsProps,

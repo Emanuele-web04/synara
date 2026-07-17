@@ -492,15 +492,29 @@ const make = Effect.gen(function* () {
 
     const thread = yield* getThreadDetail(event.threadId);
     if (!thread) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: thread not found", {
+        threadId: event.threadId,
+        turnId,
+      });
       return;
     }
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: project not found", {
+        threadId: thread.id,
+        turnId,
+        projectId: thread.projectId,
+      });
       return;
     }
 
     // When a primary turn is active, only that turn may produce completion checkpoints.
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: turn is not the active turn", {
+        threadId: thread.id,
+        turnId,
+        activeTurnId: thread.session.activeTurnId,
+      });
       return;
     }
 
@@ -522,6 +536,14 @@ const make = Effect.gen(function* () {
       preferSessionRuntime: true,
     });
     if (!checkpointCwd) {
+      yield* Effect.logDebug(
+        "turn-completion checkpoint skipped: no git workspace to capture from",
+        {
+          threadId: thread.id,
+          turnId,
+          projectId: thread.projectId,
+        },
+      );
       return;
     }
 
@@ -1151,11 +1173,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // When ProviderRuntimeIngestion creates a placeholder checkpoint (status "missing")
-    // from a turn.diff.updated runtime event, capture the real git checkpoint to
-    // replace it. The providerService.streamEvents PubSub does not reliably deliver
-    // turn.completed runtime events to this reactor (shared subscription), so
-    // reacting to the domain event is the reliable path.
+    // Placeholder checkpoints (status "missing") from turn.diff.updated stay
+    // unresolved until the terminal turn.completed runtime event captures the real
+    // git checkpoint; this hook only logs them. Turn settlement itself does not
+    // depend on this reactor — the projector settles latestTurn from the session
+    // status transition.
     if (event.type === "thread.turn-diff-completed") {
       yield* captureCheckpointFromPlaceholder(event);
     }

@@ -27,7 +27,8 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
   );
 }
 
-function MenuPopup({
+/** Low-level popup foundation. App surfaces should use ComposerPickerMenuPopup instead. */
+function MenuPopupBase({
   children,
   className,
   surface = "default",
@@ -364,7 +365,7 @@ function MenuSubPopup({
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (
-    <MenuPopup
+    <MenuPopupBase
       align={align}
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}
@@ -387,8 +388,7 @@ export {
   MenuPortal as DropdownMenuPortal,
   MenuTrigger,
   MenuTrigger as DropdownMenuTrigger,
-  MenuPopup,
-  MenuPopup as DropdownMenuContent,
+  MenuPopupBase,
   MenuGroup,
   MenuGroup as DropdownMenuGroup,
   MenuItem,

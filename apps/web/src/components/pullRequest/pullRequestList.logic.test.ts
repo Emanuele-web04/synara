@@ -9,6 +9,7 @@ import {
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
   pullRequestListEntryKey,
+  pullRequestPinToggleInputs,
 } from "./pullRequestList.logic";
 
 function makeActor(login: string): PullRequestActor {
@@ -16,7 +17,7 @@ function makeActor(login: string): PullRequestActor {
 }
 
 function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
-  return {
+  const entry: PullRequestListEntry = {
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     repository: "acme/widgets",
@@ -35,9 +36,20 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
     reviewDecision: null,
     viewerReviewRequested: false,
     isPinned: false,
+    projectContexts: [],
     mergeability: "unknown",
     labels: [],
     ...overrides,
+  };
+  return {
+    ...entry,
+    projectContexts: overrides.projectContexts ?? [
+      {
+        projectId: entry.projectId,
+        projectTitle: entry.projectTitle,
+        isPinned: entry.isPinned ?? false,
+      },
+    ],
   };
 }
 
@@ -130,13 +142,13 @@ describe("orderPullRequestEntriesPinnedFirst", () => {
 });
 
 describe("pull request list identity", () => {
-  it("keeps rows from projects sharing one repository distinct", () => {
+  it("uses one stable row identity across projects sharing a repository", () => {
     const first = makeEntry();
     const second = makeEntry({
       projectId: "project-2" as PullRequestListEntry["projectId"],
       projectTitle: "Project Two",
     });
-    expect(pullRequestListEntryKey(first)).not.toBe(pullRequestListEntryKey(second));
+    expect(pullRequestListEntryKey(first)).toBe(pullRequestListEntryKey(second));
   });
 
   it("counts one review request once across shared-project rows", () => {
@@ -147,6 +159,84 @@ describe("pull request list identity", () => {
     });
     const other = makeEntry({ number: 2, viewerReviewRequested: true });
     expect(countUniqueViewerReviewRequests([first, duplicate, other])).toBe(2);
+  });
+});
+
+describe("pullRequestPinToggleInputs", () => {
+  it("clears every owning project from an aggregate pinned row", () => {
+    const entry = makeEntry({
+      isPinned: true,
+      projectContexts: [
+        {
+          projectId: "project-1" as PullRequestListEntry["projectId"],
+          projectTitle: "Project One",
+          isPinned: true,
+        },
+        {
+          projectId: "project-2" as PullRequestListEntry["projectId"],
+          projectTitle: "Project Two",
+          isPinned: true,
+        },
+      ],
+    });
+
+    expect(pullRequestPinToggleInputs(entry, true)).toEqual([
+      {
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 1,
+        isPinned: false,
+      },
+      {
+        projectId: "project-2",
+        repository: "acme/widgets",
+        number: 1,
+        isPinned: false,
+      },
+    ]);
+  });
+
+  it("keeps project-scoped pin toggles local", () => {
+    const entry = makeEntry({ isPinned: true });
+    expect(pullRequestPinToggleInputs(entry, false)).toEqual([
+      {
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+        isPinned: false,
+      },
+    ]);
+  });
+
+  it("pins every associated project from an aggregate unpinned row", () => {
+    const entry = makeEntry({
+      projectContexts: [
+        {
+          projectId: "project-1" as PullRequestListEntry["projectId"],
+          projectTitle: "Project One",
+          isPinned: false,
+        },
+        {
+          projectId: "project-2" as PullRequestListEntry["projectId"],
+          projectTitle: "Project Two",
+          isPinned: false,
+        },
+      ],
+    });
+    expect(pullRequestPinToggleInputs(entry, true)).toEqual([
+      {
+        projectId: "project-1",
+        repository: "acme/widgets",
+        number: 1,
+        isPinned: true,
+      },
+      {
+        projectId: "project-2",
+        repository: "acme/widgets",
+        number: 1,
+        isPinned: true,
+      },
+    ]);
   });
 });
 

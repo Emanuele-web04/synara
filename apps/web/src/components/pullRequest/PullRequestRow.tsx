@@ -6,6 +6,7 @@
 // Exports: PullRequestRow
 
 import type { PullRequestListEntry } from "@synara/contracts";
+import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
 import { memo } from "react";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -51,16 +52,19 @@ export const PullRequestRow = memo(function PullRequestRow({
 }: {
   entry: PullRequestListEntry;
   selected: boolean;
-  /** All-projects view: a shared repository yields one row per project, so the project name
-   *  is the only thing telling those rows apart. */
+  /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
   const isPinned = entry.isPinned === true;
+  const projectContexts = pullRequestListProjectContexts(entry);
+  const projectLabel =
+    projectContexts.length > 1 ? `${projectContexts.length} projects` : entry.projectTitle;
+  const projectTitle = projectContexts.map((context) => context.projectTitle).join(", ");
   const pinLabel = pinActionLabel(
     showProjectTitle
-      ? `pull request #${entry.number} in ${entry.projectTitle}`
+      ? `pull request #${entry.number} in ${projectLabel}`
       : `pull request #${entry.number}`,
     isPinned,
   );
@@ -112,8 +116,8 @@ export const PullRequestRow = memo(function PullRequestRow({
             <PullRequestAvatar actor={entry.author} size="sm" className="shrink-0" />
             <PullRequestMetaLine className="flex-1">
               {showProjectTitle ? (
-                <span className="max-w-[12rem] truncate" title={entry.projectTitle}>
-                  {entry.projectTitle}
+                <span className="max-w-[12rem] truncate" title={projectTitle}>
+                  {projectLabel}
                 </span>
               ) : null}
               <span className="truncate">{entry.repository}</span>

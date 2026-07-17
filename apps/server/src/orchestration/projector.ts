@@ -74,6 +74,42 @@ function isTerminalLatestTurn(
   return latestTurn.state === "completed" || latestTurn.state === "error";
 }
 
+// Turn lifecycle must settle with the session: once a session leaves "running",
+// no provider event will ever mark the turn complete on its own, so a running
+// latestTurn is settled here. Checkpoint diff events (thread.turn-diff-completed)
+// only enrich the terminal state afterwards — they are not the lifecycle authority.
+// A retained activeTurnId blocks settlement (except on error): stop-requested flows
+// deliberately emit "interrupted" while keeping the turn active until the provider's
+// terminal event decides the real outcome, and a premature settle here could never
+// be corrected because settlement only applies to running turns.
+function settleLatestTurnForSessionStatus(
+  latestTurn: OrchestrationThread["latestTurn"],
+  session: Pick<OrchestrationSession, "status" | "activeTurnId" | "updatedAt">,
+): OrchestrationThread["latestTurn"] {
+  if (latestTurn?.state !== "running") {
+    return latestTurn;
+  }
+  const settledState =
+    session.status === "error"
+      ? ("error" as const)
+      : session.status === "interrupted" || session.status === "stopped"
+        ? ("interrupted" as const)
+        : session.status === "ready"
+          ? ("completed" as const)
+          : null;
+  if (settledState === null) {
+    return latestTurn;
+  }
+  if (session.activeTurnId !== null && settledState !== "error") {
+    return latestTurn;
+  }
+  return {
+    ...latestTurn,
+    state: settledState,
+    completedAt: latestTurn.completedAt ?? session.updatedAt,
+  };
+}
+
 function updateThread(
   threads: ReadonlyArray<OrchestrationThread>,
   threadId: ThreadId,
@@ -828,7 +864,7 @@ export function projectEvent(
                           ? thread.latestTurn.assistantMessageId
                           : null,
                     }
-                : thread.latestTurn,
+                : settleLatestTurnForSessionStatus(thread.latestTurn, session),
             updatedAt: event.occurredAt,
           }),
         };
@@ -929,10 +965,13 @@ export function projectEvent(
             previousLatestCheckpointTurnCount > payload.checkpointTurnCount);
         const latestTurn = preservesNewerLatestTurn
           ? thread.latestTurn
-          : isProviderDiffPlaceholderRef(payload.checkpointRef) &&
+          : // A provider-diff placeholder only carries live diff totals; it must never
+            // change the turn lifecycle — neither close a running turn nor flip an
+            // already-settled one to "interrupted" when it loses the race against
+            // session settlement.
+            isProviderDiffPlaceholderRef(payload.checkpointRef) &&
               payload.status === "missing" &&
-              thread.latestTurn?.turnId === payload.turnId &&
-              thread.latestTurn.state === "running"
+              thread.latestTurn?.turnId === payload.turnId
             ? thread.latestTurn
             : {
                 turnId: payload.turnId,
