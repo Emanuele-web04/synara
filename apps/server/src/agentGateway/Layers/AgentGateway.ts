@@ -48,6 +48,7 @@ import { AutomationService } from "../../automation/Services/AutomationService.t
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { AgentGateway, type AgentGatewayShape } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayWriteAuthority } from "../Services/AgentGatewaySessionRegistry.ts";
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
 import { SYNARA_GATEWAY_HARNESS_POLICY, SYNARA_HARNESS_POLICY_VERSION } from "../harnessPolicy.ts";
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
@@ -137,6 +138,7 @@ interface ToolContext {
   readonly callerSessionKey: string;
   readonly callerProvider: ProviderKind;
   readonly callerCapabilities: ReadonlySet<"thread:read" | "thread:write" | "automation:write">;
+  readonly callerWriteAuthority: AgentGatewayWriteAuthority | null;
   readonly callerTurnId: string | null;
   readonly jsonRpcRequestId: JsonRpcId;
 }
@@ -2117,16 +2119,45 @@ export const makeAgentGateway = Effect.gen(function* () {
             jsonRpcRequestId: request.id,
           };
           if (tool.requiresActiveTurn) {
-            const caller = yield* requireThreadShell(context.callerThreadId);
-            if (caller.latestTurn?.state !== "running") {
+            const writeAuthority = context.callerWriteAuthority;
+            if (writeAuthority === null) {
               return jsonRpcResult(
                 request.id,
                 gatewayToolErrorResult(
                   new GatewayToolError(
                     "caller_turn_inactive",
-                    "This Synara write was rejected because the calling turn is no longer active. Detached or completed agents cannot mutate Synara resources.",
+                    "This Synara write was rejected because no caller turn was active when the MCP request arrived.",
+                    { callerThreadId: context.callerThreadId },
+                  ),
+                ),
+              );
+            }
+            if (!credentials.verifyWriteAuthority(writeAuthority)) {
+              return jsonRpcResult(
+                request.id,
+                gatewayToolErrorResult(
+                  new GatewayToolError(
+                    "caller_session_inactive",
+                    "This Synara write was rejected because its provider-session authority is no longer active.",
+                    { callerThreadId: context.callerThreadId },
+                  ),
+                ),
+              );
+            }
+            const caller = yield* requireThreadShell(context.callerThreadId);
+            if (
+              caller.latestTurn?.state !== "running" ||
+              caller.latestTurn.turnId !== writeAuthority.turnId
+            ) {
+              return jsonRpcResult(
+                request.id,
+                gatewayToolErrorResult(
+                  new GatewayToolError(
+                    "caller_turn_inactive",
+                    "This Synara write was rejected because the turn that received this MCP request is no longer active. In-flight requests cannot inherit authority from a later turn.",
                     {
                       callerThreadId: context.callerThreadId,
+                      authorizedTurnId: writeAuthority.turnId,
                       latestTurnId: caller.latestTurn?.turnId ?? null,
                       latestTurnState: caller.latestTurn?.state ?? null,
                     },
@@ -2136,7 +2167,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             }
             invocationContext = {
               ...invocationContext,
-              callerTurnId: caller.latestTurn.turnId,
+              callerTurnId: writeAuthority.turnId,
             };
           }
           const result = yield* Effect.suspend(() => tool.handler(args, invocationContext)).pipe(
@@ -2157,7 +2188,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     Effect.gen(function* () {
       const token = extractBearerToken(input.authorizationHeader);
       const callerSession = token ? credentials.verifySession(token) : null;
-      if (!callerSession) {
+      if (!token || !callerSession) {
         return {
           status: 401,
           body: jsonRpcError(
@@ -2200,6 +2231,10 @@ export const makeAgentGateway = Effect.gen(function* () {
         callerSessionKey: callerSession.sessionKey,
         callerProvider: callerSession.provider,
         callerCapabilities: callerSession.capabilities,
+        callerWriteAuthority:
+          callerThread.value.latestTurn?.state === "running"
+            ? credentials.bindWriteAuthority(token, callerThread.value.latestTurn.turnId)
+            : null,
         callerTurnId:
           callerThread.value.latestTurn?.state === "running"
             ? callerThread.value.latestTurn.turnId

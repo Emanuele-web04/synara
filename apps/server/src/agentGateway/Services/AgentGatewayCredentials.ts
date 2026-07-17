@@ -10,7 +10,10 @@
  */
 import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { AgentGatewaySessionIdentity } from "./AgentGatewaySessionRegistry.ts";
+import type {
+  AgentGatewaySessionIdentity,
+  AgentGatewayWriteAuthority,
+} from "./AgentGatewaySessionRegistry.ts";
 
 export interface AgentGatewayMcpConnection {
   /** Loopback streamable-HTTP MCP endpoint, e.g. `http://127.0.0.1:3773/mcp`. */
@@ -37,6 +40,10 @@ export interface AgentGatewayCredentialsShape {
   readonly verifySessionToken: (token: string) => string | null;
   /** Resolve the complete non-secret invocation scope. */
   readonly verifySession: (token: string) => AgentGatewaySessionIdentity | null;
+  /** Pin one request/batch to the exact running turn observed at ingress. */
+  readonly bindWriteAuthority: (token: string, turnId: string) => AgentGatewayWriteAuthority | null;
+  /** Recheck that a previously bound authority still belongs to a live session. */
+  readonly verifyWriteAuthority: (authority: AgentGatewayWriteAuthority) => boolean;
   /** Revoke exactly one provider session credential. */
   readonly revokeSessionToken: (token: string) => void;
   /** Convenience bundle used when injecting MCP config into provider sessions. */

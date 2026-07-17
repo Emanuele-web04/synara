@@ -42,6 +42,16 @@ async function withGatewayServer(
               capabilities: new Set(["thread:read", "thread:write", "automation:write"]),
             }
           : null,
+      bindWriteAuthority: (token, turnId) =>
+        token === VALID_TOKEN
+          ? {
+              sessionKey: "session-http-route-test",
+              threadId,
+              provider: "cursor",
+              turnId,
+            }
+          : null,
+      verifyWriteAuthority: (authority) => authority.sessionKey === "session-http-route-test",
       revokeSessionToken: () => undefined,
       connectionForThread: () => ({
         url: "http://127.0.0.1/mcp",

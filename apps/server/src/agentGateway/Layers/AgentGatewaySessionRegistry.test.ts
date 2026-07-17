@@ -26,6 +26,20 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.equal(registry.verify(second.token)?.threadId, "thread-1");
   });
 
+  it("binds write authority to one exact turn and invalidates it on revocation", () => {
+    const registry = makeAgentGatewaySessionRegistry({ randomId: () => "authority" });
+    const issued = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
+    const authority = registry.bindWriteAuthority(issued.token, "turn-a");
+
+    assert.isNotNull(authority);
+    assert.equal(authority?.turnId, "turn-a");
+    assert.isTrue(registry.verifyWriteAuthority(authority!));
+
+    registry.revoke(issued.token);
+    assert.isFalse(registry.verifyWriteAuthority(authority!));
+    assert.isNull(registry.bindWriteAuthority(issued.token, "turn-b"));
+  });
+
   it("keeps credentials valid for a long-lived provider session but not across restart", () => {
     let time = 1_000;
     const firstRegistry = makeAgentGatewaySessionRegistry({

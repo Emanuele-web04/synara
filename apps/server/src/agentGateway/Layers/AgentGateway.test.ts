@@ -198,6 +198,10 @@ function makeHarnessLayer(
     readonly existingBranches?: ReadonlyArray<string>;
     readonly failDeleteBranch?: boolean;
     readonly failOperationComplete?: boolean;
+    readonly advanceParentTurnAfterDispatch?: {
+      readonly commandType: OrchestrationCommand["type"];
+      readonly turnId: string;
+    };
   } = {},
 ) {
   const dispatched: Array<OrchestrationCommand> = [];
@@ -229,6 +233,20 @@ function makeHarnessLayer(
           }
         : null;
     },
+    bindWriteAuthority: (token: string, turnId: string) => {
+      const threadId = VALID_TOKENS[token];
+      return threadId
+        ? {
+            sessionKey: `session-for-${threadId}`,
+            threadId: ThreadId.makeUnsafe(threadId),
+            provider:
+              token === "token-parent-claude" ? ("claudeAgent" as const) : ("codex" as const),
+            turnId,
+          }
+        : null;
+    },
+    verifyWriteAuthority: (authority) =>
+      authority.sessionKey === `session-for-${authority.threadId}`,
     revokeSessionToken: () => undefined,
     connectionForThread: (threadId: ThreadIdType) => ({
       url: "http://127.0.0.1:3773/mcp",
@@ -285,6 +303,25 @@ function makeHarnessLayer(
         Effect.flatMap(() =>
           Effect.suspend(() => {
             dispatched.push(command);
+            if (
+              options.advanceParentTurnAfterDispatch?.commandType === command.type &&
+              threadsById.get("thread-parent")?.latestTurn?.turnId !==
+                options.advanceParentTurnAfterDispatch.turnId
+            ) {
+              threadsById.set(
+                "thread-parent",
+                makeThreadShell("thread-parent", {
+                  latestTurn: {
+                    turnId: TurnId.makeUnsafe(options.advanceParentTurnAfterDispatch.turnId),
+                    state: "running",
+                    requestedAt: NOW,
+                    startedAt: NOW,
+                    completedAt: null,
+                    assistantMessageId: null,
+                  },
+                }),
+              );
+            }
             return options.failDispatch?.(command)
               ? Effect.fail(new Error("injected dispatch failure"))
               : Effect.succeed({ sequence: dispatched.length });
@@ -1319,6 +1356,71 @@ describe("AgentGateway", () => {
         "caller_turn_inactive",
       );
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("keeps an in-flight MCP batch bound to its ingress turn and idempotency scope", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      advanceParentTurnAfterDispatch: {
+        commandType: "thread.create",
+        turnId: "turn-parent-later",
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: [
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "synara_create_threads",
+              arguments: {
+                requestId: "turn-a-plan",
+                threads: [
+                  {
+                    prompt: "worker from turn A",
+                    target: { provider: "codex", model: "gpt-5.5" },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: {
+              name: "synara_create_threads",
+              arguments: {
+                requestId: "must-not-use-turn-b",
+                threads: [
+                  {
+                    prompt: "late worker",
+                    target: { provider: "codex", model: "gpt-5.5" },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      });
+
+      const results = response.body as Array<{ result?: Record<string, unknown> }>;
+      assert.equal(response.status, 200);
+      assert.isFalse(isToolError(results[0]?.result));
+      assert.equal(
+        (toolResultJson(results[1]?.result).error as { code: string }).code,
+        "caller_turn_inactive",
+      );
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "completed");
+      assert.isNull(harness.getOperationStatus("turn-parent-later"));
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.create").length,
+        1,
+      );
     }).pipe(Effect.provide(gatewayLayer));
   });
 

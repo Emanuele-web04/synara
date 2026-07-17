@@ -1869,6 +1869,14 @@ const make = Effect.gen(function* () {
               detail,
               createdAt: event.payload.createdAt,
             });
+            // A direct start has no provider turn and therefore cannot emit a
+            // terminal runtime event. Recover every queue sharing this
+            // provider session now; otherwise follow-ups queued before the
+            // failure remain stranded indefinitely (including child threads
+            // multiplexed onto their parent's provider session).
+            if (!isPendingQueuedDispatch) {
+              yield* drainQueuedTurnsForSession(event.payload.threadId);
+            }
           }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
