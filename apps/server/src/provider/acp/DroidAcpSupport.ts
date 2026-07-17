@@ -18,6 +18,7 @@ import * as EffectAcpErrorsRuntime from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -126,6 +127,7 @@ export function buildDroidAcpSpawnInput(
     command: resolveDroidCliBinaryPath(droidSettings?.binaryPath),
     args,
     cwd,
+    env: buildProviderChildEnvironment({ provider: "droid" }),
   };
 }
 

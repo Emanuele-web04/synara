@@ -1,18 +1,17 @@
 import {
   formatModelDisplayName,
-  geminiModelOptionsFromEffortValue,
   humanizeModelSlug,
   normalizeModelSlug,
 } from "@synara/shared/model";
 import type {
+  AntigravityModelOptions,
+  AntigravityModelSelection,
   ClaudeModelOptions,
   ClaudeModelSelection,
   CodexModelOptions,
   CodexModelSelection,
   CursorModelOptions,
   CursorModelSelection,
-  GeminiModelOptions,
-  GeminiModelSelection,
   DroidModelOptions,
   DroidModelSelection,
   GrokModelOptions,
@@ -26,6 +25,7 @@ import type {
   ProviderKind,
   ProviderModelOptions,
 } from "@synara/contracts";
+import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
 
@@ -94,6 +94,9 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   if (provider === "grok") {
     return slug.trim();
   }
+  if (provider === "cursor") {
+    return normalizeCursorModelVariantBaseId(slug) ?? slug.trim();
+  }
   return normalizeModelSlug(slug, provider) ?? slug;
 }
 
@@ -101,7 +104,7 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (kilo/opencode/cursor), and user-defined custom models always survive.
+ * (antigravity/kilo/opencode/cursor), and user-defined custom models always survive.
  */
 export function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
@@ -165,13 +168,16 @@ export function mergeDynamicModelOptions(input: {
       ? []
       : input.staticOptions.filter(
           (model) =>
-            "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
+            "isCustom" in model &&
+            model.isCustom &&
+            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
         );
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    (input.provider === "kilo" ||
+    (input.provider === "antigravity" ||
+      input.provider === "kilo" ||
       input.provider === "opencode" ||
       input.provider === "cursor" ||
       input.provider === "droid") &&
@@ -292,13 +298,11 @@ export function buildNextProviderOptions(
   if (provider === "cursor") {
     return { ...(modelOptions as CursorModelOptions | undefined), ...patch } as CursorModelOptions;
   }
-  if (provider === "gemini") {
+  if (provider === "antigravity") {
     return {
-      ...(modelOptions as GeminiModelOptions | undefined),
-      thinkingLevel: undefined,
-      thinkingBudget: undefined,
+      ...(modelOptions as AntigravityModelOptions | undefined),
       ...patch,
-    } as GeminiModelOptions;
+    } as AntigravityModelOptions;
   }
   if (provider === "grok") {
     return {
@@ -329,13 +333,6 @@ export function buildProviderOptionPatch(
   optionId: string,
   value: string | boolean,
 ): Record<string, unknown> {
-  if (
-    provider === "gemini" &&
-    typeof value === "string" &&
-    (optionId === "thinkingLevel" || optionId === "thinkingBudget")
-  ) {
-    return geminiModelOptionsFromEffortValue(value) ?? {};
-  }
   return { [optionId]: value };
 }
 
@@ -355,10 +352,10 @@ export function buildModelSelection(
   options?: CursorModelOptions | null | undefined,
 ): CursorModelSelection;
 export function buildModelSelection(
-  provider: "gemini",
+  provider: "antigravity",
   model: string,
-  options?: GeminiModelOptions | null | undefined,
-): GeminiModelSelection;
+  options?: AntigravityModelOptions | null | undefined,
+): AntigravityModelSelection;
 export function buildModelSelection(
   provider: "grok",
   model: string,
@@ -395,6 +392,14 @@ export function buildModelSelection(
   options?: ProviderOptions | null | undefined,
 ): ModelSelection {
   switch (provider) {
+    case "antigravity":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as AntigravityModelOptions,
+          }
+        : { provider, model };
     case "codex":
       return options
         ? {
@@ -417,14 +422,6 @@ export function buildModelSelection(
             provider,
             model,
             options: options as CursorModelOptions,
-          }
-        : { provider, model };
-    case "gemini":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GeminiModelOptions,
           }
         : { provider, model };
     case "grok":

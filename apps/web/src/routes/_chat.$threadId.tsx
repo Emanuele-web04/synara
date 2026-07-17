@@ -157,11 +157,17 @@ import {
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
+import {
+  pullRequestDetailInputFromPane,
+  pullRequestPaneTabLabel,
+} from "~/components/pullRequest/pullRequestDetail.logic";
+import { usePullRequestPaneStateIcon } from "~/components/pullRequest/usePullRequestPaneStateIcon";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const BrowserPanel = lazy(() => import("../components/BrowserPanel"));
+const PullRequestDockPane = lazy(() => import("../components/pullRequest/PullRequestDockPane"));
 const EditorWorkspaceView = lazy(() =>
   import("../components/EditorWorkspaceView").then((module) => ({
     default: module.EditorWorkspaceView,
@@ -1914,7 +1920,10 @@ function SingleChatSurface(props: {
     const hasNamedFilePane = dockState.panes.some(
       (pane) => pane.kind === "file" && pane.filePath !== null,
     );
-    if (!hasSidechatPane && !hasNamedFilePane) {
+    const hasNumberedPullRequestPane = dockState.panes.some(
+      (pane) => pane.kind === "pullRequest" && pane.pullRequestNumber !== null,
+    );
+    if (!hasSidechatPane && !hasNamedFilePane && !hasNumberedPullRequestPane) {
       return undefined;
     }
     const titleByThreadId = hasSidechatPane
@@ -1926,10 +1935,24 @@ function SingleChatSurface(props: {
         overrides[pane.id] = titleByThreadId?.get(pane.threadId) || "Side";
       } else if (pane.kind === "file" && pane.filePath) {
         overrides[pane.id] = basenameOfPath(pane.filePath);
+      } else if (pane.kind === "pullRequest" && pane.pullRequestNumber !== null) {
+        overrides[pane.id] = pullRequestPaneTabLabel(pane.pullRequestNumber);
       }
     }
     return overrides;
   }, [threadSummaries, dockState.panes]);
+
+  // The pull request pane is a singleton, so at most one tab needs the live state glyph.
+  const pullRequestPane = dockState.panes.find(
+    (pane) => pane.kind === "pullRequest" && pullRequestDetailInputFromPane(pane) !== null,
+  );
+  const pullRequestPaneStateIcon = usePullRequestPaneStateIcon(
+    pullRequestPane ? pullRequestDetailInputFromPane(pullRequestPane) : null,
+  );
+  const paneIconOverrides =
+    pullRequestPane && pullRequestPaneStateIcon
+      ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
+      : undefined;
 
   const shouldAcceptDockWidth = useCallback(
     ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
@@ -1988,7 +2011,7 @@ function SingleChatSurface(props: {
   const renderDockPane = useCallback(
     (
       pane: RightDockPane,
-      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
+      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
     ): ReactNode => {
       switch (pane.kind) {
         case "browser":
@@ -2000,6 +2023,16 @@ function SingleChatSurface(props: {
                 onClosePanel={() => closePane(props.threadId, pane.id)}
                 runtimeMode={context.runtimeMode}
                 onRequestLive={requestActiveDockPaneLive}
+              />
+            </Suspense>
+          );
+        case "pullRequest":
+          return (
+            <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+              <PullRequestDockPane
+                pane={pane}
+                pollingEnabled={context.isVisible}
+                onClose={() => closePane(props.threadId, pane.id)}
               />
             </Suspense>
           );
@@ -2291,6 +2324,7 @@ function SingleChatSurface(props: {
           motionKey={props.threadId}
           activePaneRuntimeMode={activePaneRuntimeMode}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
+          {...(paneIconOverrides ? { paneIconOverrides } : {})}
           onSelectPane={handleSelectDockPane}
           onClosePane={(paneId) => closePane(props.threadId, paneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
@@ -2305,9 +2339,7 @@ function SingleChatSurface(props: {
 
 function ChatThreadRouteView() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const hasKnownServerThreads = useStore(
-    (store) => (store.threadIds?.length ?? 0) > 0 || store.threads.length > 0,
-  );
+  const hasKnownServerThreads = useStore((store) => (store.threadIds?.length ?? 0) > 0);
   const threadId = Route.useParams({
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });

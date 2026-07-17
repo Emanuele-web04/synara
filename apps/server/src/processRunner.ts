@@ -6,6 +6,7 @@ export interface ProcessRunOptions {
   timeoutMs?: number | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   stdin?: string | undefined;
+  signal?: AbortSignal | undefined;
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
   outputMode?: "error" | "truncate" | undefined;
@@ -81,6 +82,12 @@ function normalizeBufferError(
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
+function processAbortError(): Error {
+  const error = new Error("Process execution was aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
 // Windows `.cmd` shims may run under an explicit cmd.exe wrapper; taskkill keeps
 // timeout/cancel paths from leaving the real command behind.
 function killChild(child: ChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
@@ -128,6 +135,10 @@ export async function runProcess(
   args: readonly string[],
   options: ProcessRunOptions = {},
 ): Promise<ProcessRunResult> {
+  if (options.signal?.aborted) {
+    throw processAbortError();
+  }
+
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   const outputMode = options.outputMode ?? "error";
@@ -153,24 +164,47 @@ export async function runProcess(
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let aborted = false;
     let settled = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      killChild(child, "SIGTERM");
+    const scheduleForceKill = (): void => {
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       forceKillTimer = setTimeout(() => {
         killChild(child, "SIGKILL");
       }, 1_000);
+    };
+
+    const onAbort = (): void => {
+      // The first terminal cause wins: a signal that arrives after the timeout fired must not
+      // relabel the already-timed-out process as an explicit cancellation.
+      if (settled || aborted || timedOut) return;
+      aborted = true;
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      killChild(child, "SIGTERM");
+      scheduleForceKill();
+    };
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      killChild(child, "SIGTERM");
+      scheduleForceKill();
     }, timeoutMs);
 
     const finalize = (callback: () => void): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutTimer);
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
       if (forceKillTimer) {
         clearTimeout(forceKillTimer);
       }
+      options.signal?.removeEventListener("abort", onAbort);
       callback();
     };
 
@@ -182,6 +216,7 @@ export async function runProcess(
     };
 
     const appendOutput = (stream: "stdout" | "stderr", chunk: Buffer | string): Error | null => {
+      if (aborted) return null;
       const chunkBuffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       const text = chunkBuffer.toString();
       const byteLength = chunkBuffer.length;
@@ -231,7 +266,7 @@ export async function runProcess(
 
     child.once("error", (error) => {
       finalize(() => {
-        reject(normalizeSpawnError(command, args, error));
+        reject(aborted ? processAbortError() : normalizeSpawnError(command, args, error));
       });
     });
 
@@ -247,6 +282,10 @@ export async function runProcess(
       };
 
       finalize(() => {
+        if (aborted) {
+          reject(processAbortError());
+          return;
+        }
         if (!options.allowNonZeroExit && (timedOut || (code !== null && code !== 0))) {
           reject(normalizeExitError(command, args, result));
           return;
@@ -256,11 +295,19 @@ export async function runProcess(
     });
 
     child.stdin.once("error", (error) => {
+      if (aborted) return;
       fail(normalizeStdinError(command, args, error));
     });
 
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     if (options.stdin !== undefined) {
       child.stdin.write(options.stdin, (error) => {
+        if (aborted) return;
         if (error) {
           fail(normalizeStdinError(command, args, error));
           return;

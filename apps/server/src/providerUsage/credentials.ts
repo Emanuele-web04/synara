@@ -7,6 +7,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
 
+import { fetchJson } from "./http";
+
 const execFileAsync = promisify(execFile);
 
 const KEYCHAIN_TIMEOUT_MS = 5_000;
@@ -28,7 +30,9 @@ export async function readJsonFile(path: string): Promise<unknown | null> {
 
 /** Refresh an OAuth access token with the provider's token endpoint. Never logs secrets. */
 export async function refreshOAuthAccessToken(input: {
+  service: string;
   refreshUrl: string;
+  allowedOrigins: ReadonlyArray<string>;
   refreshToken: string;
   clientId: string;
   scope?: string;
@@ -43,27 +47,25 @@ export async function refreshOAuthAccessToken(input: {
     body.scope = input.scope;
   }
 
-  let response: Response;
+  let response: Awaited<ReturnType<typeof fetchJson>>;
   try {
-    response = await fetch(input.refreshUrl, {
+    response = await fetchJson({
+      service: input.service,
+      url: input.refreshUrl,
+      allowedOrigins: input.allowedOrigins,
       method: "POST",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(input.timeoutMs ?? DEFAULT_OAUTH_REFRESH_TIMEOUT_MS),
+      body,
+      timeoutMs: input.timeoutMs ?? DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
     });
   } catch {
     return null;
   }
 
-  let json: unknown = null;
-  try {
-    json = await response.json();
-  } catch {
-    json = null;
-  }
+  const json = response.json;
   if (!response.ok || !json || typeof json !== "object") {
     return null;
   }

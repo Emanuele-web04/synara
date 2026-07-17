@@ -13,6 +13,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as EffectAcpErrors from "effect-acp/errors";
 import * as EffectAcpSchema from "effect-acp/schema";
 
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -80,7 +81,10 @@ export function buildCursorAcpSpawnInput(
     args: command.args,
     cwd,
     // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
-    env: CURSOR_AGENT_BROWSERLESS_ENV,
+    env: buildProviderChildEnvironment({
+      provider: "cursor",
+      overrides: CURSOR_AGENT_BROWSERLESS_ENV,
+    }),
   };
 }
 
@@ -558,6 +562,9 @@ function normalizeCursorCliBaseModelId(model: string): string {
     .replace(/-thinking$/u, "")
     .replace(/-fast$/u, "")
     .replace(/-(?:extra-high|none|low|medium|high|xhigh)$/u, "")
+    // `cursor-agent models` namespaces Grok as `cursor-grok-*`, while the ACP
+    // session model option exposes the same model as `grok-*`.
+    .replace(/^cursor-(?=grok-)/u, "")
     .replace(/^claude-(\d+(?:\.\d+)?)-([a-z]+)-max$/u, "claude-$1-$2")
     .replace(/-preview$/u, "");
 
@@ -633,7 +640,7 @@ function cursorModelOptionsFromCliModelId(model: string | null | undefined): Cur
 }
 
 function cursorAcpParameterKeyForModel(baseModel: string, options: CursorModelOptions): string {
-  if (options.reasoningEffort && baseModel.includes("claude")) {
+  if (options.reasoningEffort && (baseModel.includes("claude") || baseModel.includes("grok"))) {
     return "effort";
   }
   return "reasoning";

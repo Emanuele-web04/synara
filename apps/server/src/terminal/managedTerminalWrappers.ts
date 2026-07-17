@@ -11,8 +11,14 @@ import {
   SYNARA_TERMINAL_HOOK_OSC_PREFIX,
   SYNARA_TERMINAL_CLI_KIND_ENV_KEY,
   type TerminalAgentHookEventType,
-  type TerminalCliKind,
+  type ManagedTerminalCliKind,
 } from "@synara/shared/terminalThreads";
+
+import {
+  ensurePrivateDirectorySync,
+  PRIVATE_EXECUTABLE_FILE_MODE,
+  PRIVATE_FILE_MODE,
+} from "../privatePathPermissions";
 
 export interface ManagedTerminalWrapperState {
   binDir: string | null;
@@ -20,7 +26,7 @@ export interface ManagedTerminalWrapperState {
   hookScriptPath: string | null;
   claudeSettingsPath: string | null;
   zshDir: string | null;
-  targetPathByCliKind: Partial<Record<TerminalCliKind, string>>;
+  targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>>;
 }
 
 function shellQuote(value: string): string {
@@ -258,7 +264,7 @@ function buildCodexWrapperScript(input: {
 
 function buildWrapperScript(input: {
   claudeSettingsPath: string;
-  cliKind: TerminalCliKind;
+  cliKind: ManagedTerminalCliKind;
   codexHomeDir: string;
   notifyHookPath: string;
   targetPath: string;
@@ -334,7 +340,7 @@ fi
 }
 
 function ensureManagedZshWrappers(zshDir: string): void {
-  fs.mkdirSync(zshDir, { recursive: true });
+  ensurePrivateDirectorySync(zshDir);
   const quotedZshDir = shellQuote(zshDir);
   writeFileIfChanged(
     path.join(zshDir, ".zshenv"),
@@ -344,7 +350,7 @@ export ZDOTDIR="$_synara_home"
 [[ -f "$_synara_home/.zshenv" ]] && source "$_synara_home/.zshenv"
 export ZDOTDIR=${quotedZshDir}
 `,
-    0o644,
+    PRIVATE_FILE_MODE,
   );
   writeFileIfChanged(
     path.join(zshDir, ".zprofile"),
@@ -354,9 +360,13 @@ export ZDOTDIR="$_synara_home"
 [[ -f "$_synara_home/.zprofile" ]] && source "$_synara_home/.zprofile"
 export ZDOTDIR=${quotedZshDir}
 `,
-    0o644,
+    PRIVATE_FILE_MODE,
   );
-  writeFileIfChanged(path.join(zshDir, ".zshrc"), buildManagedZshRc(quotedZshDir), 0o644);
+  writeFileIfChanged(
+    path.join(zshDir, ".zshrc"),
+    buildManagedZshRc(quotedZshDir),
+    PRIVATE_FILE_MODE,
+  );
 }
 
 export function prepareManagedTerminalWrappers(options: {
@@ -375,7 +385,7 @@ export function prepareManagedTerminalWrappers(options: {
     };
   }
 
-  const targetPathByCliKind: Partial<Record<TerminalCliKind, string>> = {};
+  const targetPathByCliKind: Partial<Record<ManagedTerminalCliKind, string>> = {};
   for (const cliKind of ["codex", "claude"] as const) {
     const commandName = managedTerminalCommandNameForCliKind(cliKind);
     const targetPath = resolveExecutableOnPath(commandName, options.baseEnv);
@@ -396,20 +406,24 @@ export function prepareManagedTerminalWrappers(options: {
     };
   }
 
-  fs.mkdirSync(options.rootDir, { recursive: true });
+  ensurePrivateDirectorySync(options.rootDir);
   const codexHomeDir = path.join(options.rootDir, "codex-home");
   const hookScriptPath = path.join(options.rootDir, "notify-hook.sh");
   const claudeSettingsPath = path.join(options.rootDir, "claude-settings.json");
-  fs.mkdirSync(codexHomeDir, { recursive: true });
-  writeFileIfChanged(hookScriptPath, buildNotifyHookScript(), 0o755);
-  writeFileIfChanged(claudeSettingsPath, buildClaudeSettingsJson(hookScriptPath), 0o644);
+  ensurePrivateDirectorySync(codexHomeDir);
+  writeFileIfChanged(hookScriptPath, buildNotifyHookScript(), PRIVATE_EXECUTABLE_FILE_MODE);
+  writeFileIfChanged(
+    claudeSettingsPath,
+    buildClaudeSettingsJson(hookScriptPath),
+    PRIVATE_FILE_MODE,
+  );
   writeFileIfChanged(
     path.join(codexHomeDir, "hooks.json"),
     buildCodexHooksJson(hookScriptPath),
-    0o644,
+    PRIVATE_FILE_MODE,
   );
   for (const [cliKind, targetPath] of Object.entries(targetPathByCliKind) as Array<
-    [TerminalCliKind, string]
+    [ManagedTerminalCliKind, string]
   >) {
     const wrapperPath = path.join(options.rootDir, managedTerminalCommandNameForCliKind(cliKind));
     writeFileIfChanged(
@@ -421,7 +435,7 @@ export function prepareManagedTerminalWrappers(options: {
         notifyHookPath: hookScriptPath,
         targetPath,
       }),
-      0o755,
+      PRIVATE_EXECUTABLE_FILE_MODE,
     );
   }
   ensureManagedZshWrappers(options.zshRootDir);

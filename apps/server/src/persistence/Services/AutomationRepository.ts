@@ -149,6 +149,8 @@ export type GetAutomationRunByThreadInput = typeof GetAutomationRunByThreadInput
 
 export const ListRecoverableAutomationRunsInput = Schema.Struct({
   limit: Schema.Number,
+  afterCreatedAt: Schema.optional(Schema.String),
+  afterRunId: Schema.optional(AutomationRunId),
 });
 export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
 
@@ -239,6 +241,14 @@ export interface AutomationRepositoryShape {
   readonly createRun: (
     input: CreateAutomationRunInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  /** Atomically inserts a fresh run and consumes one definition iteration. */
+  readonly createRunAndIncrementDefinition: (
+    input: CreateAutomationRunInput,
+    scheduleAdvance?: {
+      readonly nextRunAt: string | null;
+      readonly disable: boolean;
+    },
+  ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;
   readonly getRunById: (
     input: GetAutomationRunInput,
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;

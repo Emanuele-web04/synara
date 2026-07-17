@@ -178,7 +178,7 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
       assert.notInclude(beforeColumns, "env_mode");
 
       // This is what runs on next launch.
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 32 });
 
       const afterThreadsColumns = yield* projectionThreadsColumnNames(sql);
       const afterMessagesColumns = yield* projectionThreadMessagesColumnNames(sql);

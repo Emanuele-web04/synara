@@ -5,11 +5,14 @@
 
 import {
   PROVIDER_DISPLAY_NAMES,
+  type DesktopAppSnapPermission,
+  type DesktopAppSnapState,
   type ProviderKind,
   type ServerProviderStatus,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
 } from "@synara/contracts";
+import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
@@ -61,7 +64,9 @@ import {
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
+import { createLatestAppSnapRequestGuard } from "../appSnap.logic";
 import { APP_VERSION } from "../branding";
+import { logoutCurrentBrowserSession } from "../authLogout";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
@@ -76,6 +81,7 @@ import {
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
+import { Kbd, KbdGroup } from "../components/ui/kbd";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
@@ -111,6 +117,7 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
+import { playAppSnapCaptureSound } from "../lib/appSnapSound";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -132,6 +139,7 @@ import {
 } from "../lib/icons";
 import {
   serverConfigQueryOptions,
+  serverAuthSessionQueryOptions,
   serverQueryKeys,
   serverSettingsQueryOptions,
   serverWorktreesQueryOptions,
@@ -151,6 +159,7 @@ import {
   SETTINGS_TARGETS,
 } from "../settingsNavigation";
 import {
+  SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
@@ -170,7 +179,9 @@ import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
 import {
   getVisibleProviderUpdateStatuses,
+  shouldOfferProviderUpdateAction,
   shouldShowProviderUpdateStatus,
+  withProviderUpdateTimeout,
 } from "../providerUpdates";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
@@ -274,17 +285,7 @@ const THEME_OPTIONS = [
   },
 ] as const;
 
-const PROVIDER_SELECT_OPTIONS = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "droid",
-  "opencode",
-  "kilo",
-  "pi",
-] as const satisfies readonly ProviderKind[];
+const PROVIDER_SELECT_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -303,11 +304,47 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
+function appSnapStatusText(state: DesktopAppSnapState | null): string {
+  if (!state) return "Available in the Synara desktop app";
+  if (!state.supported) return state.message ?? "Available on macOS only";
+  if (state.status === "ready") return "Listening — press both Option keys to snap";
+  if (state.status === "disabled") return "Off";
+  if (state.status === "starting") return "Starting the capture listener…";
+  return state.message ?? "Permission setup required";
+}
+
+const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
+  granted: "Granted",
+  denied: "Denied",
+  "not-determined": "Not requested yet",
+  restricted: "Restricted",
+  unknown: "Unknown",
+};
+
+function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 rounded-full",
+          permission === "granted"
+            ? "bg-emerald-500"
+            : permission === "denied" || permission === "restricted"
+              ? "bg-red-500"
+              : "bg-[color:var(--color-border)]",
+        )}
+      />
+      {APPSNAP_PERMISSION_LABELS[permission]}
+    </span>
+  );
+}
+
 type InstallBinarySettingsKey =
   | "claudeBinaryPath"
   | "codexBinaryPath"
   | "cursorBinaryPath"
-  | "geminiBinaryPath"
+  | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
   | "kiloBinaryPath"
@@ -342,17 +379,11 @@ type InstallProviderSettings = {
   agentDirDescription?: ReactNode;
 };
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
-  { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
-  { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
-  { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
-  { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
-  { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
-  { provider: "droid", title: PROVIDER_DISPLAY_NAMES.droid },
-  { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
-  { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
-  { provider: "pi", title: PROVIDER_DISPLAY_NAMES.pi },
-];
+const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> =
+  PROVIDER_DESCRIPTORS.map((descriptor) => ({
+    provider: descriptor.kind,
+    title: descriptor.displayName,
+  }));
 
 // Pure helper kept at module scope so the toggle handler stays trivial and the
 // dedupe logic is shared between the toggle and the schema normalizer.
@@ -474,21 +505,18 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     apiEndpointDescription: "Optional Cursor API endpoint override passed to `cursor-agent -e`.",
   },
   {
-    provider: "gemini",
-    title: "Gemini",
+    provider: "antigravity",
+    title: "Antigravity",
     docs: [
-      { label: "Install", href: "https://google-gemini.github.io/gemini-cli/docs/get-started/" },
-      { label: "Update", href: "https://github.com/google-gemini/gemini-cli" },
-      {
-        label: "Config",
-        href: "https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html",
-      },
+      { label: "Install", href: "https://antigravity.google/docs/cli-using" },
+      { label: "Reference", href: "https://antigravity.google/docs/cli-reference" },
+      { label: "Hooks", href: "https://antigravity.google/docs/hooks" },
     ],
-    binaryPathKey: "geminiBinaryPath",
-    binaryPlaceholder: "Gemini binary path",
+    binaryPathKey: "antigravityBinaryPath",
+    binaryPlaceholder: "Antigravity CLI binary path",
     binaryDescription: (
       <>
-        Leave blank to use <code>gemini</code> from your PATH.
+        Leave blank to use <code>agy</code> from your PATH.
       </>
     ),
   },
@@ -710,7 +738,15 @@ function SettingsRouteView() {
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
+  const {
+    isDefaultActiveTheme,
+    resetAllThemes,
+    resolvedTheme,
+    theme,
+    setTheme,
+    systemUiFont,
+    setSystemUiFont,
+  } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const [voiceDictionaryInput, setVoiceDictionaryInput] = useState(
     settings.voiceDictionary.join(", "),
@@ -718,6 +754,7 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverAuthSessionQuery = useQuery(serverAuthSessionQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -746,6 +783,7 @@ function SettingsRouteView() {
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
@@ -756,15 +794,17 @@ function SettingsRouteView() {
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
-    gemini: Boolean(settings.geminiBinaryPath),
+    antigravity: Boolean(settings.antigravityBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
     droid: Boolean(settings.droidBinaryPath),
-    kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
+    kilo: Boolean(
+      settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPasswordConfigured,
+    ),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
       settings.openCodeExperimentalWebSockets ||
       settings.openCodeServerUrl ||
-      settings.openCodeServerPassword,
+      settings.openCodeServerPasswordConfigured,
     ),
     pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
@@ -779,7 +819,7 @@ function SettingsRouteView() {
     codex: "",
     claudeAgent: "",
     cursor: "",
-    gemini: "",
+    antigravity: "",
     grok: "",
     droid: "",
     kilo: "",
@@ -793,6 +833,8 @@ function SettingsRouteView() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+  const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const shouldShowFontSmoothing = isMacPlatform(
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
@@ -803,6 +845,28 @@ function SettingsRouteView() {
       suggestion.toLowerCase().includes(query),
     );
   }, [settings.terminalFontFamily]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      setAppSnapState(null);
+      return;
+    }
+    let disposed = false;
+    const unsubscribe = bridge.onState((state) => {
+      if (!disposed) setAppSnapState(state);
+    });
+    void bridge
+      .getState()
+      .then((state) => {
+        if (!disposed) setAppSnapState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
 
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
@@ -834,16 +898,16 @@ function SettingsRouteView() {
   const claudeBinaryPath = settings.claudeBinaryPath;
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
-  const geminiBinaryPath = settings.geminiBinaryPath;
+  const antigravityBinaryPath = settings.antigravityBinaryPath;
   const grokBinaryPath = settings.grokBinaryPath;
   const droidBinaryPath = settings.droidBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
   const kiloServerUrl = settings.kiloServerUrl;
-  const kiloServerPassword = settings.kiloServerPassword;
+  const kiloServerPasswordConfigured = settings.kiloServerPasswordConfigured;
   const openCodeBinaryPath = settings.openCodeBinaryPath;
   const openCodeExperimentalWebSockets = settings.openCodeExperimentalWebSockets;
   const openCodeServerUrl = settings.openCodeServerUrl;
-  const openCodeServerPassword = settings.openCodeServerPassword;
+  const openCodeServerPasswordConfigured = settings.openCodeServerPasswordConfigured;
   const piBinaryPath = settings.piBinaryPath;
   const piAgentDir = settings.piAgentDir;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
@@ -1027,18 +1091,18 @@ function SettingsRouteView() {
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
-    settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
+    settings.antigravityBinaryPath !== defaults.antigravityBinaryPath ||
     settings.grokBinaryPath !== defaults.grokBinaryPath ||
     settings.droidBinaryPath !== defaults.droidBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
     settings.kiloServerUrl !== defaults.kiloServerUrl ||
-    settings.kiloServerPassword !== defaults.kiloServerPassword ||
+    settings.kiloServerPasswordConfigured !== defaults.kiloServerPasswordConfigured ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets !== defaults.openCodeExperimentalWebSockets ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-    settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
+    settings.openCodeServerPasswordConfigured !== defaults.openCodeServerPasswordConfigured ||
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
   const changedSettingLabels = [
@@ -1076,6 +1140,8 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.enableAppSnap !== defaults.enableAppSnap ? ["AppSnap"] : []),
+    ...(settings.appSnapPlaySound !== defaults.appSnapPlaySound ? ["AppSnap capture sound"] : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
@@ -1093,7 +1159,7 @@ function SettingsRouteView() {
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
-    settings.customGeminiModels.length > 0 ||
+    settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
     settings.customDroidModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
@@ -1222,7 +1288,10 @@ function SettingsRouteView() {
       }
       setUpdatingProviders((current) => new Set(current).add(provider));
       try {
-        const result = await ensureNativeApi().server.updateProvider({ provider });
+        const result = await withProviderUpdateTimeout({
+          provider,
+          request: ensureNativeApi().server.updateProvider({ provider }),
+        });
         const refreshedProvider = result.providers.find((status) => status.provider === provider);
         const failureMessage = providerUpdateFailureMessage(refreshedProvider);
         if (failureMessage) {
@@ -1280,7 +1349,7 @@ function SettingsRouteView() {
       codex: false,
       claudeAgent: false,
       cursor: false,
-      gemini: false,
+      antigravity: false,
       grok: false,
       droid: false,
       kilo: false,
@@ -1292,7 +1361,7 @@ function SettingsRouteView() {
       codex: "",
       claudeAgent: "",
       cursor: "",
-      gemini: "",
+      antigravity: "",
       grok: "",
       droid: "",
       kilo: "",
@@ -1370,6 +1439,70 @@ function SettingsRouteView() {
     });
   }
 
+  async function setAppSnapEnabled(nextEnabled: boolean) {
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) {
+      toastManager.add({
+        type: "warning",
+        title: "AppSnap unavailable",
+        description: "AppSnap requires the Synara desktop app on macOS.",
+      });
+      return;
+    }
+
+    try {
+      if (nextEnabled) {
+        const permissionState = await bridge.requestPermissions();
+        if (!requestGuard.isCurrent(requestId)) return;
+        setAppSnapState(permissionState);
+      }
+      if (!requestGuard.isCurrent(requestId)) return;
+      updateSettings({ enableAppSnap: nextEnabled });
+      const state = await bridge.setEnabled(nextEnabled);
+      if (!requestGuard.isCurrent(requestId)) return;
+      setAppSnapState(state);
+      if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
+        toastManager.add({
+          type: "warning",
+          title: "Finish AppSnap setup",
+          description: state.message ?? "Allow the required macOS permissions, then try again.",
+        });
+      }
+    } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
+      updateSettings({ enableAppSnap: false });
+      toastManager.add({
+        type: "error",
+        title: "AppSnap setup failed",
+        description: error instanceof Error ? error.message : "Could not configure AppSnap.",
+      });
+    }
+  }
+
+  async function recheckAppSnapPermissions() {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge) return;
+    // Same guard as setAppSnapEnabled: a slow recheck must not clobber the
+    // panel state written by a newer toggle or recheck.
+    const requestGuard = appSnapRequestGuardRef.current;
+    const requestId = requestGuard.begin();
+    try {
+      await bridge.requestPermissions();
+      const state = await bridge.setEnabled(settings.enableAppSnap);
+      if (!requestGuard.isCurrent(requestId)) return;
+      setAppSnapState(state);
+    } catch (error) {
+      if (!requestGuard.isCurrent(requestId)) return;
+      toastManager.add({
+        type: "error",
+        title: "Could not check AppSnap permissions",
+        description: error instanceof Error ? error.message : "Permission check failed.",
+      });
+    }
+  }
+
   // Rebuild the local project indexes after an older install leaves them out of sync.
   const repairLocalState = useCallback(async () => {
     if (isRepairingLocalState) {
@@ -1407,6 +1540,29 @@ function SettingsRouteView() {
       setIsRepairingLocalState(false);
     }
   }, [isRepairingLocalState, syncServerReadModel]);
+
+  const logoutCurrentSession = useCallback(async () => {
+    if (isLoggingOut) return;
+    const api = readNativeApi() ?? ensureNativeApi();
+    setIsLoggingOut(true);
+    const result = await logoutCurrentBrowserSession({
+      confirm: () =>
+        api.dialogs.confirm(
+          "Sign out this browser?\n\nIts session and every live connection opened with it will be revoked.",
+        ),
+      logout: () => api.server.logoutAuthSession(),
+      navigate: (path) => window.location.assign(path),
+      onError: (error) =>
+        toastManager.add({
+          type: "error",
+          title: "Sign out failed",
+          description: error instanceof Error ? error.message : "Unable to revoke this session.",
+        }),
+    });
+    if (result !== "redirecting") {
+      setIsLoggingOut(false);
+    }
+  }, [isLoggingOut]);
 
   const deleteManagedWorktree = useCallback(
     async (input: { workspaceRoot: string; worktreePath: string }) => {
@@ -1908,6 +2064,22 @@ function SettingsRouteView() {
               />
             }
           />
+          <SettingsRow
+            title="Use system UI font"
+            description="Ignore the theme's custom UI font and render the interface with the native system font (SF Pro on macOS)."
+            resetAction={
+              !systemUiFont ? (
+                <SettingResetButton label="system UI font" onClick={() => setSystemUiFont(true)} />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={systemUiFont}
+                onCheckedChange={(checked) => setSystemUiFont(Boolean(checked))}
+                aria-label="Use system UI font"
+              />
+            }
+          />
         </SettingsCard>
 
         <div className="space-y-3">
@@ -2269,6 +2441,140 @@ function SettingsRouteView() {
       </SettingsSection>
     </div>
   );
+
+  const renderAppSnapPanel = () => {
+    const supported = appSnapState?.supported === true;
+    const enabled = supported && settings.enableAppSnap;
+    return (
+      <div className="space-y-6">
+        <div className={cn(SETTINGS_CARD_CLASS_NAME, "flex items-start gap-3 px-4 py-3.5")}>
+          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] text-muted-foreground">
+            <CentralIcon name="screen-capture" className="size-4" />
+          </span>
+          <div className="min-w-0 space-y-1">
+            <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+              Take an AppSnap to show your agent another app's window
+            </p>
+            <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+              Press both <Kbd className="mx-px">⌥ Option</Kbd> keys at once while any app is
+              frontmost. Synara captures that window as an image, brings itself forward, and
+              attaches the snap to a task composer — the capture stays on this device until you send
+              the message.
+            </p>
+            {!supported ? (
+              <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
+                {appSnapState
+                  ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
+                  : "AppSnap requires the Synara desktop app on macOS."}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <SettingsSection title="Capture">
+          <SettingsRow
+            title="Enable AppSnap"
+            description="Run the capture listener in the background while Synara is open."
+            status={appSnapStatusText(appSnapState)}
+            resetAction={
+              settings.enableAppSnap !== defaults.enableAppSnap ? (
+                <SettingResetButton
+                  label="AppSnap"
+                  onClick={() => void setAppSnapEnabled(defaults.enableAppSnap)}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={enabled}
+                disabled={!supported}
+                onCheckedChange={(checked) => void setAppSnapEnabled(Boolean(checked))}
+                aria-label="Enable AppSnap"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Shortcut"
+            description="Press the left and right Option keys at the same time. The chord works while any app is focused, and can't be remapped yet."
+            control={
+              <KbdGroup>
+                <Kbd>⌥ left</Kbd>
+                <span className="text-xs text-muted-foreground">+</span>
+                <Kbd>⌥ right</Kbd>
+              </KbdGroup>
+            }
+          />
+
+          <SettingsRow
+            title="Destination"
+            description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
+            control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          />
+
+          <SettingsRow
+            title="Capture sound"
+            description="Play a short shutter cue when a window is captured."
+            resetAction={
+              settings.appSnapPlaySound !== defaults.appSnapPlaySound ? (
+                <SettingResetButton
+                  label="capture sound"
+                  onClick={() => updateSettings({ appSnapPlaySound: defaults.appSnapPlaySound })}
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                <Button size="xs" variant="outline" onClick={() => void playAppSnapCaptureSound()}>
+                  Preview
+                </Button>
+                <Switch
+                  checked={settings.appSnapPlaySound}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ appSnapPlaySound: Boolean(checked) })
+                  }
+                  aria-label="Play a sound when an AppSnap is captured"
+                />
+              </div>
+            }
+          />
+        </SettingsSection>
+
+        {supported ? (
+          <SettingsSection title="macOS permissions">
+            <SettingsRow
+              title="Input Monitoring"
+              description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />
+              }
+            />
+            <SettingsRow
+              title="Screen Recording"
+              description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
+              control={
+                <AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />
+              }
+            />
+            <SettingsRow
+              title="Permission status"
+              description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
+              control={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void recheckAppSnapPermissions()}
+                >
+                  Recheck permissions
+                </Button>
+              }
+            />
+          </SettingsSection>
+        ) : null}
+      </div>
+    );
+  };
 
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
@@ -2671,7 +2977,7 @@ function SettingsRouteView() {
                     customCodexModels: defaults.customCodexModels,
                     customClaudeModels: defaults.customClaudeModels,
                     customCursorModels: defaults.customCursorModels,
-                    customGeminiModels: defaults.customGeminiModels,
+                    customAntigravityModels: defaults.customAntigravityModels,
                     customGrokModels: defaults.customGrokModels,
                     customKiloModels: defaults.customKiloModels,
                     customOpenCodeModels: defaults.customOpenCodeModels,
@@ -2693,7 +2999,7 @@ function SettingsRouteView() {
                     value !== "codex" &&
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
-                    value !== "gemini" &&
+                    value !== "antigravity" &&
                     value !== "grok" &&
                     value !== "droid" &&
                     value !== "kilo" &&
@@ -2975,7 +3281,7 @@ function SettingsRouteView() {
                     codexHomePath: defaults.codexHomePath,
                     cursorBinaryPath: defaults.cursorBinaryPath,
                     cursorApiEndpoint: defaults.cursorApiEndpoint,
-                    geminiBinaryPath: defaults.geminiBinaryPath,
+                    antigravityBinaryPath: defaults.antigravityBinaryPath,
                     grokBinaryPath: defaults.grokBinaryPath,
                     droidBinaryPath: defaults.droidBinaryPath,
                     kiloBinaryPath: defaults.kiloBinaryPath,
@@ -2992,7 +3298,7 @@ function SettingsRouteView() {
                     codex: false,
                     claudeAgent: false,
                     cursor: false,
-                    gemini: false,
+                    antigravity: false,
                     grok: false,
                     droid: false,
                     kilo: false,
@@ -3017,8 +3323,8 @@ function SettingsRouteView() {
                       : providerSettings.provider === "cursor"
                         ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
                           settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
-                        : providerSettings.provider === "gemini"
-                          ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
+                        : providerSettings.provider === "antigravity"
+                          ? settings.antigravityBinaryPath !== defaults.antigravityBinaryPath
                           : providerSettings.provider === "grok"
                             ? settings.grokBinaryPath !== defaults.grokBinaryPath
                             : providerSettings.provider === "droid"
@@ -3026,7 +3332,8 @@ function SettingsRouteView() {
                               : providerSettings.provider === "kilo"
                                 ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
                                   settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                  settings.kiloServerPassword !== defaults.kiloServerPassword
+                                  settings.kiloServerPasswordConfigured !==
+                                    defaults.kiloServerPasswordConfigured
                                 : providerSettings.provider === "pi"
                                   ? settings.piBinaryPath !== defaults.piBinaryPath ||
                                     settings.piAgentDir !== defaults.piAgentDir
@@ -3034,15 +3341,15 @@ function SettingsRouteView() {
                                     settings.openCodeExperimentalWebSockets !==
                                       defaults.openCodeExperimentalWebSockets ||
                                     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                    settings.openCodeServerPassword !==
-                                      defaults.openCodeServerPassword;
+                                    settings.openCodeServerPasswordConfigured !==
+                                      defaults.openCodeServerPasswordConfigured;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
                     : providerSettings.binaryPathKey === "cursorBinaryPath"
                       ? cursorBinaryPath
-                      : providerSettings.binaryPathKey === "geminiBinaryPath"
-                        ? geminiBinaryPath
+                      : providerSettings.binaryPathKey === "antigravityBinaryPath"
+                        ? antigravityBinaryPath
                         : providerSettings.binaryPathKey === "grokBinaryPath"
                           ? grokBinaryPath
                           : providerSettings.binaryPathKey === "droidBinaryPath"
@@ -3081,15 +3388,11 @@ function SettingsRouteView() {
                   providerUpdateState === "queued" ||
                   providerUpdateState === "running" ||
                   updatingProviders.has(providerSettings.provider);
-                const canUpdateProvider =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate &&
-                  !isProviderUpdateActive;
-                const shouldShowProviderUpdateButton =
-                  showProviderUpdateStatus &&
-                  updateAdvisory?.status === "behind_latest" &&
-                  updateAdvisory.canUpdate;
+                const shouldShowProviderUpdateButton = providerStatus
+                  ? shouldOfferProviderUpdateAction(providerStatus) &&
+                    (showProviderUpdateStatus || updateAdvisory?.status === "unknown")
+                  : false;
+                const canUpdateProvider = shouldShowProviderUpdateButton && !isProviderUpdateActive;
 
                 return (
                   <Collapsible
@@ -3148,7 +3451,7 @@ function SettingsRouteView() {
                             variant="outline"
                             disabled={!canUpdateProvider}
                             title={
-                              updateAdvisory.updateCommand
+                              updateAdvisory?.updateCommand
                                 ? `Run ${updateAdvisory.updateCommand}`
                                 : undefined
                             }
@@ -3206,8 +3509,8 @@ function SettingsRouteView() {
                                       ? { claudeBinaryPath: nextValue }
                                       : providerSettings.binaryPathKey === "cursorBinaryPath"
                                         ? { cursorBinaryPath: nextValue }
-                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: nextValue }
+                                        : providerSettings.binaryPathKey === "antigravityBinaryPath"
+                                          ? { antigravityBinaryPath: nextValue }
                                           : providerSettings.binaryPathKey === "grokBinaryPath"
                                             ? { grokBinaryPath: nextValue }
                                             : providerSettings.binaryPathKey === "droidBinaryPath"
@@ -3370,11 +3673,7 @@ function SettingsRouteView() {
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
-                                  value={
-                                    providerSettings.serverPasswordKey === "kiloServerPassword"
-                                      ? kiloServerPassword
-                                      : openCodeServerPassword
-                                  }
+                                  value=""
                                   onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
@@ -3382,7 +3681,17 @@ function SettingsRouteView() {
                                         : { openCodeServerPassword: nextValue },
                                     )
                                   }
-                                  placeholder={providerSettings.serverPasswordPlaceholder}
+                                  placeholder={
+                                    (
+                                      providerSettings.serverPasswordKey === "kiloServerPassword"
+                                        ? kiloServerPasswordConfigured
+                                        : openCodeServerPasswordConfigured
+                                    )
+                                      ? "Configured — enter a replacement or leave blank"
+                                      : providerSettings.serverPasswordPlaceholder
+                                  }
+                                  type="password"
+                                  autoComplete="new-password"
                                   spellCheck={false}
                                 />
                                 {providerSettings.serverPasswordDescription ? (
@@ -3435,6 +3744,26 @@ function SettingsRouteView() {
 
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
+      {serverAuthSessionQuery.data?.authenticated ? (
+        <SettingsSection title="Session">
+          <SettingsRow
+            title="This browser"
+            description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
+            status={`Authenticated as ${serverAuthSessionQuery.data.role ?? "client"}.`}
+            control={
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                disabled={isLoggingOut}
+                onClick={() => void logoutCurrentSession()}
+              >
+                {isLoggingOut ? "Signing out..." : "Sign out"}
+              </Button>
+            }
+          />
+        </SettingsSection>
+      ) : null}
+
       <SettingsSection title="Developer tools">
         <SettingsRow
           title="Keybindings"
@@ -3542,6 +3871,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "appsnap":
+        return renderAppSnapPanel();
       case "shortcuts":
         return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":

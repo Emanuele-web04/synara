@@ -12,8 +12,6 @@ import {
   ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
-  GitMergedSimpleIcon,
-  GitPullRequestIcon,
   KanbanIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -30,10 +28,16 @@ import {
   WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
+import {
+  PR_STATE_PRESENTATION_ICONS,
+  resolvePrStatePresentation,
+  type PrStatePresentation,
+} from "~/components/pullRequest/pullRequestStatePresentation";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { IoIosGitCompare } from "react-icons/io";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
@@ -47,6 +51,7 @@ import {
   useRef,
   Suspense,
   useState,
+  type ComponentType,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -135,6 +140,10 @@ import {
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
+  pullRequestQueryKeys,
+  pullRequestReviewRequestCountQueryOptions,
+} from "../lib/pullRequestReactQuery";
+import {
   serverConfigQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
@@ -201,6 +210,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
 import {
@@ -247,7 +257,6 @@ import {
   Menu,
   MenuGroup,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
@@ -282,6 +291,7 @@ import {
   getPinnedThreadsForSidebar,
   getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
+  pullRequestRepositoryConfigFingerprint,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
@@ -291,6 +301,7 @@ import {
   isLatestPinnedThreadMutation,
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -304,10 +315,9 @@ import {
   resolveThreadStatusPill,
   type ThreadStatusPill,
   type SidebarDerivedProjectData,
+  type SidebarActionBadge,
   type SidebarView,
   shouldShowDebugFeatureFlagsMenu,
-  resolvePrStatePresentation,
-  type PrStatePresentation,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -947,7 +957,7 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   return {
     label: presentation.label,
     colorClass: presentation.colorClass,
-    icon: presentation.iconKind === "merged-simple" ? GitMergedSimpleIcon : GitPullRequestIcon,
+    icon: PR_STATE_PRESENTATION_ICONS[presentation.iconKind],
     tooltip: `#${pr.number} ${presentation.label}: ${pr.title}`,
     url: pr.url,
   };
@@ -1010,11 +1020,7 @@ function ProjectSortMenu({
         tooltip="Sort projects"
         tooltipSide="right"
       />
-      <MenuPopup
-        align="end"
-        side="bottom"
-        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
             Sort projects
@@ -1043,7 +1049,7 @@ function ProjectSortMenu({
             onThreadSortOrderChange={onThreadSortOrderChange}
           />
         </MenuGroup>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }
@@ -1089,11 +1095,7 @@ function ChatSortMenu({
         tooltip="Sort chats"
         tooltipSide="top"
       />
-      <MenuPopup
-        align="end"
-        side="bottom"
-        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
           <ThreadSortMenuItems
@@ -1101,7 +1103,7 @@ function ChatSortMenu({
             onThreadSortOrderChange={onThreadSortOrderChange}
           />
         </MenuGroup>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }
@@ -1113,18 +1115,18 @@ function SidebarPrimaryAction({
   active = false,
   disabled = false,
   shortcutLabel,
-  badgeCount,
+  badge,
 }: {
-  icon: LucideIcon;
+  // Accepts both Lucide adapters and raw react-icons glyphs (rendered via SidebarGlyph).
+  icon: ComponentType<{ className?: string }>;
   label: string;
   onClick?: () => void;
   active?: boolean;
   disabled?: boolean;
   shortcutLabel?: string | null;
-  badgeCount?: number | null;
+  badge?: SidebarActionBadge | null;
 }) {
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
-  const showBadge = typeof badgeCount === "number" && badgeCount > 0;
 
   return (
     <SidebarMenuItem>
@@ -1147,9 +1149,13 @@ function SidebarPrimaryAction({
           <SidebarGlyph icon={Icon} variant="leading" />
         </SidebarLeadingIcon>
         <span className="truncate">{label}</span>
-        {showBadge ? (
-          <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-            {badgeCount}
+        {badge ? (
+          <span
+            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+            aria-label={badge.accessibleLabel}
+            title={badge.accessibleLabel}
+          >
+            {badge.text}
           </span>
         ) : shortcutParts.length > 0 ? (
           <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
@@ -1414,6 +1420,7 @@ export default function Sidebar() {
   const isOnStudioRoute = pathname.startsWith("/studio");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
+  const isOnPullRequests = pathname.startsWith("/pull-requests");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -1428,11 +1435,33 @@ export default function Sidebar() {
       );
     });
   }, [queryClient]);
-  const automationAttentionBadgeCount = useMemo(() => {
+  const automationAttentionBadge = useMemo(() => {
     const data = automationListQuery.data;
-    if (!data) return 0;
-    return automationAttentionCount(data.runs);
+    if (!data) return null;
+    const count = automationAttentionCount(data.runs);
+    return count > 0
+      ? {
+          text: String(count),
+          accessibleLabel: `${count} ${pluralize(count, "automation needs", "automations need")} attention`,
+        }
+      : null;
   }, [automationListQuery.data]);
+  const pullRequestRepositoryConfig = useMemo(
+    () => pullRequestRepositoryConfigFingerprint(projects),
+    [projects],
+  );
+  const previousPullRequestRepositoryConfigRef = useRef(pullRequestRepositoryConfig);
+  useEffect(() => {
+    if (previousPullRequestRepositoryConfigRef.current === pullRequestRepositoryConfig) return;
+    previousPullRequestRepositoryConfigRef.current = pullRequestRepositoryConfig;
+    void queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
+  }, [pullRequestRepositoryConfig, queryClient]);
+  // Count-only server query keeps rich pull-request rows off the wire and out of this cache.
+  const pullRequestsReviewingQuery = useQuery({
+    ...pullRequestReviewRequestCountQueryOptions({ projectId: null }),
+    enabled: projects.some((project) => project.kind === "project"),
+  });
+  const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
   // Heartbeat automations grouped by their target thread, so each thread row can show a
   // clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
@@ -1541,6 +1570,7 @@ export default function Sidebar() {
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
   const [projectRunDialogProjectId, setProjectRunDialogProjectId] = useState<ProjectId | null>(
@@ -3601,9 +3631,11 @@ export default function Sidebar() {
       const threadSummary = sidebarThreadSummaryById[threadId];
       const isPinned = pinnedThreadIdSet.has(threadId);
       const hasPendingApprovals =
-        threadSummary?.hasPendingApprovals ?? derivePendingApprovals(thread.activities).length > 0;
+        threadSummary?.hasPendingApprovals ??
+        derivePendingApprovals(thread.activities, thread.pendingInteractions).length > 0;
       const hasPendingUserInput =
-        threadSummary?.hasPendingUserInput ?? derivePendingUserInputs(thread.activities).length > 0;
+        threadSummary?.hasPendingUserInput ??
+        derivePendingUserInputs(thread.activities, thread.pendingInteractions).length > 0;
       const canHandoff = canCreateThreadHandoff({
         thread,
         hasPendingApprovals,
@@ -5857,6 +5889,22 @@ export default function Sidebar() {
             </button>
             <SidebarSectionToolbar placement="overlay" revealOnHover>
               <SidebarIconButton
+                icon={IoIosGitCompare}
+                label={`View pull requests for ${project.name}`}
+                tooltip="Pull requests"
+                tooltipSide="top"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  // Opens the in-app pull requests view scoped to this project (selecting a
+                  // row there opens the right-dock detail panel) instead of leaving for GitHub.
+                  void navigate({
+                    to: "/pull-requests",
+                    search: { involvement: "all", state: "open", projectId: project.id },
+                  });
+                }}
+              />
+              <SidebarIconButton
                 icon={TerminalIcon}
                 label={`Create new terminal thread in ${project.name}`}
                 tooltip={
@@ -6385,6 +6433,12 @@ export default function Sidebar() {
         shortcutLabel: importThreadShortcutLabel,
       },
       {
+        id: "feedback",
+        label: "Feedback Synara",
+        description: "Send feedback or report an issue to the Synara team.",
+        keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
+      },
+      {
         id: "settings",
         label: "Settings",
         description: "Open app settings.",
@@ -6788,10 +6842,22 @@ export default function Sidebar() {
                         }}
                       />
                       <SidebarPrimaryAction
+                        icon={IoIosGitCompare}
+                        label="Pull requests"
+                        active={isOnPullRequests}
+                        badge={pullRequestsReviewBadge}
+                        onClick={() => {
+                          void navigate({
+                            to: "/pull-requests",
+                            search: { involvement: "all", state: "open" },
+                          });
+                        }}
+                      />
+                      <SidebarPrimaryAction
                         icon={ClockIcon}
                         label="Automations"
                         active={isOnAutomations}
-                        badgeCount={automationAttentionBadgeCount}
+                        badge={automationAttentionBadge}
                         onClick={() => {
                           void navigate({ to: "/automations" });
                         }}
@@ -7507,7 +7573,6 @@ export default function Sidebar() {
               autoCapitalize="off"
               autoCorrect="off"
               placeholder="e.g. npm run dev"
-              className="font-mono"
               value={projectRunDialogCommandDraft}
               aria-invalid={projectRunDialogCommandIsValid ? undefined : true}
               onChange={(event) => setProjectRunDialogCommandDraft(event.target.value)}
@@ -7604,6 +7669,7 @@ export default function Sidebar() {
           onOpenSettings={() => {
             void navigate({ to: "/settings" });
           }}
+          onOpenFeedback={openFeedbackDialog}
           onOpenUsageSettings={() => {
             void navigate({
               to: "/settings",
@@ -7635,6 +7701,7 @@ function SidebarSearchPaletteController(props: {
   homeDir: string | null;
   initialBrowseQuery: string | null;
   onOpenSettings: () => void;
+  onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -7694,6 +7761,7 @@ function SidebarSearchPaletteController(props: {
       homeDir={props.homeDir}
       initialBrowseQuery={props.initialBrowseQuery}
       onOpenSettings={props.onOpenSettings}
+      onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}

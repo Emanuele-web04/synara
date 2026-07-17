@@ -18,20 +18,18 @@ import {
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
-  getGeminiThinkingModelAlias,
   getModelCapabilities,
   getModelOptions,
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
-  normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
   resolveApiModelId,
   resolveSelectableModel,
-  resolveGeminiApiModelId,
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
@@ -183,10 +181,8 @@ describe("resolveSelectableModel", () => {
 });
 
 describe("getModelCapabilities reasoningEffortLevels", () => {
-  const values = (
-    provider: "codex" | "claudeAgent" | "gemini" | "grok" | "droid",
-    model: string | null,
-  ) => getModelCapabilities(provider, model).reasoningEffortLevels.map((l) => l.value);
+  const values = (provider: "codex" | "claudeAgent" | "grok" | "droid", model: string | null) =>
+    getModelCapabilities(provider, model).reasoningEffortLevels.map((l) => l.value);
 
   it("returns codex reasoning options for codex", () => {
     expect(values("codex", "gpt-5.5")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
@@ -310,19 +306,10 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
 
-  it("keeps Gemini 2.5 Pro and auto 2.5 on supported budgets only", () => {
-    expect(values("gemini", "gemini-2.5-pro")).toEqual(["-1", "512"]);
-    expect(values("gemini", "auto-gemini-2.5")).toEqual(["-1", "512"]);
-  });
-
-  it("keeps all Gemini 2.5 models on CLI-safe budgets only", () => {
-    expect(values("gemini", "gemini-2.5-flash")).toEqual(["-1", "512"]);
-    expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
-  });
-
   it("returns Grok effort options for Grok Build models", () => {
     expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
     expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+    expect(values("grok", "grok-4.5")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -353,7 +340,6 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-sonnet-5"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
-    expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build-0.1"))).toBe("low");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build"))).toBe("low");
   });
@@ -397,19 +383,6 @@ describe("provider option descriptor helpers", () => {
     expect(fastMode).toMatchObject({
       type: "boolean",
       currentValue: true,
-    });
-  });
-
-  it("coerces legacy numeric Gemini budgets into string select values", () => {
-    const descriptors = getProviderOptionDescriptors({
-      provider: "gemini",
-      caps: getModelCapabilities("gemini", "gemini-2.5-pro"),
-      selections: { thinkingBudget: 512 },
-    });
-
-    expect(descriptors.find((descriptor) => descriptor.id === "thinkingBudget")).toMatchObject({
-      type: "select",
-      currentValue: "512",
     });
   });
 
@@ -794,17 +767,6 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 });
 
-describe("normalizeGeminiModelOptions", () => {
-  it("drops unsupported thinking-off overrides for the Gemini 2.5 family", () => {
-    expect(normalizeGeminiModelOptions("gemini-2.5-pro", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("auto-gemini-2.5", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("gemini-2.5-flash", { thinkingBudget: 0 })).toBeUndefined();
-    expect(
-      normalizeGeminiModelOptions("gemini-2.5-flash-lite", { thinkingBudget: 0 }),
-    ).toBeUndefined();
-  });
-});
-
 describe("normalizeGrokModelOptions", () => {
   it("drops default Grok reasoning effort options and preserves supported overrides", () => {
     expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "low" })).toBeUndefined();
@@ -818,21 +780,46 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
+    expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+    });
   });
 });
 
-describe("getGeminiThinkingModelAlias", () => {
-  it("refuses unsupported Gemini 2.5 off aliases", () => {
-    expect(getGeminiThinkingModelAlias("gemini-2.5-pro", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-pro", { thinkingBudget: 0 })).toBe("gemini-2.5-pro");
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-flash", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash",
-    );
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash-lite",
-    );
+describe("normalizeAntigravityModelOptions", () => {
+  it("stores only supported non-default effort overrides", () => {
+    const runtimeCapabilities = {
+      reasoningEffortLevels: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium", isDefault: true as const },
+        { value: "high", label: "High" },
+      ],
+      supportsFastMode: false,
+      supportsThinkingToggle: false,
+      promptInjectedEffortLevels: [],
+      contextWindowOptions: [],
+    };
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "medium" },
+        runtimeCapabilities,
+      ),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "ultra" },
+        runtimeCapabilities,
+      ),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "high" },
+        runtimeCapabilities,
+      ),
+    ).toEqual({ reasoningEffort: "high" });
   });
 });
 

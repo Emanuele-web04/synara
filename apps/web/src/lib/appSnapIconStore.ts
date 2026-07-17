@@ -1,0 +1,111 @@
+// FILE: appSnapIconStore.ts
+// Purpose: Deduplicates native AppSnap icons outside localStorage.
+// Layer: Browser storage adapter
+// Depends on: IndexedDB structured-clone support.
+
+import { awaitIdbRequest, openIndexedDbDatabase, waitForIdbTransaction } from "./indexedDb";
+
+const DATABASE_NAME = "synara-appsnap-icons";
+const DATABASE_VERSION = 1;
+const ICON_STORE_NAME = "icons";
+const MAX_BUNDLE_IDENTIFIER_LENGTH = 512;
+const MAX_ICON_DATA_URL_LENGTH = 256_000;
+const MAX_STORED_APP_ICONS = 100;
+
+interface StoredAppSnapIcon {
+  bundleIdentifier: string;
+  dataUrl: string;
+  updatedAt: number;
+}
+
+export function selectAppSnapIconEvictionKeys(
+  entries: ReadonlyArray<Pick<StoredAppSnapIcon, "bundleIdentifier" | "updatedAt">>,
+  maximumEntries = MAX_STORED_APP_ICONS,
+): string[] {
+  const overflow = Math.max(0, entries.length - Math.max(0, maximumEntries));
+  if (overflow === 0) return [];
+  return [...entries]
+    .sort(
+      (left, right) =>
+        left.updatedAt - right.updatedAt ||
+        left.bundleIdentifier.localeCompare(right.bundleIdentifier),
+    )
+    .slice(0, overflow)
+    .map((entry) => entry.bundleIdentifier);
+}
+
+function normalizeBundleIdentifier(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= MAX_BUNDLE_IDENTIFIER_LENGTH
+    ? normalized
+    : null;
+}
+
+function normalizeIconDataUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > MAX_ICON_DATA_URL_LENGTH) return null;
+  return /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : null;
+}
+
+function openAppSnapIconDatabase(): Promise<IDBDatabase> {
+  return openIndexedDbDatabase({
+    name: DATABASE_NAME,
+    version: DATABASE_VERSION,
+    storeName: ICON_STORE_NAME,
+    keyPath: "bundleIdentifier",
+    label: "AppSnap icon cache",
+  });
+}
+
+function waitForTransaction(transaction: IDBTransaction): Promise<void> {
+  return waitForIdbTransaction(transaction, "AppSnap icon storage");
+}
+
+export async function persistAppSnapIcon(input: {
+  bundleIdentifier: string;
+  dataUrl: string;
+}): Promise<void> {
+  const bundleIdentifier = normalizeBundleIdentifier(input.bundleIdentifier);
+  const dataUrl = normalizeIconDataUrl(input.dataUrl);
+  if (!bundleIdentifier || !dataUrl) return;
+
+  const database = await openAppSnapIconDatabase();
+  try {
+    const transaction = database.transaction(ICON_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(ICON_STORE_NAME);
+    store.put({
+      bundleIdentifier,
+      dataUrl,
+      updatedAt: Date.now(),
+    } satisfies StoredAppSnapIcon);
+    const entriesRequest = store.getAll();
+    entriesRequest.addEventListener("success", () => {
+      const entries = entriesRequest.result as StoredAppSnapIcon[];
+      for (const key of selectAppSnapIconEvictionKeys(entries)) {
+        store.delete(key);
+      }
+    });
+    await waitForTransaction(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+export async function readAppSnapIcon(bundleIdentifier: string): Promise<string | null> {
+  const normalizedBundleIdentifier = normalizeBundleIdentifier(bundleIdentifier);
+  if (!normalizedBundleIdentifier) return null;
+
+  const database = await openAppSnapIconDatabase();
+  try {
+    const transaction = database.transaction(ICON_STORE_NAME, "readonly");
+    const completion = waitForTransaction(transaction);
+    const stored = (await awaitIdbRequest(
+      transaction.objectStore(ICON_STORE_NAME).get(normalizedBundleIdentifier),
+      "Could not read the AppSnap icon cache.",
+    )) as StoredAppSnapIcon | undefined;
+    await completion;
+    return normalizeIconDataUrl(stored?.dataUrl);
+  } finally {
+    database.close();
+  }
+}

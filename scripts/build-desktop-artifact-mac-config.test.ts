@@ -2,6 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   createDesktopPlatformBuildConfig,
+  MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+  MAC_APPSNAP_HELPER_BUNDLE_PATH,
+  MAC_APPSNAP_HELPER_STAGE_PATH,
   MAC_ENTITLEMENTS_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
@@ -16,6 +19,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
+      signed: true,
     });
     const mac = config.mac as Record<string, unknown>;
     const extendInfo = mac.extendInfo as Record<string, unknown>;
@@ -24,9 +28,26 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
+    assert.equal(mac.notarize, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
+    assert.deepStrictEqual(mac.binaries, ["Contents/Helpers/synara-appsnap-helper"]);
+    assert.equal(mac.x64ArchFiles, "Contents/Helpers/synara-appsnap-helper");
+    assert.equal(
+      MAC_APPSNAP_HELPER_STAGE_PATH,
+      "apps/desktop/native/appsnap/build/synara-appsnap-helper",
+    );
+    assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
+    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.deepStrictEqual(config.extraFiles, [
+      {
+        from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
+        to: "Helpers/synara-appsnap-helper",
+      },
+    ]);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
+    assert.equal(extendInfo.NSScreenCaptureUsageDescription, undefined);
   });
 
   it("leaves non-macOS platform configs unchanged", () => {
@@ -41,6 +62,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(linux.mac, undefined);
+    assert.equal(linux.extraFiles, undefined);
     assert.deepStrictEqual(linux.asarUnpack, ["node_modules/node-pty/**"]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
@@ -55,6 +77,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.equal(win.mac, undefined);
+    assert.equal(win.extraFiles, undefined);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
     assert.deepStrictEqual(win.nsis, {
@@ -63,23 +86,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
+      publisherName: "Synara",
       azureSignOptions: { publisherName: "Synara" },
     });
   });
 
-  it("keeps Windows signing optional", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "win",
-      target: "nsis",
-    });
-
-    assert.deepStrictEqual(config.win, {
-      target: ["nsis"],
-      icon: "icon.ico",
-    });
-  });
-
-  it("keeps Windows signing optional", () => {
+  it("omits Azure signing options for unsigned build-only artifacts", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",
@@ -130,6 +142,26 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.ok(issue?.includes("Build linux/x64 on a matching Linux host"));
+  });
+
+  it("requires a macOS host for the native Swift AppSnap helper", () => {
+    assert.equal(
+      validateDesktopNativeBuildHost({
+        platform: "mac",
+        arch: "universal",
+        hostPlatform: "darwin",
+        hostArch: "arm64",
+      }),
+      null,
+    );
+
+    const issue = validateDesktopNativeBuildHost({
+      platform: "mac",
+      arch: "arm64",
+      hostPlatform: "linux",
+      hostArch: "arm64",
+    });
+    assert.ok(issue?.includes("Build mac/arm64 on macOS"));
   });
 
   it("keeps separate macOS sources for solid and rounded icons", () => {

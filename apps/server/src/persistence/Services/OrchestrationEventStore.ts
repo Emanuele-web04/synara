@@ -31,11 +31,15 @@ export interface OrchestrationEventStoreShape {
     event: Omit<OrchestrationEvent, "sequence">,
   ) => Effect.Effect<OrchestrationEvent, OrchestrationEventStoreError>;
 
+  /** Capture the latest durable sequence for a finite replay fence. */
+  readonly getHighWaterSequence: () => Effect.Effect<number, OrchestrationEventStoreError>;
+
   /**
    * Replay events after the provided sequence.
    *
    * @param sequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to emit.
+   * @param throughSequenceInclusive - Optional captured high-water fence.
    * @returns Stream containing ordered events.
    *
    * Reads in fixed-size pages and normalizes non-integer/negative limits.
@@ -43,6 +47,7 @@ export interface OrchestrationEventStoreShape {
   readonly readFromSequence: (
     sequenceExclusive: number,
     limit?: number,
+    throughSequenceInclusive?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
 
   /**

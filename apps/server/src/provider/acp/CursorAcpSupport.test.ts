@@ -119,7 +119,7 @@ const noCursorAgentCommandOptions = {
 
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
-    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
+    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
@@ -131,7 +131,7 @@ describe("buildCursorAcpSpawnInput", () => {
   });
 
   it("maps the old ambiguous agent default to cursor-agent", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toEqual({
+    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toMatchObject({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
@@ -149,7 +149,7 @@ describe("buildCursorAcpSpawnInput", () => {
         "/tmp/project",
         noCursorAgentCommandOptions,
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/not-real/bin/cursor",
       args: ["agent", "acp"],
       cwd: "/tmp/project",
@@ -168,7 +168,7 @@ describe("buildCursorAcpSpawnInput", () => {
         env: { PATH: "" },
         pathExists: (path) => path === agentPath,
       }),
-    ).toEqual({
+    ).toMatchObject({
       command: agentPath,
       args: ["acp"],
       cwd: "/tmp/project",
@@ -188,7 +188,7 @@ describe("buildCursorAcpSpawnInput", () => {
         },
         "/tmp/project",
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/usr/local/bin/agent",
       args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
@@ -209,7 +209,7 @@ describe("buildCursorAcpSpawnInput", () => {
         "/tmp/project",
         noCursorAgentCommandOptions,
       ),
-    ).toEqual({
+    ).toMatchObject({
       command: "/not-real/bin/cursor",
       args: ["agent", "-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
@@ -787,6 +787,56 @@ describe("applyCursorAcpModelSelection", () => {
       { type: "config", configId: "thinking", value: true },
       { type: "model", value: "gpt-5.3-codex-spark[reasoning=low]" },
       { type: "config", configId: "reasoning", value: "low" },
+    ]);
+  });
+
+  it("maps Cursor's namespaced Grok CLI id to the unprefixed ACP model value", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "default[]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            {
+              value: "grok-4.5[effort=high,fast=true]",
+              name: "Cursor Grok 4.5",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "cursor-grok-4.5",
+        options: { reasoningEffort: "high", fastMode: false },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "grok-4.5[effort=high,fast=true]",
+      },
     ]);
   });
 

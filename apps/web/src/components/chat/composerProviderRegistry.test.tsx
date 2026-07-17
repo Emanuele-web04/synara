@@ -76,7 +76,96 @@ const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "medium",
 };
 
+const ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "Gemini 3.5 Flash",
+  name: "Gemini 3.5 Flash",
+  supportedReasoningEfforts: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT: ProviderModelDescriptor = {
+  slug: "Claude Sonnet 4.6",
+  name: "Claude Sonnet 4.6",
+  supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
+  defaultReasoningEffort: "thinking",
+};
+
+const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "grok-4.5",
+  name: "Grok 4.5",
+  supportedReasoningEfforts: [
+    { value: "none" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+  defaultReasoningEffort: "low",
+};
+
 describe("getComposerProviderState", () => {
+  it("dispatches Antigravity effort separately from its base model", () => {
+    const state = getComposerProviderState({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
+      prompt: "",
+      modelOptions: { antigravity: { reasoningEffort: "high" } },
+    });
+
+    expect(state).toEqual({
+      provider: "antigravity",
+      promptEffort: "high",
+      modelOptionsForDispatch: { reasoningEffort: "high" },
+    });
+    expect(
+      getComposerTraitSelection(
+        "antigravity",
+        "Gemini 3.5 Flash",
+        "",
+        { reasoningEffort: "high" },
+        ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
+      ).effortLevels.map((effort) => effort.value),
+    ).toEqual(["low", "medium", "high"]);
+    expect(
+      renderProviderTraitsPicker({
+        provider: "antigravity",
+        threadId: ThreadId.makeUnsafe("thread-antigravity-effort"),
+        model: "Gemini 3.5 Flash",
+        runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
+        modelOptions: { reasoningEffort: "high" },
+        prompt: "",
+        onPromptChange: vi.fn(),
+      }),
+    ).not.toBeNull();
+  });
+
+  it("hides Antigravity effort controls when the selected model has only one effort", () => {
+    const selection = getComposerTraitSelection(
+      "antigravity",
+      "Claude Sonnet 4.6",
+      "",
+      undefined,
+      ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
+    );
+
+    expect(selection.effortLevels).toEqual([]);
+    expect(
+      renderProviderTraitsPicker({
+        provider: "antigravity",
+        threadId: ThreadId.makeUnsafe("thread-antigravity-single-effort"),
+        model: "Claude Sonnet 4.6",
+        runtimeModel: ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
+        modelOptions: undefined,
+        prompt: "",
+        onPromptChange: vi.fn(),
+      }),
+    ).toBeNull();
+  });
+
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
       provider: "codex",
@@ -476,84 +565,6 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("derives Gemini effort selections from the active model family", () => {
-    const state = getComposerProviderState({
-      provider: "gemini",
-      model: "gemini-2.5-pro",
-      prompt: "",
-      modelOptions: {
-        gemini: {
-          thinkingBudget: 512,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "gemini",
-      promptEffort: "512",
-      modelOptionsForDispatch: {
-        thinkingBudget: 512,
-      },
-    });
-  });
-
-  it("drops unsupported Gemini off overrides for auto 2.5 routing", () => {
-    const state = getComposerProviderState({
-      provider: "gemini",
-      model: "auto-gemini-2.5",
-      prompt: "",
-      modelOptions: {
-        gemini: {
-          thinkingBudget: 0,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "gemini",
-      promptEffort: "-1",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
-  it("drops unsupported Gemini off overrides for 2.5 Flash", () => {
-    const state = getComposerProviderState({
-      provider: "gemini",
-      model: "gemini-2.5-flash",
-      prompt: "",
-      modelOptions: {
-        gemini: {
-          thinkingBudget: 0,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "gemini",
-      promptEffort: "-1",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
-  it("drops explicit Gemini default thinking overrides from dispatch", () => {
-    const state = getComposerProviderState({
-      provider: "gemini",
-      model: "gemini-3.1-pro-preview",
-      prompt: "",
-      modelOptions: {
-        gemini: {
-          thinkingLevel: "HIGH",
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "gemini",
-      promptEffort: "HIGH",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
   it("normalizes Grok reasoning effort options for dispatch", () => {
     const state = getComposerProviderState({
       provider: "grok",
@@ -592,6 +603,50 @@ describe("getComposerProviderState", () => {
       promptEffort: "low",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("exposes and dispatches efforts for dynamically discovered Grok models", () => {
+    const selection = getComposerTraitSelection(
+      "grok",
+      "grok-4.5",
+      "",
+      { reasoningEffort: "high" },
+      GROK_RUNTIME_4_5_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-4.5",
+      runtimeModel: GROK_RUNTIME_4_5_WITH_REASONING,
+      prompt: "",
+      modelOptions: { grok: { reasoningEffort: "high" } },
+    });
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("high");
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "high",
+      modelOptionsForDispatch: { reasoningEffort: "high" },
+    });
+  });
+
+  it("exposes Grok efforts before runtime model discovery resolves", () => {
+    const selection = getComposerTraitSelection("grok", "grok-4.5", "", undefined);
+
+    expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("low");
   });
 
   it("exposes and dispatches runtime-discovered Droid efforts for GPT-5.6", () => {

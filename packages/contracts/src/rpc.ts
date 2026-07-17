@@ -62,6 +62,21 @@ import {
   GitUnstageFilesInput,
   GitUnstageFilesResult,
 } from "./git";
+import {
+  PullRequestActionInput,
+  PullRequestCommentInput,
+  PullRequestActionResult,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
+  PullRequestsListInput,
+  PullRequestsListResult,
+  PullRequestsUnavailableError,
+} from "./pullRequests";
 import { KeybindingRule } from "./keybindings";
 import {
   ClientOrchestrationCommand,
@@ -161,11 +176,26 @@ import {
   StatsGetProfileTokenStatsResult,
 } from "./stats";
 import { WS_METHODS } from "./ws";
+import {
+  WS_BOOTSTRAP_METHOD,
+  WsBootstrapNegotiateInput,
+  WsBootstrapNegotiateResult,
+  WsCompatibilityError,
+} from "./wsCompatibility";
 
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
+  code: Schema.optional(Schema.String),
+  retryable: Schema.optional(Schema.Boolean),
+  retryAfterMs: Schema.optional(Schema.Number),
 }) {}
+
+export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {
+  payload: WsBootstrapNegotiateInput,
+  success: WsBootstrapNegotiateResult,
+  error: WsCompatibilityError,
+});
 
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -223,6 +253,24 @@ export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   success: OrchestrationRpcSchemas.replayEvents.output,
   error: WsRpcError,
 });
+
+export const WsOrchestrationListProviderDeliveryBlockersRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
+  {
+    payload: OrchestrationRpcSchemas.listProviderDeliveryBlockers.input,
+    success: OrchestrationRpcSchemas.listProviderDeliveryBlockers.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationReconcileProviderDeliveryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
+  {
+    payload: OrchestrationRpcSchemas.reconcileProviderDelivery.input,
+    success: OrchestrationRpcSchemas.reconcileProviderDelivery.output,
+    error: WsRpcError,
+  },
+);
 
 export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
@@ -412,6 +460,55 @@ export const WsGitPullRequestSnapshotRpc = Rpc.make(WS_METHODS.gitPullRequestSna
 export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullRequestThread, {
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
+  error: WsRpcError,
+});
+
+const PullRequestsRpcError = Schema.Union([PullRequestsUnavailableError, WsRpcError]);
+
+export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
+  payload: PullRequestsListInput,
+  success: PullRequestsListResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsReviewRequestCountRpc = Rpc.make(
+  WS_METHODS.pullRequestsReviewRequestCount,
+  {
+    payload: PullRequestReviewRequestCountInput,
+    success: PullRequestReviewRequestCountResult,
+    error: PullRequestsRpcError,
+  },
+);
+
+export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDetail,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDiffResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsActionRpc = Rpc.make(WS_METHODS.pullRequestsAction, {
+  payload: PullRequestActionInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+// Comments reuse the action acknowledgment shape: the mutation is confirmed independently of
+// the follow-up detail refetch that surfaces the new comment.
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPinned, {
+  payload: PullRequestSetPinnedInput,
+  success: PullRequestSetPinnedResult,
   error: WsRpcError,
 });
 
@@ -805,7 +902,9 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
-export const WsRpcGroup = RpcGroup.make(
+export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
+
+export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
@@ -814,6 +913,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsOrchestrationListProviderDeliveryBlockersRpc,
+  WsOrchestrationReconcileProviderDeliveryRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
@@ -842,6 +943,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPullRequestSnapshotRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsPullRequestsListRpc,
+  WsPullRequestsReviewRequestCountRpc,
+  WsPullRequestsDetailRpc,
+  WsPullRequestsDiffRpc,
+  WsPullRequestsActionRpc,
+  WsPullRequestsCommentRpc,
+  WsPullRequestsSetPinnedRpc,
   WsGitListBranchesRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,
@@ -905,3 +1013,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsSubscribeAutomationEventsRpc,
 );
+
+/** @deprecated Use WsFeatureRpcGroup. Bootstrap is intentionally a separate endpoint/group. */
+export const WsRpcGroup = WsFeatureRpcGroup;

@@ -1,0 +1,117 @@
+import { EventId, ThreadId, TurnId, type ProviderRuntimeEvent } from "@synara/contracts";
+import { assert, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+
+import {
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
+  ProviderRuntimeEventRepository,
+} from "../Services/ProviderRuntimeEvents.ts";
+import { ProviderRuntimeEventRepositoryLive } from "./ProviderRuntimeEvents.ts";
+import { SqlitePersistenceMemory } from "./Sqlite.ts";
+
+const layer = it.layer(
+  ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+);
+
+const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => ({
+  type: "content.delta",
+  eventId: EventId.makeUnsafe(eventId),
+  provider: "codex",
+  createdAt: "2026-07-14T00:00:00.000Z",
+  threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+  turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+  payload: {
+    streamKind: "assistant_text",
+    delta,
+  },
+});
+
+layer("ProviderRuntimeEventRepository", (it) => {
+  it.effect("journals exact events and advances its consumer cursor contiguously", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const first = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
+      const duplicate = yield* repository.append(runtimeEvent("runtime-event-1", "hello"));
+      const second = yield* repository.append(runtimeEvent("runtime-event-2", " world"));
+
+      assert.strictEqual(duplicate.sequence, first.sequence);
+      assert.isAbove(second.sequence, first.sequence);
+      assert.strictEqual(yield* repository.getHighWaterSequence, second.sequence);
+
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: second.sequence,
+        limit: 10,
+      });
+      assert.deepStrictEqual(
+        rows.map((row) => [row.sequence, row.event.eventId]),
+        [
+          [first.sequence, "runtime-event-1"],
+          [second.sequence, "runtime-event-2"],
+        ],
+      );
+
+      const skipped = yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: second.sequence,
+        updatedAt: "2026-07-14T00:00:01.000Z",
+      });
+      assert.isFalse(skipped);
+      const advanced = yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: first.sequence,
+        updatedAt: "2026-07-14T00:00:01.000Z",
+      });
+      assert.isTrue(advanced);
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        first.sequence,
+      );
+      assert.deepStrictEqual(
+        (yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        })).map((row) => row.event.eventId),
+        ["runtime-event-1"],
+      );
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: second.sequence,
+          updatedAt: "2026-07-14T00:00:02.000Z",
+        }),
+      );
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("runtime-event-terminal"),
+        provider: "codex",
+        createdAt: "2026-07-14T00:00:03.000Z",
+        threadId: ThreadId.makeUnsafe("thread-runtime-journal"),
+        turnId: TurnId.makeUnsafe("turn-runtime-journal"),
+        payload: { state: "completed" },
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: terminal.sequence,
+          updatedAt: "2026-07-14T00:00:03.000Z",
+        }),
+      );
+      assert.lengthOf(
+        yield* repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10,
+        }),
+        0,
+      );
+
+      const conflict = yield* Effect.flip(
+        repository.append(runtimeEvent("runtime-event-1", "different")),
+      );
+      assert.strictEqual(conflict._tag, "PersistenceDecodeError");
+    }),
+  );
+});

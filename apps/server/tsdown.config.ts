@@ -9,7 +9,7 @@ const sourcemapEnv = process.env.SYNARA_SERVER_SOURCEMAP?.trim().toLowerCase();
 const buildSourcemap = sourcemapEnv === "1" || sourcemapEnv === "true";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/restoreMigrationBackup.ts"],
   format: ["esm", "cjs"],
   checks: {
     legacyCjs: false,

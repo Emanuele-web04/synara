@@ -15,7 +15,7 @@ import {
 } from "@synara/contracts";
 import { memo, useCallback, useState } from "react";
 
-import { ChevronDownIcon, FastModeIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderModelOption } from "../../providerModelOptions";
@@ -222,7 +222,14 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       ) : null}
       {triggerStatusLabel ? (
         props.hideStatusLabel ? (
-          <span className="sr-only">{triggerStatusLabel}</span>
+          <>
+            <SettingsIcon
+              aria-hidden="true"
+              data-slot="composer-traits-status-icon"
+              className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+            />
+            <span className="sr-only">{triggerStatusLabel}</span>
+          </>
         ) : (
           <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
             {triggerStatusLabel}

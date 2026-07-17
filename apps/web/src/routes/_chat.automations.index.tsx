@@ -26,6 +26,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { createAllThreadsSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationDialog,
@@ -54,6 +55,8 @@ import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
 });
+
+const selectAllThreads = createAllThreadsSelector();
 
 type LiveAutomationRun = AutomationRun & {
   readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
@@ -154,7 +157,7 @@ function AutomationsRouteView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
-  const threads = useStore((state) => state.threads);
+  const threads = useStore(selectAllThreads);
   const [editingDefinition, setEditingDefinition] = useState<AutomationDefinition | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogWarnings, setDialogWarnings] = useState<readonly AutomationDraftWarning[]>([]);

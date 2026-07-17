@@ -8,9 +8,28 @@ import {
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
+  stampAcpRuntimeEventLifecycleGeneration,
 } from "./AcpCoreRuntimeEvents.ts";
 
 describe("AcpCoreRuntimeEvents", () => {
+  it("stamps one captured lifecycle generation without mutating legacy events", () => {
+    const event = makeAcpContentDeltaEvent({
+      stamp: { eventId: "event-generation" as never, createdAt: "2026-07-14T00:00:00.000Z" },
+      provider: "cursor",
+      threadId: "thread-generation" as never,
+      turnId: TurnId.makeUnsafe("turn-generation"),
+      text: "hello",
+      rawPayload: { sessionId: "session-generation" },
+    });
+
+    expect(stampAcpRuntimeEventLifecycleGeneration(event, undefined)).toBe(event);
+    expect(stampAcpRuntimeEventLifecycleGeneration(event, "generation-7")).toEqual({
+      ...event,
+      lifecycleGeneration: "generation-7",
+    });
+    expect(event).not.toHaveProperty("lifecycleGeneration");
+  });
+
   it("maps ACP permission requests to canonical runtime events", () => {
     const stamp = { eventId: "event-1" as never, createdAt: "2026-03-27T00:00:00.000Z" };
     const turnId = TurnId.makeUnsafe("turn-1");

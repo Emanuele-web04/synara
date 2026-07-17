@@ -5,11 +5,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createComposerMentionTokenRegex,
+  extractComposerMentionPath,
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
   formatComposerMentionToken,
   resolveMentionChipKind,
 } from "./composerMentions";
+
+function parseMentionToken(token: string): string {
+  const match = createComposerMentionTokenRegex({
+    includeTrailingTokenAtEnd: true,
+    global: false,
+  }).exec(token);
+  if (!match) {
+    throw new Error(`Expected a valid composer mention token: ${token}`);
+  }
+  return extractComposerMentionPath(match);
+}
 
 describe("composer mention reference filtering", () => {
   it("does not invent plugin references for plain file or folder mentions", () => {
@@ -82,5 +95,45 @@ describe("composer mention reference filtering", () => {
 describe("formatComposerMentionToken", () => {
   it("quotes mention tokens with whitespace", () => {
     expect(formatComposerMentionToken("Google Drive")).toBe('@"Google Drive"');
+  });
+
+  it("quotes paths with parentheses so they stay one mention token (#351)", () => {
+    expect(formatComposerMentionToken("/Users/me/Mac (2)/Projects")).toBe(
+      '@"/Users/me/Mac (2)/Projects"',
+    );
+    expect(formatComposerMentionToken("/Users/me/Happy Dropbox/Mac (2)/app")).toBe(
+      '@"/Users/me/Happy Dropbox/Mac (2)/app"',
+    );
+  });
+
+  it("leaves simple paths unquoted", () => {
+    expect(formatComposerMentionToken("/Users/me/projects/app")).toBe("@/Users/me/projects/app");
+  });
+
+  it.each([
+    "/Users/me/Happy Dropbox/Mac (2)/app",
+    String.raw`C:\Users\me\Project (2)`,
+    '/tmp/A "B"/repo',
+    "/Users/me/@scope/package",
+    " /tmp/path with edge whitespace ",
+  ])("round-trips quoted path bytes for %s", (path) => {
+    expect(parseMentionToken(formatComposerMentionToken(path))).toBe(path);
+  });
+
+  it("escapes embedded quotes and backslashes in quoted tokens", () => {
+    expect(formatComposerMentionToken(String.raw`C:\A "B"`)).toBe(String.raw`@"C:\\A \"B\""`);
+  });
+
+  it("parses an unclosed quote followed by a backslash run in linear time (no ReDoS)", () => {
+    // Regression guard: with an ambiguous escape alternation this backtracks
+    // exponentially and the test times out instead of finishing instantly.
+    const attack = `@"${"\\".repeat(512)}x no closing quote`;
+    const matches = [
+      ...attack.matchAll(createComposerMentionTokenRegex({ includeTrailingTokenAtEnd: true })),
+    ];
+    // Without a closing quote only the unquoted fallback token matches.
+    expect(matches.map((match) => extractComposerMentionPath(match))).toEqual([
+      `"${"\\".repeat(512)}x`,
+    ]);
   });
 });

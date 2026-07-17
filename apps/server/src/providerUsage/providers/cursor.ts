@@ -151,7 +151,9 @@ export const cursorUsageFetcher: ProviderUsageFetcher = {
 
     try {
       const usageResult = await fetchJson({
+        service: "provider-usage-cursor",
         url: USAGE_URL,
+        allowedOrigins: [new URL(USAGE_URL).origin],
         method: "POST",
         headers: cursorHeaders(auth.accessToken),
         body: {},
@@ -172,7 +174,9 @@ export const cursorUsageFetcher: ProviderUsageFetcher = {
       let creditsJson: unknown;
       try {
         const creditsResult = await fetchJson({
+          service: "provider-usage-cursor",
           url: CREDITS_URL,
+          allowedOrigins: [new URL(CREDITS_URL).origin],
           method: "POST",
           headers: cursorHeaders(auth.accessToken),
           body: {},

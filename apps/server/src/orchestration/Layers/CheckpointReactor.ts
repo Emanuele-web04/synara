@@ -12,7 +12,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
-import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
+import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
@@ -47,6 +47,8 @@ type ReactorInput =
       readonly source: "domain";
       readonly event: OrchestrationEvent;
     };
+
+const CHECKPOINT_REACTOR_CAPACITY = 256;
 
 function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
@@ -492,15 +494,29 @@ const make = Effect.gen(function* () {
 
     const thread = yield* getThreadDetail(event.threadId);
     if (!thread) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: thread not found", {
+        threadId: event.threadId,
+        turnId,
+      });
       return;
     }
     const project = yield* getProjectShell(thread.projectId);
     if (!project) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: project not found", {
+        threadId: thread.id,
+        turnId,
+        projectId: thread.projectId,
+      });
       return;
     }
 
     // When a primary turn is active, only that turn may produce completion checkpoints.
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
+      yield* Effect.logDebug("turn-completion checkpoint skipped: turn is not the active turn", {
+        threadId: thread.id,
+        turnId,
+        activeTurnId: thread.session.activeTurnId,
+      });
       return;
     }
 
@@ -522,6 +538,14 @@ const make = Effect.gen(function* () {
       preferSessionRuntime: true,
     });
     if (!checkpointCwd) {
+      yield* Effect.logDebug(
+        "turn-completion checkpoint skipped: no git workspace to capture from",
+        {
+          threadId: thread.id,
+          turnId,
+          projectId: thread.projectId,
+        },
+      );
       return;
     }
 
@@ -1075,7 +1099,6 @@ const make = Effect.gen(function* () {
     const restored = yield* checkpointStore.restoreCheckpoint({
       cwd: sessionRuntime.value.cwd,
       checkpointRef: targetCheckpointRef,
-      fallbackToHead: event.payload.turnCount === 0,
     });
     if (!restored) {
       yield* appendRevertFailureActivity({
@@ -1151,11 +1174,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // When ProviderRuntimeIngestion creates a placeholder checkpoint (status "missing")
-    // from a turn.diff.updated runtime event, capture the real git checkpoint to
-    // replace it. The providerService.streamEvents PubSub does not reliably deliver
-    // turn.completed runtime events to this reactor (shared subscription), so
-    // reacting to the domain event is the reliable path.
+    // Placeholder checkpoints (status "missing") from turn.diff.updated stay
+    // unresolved until the terminal turn.completed runtime event captures the real
+    // git checkpoint; this hook only logs them. Turn settlement itself does not
+    // depend on this reactor — the projector settles latestTurn from the session
+    // status transition.
     if (event.type === "thread.turn-diff-completed") {
       yield* captureCheckpointFromPlaceholder(event);
     }
@@ -1210,46 +1233,51 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
-
-  const start: CheckpointReactorShape["start"] = Effect.gen(function* () {
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (
-          event.type !== "thread.turn-start-requested" &&
-          event.type !== "thread.message-sent" &&
-          event.type !== "thread.checkpoint-revert-requested" &&
-          event.type !== "thread.turn-diff-completed"
-        ) {
-          return Effect.void;
-        }
-        return worker.enqueue({ source: "domain", event });
-      }),
-    );
-
-    yield* Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) => {
-        if (event.type === "turn.started" || event.type === "turn.completed") {
-          return worker.enqueue({ source: "runtime", event });
-        }
-        if (event.type === "item.completed" && event.payload.itemType === "file_change") {
-          return Effect.gen(function* () {
-            // Coalesce first (cheap) so bursts of edits collapse to one recompute.
-            if (liveDiffScheduledThreads.has(event.threadId)) {
-              return;
-            }
-            // Skip providers that stream their own live diff (handled elsewhere).
-            if (yield* supportsLiveTurnDiffPatch(event.provider)) {
-              return;
-            }
-            liveDiffScheduledThreads.add(event.threadId);
-            yield* worker.enqueue({ source: "runtime", event });
-          });
-        }
-        return Effect.void;
-      }),
-    );
+  const worker = yield* makeDrainableWorker(processInputSafely, {
+    capacity: CHECKPOINT_REACTOR_CAPACITY,
   });
+
+  const start: CheckpointReactorShape["start"] = startDrainableWorkerProducers(
+    worker,
+    Effect.gen(function* () {
+      yield* Effect.forkScoped(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (
+            event.type !== "thread.turn-start-requested" &&
+            event.type !== "thread.message-sent" &&
+            event.type !== "thread.checkpoint-revert-requested" &&
+            event.type !== "thread.turn-diff-completed"
+          ) {
+            return Effect.void;
+          }
+          return worker.enqueue({ source: "domain", event });
+        }),
+      );
+
+      yield* Effect.forkScoped(
+        Stream.runForEach(providerService.streamEvents, (event) => {
+          if (event.type === "turn.started" || event.type === "turn.completed") {
+            return worker.enqueue({ source: "runtime", event });
+          }
+          if (event.type === "item.completed" && event.payload.itemType === "file_change") {
+            return Effect.gen(function* () {
+              // Coalesce first (cheap) so bursts of edits collapse to one recompute.
+              if (liveDiffScheduledThreads.has(event.threadId)) {
+                return;
+              }
+              // Skip providers that stream their own live diff (handled elsewhere).
+              if (yield* supportsLiveTurnDiffPatch(event.provider)) {
+                return;
+              }
+              liveDiffScheduledThreads.add(event.threadId);
+              yield* worker.enqueue({ source: "runtime", event });
+            });
+          }
+          return Effect.void;
+        }),
+      );
+    }),
+  );
 
   return {
     start,

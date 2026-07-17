@@ -9,6 +9,7 @@ import {
   type AuthBootstrapResult,
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
+  type AuthLogoutResult,
   type AuthPairingCredentialResult,
   type AuthPairingLink,
   type AuthRevokeClientSessionInput,
@@ -25,6 +26,7 @@ import {
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
+  type ServerVoiceTranscriptionResult,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -36,21 +38,65 @@ import {
   type WsWelcomePayload,
   type AutomationStreamEvent,
 } from "@synara/contracts";
+import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
+import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { WsTransport } from "./wsTransport";
-import { emitWsTransportState } from "./wsTransportEvents";
+import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
+import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
-const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
-const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
-const serverProviderStatusesUpdatedListeners = new Set<
-  (payload: ServerProviderStatusesUpdatedPayload) => void
->();
-const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
-const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
-const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+
+function createListenerRegistry<T>() {
+  const listeners = new Set<(payload: T) => void>();
+  return {
+    get size() {
+      return listeners.size;
+    },
+    subscribe(listener: (payload: T) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    emit(payload: T) {
+      for (const listener of listeners) {
+        try {
+          listener(payload);
+        } catch {
+          // A listener must not prevent delivery to the remaining subscribers.
+        }
+      }
+    },
+    clear() {
+      listeners.clear();
+    },
+  };
+}
+
+function subscribeWithReplay<T>(input: {
+  readonly registry: { subscribe: (listener: (payload: T) => void) => () => unknown };
+  readonly listener: (payload: T) => void;
+  readonly latest: T | null;
+}): () => void {
+  const unsubscribe = input.registry.subscribe(input.listener);
+  if (input.latest) {
+    try {
+      input.listener(input.latest);
+    } catch {
+      // Replay follows the same listener isolation as live delivery.
+    }
+  }
+  return () => void unsubscribe();
+}
+
+const welcomeListeners = createListenerRegistry<WsWelcomePayload>();
+const serverConfigUpdatedListeners = createListenerRegistry<ServerConfigUpdatedPayload>();
+const serverProviderStatusesUpdatedListeners =
+  createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
+const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
+const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 
 function omitNullUserInputAnswers(
   command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
@@ -68,16 +114,30 @@ function omitNullUserInputAnswers(
     ),
   };
 }
-const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
-const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
-const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
-const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
-const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
-const orchestrationThreadEventListeners = new Set<
-  (payload: OrchestrationThreadStreamItem) => void
->();
-const fallbackBrowserStateListeners = new Set<(state: ThreadBrowserState) => void>();
+const terminalEventListeners = createListenerRegistry<TerminalEvent>();
+const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
+const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
+const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
+const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
+
+function clearWsNativeApiListeners(): void {
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  projectDevServerEventListeners.clear();
+  automationEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+}
 
 function defaultBrowserState(threadId: ThreadId): ThreadBrowserState {
   return {
@@ -133,6 +193,40 @@ async function requestAuthJson<T>(
   return payload as T;
 }
 
+async function requestVoiceTranscriptionUpload(
+  input: Parameters<NativeApi["server"]["transcribeVoice"]>[0],
+) {
+  const params = new URLSearchParams({
+    provider: input.provider,
+    cwd: input.cwd,
+    mimeType: input.mimeType,
+    sampleRateHz: String(input.sampleRateHz),
+    durationMs: String(input.durationMs),
+    ...(input.threadId ? { threadId: input.threadId } : {}),
+  });
+  const decoded = atob(input.audioBase64);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  const response = await fetch(
+    resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
+    { method: "POST", credentials: "include", body: bytes },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | ServerVoiceTranscriptionResult
+    | { readonly error?: unknown }
+    | null;
+  if (!response.ok || !payload || !("text" in payload)) {
+    const message =
+      payload && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Voice transcription failed with status ${response.status}.`;
+    throw new Error(message);
+  }
+  return payload;
+}
+
 function createFallbackTab(url = "about:blank") {
   return {
     id: crypto.randomUUID(),
@@ -167,9 +261,7 @@ function getFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
 
 function emitFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
   const state = cloneBrowserState(getFallbackBrowserState(threadId));
-  for (const listener of fallbackBrowserStateListeners) {
-    listener(state);
-  }
+  fallbackBrowserStateListeners.emit(state);
   return state;
 }
 
@@ -209,20 +301,8 @@ function resolveFallbackBrowserTab(state: ThreadBrowserState, tabId?: string) {
  * This avoids the race between WebSocket connect and React effect registration.
  */
 export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): () => void {
-  welcomeListeners.add(listener);
-
   const latestWelcome = instance?.transport.getLatestPush(WS_CHANNELS.serverWelcome)?.data ?? null;
-  if (latestWelcome) {
-    try {
-      listener(latestWelcome);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    welcomeListeners.delete(listener);
-  };
+  return subscribeWithReplay({ registry: welcomeListeners, listener, latest: latestWelcome });
 }
 
 /**
@@ -232,21 +312,13 @@ export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): 
 export function onServerConfigUpdated(
   listener: (payload: ServerConfigUpdatedPayload) => void,
 ): () => void {
-  serverConfigUpdatedListeners.add(listener);
-
   const latestConfig =
     instance?.transport.getLatestPush(WS_CHANNELS.serverConfigUpdated)?.data ?? null;
-  if (latestConfig) {
-    try {
-      listener(latestConfig);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverConfigUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverConfigUpdatedListeners,
+    listener,
+    latest: latestConfig,
+  });
 }
 
 /**
@@ -255,61 +327,37 @@ export function onServerConfigUpdated(
 export function onServerProviderStatusesUpdated(
   listener: (payload: ServerProviderStatusesUpdatedPayload) => void,
 ): () => void {
-  serverProviderStatusesUpdatedListeners.add(listener);
-
   const latestProviderStatuses =
     instance?.transport.getLatestPush(WS_CHANNELS.serverProviderStatusesUpdated)?.data ?? null;
-  if (latestProviderStatuses) {
-    try {
-      listener(latestProviderStatuses);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverProviderStatusesUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverProviderStatusesUpdatedListeners,
+    listener,
+    latest: latestProviderStatuses,
+  });
 }
 
 export function onServerMaintenanceUpdated(
   listener: (payload: ServerLifecycleStreamEvent) => void,
 ): () => void {
-  serverMaintenanceUpdatedListeners.add(listener);
-
   const latestMaintenance =
     instance?.transport.getLatestPush(WS_CHANNELS.serverMaintenanceUpdated)?.data ?? null;
-  if (latestMaintenance) {
-    try {
-      listener(latestMaintenance);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverMaintenanceUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverMaintenanceUpdatedListeners,
+    listener,
+    latest: latestMaintenance,
+  });
 }
 
 export function onServerSettingsUpdated(
   listener: (payload: ServerSettingsUpdatedPayload) => void,
 ): () => void {
-  serverSettingsUpdatedListeners.add(listener);
-
   const latestSettings =
     instance?.transport.getLatestPush(WS_CHANNELS.serverSettingsUpdated)?.data ?? null;
-  if (latestSettings) {
-    try {
-      listener(latestSettings);
-    } catch {
-      // Swallow listener errors
-    }
-  }
-
-  return () => {
-    serverSettingsUpdatedListeners.delete(listener);
-  };
+  return subscribeWithReplay({
+    registry: serverSettingsUpdatedListeners,
+    listener,
+    latest: latestSettings,
+  });
 }
 
 export function createWsNativeApi(): NativeApi {
@@ -321,127 +369,44 @@ export function createWsNativeApi(): NativeApi {
   }
 
   const transport = new WsTransport();
+  let unsubscribeDomainEventTransport: (() => void) | null = null;
   transport.onStateChange((state) => emitWsTransportState(state));
+  transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
+    replayCurrent: true,
+  });
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
-    const payload = message.data;
-    for (const listener of welcomeListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    welcomeListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverConfigUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverConfigUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverProviderStatusesUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverProviderStatusesUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverMaintenanceUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverMaintenanceUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverMaintenanceUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
-    const payload = message.data;
-    for (const listener of serverSettingsUpdatedListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    serverSettingsUpdatedListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
-    const payload = message.data;
-    for (const listener of gitActionProgressListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    gitActionProgressListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.terminalEvent, (message) => {
-    const payload = message.data;
-    for (const listener of terminalEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    terminalEventListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
-    const payload = message.data;
-    for (const listener of projectDevServerEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    projectDevServerEventListeners.emit(message.data);
   });
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
-    const payload = message.data;
-    for (const listener of automationEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
-  });
-  transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationDomainEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    automationEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationShellEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    orchestrationShellEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationThreadEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
-    }
+    orchestrationThreadEventListeners.emit(message.data);
   });
   const api: NativeApi = {
     dialogs: {
@@ -477,12 +442,7 @@ export function createWsNativeApi(): NativeApi {
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),
       close: (input) => transport.request(WS_METHODS.terminalClose, input),
-      onEvent: (callback) => {
-        terminalEventListeners.add(callback);
-        return () => {
-          terminalEventListeners.delete(callback);
-        };
-      },
+      onEvent: terminalEventListeners.subscribe,
     },
     projects: {
       discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
@@ -497,12 +457,7 @@ export function createWsNativeApi(): NativeApi {
       runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
       listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
-      onDevServerEvent: (callback) => {
-        projectDevServerEventListeners.add(callback);
-        return () => {
-          projectDevServerEventListeners.delete(callback);
-        };
-      },
+      onDevServerEvent: projectDevServerEventListeners.subscribe,
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -514,8 +469,9 @@ export function createWsNativeApi(): NativeApi {
       openInEditor: (cwd, editor) =>
         transport.request(WS_METHODS.shellOpenInEditor, { cwd, editor }),
       openExternal: async (url) => {
+        const externalUrl = requireHttpExternalUrl(url);
         if (window.desktopBridge) {
-          const opened = await window.desktopBridge.openExternal(url);
+          const opened = await window.desktopBridge.openExternal(externalUrl);
           if (!opened) {
             throw new Error("Unable to open link.");
           }
@@ -524,7 +480,7 @@ export function createWsNativeApi(): NativeApi {
 
         // Some mobile browsers can return null here even when the tab opens.
         // Avoid false negatives and let the browser handle popup policy.
-        window.open(url, "_blank", "noopener,noreferrer");
+        window.open(externalUrl, "_blank", "noopener,noreferrer");
       },
       showInFolder: async (path) => {
         if (window.desktopBridge) {
@@ -565,12 +521,18 @@ export function createWsNativeApi(): NativeApi {
       pullRequestSnapshot: (input) => transport.request(WS_METHODS.gitPullRequestSnapshot, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
-      onActionProgress: (callback) => {
-        gitActionProgressListeners.add(callback);
-        return () => {
-          gitActionProgressListeners.delete(callback);
-        };
-      },
+      onActionProgress: gitActionProgressListeners.subscribe,
+    },
+    pullRequests: {
+      list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
+      reviewRequestCount: (input) =>
+        transport.request(WS_METHODS.pullRequestsReviewRequestCount, input),
+      detail: (input) => transport.request(WS_METHODS.pullRequestsDetail, input),
+      diff: (input) => transport.request(WS_METHODS.pullRequestsDiff, input),
+      action: (input) =>
+        transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
+      comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
+      setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
     },
     contextMenu: {
       show: async <T extends string>(
@@ -623,8 +585,18 @@ export function createWsNativeApi(): NativeApi {
         requestAuthJson<{ revokedCount: number }>("/api/auth/clients/revoke-others", {
           method: "POST",
         }),
+      logoutAuthSession: async () => {
+        const result = await requestAuthJson<AuthLogoutResult>("/api/auth/logout", {
+          method: "POST",
+        });
+        await transport.dispose();
+        return result;
+      },
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
-      updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
+      // Provider updates run up to 2 minutes server-side; callers wrap this in
+      // withProviderUpdateTimeout, which owns the client-side watchdog.
+      updateProvider: (input) =>
+        transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
       stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
@@ -644,7 +616,7 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
         }
-        return transport.request(WS_METHODS.serverTranscribeVoice, input);
+        return requestVoiceTranscriptionUpload(input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
@@ -656,7 +628,10 @@ export function createWsNativeApi(): NativeApi {
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
-      compactThread: (input) => transport.request(WS_METHODS.providerCompactThread, input),
+      // Compaction is capped server-side per provider (ACP providers allow up
+      // to the 10-minute turn-idle ceiling), so the server owns this bound.
+      compactThread: (input) =>
+        transport.request(WS_METHODS.providerCompactThread, input, { timeoutMs: null }),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
       listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),
@@ -682,6 +657,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
           fromSequenceExclusive,
         }),
+      listProviderDeliveryBlockers: (input = {}) =>
+        transport.request(ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers, input),
+      reconcileProviderDelivery: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery, input),
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
@@ -690,23 +669,24 @@ export function createWsNativeApi(): NativeApi {
       unsubscribeThread: (input) =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeThread, input),
       onDomainEvent: (callback) => {
-        orchestrationDomainEventListeners.add(callback);
+        const shouldStartTransport = orchestrationDomainEventListeners.size === 0;
+        const unsubscribe = orchestrationDomainEventListeners.subscribe(callback);
+        if (shouldStartTransport) {
+          unsubscribeDomainEventTransport = transport.subscribe(
+            ORCHESTRATION_WS_CHANNELS.domainEvent,
+            (message) => orchestrationDomainEventListeners.emit(message.data),
+          );
+        }
         return () => {
-          orchestrationDomainEventListeners.delete(callback);
+          unsubscribe();
+          if (orchestrationDomainEventListeners.size === 0) {
+            unsubscribeDomainEventTransport?.();
+            unsubscribeDomainEventTransport = null;
+          }
         };
       },
-      onShellEvent: (callback) => {
-        orchestrationShellEventListeners.add(callback);
-        return () => {
-          orchestrationShellEventListeners.delete(callback);
-        };
-      },
-      onThreadEvent: (callback) => {
-        orchestrationThreadEventListeners.add(callback);
-        return () => {
-          orchestrationThreadEventListeners.delete(callback);
-        };
-      },
+      onShellEvent: orchestrationShellEventListeners.subscribe,
+      onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
@@ -717,12 +697,7 @@ export function createWsNativeApi(): NativeApi {
       cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
       markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
-      onEvent: (callback) => {
-        automationEventListeners.add(callback);
-        return () => {
-          automationEventListeners.delete(callback);
-        };
-      },
+      onEvent: automationEventListeners.subscribe,
     },
     browser: {
       open: async (input) => {
@@ -891,10 +866,7 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.onState(callback);
         }
-        fallbackBrowserStateListeners.add(callback);
-        return () => {
-          fallbackBrowserStateListeners.delete(callback);
-        };
+        return fallbackBrowserStateListeners.subscribe(callback);
       },
       onCopyLink: (callback) => {
         if (window.desktopBridge) {
@@ -911,39 +883,18 @@ export function createWsNativeApi(): NativeApi {
 
 // Browser-mode tests mount full app roots repeatedly in one page; reset the
 // singleton so each test gets a fresh WebSocket stream and cached push state.
-export function resetWsNativeApiForTest(): void {
-  instance?.transport.dispose();
+export async function resetWsNativeApiForTest(): Promise<void> {
+  const transport = instance?.transport;
   instance = null;
-  welcomeListeners.clear();
-  serverConfigUpdatedListeners.clear();
-  serverProviderStatusesUpdatedListeners.clear();
-  serverMaintenanceUpdatedListeners.clear();
-  serverSettingsUpdatedListeners.clear();
-  gitActionProgressListeners.clear();
-  terminalEventListeners.clear();
-  projectDevServerEventListeners.clear();
-  automationEventListeners.clear();
-  orchestrationDomainEventListeners.clear();
-  orchestrationShellEventListeners.clear();
-  orchestrationThreadEventListeners.clear();
-  fallbackBrowserStateListeners.clear();
+  clearWsNativeApiListeners();
   fallbackBrowserStates.clear();
+  await transport?.dispose();
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    instance?.transport.dispose();
+    void instance?.transport.dispose();
     instance = null;
-    welcomeListeners.clear();
-    serverConfigUpdatedListeners.clear();
-    serverProviderStatusesUpdatedListeners.clear();
-    serverSettingsUpdatedListeners.clear();
-    gitActionProgressListeners.clear();
-    terminalEventListeners.clear();
-    projectDevServerEventListeners.clear();
-    orchestrationDomainEventListeners.clear();
-    orchestrationShellEventListeners.clear();
-    orchestrationThreadEventListeners.clear();
-    fallbackBrowserStateListeners.clear();
+    clearWsNativeApiListeners();
   });
 }

@@ -22,6 +22,144 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.5",
+    date: "Jul 17",
+    features: [
+      {
+        id: "antigravity-provider",
+        title: "Antigravity joins Synara",
+        description:
+          "Connect the Antigravity CLI as a first-class coding agent, with discovered models, reasoning controls, streaming activity, approvals, and resumable conversations.",
+        details:
+          "The new provider adapter covers installation and authentication guidance, model and effort discovery, session creation and resume, tool and plan events, permission requests, usage reporting, cancellation, and restart recovery. Synara also includes dedicated Antigravity branding throughout provider setup and selection.",
+      },
+      {
+        id: "steadier-live-turns",
+        title: "Live turns settle cleanly",
+        description:
+          "Working indicators and streamed turn chrome no longer linger after the underlying provider session has already finished.",
+        details:
+          "Turn settlement now follows the owning session lifecycle, while WebSocket RPC requests resolve or reject across close, timeout, send failure, and reconnect paths. This keeps pending UI state from becoming stuck during partial streams or interrupted connections.",
+      },
+      {
+        id: "faster-chat-updates",
+        title: "Active chats stay lighter",
+        description:
+          "Conversation updates do less repeated reconciliation work, keeping busy transcripts and sidebar-driven changes more responsive.",
+        details:
+          "Chat state now avoids redundant scans and projections during live updates, bundled theme seeds reset consistently, and common transcript behavior remains on the simpler rendering path without introducing new measurement loops.",
+      },
+      {
+        id: "reliable-path-drops",
+        title: "Dropped paths become reliable mentions",
+        description:
+          "Drop files and folders whose names contain spaces or parentheses into the composer without losing or mangling the path.",
+        details:
+          "Desktop path payloads are parsed and normalized through shared composer logic, then preserved as mentions across chat and Kanban task creation. Focused coverage includes encoded paths, multiple drops, punctuation, send normalization, and unsupported payloads.",
+      },
+      {
+        id: "resilient-model-pickers",
+        title: "Provider failures stay contained",
+        description:
+          "A failed Cursor model refresh no longer takes down the model picker or discards usable choices from other discovery sources.",
+        details:
+          "Model-catalog queries retain successful and cached data when one Cursor discovery path fails, while pull-request data is coalesced through shared list logic and picker popups use a unified interaction model. Diff headers now use Synara's own visual chrome for a more consistent workspace.",
+      },
+    ],
+  },
+  {
+    version: "0.5.4",
+    date: "Jul 15",
+    features: [
+      {
+        id: "pull-request-workspace",
+        title: "Review pull requests without leaving Synara",
+        description:
+          "Browse, search, and filter pull requests across your projects, then open a complete review workspace beside the conversation.",
+        details:
+          "The new GitHub CLI-backed Pull Requests view groups work by involvement and state, supports project-scoped discovery, and opens summary, code, and timeline views with checks, reviewers, commits, file changes, and discussion context.",
+      },
+      {
+        id: "pull-request-actions",
+        title: "Take action from the review workspace",
+        description:
+          "Comment, merge, close, reopen, and pin pull requests while keeping the latest repository state close at hand.",
+        details:
+          "Mutations use shared cache coordination, single-flight refreshes, guarded optimistic state, and recovery paths so overlapping actions and refreshes remain predictable. Pinned pull requests stay easy to return to from the project workspace.",
+      },
+      {
+        id: "resilient-pr-discovery",
+        title: "Repository failures stay contained",
+        description:
+          "One unavailable repository no longer prevents useful pull-request results from the rest of your workspace.",
+        details:
+          "GitHub CLI availability, authentication, repository discovery, partial-result errors, stale cached data, and retry recovery now have explicit states. Per-repository failures remain visible without discarding successful results.",
+      },
+      {
+        id: "global-feedback",
+        title: "Send feedback from anywhere",
+        description:
+          "Open the new feedback dialog from the command menu or with /feedback whenever an idea or problem comes up.",
+        details:
+          "Feedback is now a global workflow rather than a settings-only destination, with consistent command routing and a focused dialog that keeps the current task in place.",
+      },
+      {
+        id: "desktop-window-restore",
+        title: "Desktop windows reopen where you left them",
+        description:
+          "Synara restores the previous desktop window size, position, and maximized state while keeping reopened windows on a visible display.",
+        details:
+          "Window state is persisted across launches and validated against the current monitor layout, avoiding off-screen restoration when displays have changed.",
+      },
+      {
+        id: "steadier-model-sessions",
+        title: "Model and session behavior is more predictable",
+        description:
+          "Agent sessions, transcript rendering, model discovery, and reasoning controls now stay aligned across more providers.",
+        details:
+          "Session orchestration and transcript rendering share a cleaner lifecycle, Pi custom-provider authentication follows auth.json semantics, Cursor transport-only variants stay out of the picker, and Grok reasoning-effort options match provider capabilities. The interface also adopts the system UI font more consistently.",
+      },
+    ],
+  },
+  {
+    version: "0.5.3",
+    date: "Jul 14",
+    features: [
+      {
+        id: "appsnap-capture",
+        title: "Capture any Mac app straight into your task",
+        description:
+          "Press both Option keys to capture the window you are using and attach it to the current Synara task.",
+        details:
+          "AppSnap is an opt-in macOS workflow with a dedicated setup panel, permission guidance, capture feedback, app icons, and a first-run introduction. Captures stay tied to the active task without stealing focus, and the desktop helper is included in packaged Mac builds.",
+      },
+      {
+        id: "durable-appsnap-drafts",
+        title: "AppSnaps wait safely until you send",
+        description:
+          "Captured windows remain available through navigation, restarts, retries, and manual attachment flows.",
+        details:
+          "Pending image blobs are persisted outside the lightweight draft record, restored into the composer on startup, counted against attachment limits, deduplicated across retry paths, and hydrated immediately before send. Failed or overlapping captures recover without duplicating attachments or replaying feedback sounds.",
+      },
+      {
+        id: "clearer-long-messages",
+        title: "Long messages are easier to scan",
+        description:
+          "Large user messages collapse into a focused preview while rich markdown and attachment chips remain readable.",
+        details:
+          "Transcript measurement, overflow detection, markdown chip rendering, and the simple non-virtualized timeline path now work together more predictably, reducing layout churn without losing the full message on demand.",
+      },
+      {
+        id: "steadier-agent-sessions",
+        title: "Agent sessions fail more clearly",
+        description:
+          "ACP errors preserve more useful detail, and session and transcript state stay steadier during active work.",
+        details:
+          "ACP request failures now retain structured provider context, while session orchestration and transcript handling avoid redundant state transitions and keep live output presentation predictable.",
+      },
+    ],
+  },
+  {
     version: "0.5.2",
     date: "Jul 13",
     features: [

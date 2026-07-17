@@ -10,10 +10,11 @@ import {
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
-import { ServerSettings, ServerSettingsPatch } from "./settings";
+import { ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
+export const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
@@ -355,7 +356,7 @@ export const ServerProviderStatusesUpdatedPayload = Schema.Struct({
 export type ServerProviderStatusesUpdatedPayload = typeof ServerProviderStatusesUpdatedPayload.Type;
 
 export const ServerSettingsUpdatedPayload = Schema.Struct({
-  settings: ServerSettings,
+  settings: ServerSettingsView,
 });
 export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
 
@@ -438,7 +439,7 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 export const ServerProviderUpdateResult = ServerProviderStatusesUpdatedPayload;
 export type ServerProviderUpdateResult = typeof ServerProviderUpdateResult.Type;
 
-export const ServerGetSettingsResult = ServerSettings;
+export const ServerGetSettingsResult = ServerSettingsView;
 export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;
 
 export const ServerGetEnvironmentResult = ExecutionEnvironmentDescriptor;
@@ -447,5 +448,5 @@ export type ServerGetEnvironmentResult = typeof ServerGetEnvironmentResult.Type;
 export const ServerUpdateSettingsInput = ServerSettingsPatch;
 export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
-export const ServerUpdateSettingsResult = ServerSettings;
+export const ServerUpdateSettingsResult = ServerSettingsView;
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;

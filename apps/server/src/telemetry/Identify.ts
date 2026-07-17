@@ -2,6 +2,7 @@ import { Effect, FileSystem, Path, Random, Schema } from "effect";
 import * as Crypto from "node:crypto";
 import { homedir } from "node:os";
 import { ServerConfig } from "../config";
+import { writeFileStringAtomically } from "../atomicWrite";
 
 const CodexAuthJsonSchema = Schema.Struct({
   tokens: Schema.Struct({
@@ -62,7 +63,7 @@ const upsertAnonymousId = Effect.gen(function* () {
     Effect.catch(() =>
       Effect.gen(function* () {
         const randomId = yield* Random.nextUUIDv4;
-        yield* fileSystem.writeFileString(anonymousIdPath, randomId);
+        yield* writeFileStringAtomically({ filePath: anonymousIdPath, contents: randomId });
         return randomId;
       }),
     ),
