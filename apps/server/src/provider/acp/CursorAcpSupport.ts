@@ -636,10 +636,7 @@ function cursorModelOptionsFromCliModelId(model: string | null | undefined): Cur
 }
 
 function cursorAcpParameterKeyForModel(baseModel: string, options: CursorModelOptions): string {
-  if (
-    options.reasoningEffort &&
-    (baseModel.includes("claude") || baseModel.includes("grok"))
-  ) {
+  if (options.reasoningEffort && (baseModel.includes("claude") || baseModel.includes("grok"))) {
     return "effort";
   }
   return "reasoning";
