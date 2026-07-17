@@ -14,6 +14,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  providerSupportsTextNativeReviewCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
 
@@ -232,6 +233,27 @@ describe("composerSlashCommands", () => {
     expect(availableCommands).toContain("review");
     expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "review")).toBe(true);
     expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "status")).toBe(false);
+  });
+
+  // #218: OpenCode lists native /review but does not honor bare `/review` text turns.
+  it("keeps app-level /review for opencode and does not treat review as text-native", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "opencode",
+      supportsFastSlashCommand: false,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      canOfferExportCommand: true,
+      providerNativeCommandNames: ["review", "status"],
+    });
+
+    expect(availableCommands).toContain("review");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("opencode", "review")).toBe(true);
+    expect(providerSupportsTextNativeReviewCommand("opencode", ["review", "status"])).toBe(false);
+    expect(providerSupportsTextNativeReviewCommand("opencode", [{ name: "review" }])).toBe(false);
+    // Other providers with a native review still use text pass-through.
+    expect(providerSupportsTextNativeReviewCommand("claudeAgent", ["review"])).toBe(true);
   });
 
   it("keeps app-level /automation available even if a provider exposes a native collision", () => {

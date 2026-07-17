@@ -208,6 +208,7 @@ import {
   canOfferSideSlashCommand,
   canOfferReviewSlashCommand,
   hasProviderNativeSlashCommand,
+  providerSupportsTextNativeReviewCommand,
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
 import {
@@ -3376,8 +3377,8 @@ export default function ChatView({
   }, [composerTrigger, providerNativeCommandNames, selectedProvider]);
   const effectiveComposerTriggerKind = effectiveComposerTrigger?.kind ?? null;
   const supportsTextNativeReviewCommand = useMemo(
-    () => providerNativeCommands.some((command) => command.name.toLowerCase() === "review"),
-    [providerNativeCommands],
+    () => providerSupportsTextNativeReviewCommand(selectedProvider, providerNativeCommands),
+    [providerNativeCommands, selectedProvider],
   );
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const selectedModelCaps = useMemo(
