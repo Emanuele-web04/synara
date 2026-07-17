@@ -1,9 +1,38 @@
 import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const { mockNet } = vi.hoisted(() => {
+  const request = {
+    setHeader: vi.fn(),
+    write: vi.fn(),
+    end: vi.fn(),
+    on: vi.fn(),
+    once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      if (event === "response") {
+        handler({
+          statusCode: 200,
+          on: vi.fn(),
+          once: vi.fn((evt: string, cb: (...args: unknown[]) => void) => {
+            if (evt === "end") cb();
+          }),
+        });
+      }
+      return request;
+    }),
+  };
+
+  const net = vi.fn(() => request) as unknown as {
+    request: typeof net;
+  };
+  net.request = net;
+
+  return { mockNet: net };
+});
+
 vi.mock("electron", () => ({
   app: { getVersion: () => "0.0.0-test" },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  net: mockNet,
 }));
 
 import { requestDesktopVoiceTranscription } from "./voiceTranscription";
