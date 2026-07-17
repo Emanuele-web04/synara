@@ -72,6 +72,57 @@ describe("agent gateway MCP injection", () => {
     );
   });
 
+  it("ignores commented and unrelated token references when merging shell exclusions", () => {
+    const commentedExample = [
+      "[shell_environment_policy]",
+      `# exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}"]`,
+      'exclude = ["AWS_*"]',
+    ].join("\n");
+    const mergedCommentedExample = mergeShellEnvPolicyExclude(
+      commentedExample,
+      SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+    );
+    assert.include(
+      mergedCommentedExample,
+      `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}", "AWS_*"]`,
+    );
+
+    const unrelatedString = [
+      "[shell_environment_policy]",
+      `note = "keep ${SYNARA_AGENT_GATEWAY_TOKEN_ENV} private"`,
+      'exclude = ["AWS_*"]',
+    ].join("\n");
+    const mergedUnrelatedString = mergeShellEnvPolicyExclude(
+      unrelatedString,
+      SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+    );
+    assert.include(
+      mergedUnrelatedString,
+      `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}", "AWS_*"]`,
+    );
+  });
+
+  it("recognizes only active exact entries in multiline shell exclusion arrays", () => {
+    const existing = [
+      "[shell_environment_policy]",
+      "exclude = [",
+      '  "AWS_*",',
+      `  "${SYNARA_AGENT_GATEWAY_TOKEN_ENV}",`,
+      "]",
+    ].join("\n");
+    assert.equal(mergeShellEnvPolicyExclude(existing, SYNARA_AGENT_GATEWAY_TOKEN_ENV), existing);
+
+    const tokenOnlyInComment = [
+      "[shell_environment_policy]",
+      "exclude = [",
+      `  # "${SYNARA_AGENT_GATEWAY_TOKEN_ENV}",`,
+      '  "AWS_*",',
+      "]",
+    ].join("\n");
+    const merged = mergeShellEnvPolicyExclude(tokenOnlyInComment, SYNARA_AGENT_GATEWAY_TOKEN_ENV);
+    assert.include(merged, `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}",`);
+  });
+
   it("detects real TOML table headers, ignoring comments and strings", () => {
     assert.isTrue(
       configHasTomlTableHeader('[mcp_servers.synara]\nurl = "x"', "[mcp_servers.synara]"),

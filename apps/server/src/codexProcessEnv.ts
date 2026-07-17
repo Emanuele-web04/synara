@@ -327,6 +327,82 @@ function splitTomlTables(snippet: string): string[] {
   return tables.filter((table) => table.length > 0);
 }
 
+function maskTomlComments(input: string): string {
+  let result = "";
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let inComment = false;
+
+  for (const character of input) {
+    if (inComment) {
+      if (character === "\n" || character === "\r") {
+        inComment = false;
+        result += character;
+      } else {
+        result += " ";
+      }
+      continue;
+    }
+
+    if (quote) {
+      result += character;
+      if (quote === '"' && escaped) {
+        escaped = false;
+      } else if (quote === '"' && character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      result += character;
+    } else if (character === "#") {
+      inComment = true;
+      result += " ";
+    } else {
+      result += character;
+    }
+  }
+
+  return result;
+}
+
+function findTomlArrayEnd(input: string, openBracketIndex: number): number | undefined {
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let depth = 0;
+
+  for (let index = openBracketIndex; index < input.length; index += 1) {
+    const character = input[index];
+    if (quote) {
+      if (quote === '"' && escaped) {
+        escaped = false;
+      } else if (quote === '"' && character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "[") {
+      depth += 1;
+    } else if (character === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
   if (!envVarName) {
     return config;
@@ -338,16 +414,25 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
   const tableStart = headerMatch.end;
   const tableEnd = findNextTomlTableHeaderIndex(config, tableStart);
   const tableBody = config.slice(tableStart, tableEnd);
+  const activeTableBody = maskTomlComments(tableBody);
   const quotedVar = JSON.stringify(envVarName);
 
-  if (tableBody.includes(quotedVar) || tableBody.includes(`'${envVarName}'`)) {
-    return config;
-  }
-
-  const excludePattern = /(^\s*exclude\s*=\s*\[)/m;
-  const excludeMatch = excludePattern.exec(tableBody);
+  const excludePattern = /(^[\t ]*exclude[\t ]*=[\t ]*\[)/m;
+  const excludeMatch = excludePattern.exec(activeTableBody);
   if (excludeMatch) {
-    const insertAt = tableStart + excludeMatch.index + excludeMatch[0].length;
+    const openBracketIndex = excludeMatch.index + excludeMatch[0].lastIndexOf("[");
+    const closeBracketIndex = findTomlArrayEnd(activeTableBody, openBracketIndex);
+    const activeExcludeArray = activeTableBody.slice(
+      openBracketIndex + 1,
+      closeBracketIndex ?? activeTableBody.length,
+    );
+    const escapedEnvVarName = envVarName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const exactStringPattern = new RegExp(`(["'])${escapedEnvVarName}\\1`);
+    if (exactStringPattern.test(activeExcludeArray)) {
+      return config;
+    }
+
+    const insertAt = tableStart + openBracketIndex + 1;
     return `${config.slice(0, insertAt)}${quotedVar}, ${config.slice(insertAt)}`;
   }
 
