@@ -1525,7 +1525,12 @@ export default function Sidebar() {
     void api.orchestration
       .getShellSnapshot()
       .then((snapshot) => {
-        if (cancelled || (snapshot.projects.length === 0 && snapshot.threads.length === 0)) {
+        if (
+          cancelled ||
+          (snapshot.spaces.length === 0 &&
+            snapshot.projects.length === 0 &&
+            snapshot.threads.length === 0)
+        ) {
           return;
         }
         syncServerShellSnapshot(snapshot);

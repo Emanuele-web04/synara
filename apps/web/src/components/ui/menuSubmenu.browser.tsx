@@ -4,7 +4,7 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { Menu, MenuItem, MenuPopup, MenuSub, MenuSubPopup, MenuSubTrigger } from "./menu";
+import { Menu, MenuItem, MenuPopupBase, MenuSub, MenuSubPopup, MenuSubTrigger } from "./menu";
 
 function HoverSubmenuFixture() {
   const anchor = {
@@ -13,7 +13,7 @@ function HoverSubmenuFixture() {
 
   return (
     <Menu open>
-      <MenuPopup anchor={anchor} align="start" side="bottom">
+      <MenuPopupBase anchor={anchor} align="start" side="bottom">
         <MenuItem>Primary action</MenuItem>
         <MenuSub keepOpenOnFocusOut>
           <MenuSubTrigger>Move to space</MenuSubTrigger>
@@ -22,7 +22,7 @@ function HoverSubmenuFixture() {
             <MenuItem>Work</MenuItem>
           </MenuSubPopup>
         </MenuSub>
-      </MenuPopup>
+      </MenuPopupBase>
     </Menu>
   );
 }
