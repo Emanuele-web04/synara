@@ -7,6 +7,8 @@ import {
   EventId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationPendingInteraction,
+  type OrchestrationThreadActivity,
   type ProviderKind,
   ThreadId,
   type OrchestrationReadModel,
@@ -53,7 +55,6 @@ import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 
 export interface AppState {
   projects: Project[];
-  threads: Thread[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
   threadsHydrated: boolean;
   threadIds?: ThreadId[];
@@ -91,7 +92,6 @@ type ThreadUserInputResponseRequestedEvent = Extract<
   { type: "thread.user-input-response-requested" }
 >;
 type ApplyOrchestrationEventOptions = {
-  updateThreadArray?: boolean;
   updateSidebarSummary?: boolean;
 };
 
@@ -133,7 +133,6 @@ const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-i
 
 const initialState: AppState = {
   projects: [],
-  threads: [],
   sidebarThreadSummaryById: {},
   threadsHydrated: false,
   threadIds: [],
@@ -258,21 +257,6 @@ export function persistAppStateNow(state: AppState = useStore.getState()): void 
 
 // ── Pure helpers ──────────────────────────────────────────────────────
 
-function updateThread(
-  threads: Thread[],
-  threadId: ThreadId,
-  updater: (t: Thread) => Thread,
-): Thread[] {
-  let changed = false;
-  const next = threads.map((t) => {
-    if (t.id !== threadId) return t;
-    const updated = updater(t);
-    if (updated !== t) changed = true;
-    return updated;
-  });
-  return changed ? next : threads;
-}
-
 function resolveEventUpdatedAt(thread: Thread, updatedAt: string): string {
   const currentUpdatedAt = thread.updatedAt ?? thread.createdAt;
   return currentUpdatedAt > updatedAt ? currentUpdatedAt : updatedAt;
@@ -394,6 +378,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
 }
@@ -449,6 +434,9 @@ function toThreadShell(thread: Thread): ThreadShell {
       : {}),
     ...(thread.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: thread.hasActionableProposedPlan }
+      : {}),
+    ...(thread.pendingInteractions !== undefined
+      ? { pendingInteractions: thread.pendingInteractions }
       : {}),
     ...(thread.lastVisitedAt !== undefined ? { lastVisitedAt: thread.lastVisitedAt } : {}),
   };
@@ -1134,6 +1122,7 @@ function mergeReadModelSessionWithLiveHotPath(
   previousThread: Thread | undefined,
   options: {
     preserveRunningTurn: boolean;
+    incomingLatestTurn: ReadModelThread["latestTurn"];
   },
 ): ReadModelThread["session"] {
   const previousSession = previousThread?.session;
@@ -1159,11 +1148,24 @@ function mergeReadModelSessionWithLiveHotPath(
       lastError: previousSession.lastError ?? incomingSession.lastError,
     };
   }
+  // When the snapshot is strictly newer than the local session AND carries a
+  // terminal latestTurn for a different turn than the one preserved locally, the
+  // server has provably moved past the local turn — resurrecting "running" with
+  // the stale activeTurnId would desync the session from the (adopted) settled
+  // turn forever. Equal timestamps are ambiguous (a queued follow-up can start in
+  // the same millisecond the prior turn settles), so they preserve the local
+  // running session and let the next live event or snapshot resolve the race.
+  const supersededByTerminalTurn =
+    incomingSession.updatedAt > previousSession.updatedAt &&
+    options.incomingLatestTurn != null &&
+    options.incomingLatestTurn.completedAt != null &&
+    options.incomingLatestTurn.turnId !== previousThread?.latestTurn?.turnId;
   if (
     previousSession.orchestrationStatus === "running" &&
     incomingSession.status !== "running" &&
     incomingSession.status !== "error" &&
-    previousSession.activeTurnId !== undefined
+    previousSession.activeTurnId !== undefined &&
+    !supersededByTerminalTurn
   ) {
     return {
       ...incomingSession,
@@ -1238,6 +1240,7 @@ function mergeReadModelThreadDetailWithLiveHotPath(
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
+    incomingLatestTurn: incoming.latestTurn,
   });
   const latestTurn = mergeReadModelLatestTurnWithLiveHotPath(incoming.latestTurn, previousThread, {
     preserveRunningTurn,
@@ -1383,6 +1386,13 @@ function normalizeActivities(
   });
   const cappedActivities = capThreadActivities(nextActivities);
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
+}
+
+function withOrchestrationEventSequence(
+  activity: OrchestrationThreadActivity,
+  sequence: number,
+): OrchestrationThreadActivity {
+  return { ...activity, sequence };
 }
 
 function capThreadActivities<TActivity extends Thread["activities"][number]>(
@@ -1643,6 +1653,16 @@ function normalizeThreadFromReadModel(
     previous?.turnDiffSummaries,
   );
   const activities = normalizeActivities(incoming.activities, previous?.activities);
+  const incomingPendingInteractions = Object.hasOwn(incoming, "pendingInteractions")
+    ? (incoming.pendingInteractions ?? [])
+    : previous?.pendingInteractions;
+  const pendingInteractions =
+    previous?.pendingInteractions &&
+    deepEqualJson(previous.pendingInteractions, incomingPendingInteractions ?? [])
+      ? previous.pendingInteractions
+      : incomingPendingInteractions === undefined
+        ? undefined
+        : [...incomingPendingInteractions];
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const resolvedLatestUserMessageAt =
@@ -1724,7 +1744,8 @@ function normalizeThreadFromReadModel(
     previous.threadMarkers === threadMarkers &&
     previous.notes === notes &&
     previous.turnDiffSummaries === turnDiffSummaries &&
-    previous.activities === activities
+    previous.activities === activities &&
+    previous.pendingInteractions === pendingInteractions
   ) {
     return previous;
   }
@@ -1780,6 +1801,7 @@ function normalizeThreadFromReadModel(
       : {}),
     turnDiffSummaries,
     activities,
+    ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
   };
 }
 
@@ -1872,6 +1894,9 @@ function normalizeThreadShellSnapshot(
       : {}),
     ...(incoming.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: incoming.hasActionableProposedPlan }
+      : {}),
+    ...(previous?.pendingInteractions !== undefined
+      ? { pendingInteractions: previous.pendingInteractions }
       : {}),
     ...(lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
   };
@@ -2001,8 +2026,9 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "codex" ||
     providerName === "claudeAgent" ||
     providerName === "cursor" ||
-    providerName === "gemini" ||
+    providerName === "antigravity" ||
     providerName === "grok" ||
+    providerName === "droid" ||
     providerName === "kilo" ||
     providerName === "opencode" ||
     providerName === "pi"
@@ -2072,54 +2098,136 @@ function threadMessageUpdatesSidebarSummary(event: ThreadMessageSentEvent): bool
   return event.payload.role === "user" || !event.payload.streaming;
 }
 
-function resolveThreadSummaryAfterUserInputResponseRequested(
+function markInteractionResponding(
   thread: Thread,
-  event: ThreadUserInputResponseRequestedEvent,
-) {
-  return deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: [
-      ...thread.activities,
-      {
-        id: EventId.makeUnsafe(
-          `synthetic-user-input-resolved:${event.payload.requestId}:${event.sequence}`,
-        ),
-        kind: "user-input.resolved",
-        payload: {
-          requestId: event.payload.requestId,
-        },
-        createdAt: event.payload.createdAt,
-      },
-    ],
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
+  event: ThreadUserInputResponseRequestedEvent | ThreadApprovalResponseRequestedEvent,
+): Thread["pendingInteractions"] {
+  if (thread.pendingInteractions === undefined || event.commandId === null) {
+    return thread.pendingInteractions;
+  }
+  const interactionKind =
+    event.type === "thread.approval-response-requested" ? "approval" : "userInput";
+  const lifecycleGeneration = event.payload.lifecycleGeneration ?? null;
+  let changed = false;
+  const next = thread.pendingInteractions.map((interaction) => {
+    if (
+      interaction.interactionKind !== interactionKind ||
+      interaction.requestId !== event.payload.requestId ||
+      interaction.lifecycleGeneration !== lifecycleGeneration ||
+      (interaction.status !== "pending" && interaction.status !== "retryable")
+    ) {
+      return interaction;
+    }
+    changed = true;
+    return {
+      ...interaction,
+      status: "responding" as const,
+      decision: event.type === "thread.approval-response-requested" ? event.payload.decision : null,
+      responseCommandId: event.commandId,
+      responseRequestedAt: event.payload.createdAt,
+      resolvedAt: null,
+    };
   });
+  return changed ? next : thread.pendingInteractions;
 }
 
-function resolveThreadSummaryAfterApprovalResponseRequested(
+function reconcilePendingInteractionsFromActivity(
   thread: Thread,
-  event: ThreadApprovalResponseRequestedEvent,
-) {
-  return deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: [
-      ...thread.activities,
-      {
-        id: EventId.makeUnsafe(
-          `synthetic-approval-resolved:${event.payload.requestId}:${event.sequence}`,
-        ),
-        kind: "approval.resolved",
-        payload: {
-          requestId: event.payload.requestId,
-          decision: event.payload.decision,
-        },
-        createdAt: event.payload.createdAt,
-        sequence: event.sequence,
-      },
-    ],
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
-  });
+  event: ThreadActivityAppendedEvent,
+): Thread["pendingInteractions"] {
+  const activity = event.payload.activity;
+  const interactionKind =
+    activity.kind === "approval.requested" ||
+    activity.kind === "approval.resolved" ||
+    activity.kind === "provider.approval.respond.failed"
+      ? ("approval" as const)
+      : activity.kind === "user-input.requested" ||
+          activity.kind === "user-input.resolved" ||
+          activity.kind === "provider.user-input.respond.failed"
+        ? ("userInput" as const)
+        : null;
+  if (interactionKind === null) {
+    return thread.pendingInteractions;
+  }
+  const payload = asActivityRecord(activity.payload);
+  const requestId = payload?.requestId;
+  if (typeof requestId !== "string" || requestId.length === 0) {
+    return thread.pendingInteractions;
+  }
+  const lifecycleGeneration =
+    typeof payload?.lifecycleGeneration === "string" && payload.lifecycleGeneration.length > 0
+      ? payload.lifecycleGeneration
+      : null;
+  const existing = thread.pendingInteractions ?? [];
+  const matchesIdentity = (interaction: OrchestrationPendingInteraction) =>
+    interaction.interactionKind === interactionKind &&
+    interaction.requestId === requestId &&
+    (lifecycleGeneration === null || interaction.lifecycleGeneration === lifecycleGeneration);
+
+  if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
+    const next = existing.filter((interaction) => !matchesIdentity(interaction));
+    return next.length === existing.length ? thread.pendingInteractions : next;
+  }
+
+  if (
+    activity.kind === "provider.approval.respond.failed" ||
+    activity.kind === "provider.user-input.respond.failed"
+  ) {
+    const responseCommandId = payload?.responseCommandId;
+    if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
+      return thread.pendingInteractions;
+    }
+    const settlementStatus: OrchestrationPendingInteraction["status"] =
+      payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
+    let changed = false;
+    const next = existing.map((interaction) => {
+      if (
+        !matchesIdentity(interaction) ||
+        interaction.status !== "responding" ||
+        interaction.responseCommandId !== responseCommandId
+      ) {
+        return interaction;
+      }
+      changed = true;
+      return { ...interaction, status: settlementStatus, resolvedAt: null };
+    });
+    return changed ? next : thread.pendingInteractions;
+  }
+
+  const exactIndex = existing.findIndex(
+    (interaction) =>
+      interaction.interactionKind === interactionKind && interaction.requestId === requestId,
+  );
+  const current = exactIndex >= 0 ? existing[exactIndex] : undefined;
+  if (
+    current &&
+    current.lifecycleGeneration === lifecycleGeneration &&
+    (current.status === "responding" ||
+      current.status === "confirmed" ||
+      current.status === "uncertain")
+  ) {
+    return thread.pendingInteractions;
+  }
+  const pending: OrchestrationPendingInteraction = {
+    interactionKind,
+    requestId: requestId as OrchestrationPendingInteraction["requestId"],
+    threadId: thread.id,
+    turnId: activity.turnId,
+    lifecycleGeneration,
+    status: "pending",
+    decision: null,
+    responseCommandId: null,
+    responseRequestedAt: null,
+    createdAt:
+      current?.lifecycleGeneration === lifecycleGeneration ? current.createdAt : activity.createdAt,
+    resolvedAt: null,
+  };
+  if (exactIndex < 0) {
+    return [...existing, pending];
+  }
+  const next = [...existing];
+  next[exactIndex] = pending;
+  return next;
 }
 
 function sidebarThreadSummariesEqual(
@@ -2421,11 +2529,9 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
   const { [threadId]: _removedSummary, ...sidebarThreadSummaryById } =
     state.sidebarThreadSummaryById;
   const nextThreadIds = (state.threadIds ?? EMPTY_THREAD_IDS).filter((id) => id !== threadId);
-  const nextThreads = state.threads.filter((thread) => thread.id !== threadId);
 
   if (
     nextThreadIds === state.threadIds &&
-    nextThreads === state.threads &&
     sidebarThreadSummaryById === state.sidebarThreadSummaryById
   ) {
     return state;
@@ -2446,7 +2552,57 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
     sidebarThreadSummaryById,
-    threads: nextThreads,
+  };
+}
+
+// Drop only the detail projection owned by a thread subscription. Shell,
+// session, turn, and sidebar state remain available for navigation and live
+// status while the potentially large transcript/activity payload is released.
+export function evictThreadDetailFromClientState(state: AppState, threadId: ThreadId): AppState {
+  const detailRecords = [
+    state.messageIdsByThreadId,
+    state.messageByThreadId,
+    state.activityIdsByThreadId,
+    state.activityByThreadId,
+    state.proposedPlanIdsByThreadId,
+    state.proposedPlanByThreadId,
+    state.turnDiffIdsByThreadId,
+    state.turnDiffSummaryByThreadId,
+  ];
+  const hasNormalizedDetail = detailRecords.some(
+    (record) => record !== undefined && Object.hasOwn(record, threadId),
+  );
+  if (!hasNormalizedDetail) {
+    return state;
+  }
+
+  const { [threadId]: _removedMessageIds, ...messageIdsByThreadId } =
+    state.messageIdsByThreadId ?? EMPTY_MESSAGE_IDS_BY_THREAD;
+  const { [threadId]: _removedMessages, ...messageByThreadId } =
+    state.messageByThreadId ?? EMPTY_MESSAGE_BY_THREAD;
+  const { [threadId]: _removedActivityIds, ...activityIdsByThreadId } =
+    state.activityIdsByThreadId ?? EMPTY_ACTIVITY_IDS_BY_THREAD;
+  const { [threadId]: _removedActivities, ...activityByThreadId } =
+    state.activityByThreadId ?? EMPTY_ACTIVITY_BY_THREAD;
+  const { [threadId]: _removedPlanIds, ...proposedPlanIdsByThreadId } =
+    state.proposedPlanIdsByThreadId ?? EMPTY_PROPOSED_PLAN_IDS_BY_THREAD;
+  const { [threadId]: _removedPlans, ...proposedPlanByThreadId } =
+    state.proposedPlanByThreadId ?? EMPTY_PROPOSED_PLAN_BY_THREAD;
+  const { [threadId]: _removedDiffIds, ...turnDiffIdsByThreadId } =
+    state.turnDiffIdsByThreadId ?? EMPTY_TURN_DIFF_IDS_BY_THREAD;
+  const { [threadId]: _removedDiffs, ...turnDiffSummaryByThreadId } =
+    state.turnDiffSummaryByThreadId ?? EMPTY_TURN_DIFF_BY_THREAD;
+
+  return {
+    ...state,
+    messageIdsByThreadId,
+    messageByThreadId,
+    activityIdsByThreadId,
+    activityByThreadId,
+    proposedPlanIdsByThreadId,
+    proposedPlanByThreadId,
+    turnDiffIdsByThreadId,
+    turnDiffSummaryByThreadId,
   };
 }
 
@@ -2471,11 +2627,6 @@ export function removeDeletedThreadFromClientState(state: AppState, threadId: Th
 // Drop a project and any thread-scoped state that still points at it.
 function removeProjectState(state: AppState, projectId: Project["id"]): AppState {
   const threadIds = new Set<ThreadId>();
-  for (const thread of state.threads) {
-    if (thread.projectId === projectId) {
-      threadIds.add(thread.id);
-    }
-  }
   for (const shell of Object.values(state.threadShellById ?? EMPTY_THREAD_SHELL_BY_ID)) {
     if (shell.projectId === projectId) {
       threadIds.add(shell.id);
@@ -2527,28 +2678,15 @@ function commitThreadProjection(
   state: AppState,
   threadId: ThreadId,
   options?: {
-    updateThreadArray?: boolean;
     updateSidebarSummary?: boolean;
   },
 ): AppState {
   const nextThread = getThreadFromState(state, threadId);
-  const previousThread = state.threads.find((thread) => thread.id === threadId);
   if (!nextThread) {
     return state;
   }
 
-  // Let hot-path detail syncs skip array churn without forcing sidebar ownership
-  // back onto the thread-detail path.
-  const shouldUpdateThreadArray = options?.updateThreadArray ?? true;
   const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
-  const threadExists = previousThread !== undefined;
-  const threads = shouldUpdateThreadArray
-    ? threadExists
-      ? updateThread(state.threads, threadId, (thread) =>
-          nextThread === thread ? thread : nextThread,
-        )
-      : [...state.threads, nextThread]
-    : state.threads;
 
   const previousSummary = state.sidebarThreadSummaryById[threadId];
   const nextSummary =
@@ -2556,13 +2694,12 @@ function commitThreadProjection(
       ? buildSidebarThreadSummary(nextThread, previousSummary)
       : previousSummary;
 
-  if (threads === state.threads && nextSummary === previousSummary) {
+  if (nextSummary === previousSummary) {
     return state;
   }
 
   return {
     ...state,
-    threads,
     sidebarThreadSummaryById:
       nextSummary === previousSummary || nextSummary === undefined
         ? state.sidebarThreadSummaryById
@@ -2677,11 +2814,29 @@ function reconcileLatestTurnFromSession(
     });
   }
 
-  if (session.status === "error" && thread.latestTurn?.state === "running") {
+  // Mirror of the server projector's settlement rule: once the session leaves
+  // "running", no later event is guaranteed to close the turn (checkpoint diff
+  // events only enrich it), so a still-running latestTurn settles here. A retained
+  // activeTurnId blocks settlement (except on error): stop-requested flows emit
+  // "interrupted" while keeping the turn active until the provider's terminal
+  // event decides the real outcome.
+  const settledState =
+    session.status === "error"
+      ? ("error" as const)
+      : session.status === "interrupted" || session.status === "stopped"
+        ? ("interrupted" as const)
+        : session.status === "ready"
+          ? ("completed" as const)
+          : null;
+  if (
+    settledState !== null &&
+    thread.latestTurn?.state === "running" &&
+    (session.activeTurnId == null || settledState === "error")
+  ) {
     return buildLatestTurn({
       previous: thread.latestTurn,
       turnId: thread.latestTurn.turnId,
-      state: "error",
+      state: settledState,
       requestedAt: thread.latestTurn.requestedAt,
       startedAt: thread.latestTurn.startedAt,
       completedAt: session.updatedAt,
@@ -2842,14 +2997,17 @@ function applyTurnDiffSummaryToThread(
       )
     : sortTurnDiffSummaries([...thread.turnDiffSummaries, nextSummary]);
 
-  const isActivePlaceholder =
+  // Mirror of the server projector's placeholder guard: a provider-diff
+  // placeholder only carries live diff totals and must never change the turn
+  // lifecycle — neither close a running turn nor flip an already-settled one
+  // to "interrupted" when it loses the race against session settlement.
+  const isSameTurnPlaceholder =
     isProviderDiffPlaceholderRef(nextSummary.checkpointRef) &&
     nextSummary.status === "missing" &&
-    thread.latestTurn?.turnId === nextSummary.turnId &&
-    thread.latestTurn.state === "running";
+    thread.latestTurn?.turnId === nextSummary.turnId;
   const latestTurn =
     thread.latestTurn === null || thread.latestTurn.turnId === nextSummary.turnId
-      ? isActivePlaceholder
+      ? isSameTurnPlaceholder
         ? thread.latestTurn
         : buildLatestTurn({
             previous: thread.latestTurn,
@@ -2911,10 +3069,17 @@ function deriveThreadStateSignals(
     proposedPlans: thread.proposedPlans,
     latestTurn: thread.latestTurn,
   });
+  const actionableInteractions = thread.pendingInteractions?.filter(
+    (interaction) => interaction.status === "pending" || interaction.status === "retryable",
+  );
   return {
     latestUserMessageAt: metadata.latestUserMessageAt,
-    hasPendingApprovals: metadata.hasPendingApprovals,
-    hasPendingUserInput: metadata.hasPendingUserInput,
+    hasPendingApprovals:
+      actionableInteractions?.some((interaction) => interaction.interactionKind === "approval") ??
+      metadata.hasPendingApprovals,
+    hasPendingUserInput:
+      actionableInteractions?.some((interaction) => interaction.interactionKind === "userInput") ??
+      metadata.hasPendingUserInput,
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
   };
 }
@@ -2940,13 +3105,11 @@ function applyThreadUpdate(
   threadId: ThreadId,
   updater: (thread: Thread) => Thread,
   options?: {
-    updateThreadArray?: boolean;
     recomputeSummarySignals?: boolean;
     updateSidebarSummary?: boolean;
   },
 ): AppState {
-  const currentThread =
-    getThreadFromState(state, threadId) ?? state.threads.find((thread) => thread.id === threadId);
+  const currentThread = getThreadFromState(state, threadId);
   if (!currentThread) {
     return state;
   }
@@ -2958,7 +3121,6 @@ function applyThreadUpdate(
     return state;
   }
   return commitThreadProjection(writeThreadState(state, updatedThread, currentThread), threadId, {
-    updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? true,
   });
 }
@@ -3316,8 +3478,6 @@ function applyOrchestrationEvent(
         },
         {
           ...options,
-          updateThreadArray:
-            options?.updateThreadArray !== false || event.payload.title !== undefined,
           updateSidebarSummary: true,
         },
       );
@@ -3631,33 +3791,10 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
-          // Hide the composer prompt as soon as the response command is accepted;
-          // the provider may append its own resolved activity shortly after.
-          const syntheticResolvedActivity = {
-            id: EventId.makeUnsafe(
-              `synthetic-user-input-resolved:${event.payload.requestId}:${event.sequence}`,
-            ),
-            tone: "info",
-            kind: "user-input.resolved",
-            summary: "User input submitted",
-            payload: {
-              requestId: event.payload.requestId,
-            },
-            turnId: null,
-            sequence: event.sequence,
-            createdAt: event.payload.createdAt,
-          } satisfies Thread["activities"][number];
-          const hasResolvedActivity = thread.activities.some(
-            (activity) => activity.id === syntheticResolvedActivity.id,
-          );
-          const activities = hasResolvedActivity
-            ? thread.activities
-            : [...thread.activities, syntheticResolvedActivity];
-          const summary = resolveThreadSummaryAfterUserInputResponseRequested(thread, event);
+          const pendingInteractions = markInteractionResponding(thread, event);
           return {
             ...thread,
-            activities,
-            hasPendingUserInput: summary.hasPendingUserInput,
+            ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
                 ? thread.updatedAt
@@ -3666,7 +3803,6 @@ function applyOrchestrationEvent(
         },
         {
           ...options,
-          recomputeSummarySignals: false,
           updateSidebarSummary: true,
         },
       );
@@ -3676,10 +3812,10 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
-          const summary = resolveThreadSummaryAfterApprovalResponseRequested(thread, event);
+          const pendingInteractions = markInteractionResponding(thread, event);
           return {
             ...thread,
-            hasPendingApprovals: summary.hasPendingApprovals,
+            ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
                 ? thread.updatedAt
@@ -3688,7 +3824,6 @@ function applyOrchestrationEvent(
         },
         {
           ...options,
-          recomputeSummarySignals: false,
           updateSidebarSummary: true,
         },
       );
@@ -3698,20 +3833,29 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
+          const sequencedActivity = withOrchestrationEventSequence(
+            event.payload.activity,
+            event.sequence,
+          );
           const nextActivities = normalizeActivities(
-            [...thread.activities, event.payload.activity],
+            [...thread.activities, sequencedActivity],
             thread.activities,
           );
-          if (nextActivities === thread.activities) {
+          const pendingInteractions = reconcilePendingInteractionsFromActivity(thread, event);
+          if (
+            nextActivities === thread.activities &&
+            pendingInteractions === thread.pendingInteractions
+          ) {
             return thread;
           }
           return {
             ...thread,
             activities: nextActivities,
+            ...(pendingInteractions !== undefined ? { pendingInteractions } : {}),
             updatedAt:
-              (thread.updatedAt ?? thread.createdAt) > event.payload.activity.createdAt
+              (thread.updatedAt ?? thread.createdAt) > sequencedActivity.createdAt
                 ? thread.updatedAt
-                : event.payload.activity.createdAt,
+                : sequencedActivity.createdAt,
           };
         },
         {
@@ -3960,26 +4104,44 @@ function applyThreadActivityEventBatch(
     firstEvent.payload.threadId,
     (thread) => {
       let nextActivities = thread.activities;
+      let nextPendingInteractions = thread.pendingInteractions;
       let updatedAt = thread.updatedAt ?? thread.createdAt;
       for (const event of events) {
+        const sequencedActivity = withOrchestrationEventSequence(
+          event.payload.activity,
+          event.sequence,
+        );
         const normalizedActivities = normalizeActivities(
-          [...nextActivities, event.payload.activity],
+          [...nextActivities, sequencedActivity],
           nextActivities,
         );
-        if (normalizedActivities === nextActivities) {
-          continue;
-        }
+        const reconciledPendingInteractions = reconcilePendingInteractionsFromActivity(
+          nextPendingInteractions === undefined
+            ? thread
+            : { ...thread, pendingInteractions: nextPendingInteractions },
+          event,
+        );
+        const changed =
+          normalizedActivities !== nextActivities ||
+          reconciledPendingInteractions !== nextPendingInteractions;
         nextActivities = normalizedActivities;
-        if (event.payload.activity.createdAt > updatedAt) {
-          updatedAt = event.payload.activity.createdAt;
+        nextPendingInteractions = reconciledPendingInteractions;
+        if (changed && sequencedActivity.createdAt > updatedAt) {
+          updatedAt = sequencedActivity.createdAt;
         }
       }
-      if (nextActivities === thread.activities) {
+      if (
+        nextActivities === thread.activities &&
+        nextPendingInteractions === thread.pendingInteractions
+      ) {
         return thread;
       }
       return {
         ...thread,
         activities: nextActivities,
+        ...(nextPendingInteractions !== undefined
+          ? { pendingInteractions: nextPendingInteractions }
+          : {}),
         updatedAt,
       };
     },
@@ -3996,7 +4158,6 @@ export function applyOrchestrationEvents(
   events: ReadonlyArray<OrchestrationEvent>,
 ): AppState {
   return applyOrchestrationEventsHotPath(state, events, {
-    updateThreadArray: true,
     updateSidebarSummary: false,
   });
 }
@@ -4007,7 +4168,6 @@ export function applyOrchestrationEventsHotPath(
   options?: ApplyOrchestrationEventOptions,
 ): AppState {
   const normalizedOptions = {
-    updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? false,
   };
   let nextState = state;
@@ -4174,14 +4334,15 @@ export function syncServerShellSnapshot(
   }
 
   const derivedThreads = getThreadsFromState(normalizedState);
-  const allThreads = arraysShallowEqual(state.threads, derivedThreads)
-    ? state.threads
+  const prevThreads = getThreadsFromState(state);
+  const allThreads = arraysShallowEqual(prevThreads, derivedThreads)
+    ? prevThreads
     : derivedThreads;
   const snapshotThreadsOnly = snapshotThreads
     .map((shell) => getThreadFromState(normalizedState, shell.id))
     .filter((thread): thread is Thread => thread !== undefined);
-  const threads = arraysShallowEqual(state.threads, snapshotThreadsOnly)
-    ? state.threads
+  const threads = arraysShallowEqual(prevThreads, snapshotThreadsOnly)
+    ? prevThreads
     : snapshotThreadsOnly;
   const nextSidebarThreadSummaryById = Object.fromEntries(
     allThreads.map((thread) => [
@@ -4199,7 +4360,6 @@ export function syncServerShellSnapshot(
   return {
     ...normalizedState,
     projects,
-    threads,
     sidebarThreadSummaryById,
     threadsHydrated: true,
   };
@@ -4209,15 +4369,13 @@ function syncServerThreadDetailWithOptions(
   state: AppState,
   thread: ReadModelThread,
   options?: {
-    updateThreadArray?: boolean;
+    updateSidebarSummary?: boolean;
   },
 ): AppState {
-  const previousThread =
-    getThreadFromState(state, thread.id) ?? state.threads.find((entry) => entry.id === thread.id);
-  const nextThreadDetail =
-    options?.updateThreadArray === false
-      ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread)
-      : thread;
+  const previousThread = getThreadFromState(state, thread.id);
+  const nextThreadDetail = options
+    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread)
+    : thread;
   return commitThreadProjection(
     writeThreadState(
       state,
@@ -4226,7 +4384,6 @@ function syncServerThreadDetailWithOptions(
     ),
     thread.id,
     {
-      updateThreadArray: options?.updateThreadArray ?? true,
       updateSidebarSummary: false,
     },
   );
@@ -4239,7 +4396,7 @@ export function syncServerThreadDetail(state: AppState, thread: ReadModelThread)
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: true });
+  return syncServerThreadDetailWithOptions(state, thread);
 }
 
 export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModelThread): AppState {
@@ -4249,7 +4406,7 @@ export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModel
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
+  return syncServerThreadDetailWithOptions(state, thread, { updateSidebarSummary: false });
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -4288,7 +4445,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ),
     state.projects,
   );
-  const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
     .filter(
       (thread) =>
@@ -4297,7 +4453,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         deletedThreadIdsById[thread.id] !== true,
     )
     .map((thread) => {
-      const existing = existingThreadById.get(thread.id);
+      const existing = getThreadFromState(state, thread.id);
       return normalizeThreadFromReadModel(thread, existing);
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
@@ -4325,10 +4481,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   for (const thread of nextThreads) {
     normalizedState = writeThreadState(normalizedState, thread);
   }
-  const derivedThreads = getThreadsFromState(normalizedState);
-  const threads = arraysShallowEqual(state.threads, derivedThreads)
-    ? state.threads
-    : derivedThreads;
+  const threads = getThreadsFromState(normalizedState);
   const nextSidebarThreadSummaryById = Object.fromEntries(
     threads.map((thread) => [
       thread.id,
@@ -4343,7 +4496,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     : nextSidebarThreadSummaryById;
   if (
     projects === state.projects &&
-    threads === state.threads &&
     sidebarThreadSummaryById === state.sidebarThreadSummaryById &&
     normalizedState.threadIds === state.threadIds &&
     normalizedState.threadShellById === state.threadShellById &&
@@ -4364,7 +4516,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   return {
     ...normalizedState,
     projects,
-    threads,
     sidebarThreadSummaryById,
     threadsHydrated: true,
   };
@@ -4575,6 +4726,7 @@ interface AppStore extends AppState {
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
+  evictThreadDetail: (threadId: ThreadId) => void;
   removeDeletedProjectFromClientState: (projectId: Project["id"]) => void;
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
@@ -4602,10 +4754,11 @@ export const useStore = create<AppStore>((set) => ({
   applyOrchestrationEventsHotPath: (events) =>
     set((state) =>
       applyOrchestrationEventsHotPath(state, events, {
-        updateThreadArray: false,
         updateSidebarSummary: false,
       }),
     ),
+  evictThreadDetail: (threadId) =>
+    set((state) => evictThreadDetailFromClientState(state, threadId)),
   removeDeletedProjectFromClientState: (projectId) =>
     set((state) => removeDeletedProjectFromClientState(state, projectId)),
   removeDeletedThreadFromClientState: (threadId) =>

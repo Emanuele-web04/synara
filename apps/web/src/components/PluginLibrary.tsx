@@ -28,6 +28,7 @@ import {
 } from "react-icons/si";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 import { useStore } from "~/store";
+import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
 import {
   buildPluginSearchFields,
   buildSkillSearchFields,
@@ -85,16 +86,6 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
 };
-const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
-  "codex",
-  "claudeAgent",
-  "cursor",
-  "gemini",
-  "grok",
-  "kilo",
-  "opencode",
-  "pi",
-];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   canva: { icon: SiCanva, color: "#00C4CC" },
   figma: { icon: SiFigma, color: "#F24E1E" },
@@ -396,8 +387,11 @@ export function PluginLibrary() {
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
-  const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const antigravityCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions("antigravity"),
+  );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
+  const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -416,13 +410,17 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
       },
-      gemini: {
-        plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
-        skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
+      antigravity: {
+        plugins: supportsPluginDiscovery(antigravityCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(antigravityCapabilitiesQuery.data),
       },
       grok: {
         plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
+      },
+      droid: {
+        plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
       },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
@@ -441,8 +439,9 @@ export function PluginLibrary() {
       claudeCapabilitiesQuery.data,
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
-      geminiCapabilitiesQuery.data,
+      antigravityCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
+      droidCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,
@@ -458,8 +457,8 @@ export function PluginLibrary() {
     if (supportsTab) return;
     const fallbackOrder =
       selectedTab === "plugins"
-        ? PROVIDER_DISCOVERY_ORDER
-        : [preferredProvider, ...PROVIDER_DISCOVERY_ORDER.filter((p) => p !== preferredProvider)];
+        ? DEFAULT_PROVIDER_ORDER
+        : [preferredProvider, ...DEFAULT_PROVIDER_ORDER.filter((p) => p !== preferredProvider)];
     const fallback =
       fallbackOrder.find((provider) =>
         selectedTab === "plugins"
@@ -581,7 +580,7 @@ export function PluginLibrary() {
           </div>
           <div className="flex-1" />
           <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-            {PROVIDER_DISCOVERY_ORDER.map((provider) => {
+            {DEFAULT_PROVIDER_ORDER.map((provider) => {
               const capabilities = providerCapabilities[provider];
               const label = PROVIDER_DISPLAY_NAMES[provider];
               return (

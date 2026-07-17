@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
+  type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
 import {
@@ -29,8 +30,11 @@ import {
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
-import { APP_DISPLAY_NAME } from "../branding";
+import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
+import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
@@ -43,6 +47,8 @@ import { useGitProgressToastPreview } from "../components/useGitProgressToastPre
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { useFeedbackDialogStore } from "../feedbackDialogStore";
+import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   serverConfigQueryOptions,
@@ -56,6 +62,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useStore } from "../store";
+import { createAllThreadsSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
 import {
@@ -64,6 +71,10 @@ import {
   onServerSettingsUpdated,
   onServerWelcome,
 } from "../wsNativeApi";
+import {
+  addWsCompatibilityIssueListener,
+  readLatestWsCompatibilityIssue,
+} from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
@@ -72,7 +83,7 @@ import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
-  subscribeRetainedThreadDetailIdChanges,
+  resolveThreadDetailSubscriptionLeaseIds,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
@@ -119,6 +130,7 @@ import {
   providerUpdateNotificationKey,
   PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
   PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  withProviderUpdateTimeout,
 } from "../providerUpdates";
 import {
   getGitInvalidationThreadIdForEvent,
@@ -182,6 +194,16 @@ function RootRouteView() {
   useNativeFontSmoothing();
   useSyncDesktopTopBarTrafficLightGutterZoom();
   useTheme();
+  const [compatibilityIssue, setCompatibilityIssue] = useState<WsCompatibilityError | null>(() =>
+    readLatestWsCompatibilityIssue(),
+  );
+  useEffect(
+    () =>
+      addWsCompatibilityIssueListener(setCompatibilityIssue, {
+        replayCurrent: true,
+      }),
+    [],
+  );
 
   // Single mount point for the Windows caption buttons. The cluster is pinned to the
   // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
@@ -199,6 +221,15 @@ function RootRouteView() {
   // it last in document order guarantees that subtraction wins. (z above dialogs/toasts
   // so it also stays clickable while a modal is open.)
   const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
+
+  if (compatibilityIssue) {
+    return (
+      <>
+        <TransportCompatibilityView issue={compatibilityIssue} />
+        {desktopWindowControls}
+      </>
+    );
+  }
 
   if (!readNativeApi()) {
     return (
@@ -223,8 +254,11 @@ function RootRouteView() {
           <EventRouter />
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
+          <AppSnapWelcomeDialog />
+          <AppSnapCoordinator />
           <ProviderUpdateNotifications />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -232,6 +266,48 @@ function RootRouteView() {
       </ToastProvider>
       {desktopWindowControls}
     </>
+  );
+}
+
+function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) {
+  const title =
+    issue.action === "update-client"
+      ? "This Synara client needs an update."
+      : issue.action === "update-server"
+        ? "The Synara server needs an update."
+        : "Synara needs to reconnect with a matching build.";
+  const guidance =
+    issue.action === "update-client"
+      ? "Update or reload this client, then reconnect."
+      : issue.action === "update-server"
+        ? "Update or restart the server, then reload this client."
+        : "Reload the app. If this repeats, restart Synara so the client and server use matching builds.";
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
+      <div className="pointer-events-none absolute inset-0 opacity-80">
+        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-amber-500)_16%,transparent),transparent)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
+      </div>
+      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
+        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{title}</h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{issue.message}</p>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{guidance}</p>
+        <p className="mt-4 text-xs text-muted-foreground/80">
+          Client {APP_VERSION} · Server {issue.serverBuild}
+        </p>
+        <div className="mt-5">
+          <Button
+            size="sm"
+            className={dialogActionButtonClassName}
+            onClick={() => window.location.reload()}
+          >
+            Reload app
+          </Button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -348,7 +424,10 @@ function ProviderUpdateNotifications() {
         const api = ensureNativeApi();
         for (const provider of providers) {
           try {
-            const result = await api.server.updateProvider({ provider: provider.provider });
+            const result = await withProviderUpdateTimeout({
+              provider: provider.provider,
+              request: api.server.updateProvider({ provider: provider.provider }),
+            });
             const refreshed = result.providers.find(
               (entry) => entry.provider === provider.provider,
             );
@@ -569,6 +648,34 @@ function GlobalShortcutsDialog() {
       }}
     />
   );
+}
+
+function GlobalFeedbackDialog() {
+  const { activeProject, activeThread } = useFocusedChatContext();
+  const isOpen = useFeedbackDialogStore((state) => state.isOpen);
+  const requestedContext = useFeedbackDialogStore((state) => state.context);
+  const setOpen = useFeedbackDialogStore((state) => state.setOpen);
+  const context = useMemo<FeedbackThreadContext>(
+    () =>
+      requestedContext ?? {
+        provider: activeThread?.modelSelection.provider ?? null,
+        model: activeThread?.modelSelection.model ?? null,
+        projectKind: activeProject?.kind ?? null,
+        environmentMode: activeThread?.envMode ?? null,
+        runtimeMode: activeThread?.runtimeMode ?? null,
+        interactionMode: activeThread?.interactionMode ?? null,
+        sessionStatus: activeThread?.session?.status ?? null,
+        latestTurnState: activeThread?.latestTurn?.state ?? null,
+        messageCount: activeThread?.messages.length ?? 0,
+        activityCount: activeThread?.activities.length ?? 0,
+        hasPendingApproval: activeThread?.hasPendingApprovals === true,
+        hasPendingUserInput: activeThread?.hasPendingUserInput === true,
+        hasThreadError: Boolean(activeThread?.error),
+      },
+    [activeProject?.kind, activeThread, requestedContext],
+  );
+
+  return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
 }
 
 function GlobalWhatsNewSurface() {
@@ -815,6 +922,7 @@ function EventRouter() {
   );
   const setServerWorkspacePaths = useWorkspaceStore((store) => store.setServerWorkspacePaths);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
+  const serverThreads = useStore(selectAllThreads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -831,27 +939,22 @@ function EventRouter() {
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
   const retainedThreadIds = useRetainedThreadDetailIds();
-  const threadIds = useStore((store) => store.threadIds);
-  const serverThreadIds = useMemo(() => new Set(threadIds), [threadIds]);
-  const subscribedThreadIds = useMemo(() => {
-    const nextThreadIds = new Set<ThreadId>();
-    for (const threadId of visibleThreadIds) {
-      // Visible draft routes need a detail subscription before their shell row exists.
-      // Otherwise fast provider responses can complete before the promoted thread is
-      // known to the shell list, leaving the chat detail stuck on its optimistic state.
-      nextThreadIds.add(threadId);
-    }
-    for (const threadId of retainedThreadIds) {
-      if (serverThreadIds.has(threadId)) {
-        nextThreadIds.add(threadId);
-      }
-    }
-    return [...nextThreadIds];
-  }, [retainedThreadIds, serverThreadIds, visibleThreadIds]);
+  const serverThreadIds = useMemo(
+    () => new Set(serverThreads.map((thread) => thread.id)),
+    [serverThreads],
+  );
+  const subscribedThreadIds = useMemo(
+    () =>
+      resolveThreadDetailSubscriptionLeaseIds({
+        visibleThreadIds,
+        retainedThreadIds,
+        serverThreadIds,
+      }),
+    [retainedThreadIds, serverThreadIds, visibleThreadIds],
+  );
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
-  const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
@@ -859,7 +962,6 @@ function EventRouter() {
 
   workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
-  routeVisibleThreadIdsRef.current = visibleThreadIds;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
@@ -1123,16 +1225,6 @@ function EventRouter() {
       return reconcileThreadSubscriptionsChain;
     };
 
-    const unsubscribeRetainedThreadIdChanges = subscribeRetainedThreadDetailIdChanges(
-      (nextRetainedThreadIds) => {
-        const nextThreadIds = new Set(routeVisibleThreadIdsRef.current);
-        for (const threadId of nextRetainedThreadIds) {
-          nextThreadIds.add(threadId);
-        }
-        void enqueueThreadSubscriptionReconcile([...nextThreadIds]);
-      },
-    );
-
     const shouldApplyBootstrapShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
       if (disposed) {
         return false;
@@ -1145,7 +1237,7 @@ function EventRouter() {
       // projection reader is fully ready. Let the later non-empty shell query win.
       return (
         (currentState.projects.length === 0 && snapshot.projects.length > 0) ||
-        (currentState.threads.length === 0 && snapshot.threads.length > 0)
+        ((currentState.threadIds?.length ?? 0) === 0 && snapshot.threads.length > 0)
       );
     };
 
@@ -1160,12 +1252,8 @@ function EventRouter() {
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
-      shellRefreshGeneration += 1;
-      bumpShellRefreshEpoch();
-      subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
-      pendingThreadReplayTargetById.clear();
       threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
@@ -1633,7 +1721,6 @@ function EventRouter() {
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
         ),
       );
-      unsubscribeRetainedThreadIdChanges();
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
@@ -1667,164 +1754,49 @@ function EventRouter() {
 }
 
 function DesktopProjectBootstrap() {
-  // Kind selector keeps the recovery machine stable across upserts that leave
-  // the same recovery class — remounting would reset the attempt budget.
-  const recoveryKind = useStore((store) =>
-    classifyDesktopHydrationRecovery({
-      threadsHydrated: store.threadsHydrated,
-      projects: store.projects,
-      threads: store.threads,
-      threadIds: store.threadIds,
-      threadShellById: store.threadShellById,
-      threadSessionById: store.threadSessionById,
-      threadTurnStateById: store.threadTurnStateById,
-    }),
-  );
-  const shellRefreshEpoch = useSyncExternalStore(
-    subscribeShellRefreshEpoch,
-    getShellRefreshEpoch,
-    getShellRefreshEpoch,
-  );
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const projects = useStore((store) => store.projects);
+  const threads = useStore(selectAllThreads);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const attemptedRecoveryRef = useRef(false);
 
   useEffect(() => {
-    if (recoveryKind !== "missing-threads") {
+    const api = readNativeApi();
+    if (!api || attemptedRecoveryRef.current || !threadsHydrated) {
       return;
     }
 
-    const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () => {
-        const store = useStore.getState();
-        return (
-          classifyDesktopHydrationRecovery({
-            threadsHydrated: store.threadsHydrated,
-            projects: store.projects,
-            threads: store.threads,
-            threadIds: store.threadIds,
-            threadShellById: store.threadShellById,
-            threadSessionById: store.threadSessionById,
-            threadTurnStateById: store.threadTurnStateById,
-          }) === "missing-threads"
-        );
-      },
-      refresh: () => requestShellRefresh(),
-    });
-    controller.start();
-    return () => {
-      bumpRecoveryMutationLease();
-      controller.cancel();
-    };
-  }, [recoveryKind, shellRefreshEpoch]);
-
-  useEffect(() => {
-    if (recoveryKind !== "repair-projects") {
+    const projectIds = new Set(projects.map((project) => project.id));
+    const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
+    if (projects.length > 0 && !hasThreadWithoutProject) {
       return;
     }
+
+    attemptedRecoveryRef.current = true;
 
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
-    const controller = createMissingThreadRecoveryController({
-      isStillNeeded: () => {
-        const store = useStore.getState();
-        const kind = classifyDesktopHydrationRecovery({
-          threadsHydrated: store.threadsHydrated,
-          projects: store.projects,
-          threads: store.threads,
-          threadIds: store.threadIds,
-          threadShellById: store.threadShellById,
-          threadSessionById: store.threadSessionById,
-          threadTurnStateById: store.threadTurnStateById,
-        });
-        return kind === "repair-projects";
-      },
-      refresh: async () => {
-        const lease = getRecoveryMutationLease();
-        const api = readNativeApi();
-        if (!api) {
-          return { applied: false, shellThreadCount: 0, reason: "unavailable" };
-        }
-        const snapshot = await api.orchestration.getShellSnapshot();
-        if (lease !== getRecoveryMutationLease()) {
-          return { applied: false, shellThreadCount: 0, reason: "stale" };
-        }
+    void api.orchestration
+      .getShellSnapshot()
+      .then((snapshot) => {
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
-          if (lease !== getRecoveryMutationLease()) {
-            return { applied: false, shellThreadCount: 0, reason: "stale" };
-          }
-          const snapshotApplied = tryApplyShellSnapshot(snapshot);
-          const recoveredState = useStore.getState();
-          const recovered =
-            snapshotApplied &&
-            classifyDesktopHydrationRecovery({
-              threadsHydrated: recoveredState.threadsHydrated,
-              projects: recoveredState.projects,
-              threads: recoveredState.threads,
-              threadIds: recoveredState.threadIds,
-              threadShellById: recoveredState.threadShellById,
-              threadSessionById: recoveredState.threadSessionById,
-              threadTurnStateById: recoveredState.threadTurnStateById,
-            }) !== "repair-projects";
-          return {
-            applied: recovered,
-            shellThreadCount: snapshot.threads.length,
-            reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
-          };
+          useStore.getState().syncServerShellSnapshot(snapshot);
+          return snapshot;
         }
-        if (lease !== getRecoveryMutationLease()) {
-          return { applied: false, shellThreadCount: 0, reason: "stale" };
-        }
-        const repaired = await requestRepairState(api);
-        if (lease !== getRecoveryMutationLease()) {
-          return { applied: false, shellThreadCount: 0, reason: "stale" };
-        }
-        const decision = resolveRepairedShellApplication({
-          repaired,
-          observedLiveThreadEvidence:
-            hasClientLiveThreadEvidence(useStore.getState()) || snapshot.threads.length > 0,
+        return api.orchestration.repairState().then((repairedSnapshot) => {
+          syncServerReadModel(repairedSnapshot);
+          return repairedSnapshot;
         });
-        if (decision.action === "confirmed-empty") {
-          return {
-            applied: true,
-            shellThreadCount: 0,
-            reason: "confirmed-empty",
-          };
-        }
-        if (decision.action === "inconsistent-empty" || decision.action === "reject-incomplete") {
-          return {
-            applied: false,
-            shellThreadCount: decision.shellThreadCount,
-            reason: "empty",
-          };
-        }
-        const snapshotApplied = tryApplyShellSnapshot(decision.shell);
-        const recoveredState = useStore.getState();
-        const recovered =
-          snapshotApplied &&
-          classifyDesktopHydrationRecovery({
-            threadsHydrated: recoveredState.threadsHydrated,
-            projects: recoveredState.projects,
-            threads: recoveredState.threads,
-            threadIds: recoveredState.threadIds,
-            threadShellById: recoveredState.threadShellById,
-            threadSessionById: recoveredState.threadSessionById,
-            threadTurnStateById: recoveredState.threadTurnStateById,
-          }) !== "repair-projects";
-        return {
-          applied: recovered,
-          shellThreadCount: decision.shell.threads.length,
-          reason: recovered ? "ok" : snapshotApplied ? "empty" : "stale",
-        };
-      },
-    });
-    controller.start();
-    return () => {
-      bumpRecoveryMutationLease();
-      controller.cancel();
-    };
-  }, [recoveryKind, shellRefreshEpoch]);
+      })
+      .catch(() => {
+        attemptedRecoveryRef.current = false;
+      });
+  }, [projects, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
 }
+const selectAllThreads = createAllThreadsSelector();

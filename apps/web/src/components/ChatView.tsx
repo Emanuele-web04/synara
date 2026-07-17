@@ -42,6 +42,7 @@ import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
+import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
@@ -77,6 +78,7 @@ import {
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
+  isInitialModelDiscoveryPending,
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerCommandsQueryOptions,
@@ -93,6 +95,7 @@ import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuer
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
+  composerMentionPathNeedsQuoting,
   formatComposerMentionToken,
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -131,11 +134,15 @@ import {
   buildComposerFileAttachmentsFromFiles,
   IMAGE_SIZE_LIMIT_LABEL,
   buildComposerImageAttachmentsFromFiles,
-  buildUploadComposerAttachments,
+  stageUploadComposerAttachments,
   cloneComposerImageAttachment,
+  effectiveComposerAttachmentCount,
+  findPendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
+  hydratePendingBlobComposerAttachments,
   readFileAsDataUrl,
 } from "../lib/composerSend";
+import { composerImageBlobKey, persistComposerImageBlob } from "../lib/composerImageBlobStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
@@ -159,13 +166,18 @@ import {
   buildThreadBreadcrumbs,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  hasFileUndoSettled,
   promptStillMatchesActiveHistoryBrowse,
+  type PendingFileUndo,
   type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
@@ -191,7 +203,11 @@ import {
   ensureLeadingSpaceForReplacement,
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
-import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import {
+  createAllThreadsSelector,
+  createProjectSelector,
+  createThreadSelector,
+} from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
@@ -273,9 +289,10 @@ import {
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import { disposeAndCloseTerminalSession, randomTerminalId } from "./terminal/terminalSession";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
@@ -299,6 +316,7 @@ import {
   shouldPromptForTerminalClose,
 } from "~/lib/terminalCloseConfirmation";
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
+import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -520,7 +538,7 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useFeatureFlags } from "../featureFlags";
-import { mergeCursorModelVariantsWithBaseControls } from "../cursorModelVariants";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -724,6 +742,69 @@ function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
   });
 }
 
+// Shared by the live-composer and prompt-history attachment sync effects:
+// AppSnap images persist their bytes as IndexedDB blobs (reusing an existing
+// blob key when valid), everything else inlines a data URL. Falls back to the
+// already-persisted attachments for images whose serialization fails.
+async function stagePersistedComposerImageAttachments(input: {
+  threadId: ThreadId;
+  images: ReadonlyArray<ComposerImageAttachment>;
+  getPersistedAttachments: () => PersistedComposerImageAttachment[];
+}): Promise<PersistedComposerImageAttachment[]> {
+  try {
+    const existingPersistedById = new Map(
+      input.getPersistedAttachments().map((attachment) => [attachment.id, attachment]),
+    );
+    const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
+    await Promise.all(
+      input.images.map(async (image) => {
+        try {
+          if (image.source?.kind === "appsnap") {
+            const existingPersisted = existingPersistedById.get(image.id);
+            const expectedBlobKey = composerImageBlobKey(input.threadId, image.id);
+            const blobKey =
+              existingPersisted?.blobKey === expectedBlobKey
+                ? expectedBlobKey
+                : await persistComposerImageBlob({
+                    threadId: input.threadId,
+                    imageId: image.id,
+                    file: image.file,
+                  });
+            stagedAttachmentById.set(image.id, {
+              id: image.id,
+              name: image.name,
+              mimeType: image.mimeType,
+              sizeBytes: image.sizeBytes,
+              blobKey,
+              source: image.source,
+            });
+            return;
+          }
+          const dataUrl = await readFileAsDataUrl(image.file);
+          stagedAttachmentById.set(image.id, {
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl,
+          });
+        } catch {
+          const existingPersisted = existingPersistedById.get(image.id);
+          if (existingPersisted) {
+            stagedAttachmentById.set(image.id, existingPersisted);
+          }
+        }
+      }),
+    );
+    return Array.from(stagedAttachmentById.values());
+  } catch {
+    const currentImageIds = new Set(input.images.map((image) => image.id));
+    return input
+      .getPersistedAttachments()
+      .filter((attachment) => currentImageIds.has(attachment.id));
+  }
+}
+
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -780,10 +861,12 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "antigravity":
+      return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
+    case "droid":
+      return normalizeCustomBinaryPath(providerOptions?.droid?.binaryPath);
     case "kilo":
       return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
@@ -1000,6 +1083,8 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
   };
 }
 
+const selectAllThreads = createAllThreadsSelector();
+
 export default function ChatView({
   threadId,
   paneScopeId = SINGLE_CHAT_PANE_SCOPE_ID,
@@ -1021,13 +1106,13 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
-  const setStickyComposerModelSelection = useComposerDraftStore(
-    (store) => store.setStickyModelSelection,
+  const setComposerDraftModelSelectionAndSticky = useComposerDraftStore(
+    (store) => store.setModelSelectionAndSticky,
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
@@ -1087,6 +1172,7 @@ export default function ChatView({
     ],
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const durablyPersistedComposerImageIds = composerDraft.persistedAttachments;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftPromptHistorySavedDraft = useComposerDraftStore(
     (store) => store.setPromptHistorySavedDraft,
@@ -1191,11 +1277,12 @@ export default function ChatView({
   const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [pendingFileUndo, setPendingFileUndo] = useState<PendingFileUndo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
-  const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
-    ApprovalRequestId[]
-  >([]);
+  const [respondingRequestKeys, setRespondingRequestKeys] = useState<string[]>([]);
+  const [respondingUserInputRequestKeys, setRespondingUserInputRequestKeys] = useState<string[]>(
+    [],
+  );
   const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
@@ -1592,6 +1679,15 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  useEffect(() => {
+    if (
+      pendingFileUndo &&
+      hasFileUndoSettled({ pending: pendingFileUndo, thread: activeThread ?? null })
+    ) {
+      setPendingFileUndo(null);
+      setIsRevertingCheckpoint(false);
+    }
+  }, [activeThread, pendingFileUndo]);
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -1646,7 +1742,7 @@ export default function ChatView({
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
   const automationProjects = useStore((state) => state.projects);
-  const automationThreads = useStore((state) => state.threads);
+  const automationThreads = useStore(selectAllThreads);
   const { data: automationData, updateMutation: automationUpdateMutation } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
   const [automationEditingDefinition, setAutomationEditingDefinition] =
@@ -1941,7 +2037,6 @@ export default function ChatView({
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
-  const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
@@ -1958,8 +2053,9 @@ export default function ChatView({
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
-      gemini: resolveHint("gemini"),
+      antigravity: resolveHint("antigravity"),
       grok: resolveHint("grok"),
+      droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
@@ -1992,11 +2088,13 @@ export default function ChatView({
       enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
     }),
   );
-  const geminiModelsQuery = useQuery(
+  const antigravityModelsQuery = useQuery(
     providerModelsQueryOptions({
-      provider: "gemini",
-      binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+      provider: "antigravity",
+      binaryPath: settings.antigravityBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled:
+        selectedProvider === "antigravity" || lockedProvider === "antigravity" || isModelPickerOpen,
     }),
   );
   const grokDynamicModelsQuery = useQuery(
@@ -2004,6 +2102,15 @@ export default function ChatView({
       provider: "grok",
       binaryPath: settings.grokBinaryPath || null,
       enabled: selectedProvider === "grok" || lockedProvider === "grok" || isModelPickerOpen,
+    }),
+  );
+  const droidModelDiscoveryEnabled = selectedProvider === "droid" || lockedProvider === "droid";
+  const droidDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "droid",
+      binaryPath: settings.droidBinaryPath || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: droidModelDiscoveryEnabled,
     }),
   );
   const openCodeDynamicModelsQuery = useQuery(
@@ -2052,11 +2159,8 @@ export default function ChatView({
     }),
   );
   const cursorRuntimeModels = useMemo(
-    () =>
-      showExpandedCursorModelVariants
-        ? (cursorDynamicModelsQuery.data?.models ?? [])
-        : mergeCursorModelVariantsWithBaseControls(cursorDynamicModelsQuery.data?.models ?? []),
-    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
+    () => collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+    [cursorDynamicModelsQuery.data?.models],
   );
   const cursorModelDiscoveryEnabled =
     selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
@@ -2067,7 +2171,14 @@ export default function ChatView({
   const cursorModelDiscoveryPending =
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
-    (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
+  const hasResolvedDroidModelDiscovery =
+    droidDynamicModelsQuery.data?.source === "droid-acp" &&
+    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const droidModelDiscoveryPending =
+    droidModelDiscoveryEnabled &&
+    !hasResolvedDroidModelDiscovery &&
+    isInitialModelDiscoveryPending(droidDynamicModelsQuery);
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
@@ -2075,7 +2186,7 @@ export default function ChatView({
   const kiloModelDiscoveryPending =
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
-    (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(kiloDynamicModelsQuery);
   const hasResolvedOpenCodeModelDiscovery =
     (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
       openCodeDynamicModelsQuery.data?.source === "opencode") &&
@@ -2083,14 +2194,19 @@ export default function ChatView({
   const openCodeModelDiscoveryPending =
     openCodeModelDiscoveryEnabled &&
     !hasResolvedOpenCodeModelDiscovery &&
-    (openCodeDynamicModelsQuery.isLoading || openCodeDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(openCodeDynamicModelsQuery);
   const hasResolvedPiModelDiscovery =
     piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
     (piDynamicModelsQuery.data.models.length ?? 0) > 0;
   const piModelDiscoveryPending =
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
-    (piDynamicModelsQuery.isLoading || piDynamicModelsQuery.isFetching);
+    isInitialModelDiscoveryPending(piDynamicModelsQuery);
+  const antigravityModelDiscoveryPending =
+    !(
+      antigravityModelsQuery.data?.source === "antigravity.cli" &&
+      (antigravityModelsQuery.data.models.length ?? 0) > 0
+    ) && isInitialModelDiscoveryPending(antigravityModelsQuery);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -2108,15 +2224,20 @@ export default function ChatView({
         customModelsByProvider.cursor,
         composerModelHintByProvider.cursor,
       ),
-      gemini: getAppModelOptions(
-        "gemini",
-        customModelsByProvider.gemini,
-        composerModelHintByProvider.gemini,
+      antigravity: getAppModelOptions(
+        "antigravity",
+        customModelsByProvider.antigravity,
+        composerModelHintByProvider.antigravity,
       ),
       grok: getAppModelOptions(
         "grok",
         customModelsByProvider.grok,
         composerModelHintByProvider.grok,
+      ),
+      droid: getAppModelOptions(
+        "droid",
+        customModelsByProvider.droid,
+        composerModelHintByProvider.droid,
       ),
       kilo: getAppModelOptions(
         "kilo",
@@ -2142,8 +2263,9 @@ export default function ChatView({
         cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
-      gemini: geminiModelsQuery.data,
+      antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      droid: droidDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -2153,8 +2275,9 @@ export default function ChatView({
       "claudeAgent",
       "codex",
       "cursor",
-      "gemini",
+      "antigravity",
       "grok",
+      "droid",
       "kilo",
       "opencode",
       "pi",
@@ -2177,7 +2300,8 @@ export default function ChatView({
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
     customModelsByProvider,
-    geminiModelsQuery.data,
+    droidDynamicModelsQuery.data,
+    antigravityModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
@@ -2196,8 +2320,9 @@ export default function ChatView({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
-      gemini: geminiModelsQuery.data?.models ?? [],
+      antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      droid: droidDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -2206,7 +2331,8 @@ export default function ChatView({
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
-      geminiModelsQuery.data?.models,
+      droidDynamicModelsQuery.data?.models,
+      antigravityModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
@@ -2217,8 +2343,9 @@ export default function ChatView({
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
-    gemini: geminiModelsQuery,
+    antigravity: antigravityModelsQuery,
     grok: grokDynamicModelsQuery,
+    droid: droidDynamicModelsQuery,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,
@@ -2281,33 +2408,43 @@ export default function ChatView({
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : selectedProviderModelsQuery !== undefined &&
-              (selectedProviderModelsQuery.isLoading ||
-                (selectedProviderModelsQuery.isFetching &&
-                  selectedProviderModelsQuery.data === undefined));
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : selectedProviderModelsQuery !== undefined &&
+                  (selectedProviderModelsQuery.isLoading ||
+                    (selectedProviderModelsQuery.isFetching &&
+                      selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "antigravity" ||
+    selectedProvider === "droid" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : false;
+    selectedProvider === "antigravity"
+      ? antigravityModelDiscoveryPending
+      : selectedProvider === "cursor"
+        ? cursorModelDiscoveryPending
+        : selectedProvider === "droid"
+          ? droidModelDiscoveryPending
+          : selectedProvider === "kilo"
+            ? kiloModelDiscoveryPending
+            : selectedProvider === "opencode"
+              ? openCodeModelDiscoveryPending
+              : selectedProvider === "pi"
+                ? piModelDiscoveryPending
+                : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -2429,24 +2566,30 @@ export default function ChatView({
     }
   }, [agentActivityTimelineState.detailById, openAgentActivityId]);
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities),
-    [threadActivities],
+    () => derivePendingApprovals(threadActivities, activeThread?.pendingInteractions),
+    [activeThread?.pendingInteractions, threadActivities],
   );
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
+    () => derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions),
+    [activeThread?.pendingInteractions, threadActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activePendingUserInputKey = activePendingUserInput
+    ? pendingRequestInstanceKey(
+        activePendingUserInput.requestId,
+        activePendingUserInput.lifecycleGeneration,
+      )
+    : null;
   const activePendingDraftAnswers = useMemo(
     () =>
-      activePendingUserInput
-        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
+      activePendingUserInputKey
+        ? (pendingUserInputAnswersByRequestId[activePendingUserInputKey] ??
           EMPTY_PENDING_USER_INPUT_ANSWERS)
         : EMPTY_PENDING_USER_INPUT_ANSWERS,
-    [activePendingUserInput, pendingUserInputAnswersByRequestId],
+    [activePendingUserInputKey, pendingUserInputAnswersByRequestId],
   );
-  const activePendingQuestionIndex = activePendingUserInput
-    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
+  const activePendingQuestionIndex = activePendingUserInputKey
+    ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInputKey] ?? 0)
     : 0;
   const activePendingProgress = useMemo(
     () =>
@@ -2466,8 +2609,8 @@ export default function ChatView({
         : null,
     [activePendingDraftAnswers, activePendingUserInput],
   );
-  const activePendingIsResponding = activePendingUserInput
-    ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
+  const activePendingIsResponding = activePendingUserInputKey
+    ? respondingUserInputRequestKeys.includes(activePendingUserInputKey)
     : false;
   const activeProposedPlan = useMemo(() => {
     if (!latestTurnSettled) {
@@ -2555,9 +2698,13 @@ export default function ChatView({
       };
     }
 
+    // Only while a turn is live: deriveActiveTaskListState falls back to the latest
+    // unfinished prior-turn list (follow-up turns, reloads mid-turn), but once the
+    // thread is idle the card must clear — providers routinely end a turn without
+    // marking every task completed, and an unfinished list must not linger forever.
     return latestTurnSettled
       ? null
-      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
+      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId);
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
     () =>
@@ -2851,8 +2998,13 @@ export default function ChatView({
       pendingAutomationConversation && pendingAutomationConversation.threadId === threadId
         ? pendingAutomationConversation.bubbles
         : [];
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    // Optimistic messages exist only briefly after a send; skip the full-transcript
+    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
+    let pendingMessages = optimisticUserMessages;
+    if (optimisticUserMessages.length > 0) {
+      const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
+      pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    }
     const withPending =
       pendingMessages.length === 0
         ? serverMessagesWithPreviewHandoff
@@ -2868,6 +3020,11 @@ export default function ChatView({
   ]);
   const promptHistory = useMemo(() => {
     const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+    // Optimistic messages exist only briefly after a send; skip the full-transcript
+    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
+    if (optimisticUserMessages.length === 0) {
+      return derivePromptHistoryFromMessages(activeMessages);
+    }
     const activeMessageIds = new Set(activeMessages.map((message) => message.id));
     const pendingOptimisticMessages = optimisticUserMessages.filter(
       (message) => !activeMessageIds.has(message.id),
@@ -3041,10 +3198,14 @@ export default function ChatView({
       });
     }
     return buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries,
+      turnDiffSummaries: turnDiffSummaries.map((summary) => ({
+        ...summary,
+        checkpointTurnCount:
+          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
+      })),
       messages: messagesForDiffAnchoring,
     });
-  }, [turnDiffSummaries, timelineMessages]);
+  }, [inferredCheckpointTurnCountByTurnId, turnDiffSummaries, timelineMessages]);
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -3133,12 +3294,6 @@ export default function ChatView({
           ? providerOptionsForDispatch?.opencode?.serverUrl
           : selectedProvider === "kilo"
             ? providerOptionsForDispatch?.kilo?.serverUrl
-            : null) ?? null,
-      serverPassword:
-        (selectedProvider === "opencode"
-          ? providerOptionsForDispatch?.opencode?.serverPassword
-          : selectedProvider === "kilo"
-            ? providerOptionsForDispatch?.kilo?.serverPassword
             : null) ?? null,
       experimentalWebSockets:
         selectedProvider === "opencode"
@@ -3380,10 +3535,14 @@ export default function ChatView({
   composerMenuOpenRef.current = composerMenuOpen;
   composerMenuItemsRef.current = composerMenuItems;
   activeComposerMenuItemRef.current = activeComposerMenuItem;
-  const nonPersistedComposerImageIdSet = useMemo(
-    () => new Set(nonPersistedComposerImageIds),
-    [nonPersistedComposerImageIds],
-  );
+  const nonPersistedComposerImageIdSet = useMemo(() => {
+    const durableBlobIds = new Set(
+      durablyPersistedComposerImageIds
+        .filter((attachment) => Boolean(attachment.blobKey))
+        .map((attachment) => attachment.id),
+    );
+    return new Set(nonPersistedComposerImageIds.filter((id) => !durableBlobIds.has(id)));
+  }, [durablyPersistedComposerImageIds, nonPersistedComposerImageIds]);
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const rememberCustomBinaryPathForDispatch = useCallback(
@@ -4219,12 +4378,32 @@ export default function ChatView({
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
+    settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
   // Every close (header toggle or panel action click) stores the cross-chat preference,
   // so a dismissed panel stays closed when switching threads until it is toggled back on.
+  // The same toggle also persists to settings so the preference survives reloads.
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
+  const updateEnvironmentPanelPreference = useCallback(
+    (open: boolean, persist: boolean) => {
+      const update = resolveEnvironmentPanelPreferenceUpdate({ open, persist });
+      setEnvironmentPanelPreferenceOpen(update.userPreferenceOpen);
+      if (update.settingsDefaultOpen !== null) {
+        updateSettings({ environmentPanelDefaultOpen: update.settingsDefaultOpen });
+      }
+    },
+    [updateSettings],
+  );
+  const setEnvironmentPanelOpenPreference = useCallback(
+    (open: boolean) => updateEnvironmentPanelPreference(open, true),
+    [updateEnvironmentPanelPreference],
+  );
+  const closeEnvironmentPanelAfterAction = useCallback(
+    () => updateEnvironmentPanelPreference(false, false),
+    [updateEnvironmentPanelPreference],
+  );
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
     userPreferenceOpen: environmentPanelPreferenceOpen,
@@ -4292,7 +4471,7 @@ export default function ChatView({
       },
       onTerminalMetadataChange: (
         terminalId: string,
-        metadata: { cliKind: "codex" | "claude" | null; label: string },
+        metadata: { cliKind: "codex" | "claude" | "antigravity" | null; label: string },
       ) => {
         if (!activeThreadId) return;
         storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
@@ -4470,8 +4649,6 @@ export default function ChatView({
     isServerThread,
     stopActiveThreadSession,
     runProjectScript,
-    setStoreThreadWorkspace,
-    syncServerShellSnapshot,
   });
   const persistProjectScripts = useCallback(
     async (input: {
@@ -5204,6 +5381,11 @@ export default function ChatView({
     if (activeThread.messages.length === 0) {
       return;
     }
+    // No optimistic messages → nothing to reconcile; skip the full-transcript id Set
+    // this effect would otherwise rebuild on every streaming flush.
+    if (optimisticUserMessages.length === 0) {
+      return;
+    }
     const serverIds = new Set(activeThread.messages.map((message) => message.id));
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
     if (removedMessages.length === 0) {
@@ -5341,57 +5523,29 @@ export default function ChatView({
     let cancelled = false;
     void (async () => {
       if (composerImages.length === 0) {
+        const hasDeferredBlobAttachment =
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[threadId]?.persistedAttachments.some(
+              (attachment) => attachment.blobKey,
+            ) ?? false;
+        if (hasDeferredBlobAttachment) {
+          return;
+        }
         clearComposerDraftPersistedAttachments(threadId);
         return;
       }
-      const getPersistedAttachmentsForThread = () =>
-        useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [];
-      try {
-        const currentPersistedAttachments = getPersistedAttachmentsForThread();
-        const existingPersistedById = new Map(
-          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
-        );
-        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
-        await Promise.all(
-          composerImages.map(async (image) => {
-            try {
-              const dataUrl = await readFileAsDataUrl(image.file);
-              stagedAttachmentById.set(image.id, {
-                id: image.id,
-                name: image.name,
-                mimeType: image.mimeType,
-                sizeBytes: image.sizeBytes,
-                dataUrl,
-              });
-            } catch {
-              const existingPersisted = existingPersistedById.get(image.id);
-              if (existingPersisted) {
-                stagedAttachmentById.set(image.id, existingPersisted);
-              }
-            }
-          }),
-        );
-        const serialized = Array.from(stagedAttachmentById.values());
-        if (cancelled) {
-          return;
-        }
-        // Stage attachments in persisted draft state first so persist middleware can write them.
-        syncComposerDraftPersistedAttachments(threadId, serialized);
-      } catch {
-        const currentImageIds = new Set(composerImages.map((image) => image.id));
-        const fallbackPersistedAttachments = getPersistedAttachmentsForThread();
-        const fallbackPersistedIds = fallbackPersistedAttachments
-          .map((attachment) => attachment.id)
-          .filter((id) => currentImageIds.has(id));
-        const fallbackPersistedIdSet = new Set(fallbackPersistedIds);
-        const fallbackAttachments = fallbackPersistedAttachments.filter((attachment) =>
-          fallbackPersistedIdSet.has(attachment.id),
-        );
-        if (cancelled) {
-          return;
-        }
-        syncComposerDraftPersistedAttachments(threadId, fallbackAttachments);
+      const staged = await stagePersistedComposerImageAttachments({
+        threadId,
+        images: composerImages,
+        getPersistedAttachments: () =>
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [],
+      });
+      if (cancelled) {
+        return;
       }
+      // Stage attachments in persisted draft state first so persist middleware can write them.
+      void syncComposerDraftPersistedAttachments(threadId, staged);
     })();
     return () => {
       cancelled = true;
@@ -5412,53 +5566,17 @@ export default function ChatView({
     }
     let cancelled = false;
     void (async () => {
-      const getPersistedAttachmentsForThread = () =>
-        useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
-          ?.persistedAttachments ?? [];
-      try {
-        const currentPersistedAttachments = getPersistedAttachmentsForThread();
-        const existingPersistedById = new Map(
-          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
-        );
-        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
-        await Promise.all(
-          composerPromptHistorySavedDraftImages.map(async (image) => {
-            try {
-              const dataUrl = await readFileAsDataUrl(image.file);
-              stagedAttachmentById.set(image.id, {
-                id: image.id,
-                name: image.name,
-                mimeType: image.mimeType,
-                sizeBytes: image.sizeBytes,
-                dataUrl,
-              });
-            } catch {
-              const existingPersisted = existingPersistedById.get(image.id);
-              if (existingPersisted) {
-                stagedAttachmentById.set(image.id, existingPersisted);
-              }
-            }
-          }),
-        );
-        if (cancelled) {
-          return;
-        }
-        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
-          threadId,
-          Array.from(stagedAttachmentById.values()),
-        );
-      } catch {
-        const currentImageIds = new Set(
-          composerPromptHistorySavedDraftImages.map((image) => image.id),
-        );
-        const fallbackAttachments = getPersistedAttachmentsForThread().filter((attachment) =>
-          currentImageIds.has(attachment.id),
-        );
-        if (cancelled) {
-          return;
-        }
-        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(threadId, fallbackAttachments);
+      const staged = await stagePersistedComposerImageAttachments({
+        threadId,
+        images: composerPromptHistorySavedDraftImages,
+        getPersistedAttachments: () =>
+          useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
+            ?.persistedAttachments ?? [],
+      });
+      if (cancelled) {
+        return;
       }
+      void syncComposerDraftPromptHistorySavedDraftPersistedAttachments(threadId, staged);
     })();
     return () => {
       cancelled = true;
@@ -5703,6 +5821,42 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  const onProviderModelSelect = useCallback(
+    (provider: ProviderKind, model: ModelSlug) => {
+      if (!activeThread) return;
+      if (lockedProvider !== null && provider !== lockedProvider) {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider[provider],
+        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
+      });
+      const nextModelSelection: ModelSelection = {
+        provider,
+        model: resolvedModel,
+      };
+      setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
+      if (provider === "cursor") {
+        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+          persistSticky: true,
+          model: resolvedModel,
+        });
+      }
+      scheduleComposerFocus();
+    },
+    [
+      activeThread,
+      lockedProvider,
+      scheduleComposerFocus,
+      setComposerDraftModelSelectionAndSticky,
+      setComposerDraftProviderModelOptions,
+      customModelsByProvider,
+      modelOptionsByProvider,
+    ],
+  );
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -5760,6 +5914,23 @@ export default function ChatView({
         event.stopPropagation();
         handleModelPickerOpenChange(true);
         scheduleComposerFocus();
+        return;
+      }
+
+      if (command === "model.next" || command === "model.previous") {
+        if (!composerPickerShortcutActive) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = command === "model.next" ? "next" : "previous";
+        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const nextSlug = resolveCycledModelSlug({
+          currentModel: selectedModel,
+          options: providerOptions,
+          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          direction,
+        });
+        if (!nextSlug) return;
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
         return;
       }
 
@@ -5934,6 +6105,11 @@ export default function ChatView({
     scheduleComposerFocus,
     toggleComposerFocus,
     toggleTerminalVisibility,
+    activeThread,
+    selectedProvider,
+    selectedModel,
+    modelOptionsByProvider,
+    onProviderModelSelect,
   ]);
 
   const startComposerVoiceRecording = useCallback(async () => {
@@ -6142,14 +6318,9 @@ export default function ChatView({
 
       const { images: nextImages, error } = buildComposerImageAttachmentsFromFiles({
         files,
-        existingAttachmentCount: (() => {
-          const currentDraft = useComposerDraftStore.getState().draftsByThreadId[activeThreadId];
-          return (
-            (currentDraft?.images.length ?? 0) +
-            (currentDraft?.files.length ?? 0) +
-            (currentDraft?.assistantSelections.length ?? 0)
-          );
-        })(),
+        existingAttachmentCount: effectiveComposerAttachmentCount(
+          useComposerDraftStore.getState().draftsByThreadId[activeThreadId],
+        ),
       });
 
       if (nextImages.length === 1 && nextImages[0]) {
@@ -6186,14 +6357,9 @@ export default function ChatView({
 
       const { files: nextFiles, error } = buildComposerFileAttachmentsFromFiles({
         files,
-        existingAttachmentCount: (() => {
-          const currentDraft = useComposerDraftStore.getState().draftsByThreadId[activeThreadId];
-          return (
-            (currentDraft?.images.length ?? 0) +
-            (currentDraft?.files.length ?? 0) +
-            (currentDraft?.assistantSelections.length ?? 0)
-          );
-        })(),
+        existingAttachmentCount: effectiveComposerAttachmentCount(
+          useComposerDraftStore.getState().draftsByThreadId[activeThreadId],
+        ),
       });
 
       if (nextFiles.length > 0) {
@@ -6222,6 +6388,11 @@ export default function ChatView({
       addFiles: addComposerFiles,
     },
     appendReferenceText: (referenceText) => appendComposerPromptText(threadId, referenceText),
+    appendPathMentions: (paths) => {
+      for (const absolutePath of paths) {
+        appendComposerPromptText(threadId, formatComposerMentionToken(absolutePath));
+      }
+    },
     dragDepthRef,
     focusComposer,
     setIsDragOverComposer,
@@ -6255,6 +6426,7 @@ export default function ChatView({
           commandId: newCommandId(),
           threadId: activeThread.id,
           turnCount,
+          scope: "thread",
           createdAt: new Date().toISOString(),
         });
       } catch (err) {
@@ -6264,6 +6436,57 @@ export default function ChatView({
         );
       }
       setIsRevertingCheckpoint(false);
+    },
+    [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
+  );
+
+  const onUndoTurnFiles = useCallback(
+    async (turnCounts: readonly number[]) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || isRevertingCheckpoint || turnCounts.length === 0) return;
+
+      if (hasLiveTurn || isSendBusy || isConnecting) {
+        setThreadError(activeThread.id, "Interrupt the current turn before undoing file changes.");
+        return;
+      }
+      const confirmed = await api.dialogs.confirm(
+        [
+          "Undo the latest file changes shown in this card?",
+          "Earlier file changes will remain available to undo.",
+          "Messages and provider conversation history will be kept.",
+          "This action cannot be undone.",
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      const turnCount = Math.max(...turnCounts);
+      const requestedAt = new Date().toISOString();
+      setPendingFileUndo({
+        threadId: activeThread.id,
+        turnCount,
+        existingFailureActivityIds: activeThread.activities
+          .filter((activity) => activity.kind === "checkpoint.revert.failed")
+          .map((activity) => activity.id),
+      });
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.checkpoint.revert",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          turnCount,
+          scope: "files",
+          createdAt: requestedAt,
+        });
+      } catch (err) {
+        setPendingFileUndo(null);
+        setIsRevertingCheckpoint(false);
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to undo file changes.",
+        );
+      }
     },
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
@@ -6831,8 +7054,8 @@ export default function ChatView({
       const liveComposerSnapshot = composerEditorRef.current?.readSnapshot() ?? null;
       const livePendingAnswerText = liveComposerSnapshot?.value ?? promptRef.current;
       const currentDraftAnswer =
-        activePendingUserInput && activeQuestion
-          ? pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+        activePendingUserInputKey && activeQuestion
+          ? pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey]?.[
               activeQuestion.id
             ]
           : undefined;
@@ -6845,18 +7068,18 @@ export default function ChatView({
               ),
             }
           : undefined;
-      if (activePendingUserInput && answerOverrides) {
+      if (activePendingUserInputKey && answerOverrides) {
         const nextRequestAnswers = {
-          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey],
           ...answerOverrides,
         };
         pendingUserInputAnswersByRequestIdRef.current = {
           ...pendingUserInputAnswersByRequestIdRef.current,
-          [activePendingUserInput.requestId]: nextRequestAnswers,
+          [activePendingUserInputKey]: nextRequestAnswers,
         };
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
-          [activePendingUserInput.requestId]: nextRequestAnswers,
+          [activePendingUserInputKey]: nextRequestAnswers,
         }));
       }
       return onAdvanceActivePendingUserInput(answerOverrides);
@@ -6866,6 +7089,27 @@ export default function ChatView({
       queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
     let promptForSend = queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
+    // AppSnap captures persist as IndexedDB blobs and hydrate into `images`
+    // asynchronously (see AppSnapCoordinator). Right after a reload the user can
+    // hit send before that hydration finishes; without this, the not-yet-hydrated
+    // capture would be silently dropped from the message and then have its blob
+    // deleted when the composer clears after send. Live sends only: a queued turn
+    // already captured a fully-resolved image snapshot when it was queued.
+    if (queuedChatTurn === null) {
+      const pendingBlobAttachments = findPendingBlobComposerAttachments({
+        persistedAttachments:
+          useComposerDraftStore.getState().draftsByThreadId[activeThread.id]
+            ?.persistedAttachments ?? [],
+        images: composerImagesForSend,
+      });
+      if (pendingBlobAttachments.length > 0) {
+        const hydratedPendingImages =
+          await hydratePendingBlobComposerAttachments(pendingBlobAttachments);
+        if (hydratedPendingImages.length > 0) {
+          composerImagesForSend = [...composerImagesForSend, ...hydratedPendingImages];
+        }
+      }
+    }
     const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
@@ -7460,7 +7704,8 @@ export default function ChatView({
       outgoingMessageText,
       selectedComposerMentionsForSend,
     );
-    const turnAttachmentsPromise = buildUploadComposerAttachments({
+    const turnAttachmentsPromise = stageUploadComposerAttachments({
+      threadId: threadIdForSend,
       images: composerImagesSnapshot,
       files: composerFilesSnapshot,
       assistantSelections: composerAssistantSelectionsSnapshot,
@@ -7484,11 +7729,16 @@ export default function ChatView({
       })),
     ];
     // Sending the first message flips the centered empty landing into a normal
-    // transcript, which would otherwise let the Environment panel's default-open
-    // policy pop it open. Keep it closed on send regardless of whether the user
-    // had opened it in the empty view.
+    // transcript. Clear session-only landing overrides when default-open is enabled;
+    // otherwise keep the transition closed.
     if (isCenteredEmptyLanding) {
-      setEnvironmentPanelPreferenceOpen(false);
+      setEnvironmentPanelPreferenceOpen(
+        resolveEnvironmentPanelPreferenceAfterFirstSend({
+          isCenteredEmptyLanding,
+          settingsDefaultOpen: settings.environmentPanelDefaultOpen,
+          currentPreferenceOpen: environmentPanelPreferenceOpen,
+        }),
+      );
     }
     setOptimisticUserMessages((existing) => [
       ...existing,
@@ -7585,12 +7835,11 @@ export default function ChatView({
       }
 
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedProviderForSend,
-        selectedModelSelectionForSend.provider === selectedProviderForSend
-          ? selectedModelSelectionForSend.model
-          : selectedModelForSend ||
-              targetProjectDefaultModelSelectionForSend?.model ||
-              DEFAULT_MODEL_BY_PROVIDER.codex,
+        selectedModelSelectionForSend.provider,
+        selectedModelSelectionForSend.model ||
+          selectedModelForSend ||
+          targetProjectDefaultModelSelectionForSend?.model ||
+          DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
 
@@ -7690,37 +7939,39 @@ export default function ChatView({
           ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
           : undefined,
       );
-      const turnAttachments = await turnAttachmentsPromise;
+      const stagedTurnAttachments = await turnAttachmentsPromise;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: selectedModelSelectionForSend.provider,
         providerOptions: providerOptionsForDispatchForSend,
       });
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId: threadIdForSend,
-        message: {
-          messageId: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-          ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
-          ...(mentionedPluginMentionsForSend.length > 0
-            ? { mentions: mentionedPluginMentionsForSend }
+      await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
+        api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          message: {
+            messageId: messageIdForSend,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: turnAttachments,
+            ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
+            ...(mentionedPluginMentionsForSend.length > 0
+              ? { mentions: mentionedPluginMentionsForSend }
+              : {}),
+          },
+          modelSelection: selectedModelSelectionForSend,
+          ...(providerOptionsForDispatchForSend
+            ? { providerOptions: providerOptionsForDispatchForSend }
             : {}),
-        },
-        modelSelection: selectedModelSelectionForSend,
-        ...(providerOptionsForDispatchForSend
-          ? { providerOptions: providerOptionsForDispatchForSend }
-          : {}),
-        assistantDeliveryMode,
-        dispatchMode,
-        runtimeMode: nextRuntimeModeForSend,
-        interactionMode: interactionModeForSend,
-        ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-        createdAt: messageCreatedAt,
-      });
+          assistantDeliveryMode,
+          dispatchMode,
+          runtimeMode: nextRuntimeModeForSend,
+          interactionMode: interactionModeForSend,
+          ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
+          createdAt: messageCreatedAt,
+        }),
+      );
       turnStartSucceeded = true;
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
       // queued auto-dispatch through that gap so it can't race the steer.
@@ -7735,6 +7986,12 @@ export default function ChatView({
         setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
       }
     })().catch(async (err: unknown) => {
+      // Uploads start in parallel with workspace/session preparation. If any
+      // earlier step fails, settle that promise and release every staged blob.
+      await turnAttachmentsPromise.then(
+        (staged) => staged.cleanup(),
+        () => undefined,
+      );
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
       failLocalDispatchWorktreeSetup();
@@ -7808,12 +8065,17 @@ export default function ChatView({
   };
 
   const onRespondToApproval = useCallback(
-    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
+    async (
+      requestId: ApprovalRequestId,
+      decision: ProviderApprovalDecision,
+      lifecycleGeneration?: string,
+    ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
+      const requestKey = pendingRequestInstanceKey(requestId, lifecycleGeneration);
 
-      setRespondingRequestIds((existing) =>
-        existing.includes(requestId) ? existing : [...existing, requestId],
+      setRespondingRequestKeys((existing) =>
+        existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
       // Durably persist "always allow" client-side so the next turn (after an
       // idle-stop or runtime restart) keeps full-access instead of asking again.
@@ -7829,6 +8091,7 @@ export default function ChatView({
           threadId: activeThreadId,
           requestId,
           decision,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
           createdAt: new Date().toISOString(),
         })
         .catch((err: unknown) => {
@@ -7837,21 +8100,26 @@ export default function ChatView({
             err instanceof Error ? err.message : "Failed to submit approval decision.",
           );
         });
-      setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
     [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
   );
 
   const onRespondToUserInput = useCallback(
-    async (requestId: ApprovalRequestId, answers: ProviderUserInputAnswers) => {
+    async (
+      requestId: ApprovalRequestId,
+      answers: ProviderUserInputAnswers,
+      lifecycleGeneration?: string,
+    ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
+      const requestKey = pendingRequestInstanceKey(requestId, lifecycleGeneration);
       const dispatchAnswers = hasCompletePendingUserInputAnswers(answers)
         ? answers
         : omitNullPendingUserInputAnswers(answers);
 
-      setRespondingUserInputRequestIds((existing) =>
-        existing.includes(requestId) ? existing : [...existing, requestId],
+      setRespondingUserInputRequestKeys((existing) =>
+        existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
       await api.orchestration
         .dispatchCommand({
@@ -7860,6 +8128,7 @@ export default function ChatView({
           threadId: activeThreadId,
           requestId,
           answers: dispatchAnswers,
+          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
           createdAt: new Date().toISOString(),
         })
         .catch((err: unknown) => {
@@ -7868,7 +8137,7 @@ export default function ChatView({
             err instanceof Error ? err.message : "Failed to submit user input.",
           );
         });
-      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      setRespondingUserInputRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
     [activeThreadId, setStoreThreadError],
   );
@@ -7881,25 +8150,29 @@ export default function ChatView({
     setPrompt("");
     setComposerCursor(0);
     setComposerTrigger(null);
-    void onRespondToUserInput(activePendingUserInput.requestId, {});
+    void onRespondToUserInput(
+      activePendingUserInput.requestId,
+      {},
+      activePendingUserInput.lifecycleGeneration,
+    );
   }, [activePendingIsResponding, activePendingUserInput, onRespondToUserInput, setPrompt]);
 
   const setActivePendingUserInputQuestionIndex = useCallback(
     (nextQuestionIndex: number) => {
-      if (!activePendingUserInput) {
+      if (!activePendingUserInputKey) {
         return;
       }
       setPendingUserInputQuestionIndexByRequestId((existing) => ({
         ...existing,
-        [activePendingUserInput.requestId]: nextQuestionIndex,
+        [activePendingUserInputKey]: nextQuestionIndex,
       }));
     },
-    [activePendingUserInput],
+    [activePendingUserInputKey],
   );
 
   const onToggleActivePendingUserInputOption = useCallback(
     (questionId: string, optionLabel: string) => {
-      if (!activePendingUserInput) {
+      if (!activePendingUserInput || !activePendingUserInputKey) {
         return null;
       }
       const question = activePendingUserInput.questions.find((entry) => entry.id === questionId);
@@ -7908,29 +8181,27 @@ export default function ChatView({
       }
       const nextDraftAnswer = togglePendingUserInputOptionSelection(
         question,
-        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
-          questionId
-        ],
+        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey]?.[questionId],
         optionLabel,
       );
       const nextRequestAnswers = {
-        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey],
         [questionId]: nextDraftAnswer,
       };
       pendingUserInputAnswersByRequestIdRef.current = {
         ...pendingUserInputAnswersByRequestIdRef.current,
-        [activePendingUserInput.requestId]: nextRequestAnswers,
+        [activePendingUserInputKey]: nextRequestAnswers,
       };
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
-        [activePendingUserInput.requestId]: nextRequestAnswers,
+        [activePendingUserInputKey]: nextRequestAnswers,
       }));
       promptRef.current = "";
       setComposerCursor(0);
       setComposerTrigger(null);
       return nextDraftAnswer;
     },
-    [activePendingUserInput],
+    [activePendingUserInput, activePendingUserInputKey],
   );
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
@@ -7941,57 +8212,55 @@ export default function ChatView({
       expandedCursor: number,
       cursorAdjacentToMention: boolean,
     ) => {
-      if (!activePendingUserInput) {
+      if (!activePendingUserInputKey) {
         return;
       }
       promptRef.current = value;
       const nextDraftAnswer = setPendingUserInputCustomAnswer(
-        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
-          questionId
-        ],
+        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey]?.[questionId],
         value,
       );
       const nextRequestAnswers = {
-        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey],
         [questionId]: nextDraftAnswer,
       };
       pendingUserInputAnswersByRequestIdRef.current = {
         ...pendingUserInputAnswersByRequestIdRef.current,
-        [activePendingUserInput.requestId]: nextRequestAnswers,
+        [activePendingUserInputKey]: nextRequestAnswers,
       };
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
-        [activePendingUserInput.requestId]: nextRequestAnswers,
+        [activePendingUserInputKey]: nextRequestAnswers,
       }));
       setComposerCursor(nextCursor);
       setComposerTrigger(
         cursorAdjacentToMention ? null : detectComposerTrigger(value, expandedCursor),
       );
     },
-    [activePendingUserInput],
+    [activePendingUserInputKey],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(
     (answerOverrides?: Record<string, PendingUserInputDraftAnswer>): boolean => {
-      if (!activePendingUserInput || !activePendingProgress) {
+      if (!activePendingUserInput || !activePendingUserInputKey || !activePendingProgress) {
         return false;
       }
       const pendingDraftAnswers =
         answerOverrides && Object.keys(answerOverrides).length > 0
           ? {
-              ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+              ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey],
               ...answerOverrides,
             }
-          : (pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId] ??
+          : (pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey] ??
             activePendingDraftAnswers);
       if (answerOverrides && Object.keys(answerOverrides).length > 0) {
         pendingUserInputAnswersByRequestIdRef.current = {
           ...pendingUserInputAnswersByRequestIdRef.current,
-          [activePendingUserInput.requestId]: pendingDraftAnswers,
+          [activePendingUserInputKey]: pendingDraftAnswers,
         };
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
-          [activePendingUserInput.requestId]: pendingDraftAnswers,
+          [activePendingUserInputKey]: pendingDraftAnswers,
         }));
       }
       const resolvedAnswers = buildPendingUserInputAnswers(
@@ -8000,7 +8269,11 @@ export default function ChatView({
       );
       if (activePendingProgress.isLastQuestion) {
         if (resolvedAnswers) {
-          void onRespondToUserInput(activePendingUserInput.requestId, resolvedAnswers);
+          void onRespondToUserInput(
+            activePendingUserInput.requestId,
+            resolvedAnswers,
+            activePendingUserInput.lifecycleGeneration,
+          );
           return true;
         }
         return false;
@@ -8019,6 +8292,7 @@ export default function ChatView({
       activePendingDraftAnswers,
       activePendingProgress,
       activePendingUserInput,
+      activePendingUserInputKey,
       onRespondToUserInput,
       setActivePendingUserInputQuestionIndex,
     ],
@@ -8531,44 +8805,6 @@ export default function ChatView({
     selectedModel,
   ]);
 
-  const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
-      if (!activeThread) return;
-      if (lockedProvider !== null && provider !== lockedProvider) {
-        scheduleComposerFocus();
-        return;
-      }
-      const resolvedModel = resolveCommittedProviderModel({
-        selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
-        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
-      });
-      const nextModelSelection: ModelSelection = {
-        provider,
-        model: resolvedModel,
-      };
-      setComposerDraftModelSelection(activeThread.id, nextModelSelection);
-      if (provider === "cursor" && !showExpandedCursorModelVariants) {
-        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-          persistSticky: true,
-          model: resolvedModel,
-        });
-      }
-      setStickyComposerModelSelection(nextModelSelection);
-      scheduleComposerFocus();
-    },
-    [
-      activeThread,
-      lockedProvider,
-      scheduleComposerFocus,
-      setComposerDraftModelSelection,
-      setComposerDraftProviderModelOptions,
-      setStickyComposerModelSelection,
-      showExpandedCursorModelVariants,
-      customModelsByProvider,
-      modelOptionsByProvider,
-    ],
-  );
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
       const currentPrompt = promptRef.current;
@@ -8690,7 +8926,9 @@ export default function ChatView({
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
+          antigravity: antigravityModelDiscoveryPending,
           cursor: cursorModelDiscoveryPending,
+          droid: droidModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
           opencode: openCodeModelDiscoveryPending,
           pi: piModelDiscoveryPending,
@@ -8731,7 +8969,9 @@ export default function ChatView({
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={{
+        antigravity: antigravityModelDiscoveryPending,
         cursor: cursorModelDiscoveryPending,
+        droid: droidModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
         opencode: openCodeModelDiscoveryPending,
         pi: piModelDiscoveryPending,
@@ -9048,24 +9288,24 @@ export default function ChatView({
       }
       promptRef.current = next.text;
       const activePendingQuestion = activePendingProgress?.activeQuestion;
-      if (activePendingQuestion && activePendingUserInput) {
+      if (activePendingQuestion && activePendingUserInputKey) {
         const nextDraftAnswer = setPendingUserInputCustomAnswer(
-          pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+          pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey]?.[
             activePendingQuestion.id
           ],
           next.text,
         );
         const nextRequestAnswers = {
-          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInputKey],
           [activePendingQuestion.id]: nextDraftAnswer,
         };
         pendingUserInputAnswersByRequestIdRef.current = {
           ...pendingUserInputAnswersByRequestIdRef.current,
-          [activePendingUserInput.requestId]: nextRequestAnswers,
+          [activePendingUserInputKey]: nextRequestAnswers,
         };
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
-          [activePendingUserInput.requestId]: nextRequestAnswers,
+          [activePendingUserInputKey]: nextRequestAnswers,
         }));
       } else {
         setPrompt(next.text);
@@ -9079,7 +9319,7 @@ export default function ChatView({
       });
       return nextCursor;
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInput, setPrompt],
+    [activePendingProgress?.activeQuestion, activePendingUserInputKey, setPrompt],
   );
 
   const readComposerSnapshot = useCallback((): {
@@ -9178,8 +9418,8 @@ export default function ChatView({
 
   // Rewrites the active `@...` mention to an absolute folder path with a trailing separator
   // so the local-folder picker stays open and the user can keep browsing by clicking or typing.
-  // Paths with whitespace are written as an unclosed `@"...` so detectComposerTrigger keeps
-  // matching and the picker stays open while the user descends into folders with spaces.
+  // Paths that need quoting (spaces, parentheses, …) are written as an unclosed
+  // `@"...` so detectComposerTrigger keeps matching while the user descends (#351).
   const handleNavigateLocalFolder = useCallback(
     (absolutePath: string) => {
       const { snapshot, trigger } = resolveActiveComposerTrigger();
@@ -9188,7 +9428,7 @@ export default function ChatView({
       const withTrailingSeparator = absolutePath.endsWith(separator)
         ? absolutePath
         : `${absolutePath}${separator}`;
-      const base = /\s/.test(withTrailingSeparator)
+      const base = composerMentionPathNeedsQuoting(withTrailingSeparator)
         ? `@"${withTrailingSeparator}`
         : `@${withTrailingSeparator}`;
       applyComposerTriggerReplacement({ snapshot, trigger, base });
@@ -9272,6 +9512,7 @@ export default function ChatView({
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
+    environmentMode: envMode ?? null,
     runtimeMode,
     interactionMode,
     threadId,
@@ -10107,6 +10348,7 @@ export default function ChatView({
     gitCwd: threadWorkspaceCwd,
     openInTarget: threadWorkspaceCwd,
     githubRepository: githubRepositoryQuery.data?.repository ?? null,
+    githubRepositories: githubRepositoryQuery.data?.repositories ?? [],
     isGitRepo,
     keybindings,
     availableEditors,
@@ -10143,7 +10385,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelPreferenceOpen(false),
+    onClose: closeEnvironmentPanelAfterAction,
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10153,7 +10395,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: setEnvironmentPanelPreferenceOpen,
+        onOpenChange: setEnvironmentPanelOpenPreference,
       }
     : null;
 
@@ -10221,7 +10463,12 @@ export default function ChatView({
                   <ComposerPendingApprovalPanel
                     approval={activePendingApproval}
                     pendingCount={pendingApprovals.length}
-                    isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                    isResponding={respondingRequestKeys.includes(
+                      pendingRequestInstanceKey(
+                        activePendingApproval.requestId,
+                        activePendingApproval.lifecycleGeneration,
+                      ),
+                    )}
                     onRespond={onRespondToApproval}
                   />
                 </div>
@@ -10229,7 +10476,7 @@ export default function ChatView({
                 <div className="pb-2">
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
-                    respondingRequestIds={respondingUserInputRequestIds}
+                    isResponding={activePendingIsResponding}
                     answers={activePendingDraftAnswers}
                     questionIndex={activePendingQuestionIndex}
                     onToggleOption={onToggleActivePendingUserInputOption}
@@ -10560,14 +10807,14 @@ export default function ChatView({
                                 >
                                   <ChevronDownIcon className="size-3.5" />
                                 </MenuTrigger>
-                                <MenuPopup align="end" side="top">
+                                <ComposerPickerMenuPopup align="end" side="top">
                                   <MenuItem
                                     disabled={isSendBusy || isConnecting}
                                     onClick={() => void onImplementPlanInNewThread()}
                                   >
                                     Implement in a new thread
                                   </MenuItem>
-                                </MenuPopup>
+                                </ComposerPickerMenuPopup>
                               </Menu>
                             </div>
                           )
@@ -10923,6 +11170,7 @@ export default function ChatView({
                     onOpenAutomation={onOpenAutomation}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
+                    onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

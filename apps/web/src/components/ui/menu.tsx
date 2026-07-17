@@ -27,7 +27,8 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
   );
 }
 
-function MenuPopup({
+/** Low-level popup foundation. App surfaces should use ComposerPickerMenuPopup instead. */
+function MenuPopupBase({
   children,
   className,
   surface = "default",
@@ -112,7 +113,9 @@ function MenuItem({
     <MenuPrimitive.Item
       className={cn(
         COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-        "data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground",
+        // text-destructive (not -foreground): these items sit on the popup surface, so they
+        // need the red accent itself — the foreground token is for text on a destructive fill.
+        "data-inset:ps-8 data-[variant=destructive]:text-destructive",
         className,
       )}
       data-inset={inset}
@@ -362,7 +365,7 @@ function MenuSubPopup({
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (
-    <MenuPopup
+    <MenuPopupBase
       align={align}
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}
@@ -385,8 +388,7 @@ export {
   MenuPortal as DropdownMenuPortal,
   MenuTrigger,
   MenuTrigger as DropdownMenuTrigger,
-  MenuPopup,
-  MenuPopup as DropdownMenuContent,
+  MenuPopupBase,
   MenuGroup,
   MenuGroup as DropdownMenuGroup,
   MenuItem,

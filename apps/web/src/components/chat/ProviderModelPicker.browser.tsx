@@ -20,13 +20,17 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto", name: "Auto" },
     { slug: "composer-2", name: "Composer 2" },
   ],
-  gemini: [
-    { slug: "auto-gemini-3", name: "Auto Gemini 3" },
-    { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-  ],
   grok: [
     { slug: "grok-build-0.1", name: "Grok Build 0.1" },
     { slug: "grok-build", name: "Grok 4.3" },
+  ],
+  droid: [
+    {
+      slug: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      description: "0.4x Factory token rate",
+    },
+    { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna" },
   ],
   kilo: [
     {
@@ -56,6 +60,12 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       name: "Claude Sonnet 4.5",
       upstreamProviderId: "anthropic",
       upstreamProviderName: "Anthropic",
+    },
+  ],
+  antigravity: [
+    {
+      slug: "Gemini 3.5 Flash",
+      name: "Gemini 3.5 Flash",
     },
   ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
@@ -222,6 +232,28 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows live Droid cost multipliers without adding one to BYOK models", async () => {
+    const mounted = await mountPicker({
+      provider: "droid",
+      model: "gpt-5.6-luna",
+      lockedProvider: "droid",
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      const rows = Array.from(document.querySelectorAll('[role="menuitemradio"]'));
+      const pricedRow = rows.find((row) => row.textContent?.includes("GPT-5.6 Luna"));
+      const byokRow = rows.find((row) => row.textContent?.includes("Custom GPT-5.6 Luna"));
+
+      expect(pricedRow?.textContent).toContain("0.4×");
+      expect(pricedRow?.querySelector('[title="0.4x Factory token rate"]')).not.toBeNull();
+      expect(byokRow?.textContent).not.toContain("×");
     } finally {
       await mounted.cleanup();
     }

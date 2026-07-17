@@ -1,5 +1,5 @@
 // FILE: theme.seed.generated.ts
-// Purpose: Stores the exact normalized theme seeds extracted from the packaged Codex theme assets.
+// Purpose: Stores normalized theme seeds with Synara's zero-contrast default.
 // Layer: Web appearance generated catalog
 // Exports: THEME_SEED_CATALOG for code-theme seed lookup.
 
@@ -9,7 +9,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   absolutely: {
     dark: {
       accent: "#cc7d5e",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -25,7 +25,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#cc7d5e",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -43,7 +43,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   ayu: {
     dark: {
       accent: "#e6b450",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -61,7 +61,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   catppuccin: {
     dark: {
       accent: "#cba6f7",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -77,7 +77,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#8839ef",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -95,7 +95,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   codex: {
     dark: {
       accent: "#0169cc",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -111,7 +111,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#0169cc",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -129,7 +129,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   synara: {
     dark: {
       accent: "#6073cc",
-      contrast: 75,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -145,7 +145,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#526fff",
-      contrast: 65,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -163,7 +163,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   dracula: {
     dark: {
       accent: "#ff79c6",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -181,7 +181,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   everforest: {
     dark: {
       accent: "#a7c080",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -197,7 +197,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#93b259",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -215,7 +215,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   github: {
     dark: {
       accent: "#1f6feb",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -231,7 +231,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#0969da",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -249,7 +249,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   gruvbox: {
     dark: {
       accent: "#458588",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -265,7 +265,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#458588",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -283,7 +283,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   linear: {
     dark: {
       accent: "#606acc",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: "Inter",
@@ -299,7 +299,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#5e6ad2",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: "Inter",
@@ -317,7 +317,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   lobster: {
     dark: {
       accent: "#ff5c5c",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: "Satoshi",
@@ -335,7 +335,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   material: {
     dark: {
       accent: "#80cbc4",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -353,7 +353,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   matrix: {
     dark: {
       accent: "#1eff5a",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
@@ -371,7 +371,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   monokai: {
     dark: {
       accent: "#99947c",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -389,7 +389,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   "night-owl": {
     dark: {
       accent: "#44596b",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -407,7 +407,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   nord: {
     dark: {
       accent: "#88c0d0",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -425,7 +425,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   notion: {
     dark: {
       accent: "#3183d8",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -441,7 +441,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#3183d8",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -459,7 +459,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   one: {
     dark: {
       accent: "#4d78cc",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -475,7 +475,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#526fff",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -493,7 +493,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   oscurange: {
     dark: {
       accent: "#f9b98c",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -511,7 +511,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   proof: {
     light: {
       accent: "#3d755d",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -529,7 +529,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   raycast: {
     dark: {
       accent: "#ff6363",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: '"Jetbrains Mono"',
         ui: "Inter",
@@ -545,7 +545,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#ff6363",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: '"Jetbrains Mono"',
         ui: "Inter",
@@ -563,7 +563,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   "rose-pine": {
     dark: {
       accent: "#ea9a97",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -579,7 +579,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#d7827e",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -597,7 +597,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   sentry: {
     dark: {
       accent: "#7055f6",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -615,7 +615,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   solarized: {
     dark: {
       accent: "#d30102",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -631,7 +631,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#b58900",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -649,7 +649,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   temple: {
     dark: {
       accent: "#e4f222",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -667,7 +667,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   "tokyo-night": {
     dark: {
       accent: "#3d59a1",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -685,7 +685,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   vercel: {
     dark: {
       accent: "#006efe",
-      contrast: 50,
+      contrast: 0,
       fonts: {
         code: '"Geist Mono", ui-monospace, "SFMono-Regular"',
         ui: "Geist, Inter",
@@ -701,7 +701,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#006aff",
-      contrast: 40,
+      contrast: 0,
       fonts: {
         code: '"Geist Mono", ui-monospace, "SFMono-Regular"',
         ui: "Geist, Inter",
@@ -719,7 +719,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
   "vscode-plus": {
     dark: {
       accent: "#007acc",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,
@@ -735,7 +735,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
     },
     light: {
       accent: "#007acc",
-      contrast: 45,
+      contrast: 0,
       fonts: {
         code: null,
         ui: null,

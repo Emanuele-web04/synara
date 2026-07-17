@@ -75,6 +75,7 @@ interface ChatTranscriptPaneProps {
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   onScrollToBottom: () => void;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -131,6 +132,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenThread,
   onOpenAutomation,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   onScrollToBottom,
   onToggleWorkGroup,
@@ -214,6 +216,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
+            {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
             {...(onEditUserMessage ? { onEditUserMessage } : {})}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}

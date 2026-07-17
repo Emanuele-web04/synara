@@ -31,6 +31,13 @@ export function getCentralIconUrl(
   name: string,
   variant: CentralIconVariant = DEFAULT_CENTRAL_ICON_VARIANT,
 ): string | null {
+  // Defensive: a non-string name (stale HMR module state, or a dynamic call site handing
+  // through bad data) must degrade to "no icon" with a loud diagnostic instead of taking
+  // down the whole tree with `name.endsWith is not a function`.
+  if (typeof name !== "string") {
+    console.error("[central-icons] non-string icon name:", name, new Error("caller").stack);
+    return null;
+  }
   const normalizedName = name.endsWith(SVG_SUFFIX) ? name.slice(0, -SVG_SUFFIX.length) : name;
 
   if (!CENTRAL_ICON_NAME_PATTERN.test(normalizedName)) {

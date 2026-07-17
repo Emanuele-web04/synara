@@ -127,7 +127,7 @@ export type ProjectSearchLocalEntriesResult = typeof ProjectSearchLocalEntriesRe
 export const ProjectWriteFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
-  contents: Schema.String,
+  contents: Schema.String.check(Schema.isMaxLength(PROJECT_READ_FILE_MAX_BYTES)),
 });
 export type ProjectWriteFileInput = typeof ProjectWriteFileInput.Type;
 

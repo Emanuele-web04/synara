@@ -3,6 +3,7 @@
 // Exports: Vitest coverage for tolerant cache reads and atomic cache writes.
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import fs from "node:fs";
 import { Effect, FileSystem, Path } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -39,11 +40,15 @@ describe("providerStatusCache", () => {
           provider: readyCodexStatus,
         });
 
-        return yield* readProviderStatusCache(cachePath);
+        return {
+          cached: yield* readProviderStatusCache(cachePath),
+          mode: fs.statSync(cachePath).mode & 0o777,
+        };
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
-    expect(result).toEqual(readyCodexStatus);
+    expect(result.cached).toEqual(readyCodexStatus);
+    if (process.platform !== "win32") expect(result.mode).toBe(0o600);
   });
 
   it("ignores malformed cache files", async () => {
@@ -73,7 +78,7 @@ describe("providerStatusCache", () => {
     expect(
       orderProviderStatuses([
         {
-          provider: "gemini",
+          provider: "antigravity",
           status: "ready",
           available: true,
           authStatus: "authenticated",
@@ -119,7 +124,7 @@ describe("providerStatusCache", () => {
         checkedAt: "2026-04-15T10:03:00.000Z",
       },
       {
-        provider: "gemini",
+        provider: "antigravity",
         status: "ready",
         available: true,
         authStatus: "authenticated",

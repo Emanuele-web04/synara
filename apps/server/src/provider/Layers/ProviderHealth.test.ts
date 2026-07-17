@@ -3,8 +3,10 @@ import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vitest";
 
 import { SYNARA_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import { ServerConfig } from "../../config";
@@ -17,6 +19,7 @@ import {
 } from "../providerStatusCache";
 import {
   checkClaudeProviderStatus,
+  checkAntigravityProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
   checkGrokProviderStatus,
@@ -30,14 +33,17 @@ import {
   makeCheckGrokProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
+  makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
+  PACKAGE_MANAGED_PROVIDER_UPDATES,
   providerStatusesEqual,
   ProviderHealthLive,
   projectProviderStatusesForSettings,
   readCodexConfigModelProvider,
   stabilizeProviderStatusesAgainstTransientTimeouts,
 } from "./ProviderHealth";
+import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -63,6 +69,12 @@ function mockSpawnerLayer(
     args: ReadonlyArray<string>,
     command: string,
     env: NodeJS.ProcessEnv | undefined,
+    options:
+      | {
+          readonly env?: NodeJS.ProcessEnv;
+          readonly windowsVerbatimArguments?: boolean;
+        }
+      | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -75,9 +87,14 @@ function mockSpawnerLayer(
       const cmd = command as unknown as {
         command: string;
         args: ReadonlyArray<string>;
-        options?: { env?: NodeJS.ProcessEnv };
+        options?: {
+          env?: NodeJS.ProcessEnv;
+          windowsVerbatimArguments?: boolean;
+        };
       };
-      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
+      return Effect.succeed(
+        mockHandle(handler(cmd.args, cmd.command, cmd.options?.env, cmd.options)),
+      );
     }),
   );
 }
@@ -98,13 +115,44 @@ function failingSpawnerLayer(description: string) {
   );
 }
 
+function hangingSpawnerLayer(input: {
+  readonly onKill: () => void;
+  readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
+}) {
+  const handle = ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(2),
+    exitCode: Effect.never,
+    isRunning: Effect.succeed(true),
+    kill: () => Effect.sync(input.onKill),
+    stdin: Sink.drain,
+    stdout: Stream.never,
+    stderr: Stream.never,
+    all: Stream.never,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.never,
+  });
+  return Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      const cmd = command as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+      };
+      return input.shouldHang(cmd.args, cmd.command)
+        ? Effect.succeed(handle)
+        : Effect.succeed(mockHandle({ stdout: "", stderr: "", code: 0 }));
+    }),
+  );
+}
+
 const allProvidersDisabledSettings = {
   providers: {
     codex: { enabled: false },
     claudeAgent: { enabled: false },
     cursor: { enabled: false },
-    gemini: { enabled: false },
+    antigravity: { enabled: false },
     grok: { enabled: false },
+    droid: { enabled: false },
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
@@ -117,8 +165,9 @@ const allProvidersDisabledServerSettings = {
     codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: false },
     claudeAgent: { ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent, enabled: false },
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
-    gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
+    antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
@@ -197,6 +246,109 @@ function withTempCodexHome(configContent?: string) {
 }
 
 it.layer(NodeServices.layer)("ProviderHealth", (it) => {
+  describe("provider update commands", () => {
+    it("registers Antigravity's native updater", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.antigravity;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "agy",
+        realCommandPath: "/Users/test/.local/bin/agy",
+        commandDirectory: "/Users/test/.local/bin",
+      });
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "agy update",
+        executable: "agy",
+        args: ["update"],
+        lockKey: "antigravity-native",
+        pathPrepend: "/Users/test/.local/bin",
+      });
+    });
+
+    it("updates npm-managed Kilo through its matching package manager and PATH", () => {
+      const definition = PACKAGE_MANAGED_PROVIDER_UPDATES.kilo;
+      assert.ok(definition);
+
+      const capabilities = resolvePackageManagedProviderMaintenance(definition, {
+        binaryPath: "kilo",
+        realCommandPath:
+          "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+        commandDirectory: "/Users/test/.nvm/versions/node/v24.13.0/bin",
+      });
+
+      assert.deepStrictEqual(capabilities.update, {
+        command: "npm install -g @kilocode/cli@latest",
+        executable: "npm",
+        args: ["install", "-g", "@kilocode/cli@latest"],
+        lockKey: "npm-global",
+        pathPrepend: "/Users/test/.nvm/versions/node/v24.13.0/bin",
+      });
+    });
+
+    it.effect("stops a hung provider process and persists a failed update state", () =>
+      Effect.gen(function* () {
+        let killed = false;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-update-timeout-",
+        });
+        yield* writeProviderStatusCache({
+          filePath: resolveProviderStatusCachePath({
+            stateDir: path.join(baseDir, "userdata"),
+            provider: "kilo",
+          }),
+          provider: {
+            provider: "kilo",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: "2026-07-15T12:00:00.000Z",
+            message: "Kilo CLI is installed and authenticated.",
+            version: "7.3.46",
+          },
+        });
+        const settings = {
+          ...allProvidersDisabledServerSettings,
+          providers: {
+            ...allProvidersDisabledServerSettings.providers,
+            kilo: {
+              ...DEFAULT_SERVER_SETTINGS.providers.kilo,
+              enabled: true,
+              binaryPath:
+                "/Users/test/.nvm/versions/node/v24.13.0/lib/node_modules/@kilocode/cli/bin/kilo",
+            },
+          },
+        } satisfies typeof DEFAULT_SERVER_SETTINGS;
+        const layer = makeProviderHealthLive({ providerUpdateTimeoutMs: 20 }).pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(settings)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            hangingSpawnerLayer({
+              onKill: () => (killed = true),
+              shouldHang: (args, command) =>
+                command === "npm" && args.join(" ") === "install -g @kilocode/cli@latest",
+            }),
+          ),
+        );
+
+        const result = yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          return yield* TestClock.withLive(providerHealth.updateProvider({ provider: "kilo" }));
+        }).pipe(Effect.provide(layer));
+        const kilo = result.providers.find((provider) => provider.provider === "kilo");
+
+        assert.strictEqual(killed, true);
+        assert.strictEqual(kilo?.updateState?.status, "failed");
+        assert.strictEqual(
+          kilo?.updateState?.message,
+          "Update timed out after 20 milliseconds. The provider process was stopped.",
+        );
+      }),
+    );
+  });
+
   describe("disabled provider handling", () => {
     it("builds an inert status for disabled providers", () => {
       assert.deepStrictEqual(makeDisabledProviderStatus("kilo", "2026-06-16T12:00:00.000Z"), {
@@ -217,7 +369,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(statuses.length, 9);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -352,7 +504,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 8);
+        assert.strictEqual(statuses.length, 9);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -630,6 +782,31 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("propagates verbatim Windows arguments through the Effect command", () => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      return Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("C:\\tools(x86)\\codex.cmd");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, _env, options) => {
+            assert.strictEqual(command, "C:\\Windows\\System32\\cmd.exe");
+            assert.strictEqual(options?.windowsVerbatimArguments, true);
+            const commandLine = args.at(-1) ?? "";
+            if (commandLine.includes('"--version"')) {
+              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            }
+            if (commandLine.includes('"login" "status"')) {
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => platform.mockRestore())),
+      );
+    });
 
     it.effect("uses configured codex home for version, config, and auth probes", () => {
       let sawLoginStatusProbe = false;
@@ -1616,6 +1793,76 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
         );
       }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
+    );
+  });
+
+  describe("checkAntigravityProviderStatus", () => {
+    it.effect("rejects versions that predate --new-project support", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus();
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.version, "1.0.11");
+        assert.strictEqual(
+          status.message,
+          "Antigravity CLI 1.0.11 is too old for Synara. Upgrade to 1.0.12 or newer.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "Antigravity CLI 1.0.11\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns ready when Antigravity lists authenticated models", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus();
+        assert.strictEqual(status.provider, "antigravity");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.version, "1.1.2");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "agy");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return {
+                stdout: "Gemini 3.5 Flash (Medium)\nClaude Sonnet 4.6 (Thinking)\n",
+                stderr: "",
+                code: 0,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses the configured Antigravity binary", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/agy");
+            return args.join(" ") === "--version"
+              ? { stdout: "1.1.2\n", stderr: "", code: 0 }
+              : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
+          }),
+        ),
+      ),
     );
   });
 

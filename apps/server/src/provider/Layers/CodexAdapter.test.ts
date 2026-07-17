@@ -139,7 +139,7 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.respondToUserInputImpl(threadId, requestId, answers);
   }
 
-  override stopSession(_threadId: ThreadId): void {}
+  override async stopSession(_threadId: ThreadId): Promise<void> {}
 
   override listSessions(): ProviderSession[] {
     return [];
@@ -149,7 +149,7 @@ class FakeCodexManager extends CodexAppServerManager {
     return false;
   }
 
-  override stopAll(): void {
+  override async stopAll(): Promise<void> {
     this.stopAllImpl();
   }
 }
@@ -205,6 +205,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        lifecycleGeneration: "generation-start-a",
         modelSelection: {
           provider: "codex",
           model: "gpt-5.3-codex",
@@ -219,6 +220,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        lifecycleGeneration: "generation-start-a",
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
@@ -1027,6 +1029,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           provider: "codex",
           threadId: asThreadId("thread-1"),
           createdAt: new Date().toISOString(),
+          lifecycleGeneration: "generation-request-a",
           method: "item/tool/requestUserInput",
           requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
           payload: {
@@ -1051,6 +1054,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           provider: "codex",
           threadId: asThreadId("thread-1"),
           createdAt: new Date().toISOString(),
+          lifecycleGeneration: "generation-request-a",
           method: "item/tool/requestUserInput/answered",
           requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
           payload: {
@@ -1066,12 +1070,14 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
           assert.equal(events[0].requestId, "req-user-input-1");
+          assert.equal(events[0].lifecycleGeneration, "generation-request-a");
           assert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
         }
 
         assert.equal(events[1]?.type, "user-input.resolved");
         if (events[1]?.type === "user-input.resolved") {
           assert.equal(events[1].requestId, "req-user-input-1");
+          assert.equal(events[1].lifecycleGeneration, "generation-request-a");
           assert.deepEqual(events[1].payload.answers, {
             sandbox_mode: "workspace-write",
           });

@@ -14,6 +14,7 @@ import {
   sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@synara/shared/git";
+import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";
@@ -157,20 +158,6 @@ function resolvePullRequestWorktreeLocalBranchName(
   const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
   const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
   return `synara/pr-${pullRequest.number}/${suffix}`;
-}
-
-function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
-  const trimmed = url?.trim() ?? "";
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  const match =
-    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/|git:\/\/github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(
-      trimmed,
-    );
-  const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
-  return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
 }
 
 function parseRepositoryOwnerLogin(nameWithOwner: string | null): string | null {
@@ -1385,9 +1372,9 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
-  // Keep diff summaries read-only by summarizing the patch already selected in the UI.
+  // Resolve the patch server-side so large repository data never makes a client→RPC round trip.
   const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
-    const patch = input.patch.trim();
+    const { patch } = yield* readWorkingTreeDiff({ cwd: input.cwd, scope: input.scope });
     if (patch.length === 0) {
       return yield* gitManagerError("summarizeDiff", "Cannot summarize an empty diff.");
     }
@@ -2721,9 +2708,11 @@ The local stash entry was kept for recovery.`,
     summarizeDiff,
     resolvePullRequest,
     pullRequestSnapshot,
-    preparePullRequestThread,
-    handoffThread,
-    runStackedAction,
+    preparePullRequestThread: (input) =>
+      gitCore.withMutation(input.cwd, preparePullRequestThread(input)),
+    handoffThread: (input) => gitCore.withMutation(input.cwd, handoffThread(input)),
+    runStackedAction: (input, options) =>
+      gitCore.withMutation(input.cwd, runStackedAction(input, options)),
   } satisfies GitManagerShape;
 });
 

@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import fs from "node:fs";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -25,10 +26,11 @@ describe("serverRuntimeState", () => {
         const config = yield* ServerConfig;
         const state = makePersistedServerRuntimeState({ config, port: 4123 });
         yield* persistServerRuntimeState({ path: config.serverRuntimeStatePath, state });
+        const mode = fs.statSync(config.serverRuntimeStatePath).mode & 0o777;
         const persisted = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
         yield* clearPersistedServerRuntimeState(config.serverRuntimeStatePath);
         const cleared = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-        return { persisted, cleared };
+        return { persisted, cleared, mode };
       }),
     );
 
@@ -37,5 +39,6 @@ describe("serverRuntimeState", () => {
       expect(result.persisted.value.origin).toBe("http://127.0.0.1:4123");
     }
     expect(Option.isNone(result.cleared)).toBe(true);
+    if (process.platform !== "win32") expect(result.mode).toBe(0o600);
   });
 });

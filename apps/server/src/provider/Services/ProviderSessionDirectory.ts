@@ -17,6 +17,7 @@ export interface ProviderRuntimeBinding {
   readonly provider: ProviderKind;
   readonly adapterKey?: string;
   readonly status?: ProviderSessionRuntimeStatus;
+  readonly lifecycleGeneration?: string;
   readonly lastSeenAt?: string;
   readonly resumeCursor?: unknown | null;
   readonly runtimePayload?: unknown | null;

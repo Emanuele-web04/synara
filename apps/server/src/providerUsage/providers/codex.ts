@@ -176,7 +176,9 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
 
     try {
       const result = await fetchJson({
+        service: "provider-usage-codex",
         url: USAGE_URL,
+        allowedOrigins: [new URL(USAGE_URL).origin],
         headers: {
           Authorization: `Bearer ${auth.accessToken}`,
           Accept: "application/json",

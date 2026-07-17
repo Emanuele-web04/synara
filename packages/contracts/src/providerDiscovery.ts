@@ -11,8 +11,9 @@ const ProviderDiscoveryKind = Schema.Literals([
   "codex",
   "claudeAgent",
   "cursor",
-  "gemini",
+  "antigravity",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -106,7 +107,6 @@ export const ProviderListCommandsInput = Schema.Struct({
   threadId: Schema.optional(TrimmedNonEmptyString),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
-  serverPassword: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
   forceReload: Schema.optional(Schema.Boolean),
@@ -218,6 +218,8 @@ export const ProviderReadPluginInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   marketplacePath: TrimmedNonEmptyString,
   pluginName: TrimmedNonEmptyString,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 
@@ -265,6 +267,7 @@ export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescri
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),

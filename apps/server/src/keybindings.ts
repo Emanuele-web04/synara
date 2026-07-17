@@ -41,6 +41,7 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { writeFileStringAtomically } from "./atomicWrite";
 import { ServerConfig } from "./config";
 
 export class KeybindingsConfigError extends Schema.TaggedErrorClass<KeybindingsConfigError>()(
@@ -87,6 +88,9 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
+  // Cycle models within the active provider (favorites first, then remaining list).
+  { key: "alt+]", command: "model.next", when: "!terminalFocus" },
+  { key: "alt+[", command: "model.previous", when: "!terminalFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
   // New thread (chat.new) is the primary create action; it falls back to the most
@@ -104,7 +108,6 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+c", command: "chat.newClaude", when: "!terminalFocus || isMac" },
   { key: "mod+alt+x", command: "chat.newCodex", when: "!terminalFocus || isMac" },
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus || isMac" },
-  { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus || isMac" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus || isMac" },
   // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
   // standalone PWA windows have no tab strip, so the chord reaches the page. It remains
@@ -566,8 +569,9 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
-// Retired picker jump commands have no current equivalent; dropping them avoids
-// rebinding old number-key shortcuts to a different action.
+// Commands removed without a direct replacement are dropped during startup so
+// persisted configs from older releases do not produce validation warnings.
+const RETIRED_LEGACY_KEYBINDING_COMMANDS = new Set(["chat.newGemini"]);
 const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
 const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"], string>> = {
@@ -591,7 +595,6 @@ const CREATION_COMMANDS_WITH_TERMINAL_ESCAPE = new Set<KeybindingRule["command"]
   "chat.newClaude",
   "chat.newCodex",
   "chat.newCursor",
-  "chat.newGemini",
   "chat.split",
 ]);
 
@@ -605,7 +608,10 @@ function readKeybindingEntryCommand(entry: unknown): string | null {
 }
 
 function isRetiredLegacyKeybindingCommand(command: string): boolean {
-  return RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command);
+  return (
+    RETIRED_LEGACY_KEYBINDING_COMMANDS.has(command) ||
+    RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN.test(command)
+  );
 }
 
 // Cross-device configs can lag behind command renames; normalize known aliases
@@ -941,13 +947,11 @@ const makeKeybindings = Effect.gen(function* () {
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
-    const tempPath = `${keybindingsConfigPath}.${process.pid}.${Date.now()}.tmp`;
-
     return Schema.encodeEffect(KeybindingsConfigPrettyJson)(rules).pipe(
       Effect.map((encoded) => `${encoded}\n`),
-      Effect.tap(() => fs.makeDirectory(path.dirname(keybindingsConfigPath), { recursive: true })),
-      Effect.tap((encoded) => fs.writeFileString(tempPath, encoded)),
-      Effect.flatMap(() => fs.rename(tempPath, keybindingsConfigPath)),
+      Effect.flatMap((encoded) =>
+        writeFileStringAtomically({ filePath: keybindingsConfigPath, contents: encoded }),
+      ),
       Effect.mapError(
         (cause) =>
           new KeybindingsConfigError({

@@ -15,10 +15,10 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { SidebarMenuButton } from "./ui/sidebar";
 import { toastManager } from "./ui/toast";
 
@@ -63,11 +63,7 @@ export function DebugFeatureFlagsMenu() {
         <FlagIcon className="size-[15px]" />
         <span>Feature flags</span>
       </MenuTrigger>
-      <MenuPopup
-        align="start"
-        side="top"
-        className="min-w-72 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
+      <ComposerPickerMenuPopup align="start" side="top" className="min-w-72">
         <MenuGroup>
           <MenuGroupLabel>Local feature flags</MenuGroupLabel>
           {FEATURE_FLAGS.map((flag) => {
@@ -112,7 +108,7 @@ export function DebugFeatureFlagsMenu() {
         <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
           Stored only in this browser profile.
         </div>
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 }

@@ -14,19 +14,18 @@ import {
 import {
   getDefaultContextWindow,
   getDefaultEffort,
-  getGeminiThinkingSelectionValue,
   hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
-  normalizeGeminiModelOptions,
-  normalizeGrokModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveLabeledOptionValue,
   trimOrNull,
 } from "@synara/shared/model";
 import type { ReactNode } from "react";
+import { classifyCodexReasoningEffortSupport } from "../../lib/codexReasoningEffort";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
@@ -129,8 +128,15 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.codex;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
       const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffortSupport = classifyCodexReasoningEffortSupport({
+        model,
+        effort: rawEffort,
+        ...(runtimeModel ? { runtimeModel } : {}),
+      });
       const reasoningEffort =
-        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+        rawEffort &&
+        reasoningEffortSupport !== "unsupported" &&
+        rawEffort !== defaultReasoningEffort
           ? rawEffort
           : undefined;
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
@@ -177,16 +183,31 @@ function getProviderStateFromCapabilities(
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
-    case "gemini": {
-      const providerOptions = modelOptions?.gemini;
-      rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
-      normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
+    case "antigravity": {
+      const providerOptions = modelOptions?.antigravity;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeAntigravityModelOptions(model, providerOptions, caps);
       break;
     }
     case "grok": {
       const providerOptions = modelOptions?.grok;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeGrokModelOptions(model, providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? providerOptions?.reasoningEffort
+          : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
+      break;
+    }
+    case "droid": {
+      const providerOptions = modelOptions?.droid;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      // Droid's advertised "default" is the mutable current CLI preference.
+      // Once the user selects an effort, always dispatch it explicitly.
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) ? providerOptions?.reasoningEffort : undefined;
+      normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
     case "kilo":
@@ -226,7 +247,15 @@ function getProviderStateFromCapabilities(
   const promptEffort =
     provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
-      : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
+      : draftEffort &&
+          !isPromptInjected &&
+          (provider === "codex"
+            ? classifyCodexReasoningEffortSupport({
+                model,
+                effort: draftEffort,
+                ...(runtimeModel ? { runtimeModel } : {}),
+              }) !== "unsupported"
+            : hasEffortLevel(caps, draftEffort))
         ? draftEffort
         : defaultEffort && hasEffortLevel(caps, defaultEffort)
           ? defaultEffort
@@ -260,15 +289,20 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
   },
-  gemini: {
+  antigravity: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
-    renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("antigravity", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("antigravity", input),
   },
   grok: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("grok", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("grok", input),
+  },
+  droid: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("droid", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("droid", input),
   },
   kilo: {
     getState: (input) => getProviderStateFromCapabilities(input),

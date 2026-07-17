@@ -539,6 +539,7 @@ export const launchDetached = (launch: EditorLaunch) =>
           stdio: "ignore",
           shell: prepared.shell,
           windowsHide: prepared.windowsHide,
+          windowsVerbatimArguments: prepared.windowsVerbatimArguments,
         });
       } catch (error) {
         return resume(

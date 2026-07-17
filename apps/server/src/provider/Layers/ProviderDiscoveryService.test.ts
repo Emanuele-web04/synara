@@ -64,6 +64,8 @@ const makeConfigLayer = () =>
         ...derived,
         staticDir: undefined,
         devUrl: undefined,
+        publicUrl: undefined,
+        allowInsecureRemote: false,
         noBrowser: true,
         authToken: undefined,
         autoBootstrapProjectFromCwd: false,
@@ -116,7 +118,7 @@ describe("ProviderDiscoveryService.listSkills", () => {
   it("serves the unified catalog for providers without native skill discovery", async () => {
     await writeSkill(path.join(baseDir, "skills", "portable"), "portable");
 
-    const result = await runListSkills({ adapter: {}, provider: "gemini" });
+    const result = await runListSkills({ adapter: {}, provider: "antigravity" });
 
     expect(result.skills.map((skill) => skill.name)).toEqual(["portable"]);
   });

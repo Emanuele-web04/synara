@@ -10,9 +10,10 @@ import type { ReactNode, SVGProps } from "react";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
+  AntigravityIcon,
   ClaudeAI,
   CursorIcon,
-  Gemini,
+  DroidIcon,
   GrokIcon,
   type Icon,
   KiloIcon,
@@ -66,8 +67,9 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
-  gemini: Gemini,
+  antigravity: AntigravityIcon,
   grok: GrokIcon,
+  droid: DroidIcon,
   kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,

@@ -43,12 +43,15 @@ import type { Effect } from "effect";
 import type { Stream } from "effect";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** Restart-session adapters cannot rewind provider history and must rebuild context locally. */
+  readonly conversationRollback?: ProviderConversationRollbackMode;
   readonly supportsSkillMentions?: boolean;
   readonly supportsSkillDiscovery?: boolean;
   readonly supportsNativeSlashCommandDiscovery?: boolean;

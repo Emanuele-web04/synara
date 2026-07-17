@@ -4,9 +4,20 @@ import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   decodeSubagentReceiverAgents,
+  decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints,
   resolveSubagentIdentityHint,
 } from "./subagents";
+
+describe("decodeSubagentReceiverThreadIds", () => {
+  it.each([
+    ["legacy receiver array", { receiverThreadIds: ["child-provider-1"] }],
+    ["current receiver id", { receiverThreadId: "child-provider-1" }],
+    ["current spawned thread id", { newThreadId: "child-provider-1" }],
+  ])("decodes the %s shape", (_label, item) => {
+    expect(decodeSubagentReceiverThreadIds(item)).toEqual(["child-provider-1"]);
+  });
+});
 
 describe("collectSubagentProviderThreadIds", () => {
   it("includes thread ids discovered from receiverAgents, agentStates, and source thread_spawn payloads", () => {

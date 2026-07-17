@@ -9,7 +9,7 @@ import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -249,7 +249,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           continue;
         }
 
-        const resolvedPath = resolveAttachmentPath({
+        const resolvedPath = resolveProviderAttachmentPath({
           attachmentsDir: serverConfig.attachmentsDir,
           attachment,
         });
@@ -327,6 +327,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           cwd,
           env,
           shell: prepared.shell,
+          ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           stdin: {
             stream: Stream.make(new TextEncoder().encode(prompt)),
           },
