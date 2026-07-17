@@ -12,6 +12,7 @@ import {
   effectiveComposerAttachmentCount,
   findPendingBlobComposerAttachments,
   hydratePendingBlobComposerAttachments,
+  readFileAsDataUrl,
 } from "./composerSend";
 
 describe("composerSend attachment builders", () => {
@@ -23,6 +24,7 @@ describe("composerSend attachment builders", () => {
 
   afterEach(() => {
     URL.createObjectURL = originalCreateObjectUrl;
+    vi.unstubAllGlobals();
   });
 
   it("keeps image-specific unsupported-file errors while sharing cap handling", () => {
@@ -77,6 +79,34 @@ describe("composerSend attachment builders", () => {
     expect(result.files).toEqual([]);
     expect(result.error).toBe(
       `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+    );
+  });
+
+  it("reads genuine empty files instead of treating them as folders", async () => {
+    vi.stubGlobal(
+      "FileReader",
+      class {
+        result: string | null = null;
+        error: Error | null = null;
+        private readonly listeners = new Map<string, Array<() => void>>();
+
+        addEventListener(type: string, listener: () => void) {
+          const listeners = this.listeners.get(type) ?? [];
+          listeners.push(listener);
+          this.listeners.set(type, listeners);
+        }
+
+        readAsDataURL() {
+          this.result = "data:application/octet-stream;base64,";
+          for (const listener of this.listeners.get("load") ?? []) {
+            listener();
+          }
+        }
+      },
+    );
+
+    await expect(readFileAsDataUrl(new File([], ".gitkeep"))).resolves.toBe(
+      "data:application/octet-stream;base64,",
     );
   });
 });

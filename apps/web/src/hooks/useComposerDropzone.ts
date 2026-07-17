@@ -6,7 +6,7 @@
 import { useCallback, useRef, type ClipboardEvent, type DragEvent } from "react";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
-import { splitDroppedComposerFiles } from "~/lib/composerDropPaths";
+import { isDroppedComposerDirectory, splitDroppedComposerFiles } from "~/lib/composerDropPaths";
 
 export function isComposerHandledDrag(dataTransfer: DataTransfer): boolean {
   return (
@@ -107,7 +107,10 @@ function isComposerHandledDragForMode(
   if (items.length === 0) {
     return true;
   }
-  return items.some((item) => item.kind === "file" && item.type.startsWith("image/"));
+  return items.some(
+    (item) =>
+      item.kind === "file" && (item.type.startsWith("image/") || isDroppedComposerDirectory(item)),
+  );
 }
 
 export function useComposerDropzone(input: {
@@ -224,7 +227,10 @@ export function useComposerDropzone(input: {
       }
       // Desktop OS drops: resolve absolute paths so folders become @mentions
       // instead of unreadable attachment blobs (#351).
-      const dropped = splitDroppedComposerFiles(event.dataTransfer.files);
+      const dropped = splitDroppedComposerFiles({
+        files: event.dataTransfer.files,
+        items: event.dataTransfer.items,
+      });
       const splitFiles = {
         imageFiles: dropped.imageFiles,
         genericFiles: dropped.genericFiles,

@@ -194,6 +194,18 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("keeps escaped quotes, backslashes, and @ signs inside an active quoted path", () => {
+    const text = String.raw`Look at @"C:\\A \"B\"/@scope`;
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: String.raw`C:\A "B"/@scope`,
+      rangeStart: "Look at ".length,
+      rangeEnd: text.length,
+    });
+  });
+
   it('does not treat a closed @"..." mention as still active', () => {
     const text = 'Look at @"/Users/John Smith/Docs" and more';
     const trigger = detectComposerTrigger(text, text.length);

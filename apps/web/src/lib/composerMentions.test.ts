@@ -5,11 +5,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createComposerMentionTokenRegex,
+  extractComposerMentionPath,
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
   formatComposerMentionToken,
   resolveMentionChipKind,
 } from "./composerMentions";
+
+function parseMentionToken(token: string): string {
+  const match = createComposerMentionTokenRegex({
+    includeTrailingTokenAtEnd: true,
+    global: false,
+  }).exec(token);
+  if (!match) {
+    throw new Error(`Expected a valid composer mention token: ${token}`);
+  }
+  return extractComposerMentionPath(match);
+}
 
 describe("composer mention reference filtering", () => {
   it("does not invent plugin references for plain file or folder mentions", () => {
@@ -95,5 +108,19 @@ describe("formatComposerMentionToken", () => {
 
   it("leaves simple paths unquoted", () => {
     expect(formatComposerMentionToken("/Users/me/projects/app")).toBe("@/Users/me/projects/app");
+  });
+
+  it.each([
+    "/Users/me/Happy Dropbox/Mac (2)/app",
+    String.raw`C:\Users\me\Project (2)`,
+    '/tmp/A "B"/repo',
+    "/Users/me/@scope/package",
+    " /tmp/path with edge whitespace ",
+  ])("round-trips quoted path bytes for %s", (path) => {
+    expect(parseMentionToken(formatComposerMentionToken(path))).toBe(path);
+  });
+
+  it("escapes embedded quotes and backslashes in quoted tokens", () => {
+    expect(formatComposerMentionToken(String.raw`C:\A "B"`)).toBe(String.raw`@"C:\\A \"B\""`);
   });
 });

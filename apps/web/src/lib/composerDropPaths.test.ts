@@ -1,9 +1,10 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  isLikelyDroppedDirectory,
+  isDroppedComposerDirectory,
   resolveDroppedFileAbsolutePath,
   splitDroppedComposerFiles,
+  type ComposerDroppedFileItem,
 } from "./composerDropPaths";
 
 function makeFile(name: string, options?: { type?: string; size?: number }): File {
@@ -13,39 +14,48 @@ function makeFile(name: string, options?: { type?: string; size?: number }): Fil
   return new File([blob], name, { type });
 }
 
+function makeItem(file: File, options?: { directory?: boolean; entryUnavailable?: boolean }) {
+  return {
+    kind: "file",
+    getAsFile: () => file,
+    ...(options?.entryUnavailable
+      ? {}
+      : { webkitGetAsEntry: () => ({ isDirectory: options?.directory === true }) }),
+  } satisfies ComposerDroppedFileItem;
+}
+
 describe("composerDropPaths", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("resolves absolute paths via the desktop bridge", () => {
+  it("resolves absolute paths via the desktop bridge without rewriting path bytes", () => {
     vi.stubGlobal("window", {
       desktopBridge: {
-        getPathForFile: (file: File) => `/Users/me/Mac (2)/${file.name}`,
+        getPathForFile: () => " /Users/me/Mac (2)/Docs ",
       },
     });
-    const file = makeFile("Docs");
-    expect(resolveDroppedFileAbsolutePath(file)).toBe("/Users/me/Mac (2)/Docs");
+
+    expect(resolveDroppedFileAbsolutePath(makeFile("Docs"))).toBe(" /Users/me/Mac (2)/Docs ");
   });
 
-  it("returns null when the desktop bridge is unavailable", () => {
+  it("returns null when the desktop bridge is unavailable or returns only whitespace", () => {
     vi.stubGlobal("window", {});
+    expect(resolveDroppedFileAbsolutePath(makeFile("Docs"))).toBeNull();
+
+    vi.stubGlobal("window", { desktopBridge: { getPathForFile: () => "   " } });
     expect(resolveDroppedFileAbsolutePath(makeFile("Docs"))).toBeNull();
   });
 
-  it("treats zero-size empty-type drops with a path as directories (#351)", () => {
-    expect(
-      isLikelyDroppedDirectory(makeFile("project-space", { size: 0, type: "" }), "/tmp/a b/dir"),
-    ).toBe(true);
-    expect(
-      isLikelyDroppedDirectory(
-        makeFile("notes.txt", { size: 12, type: "text/plain" }),
-        "/tmp/a b/notes.txt",
-      ),
-    ).toBe(false);
+  it("identifies directories from the drag entry instead of file size or MIME type", () => {
+    const emptyFile = makeFile(".gitkeep");
+
+    expect(isDroppedComposerDirectory(makeItem(emptyFile, { directory: true }))).toBe(true);
+    expect(isDroppedComposerDirectory(makeItem(emptyFile))).toBe(false);
+    expect(isDroppedComposerDirectory(makeItem(emptyFile, { entryUnavailable: true }))).toBe(false);
   });
 
-  it("splits directory drops into path mentions and keeps regular files as attachments", () => {
+  it("splits explicit directory drops into mentions and keeps normal files as attachments", () => {
     vi.stubGlobal("window", {
       desktopBridge: {
         getPathForFile: (file: File) => {
@@ -56,13 +66,40 @@ describe("composerDropPaths", () => {
         },
       },
     });
-    const folder = makeFile("project-space", { size: 0, type: "" });
+    const folder = makeFile("project-space");
     const image = makeFile("shot.png", { size: 32, type: "image/png" });
     const doc = makeFile("readme.md", { size: 16, type: "text/markdown" });
 
-    const split = splitDroppedComposerFiles([folder, image, doc]);
+    const split = splitDroppedComposerFiles({
+      files: [folder, image, doc],
+      items: [makeItem(folder, { directory: true }), makeItem(image), makeItem(doc)],
+    });
     expect(split.pathMentions).toEqual(["/Users/me/Happy Dropbox/Mac (2)/project-space"]);
-    expect(split.imageFiles.map((file) => file.name)).toEqual(["shot.png"]);
-    expect(split.genericFiles.map((file) => file.name)).toEqual(["readme.md"]);
+    expect(split.imageFiles).toEqual([image]);
+    expect(split.genericFiles).toEqual([doc]);
+  });
+
+  it("keeps genuine empty files when directory metadata is absent", () => {
+    vi.stubGlobal("window", {
+      desktopBridge: { getPathForFile: () => "/Users/me/.gitkeep" },
+    });
+    const emptyFile = makeFile(".gitkeep");
+
+    expect(
+      splitDroppedComposerFiles({
+        files: [emptyFile],
+        items: [makeItem(emptyFile, { entryUnavailable: true })],
+      }),
+    ).toEqual({ pathMentions: [], imageFiles: [], genericFiles: [emptyFile] });
+  });
+
+  it("falls back to the FileList when drag items are unavailable", () => {
+    const emptyFile = makeFile("empty");
+
+    expect(splitDroppedComposerFiles({ files: [emptyFile] })).toEqual({
+      pathMentions: [],
+      imageFiles: [],
+      genericFiles: [emptyFile],
+    });
   });
 });

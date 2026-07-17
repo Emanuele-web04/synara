@@ -131,16 +131,6 @@ export function buildComposerFileAttachmentsFromFiles(input: {
 
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    // Directories (and other non-readable drops) fail here with a native Cocoa
-    // error on macOS desktop. Surface a clear composer-facing message (#351).
-    if (file.size === 0 && (file.type === "" || file.type === "application/x-directory")) {
-      reject(
-        new Error(
-          `Could not read '${file.name || "item"}'. Folders cannot be attached as files — drop them to insert a path mention, or attach individual files.`,
-        ),
-      );
-      return;
-    }
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       if (typeof reader.result === "string") {
