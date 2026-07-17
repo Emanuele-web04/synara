@@ -97,7 +97,8 @@ describe("sanitizeNotificationPreview", () => {
     expect(sanitizeNotificationPreview("api_key=super-secret-value output ready")).toBe(
       "[redacted] output ready",
     );
-    expect(sanitizeNotificationPreview("token ghp_abcdefghijklmnopqrstuvwxyz1234 done")).toBe(
+    const tokenShapedFixture = ["ghp", "abcdefghijklmnopqrstuvwxyz1234"].join("_");
+    expect(sanitizeNotificationPreview(`token ${tokenShapedFixture} done`)).toBe(
       "token [redacted] done",
     );
     expect(
