@@ -1,26 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+// FILE: providerDiscoveryReactQuery.test.ts
+// Purpose: Locks provider model discovery query semantics — retry policy,
+//          stale-catalog preservation, and initial-vs-background pending (#103).
+// Layer: Web data fetching tests
+
+import type { NativeApi } from "@synara/contracts";
+import { QueryClient } from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isInitialModelDiscoveryPending,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
+import * as nativeApi from "../nativeApi";
 
-vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({
-    provider: {
-      listModels: vi.fn(async ({ provider }: { provider: string }) => {
-        if (provider === "cursor") {
-          throw new Error("Cursor CLI is not installed or not on PATH");
-        }
-        return {
-          models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
-          source: "codex",
-          cached: false,
-        };
-      }),
-    },
-  }),
-}));
+function mockListModels(listModels: ReturnType<typeof vi.fn>) {
+  vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+    provider: { listModels },
+  } as unknown as NativeApi);
+  return listModels;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("isInitialModelDiscoveryPending", () => {
   it("is pending only for the first fetch (loading or placeholder fetch)", () => {
@@ -57,24 +59,64 @@ describe("isInitialModelDiscoveryPending", () => {
 });
 
 describe("providerModelsQueryOptions", () => {
-  it("soft-fails Cursor listModels so discovery settles as empty instead of rejecting", async () => {
+  it("fails fast for Cursor so a missing CLI settles instead of spinning (#103)", async () => {
+    const listModels = mockListModels(
+      vi.fn().mockRejectedValue(new Error("Cursor CLI is not installed or not on PATH")),
+    );
     const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
-    const result = await options.queryFn!({} as never);
-    expect(result).toEqual({
-      models: [],
-      source: "error",
-      cached: false,
-    });
     expect(options.retry).toBe(0);
+
+    const queryClient = new QueryClient();
+    await expect(queryClient.fetchQuery(options)).rejects.toThrow(
+      "Cursor CLI is not installed or not on PATH",
+    );
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
   });
 
-  it("still returns successful catalogs for other providers", async () => {
-    const options = providerModelsQueryOptions({ provider: "codex", enabled: true });
-    const result = await options.queryFn!({} as never);
-    expect(result).toEqual({
+  it("keeps retrying transient failures for other providers", () => {
+    expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
+    expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(0);
+  });
+
+  it("surfaces real errors instead of masking them as empty catalogs", async () => {
+    mockListModels(vi.fn().mockRejectedValue(new Error("discovery exploded")));
+    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
+
+    const queryClient = new QueryClient();
+    await expect(queryClient.fetchQuery(options)).rejects.toThrow("discovery exploded");
+    expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
+  });
+
+  it("preserves the cached catalog when a background refetch fails", async () => {
+    const catalog = {
+      models: [{ slug: "auto", name: "Auto" }],
+      source: "cursor.cli",
+      cached: false,
+    };
+    const listModels = mockListModels(
+      vi.fn().mockResolvedValueOnce(catalog).mockRejectedValue(new Error("cursor went away")),
+    );
+    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
+
+    const queryClient = new QueryClient();
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+    await queryClient.refetchQueries({ queryKey: options.queryKey });
+
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+  });
+
+  it("returns successful catalogs unchanged", async () => {
+    const catalog = {
       models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
       source: "codex",
       cached: false,
-    });
+    };
+    mockListModels(vi.fn().mockResolvedValue(catalog));
+    const options = providerModelsQueryOptions({ provider: "codex", enabled: true });
+
+    const queryClient = new QueryClient();
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
   });
 });

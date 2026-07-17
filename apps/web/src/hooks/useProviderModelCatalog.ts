@@ -159,48 +159,43 @@ export function useProviderModelCatalog(input: {
 
   const cursorModelDiscoveryEnabled = selectedProvider === "cursor" || discoveryEnabled;
   const hasResolvedCursorModelDiscovery =
-    ((cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
+    (cursorDynamicModelsQuery.data?.source === "cursor.cli" ||
       cursorDynamicModelsQuery.data?.source === "cursor.acp") &&
-      (cursorDynamicModelsQuery.data.models.length ?? 0) > 0) ||
-    cursorDynamicModelsQuery.data?.source === "error";
+    (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
   const cursorModelDiscoveryPending =
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     isInitialModelDiscoveryPending(cursorDynamicModelsQuery);
   const droidModelDiscoveryEnabled = selectedProvider === "droid";
   const hasResolvedDroidModelDiscovery =
-    (droidDynamicModelsQuery.data?.source === "droid-acp" &&
-      (droidDynamicModelsQuery.data.models.length ?? 0) > 0) ||
-    droidDynamicModelsQuery.data?.source === "error";
+    droidDynamicModelsQuery.data?.source === "droid-acp" &&
+    (droidDynamicModelsQuery.data.models.length ?? 0) > 0;
   const droidModelDiscoveryPending =
     droidModelDiscoveryEnabled &&
     !hasResolvedDroidModelDiscovery &&
     isInitialModelDiscoveryPending(droidDynamicModelsQuery);
   const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
-    ((kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
+    (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
-      (kiloDynamicModelsQuery.data.models.length ?? 0) > 0) ||
-    kiloDynamicModelsQuery.data?.source === "error";
+    (kiloDynamicModelsQuery.data.models.length ?? 0) > 0;
   const kiloModelDiscoveryPending =
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     isInitialModelDiscoveryPending(kiloDynamicModelsQuery);
   const openCodeModelDiscoveryEnabled = selectedProvider === "opencode" || discoveryEnabled;
   const hasResolvedOpenCodeModelDiscovery =
-    ((openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
+    (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
       openCodeDynamicModelsQuery.data?.source === "opencode") &&
-      (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0) ||
-    openCodeDynamicModelsQuery.data?.source === "error";
+    (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
   const openCodeModelDiscoveryPending =
     openCodeModelDiscoveryEnabled &&
     !hasResolvedOpenCodeModelDiscovery &&
     isInitialModelDiscoveryPending(openCodeDynamicModelsQuery);
   const piModelDiscoveryEnabled = selectedProvider === "pi" || discoveryEnabled;
   const hasResolvedPiModelDiscovery =
-    (piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
-      (piDynamicModelsQuery.data.models.length ?? 0) > 0) ||
-    piDynamicModelsQuery.data?.source === "error";
+    piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
+    (piDynamicModelsQuery.data.models.length ?? 0) > 0;
   const piModelDiscoveryPending =
     piModelDiscoveryEnabled &&
     !hasResolvedPiModelDiscovery &&
