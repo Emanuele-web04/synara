@@ -9,6 +9,7 @@ import {
   MessageId,
   OrchestrationProposedPlanId,
   ProjectId,
+  SpaceId,
   ThreadId,
   ThreadMarkerId,
   TurnId,
@@ -23,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applySpaceOrder,
   applyOrchestrationEvents,
   applyOrchestrationEventsHotPath,
   collapseProjectsExcept,
@@ -79,7 +81,12 @@ function makeDomainEvent<TType extends OrchestrationEvent["type"]>(
   payload: Extract<OrchestrationEvent, { type: TType }>["payload"],
   overrides: Partial<Omit<Extract<OrchestrationEvent, { type: TType }>, "type" | "payload">> = {},
 ): Extract<OrchestrationEvent, { type: TType }> {
-  const aggregateId = "threadId" in payload ? payload.threadId : ProjectId.makeUnsafe("project-1");
+  const aggregateId =
+    "threadId" in payload
+      ? payload.threadId
+      : "spaceId" in payload
+        ? payload.spaceId
+        : ProjectId.makeUnsafe("project-1");
   return {
     type,
     payload,
@@ -120,6 +127,7 @@ function makeActivity(overrides: {
 
 function makeState(thread: Thread): AppState {
   return {
+    spaces: [],
     projects: [makeProject()],
     threads: [thread],
     sidebarThreadSummaryById: {},
@@ -143,6 +151,7 @@ function makeProject(
       model: "gpt-5-codex",
     },
     expanded: true,
+    spaceId: null,
     scripts: [],
     ...overrides,
   };
@@ -182,6 +191,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
   return {
     snapshotSequence: 1,
     updatedAt: "2026-02-27T00:00:00.000Z",
+    spaces: [],
     projects: [
       {
         id: ProjectId.makeUnsafe("project-1"),
@@ -196,6 +206,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
         updatedAt: "2026-02-27T00:00:00.000Z",
         deletedAt: null,
         scripts: [],
+        spaceId: null,
       },
     ],
     threads: [thread],
@@ -206,6 +217,7 @@ function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][number]
   return {
     snapshotSequence: 2,
     updatedAt: "2026-02-27T00:01:00.000Z",
+    spaces: [],
     projects: [
       {
         id: ProjectId.makeUnsafe("project-1"),
@@ -218,6 +230,7 @@ function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][number]
         createdAt: "2026-02-27T00:00:00.000Z",
         updatedAt: "2026-02-27T00:00:00.000Z",
         scripts: [],
+        spaceId: null,
       },
     ],
     threads: [thread],
@@ -240,11 +253,169 @@ function makeReadModelProject(
     updatedAt: "2026-02-27T00:00:00.000Z",
     deletedAt: null,
     scripts: [],
+    spaceId: null,
     ...overrides,
   };
 }
 
 describe("store pure functions", () => {
+  it("hydrates, reorders, and removes spaces while keeping project assignments", () => {
+    const workSpaceId = SpaceId.makeUnsafe("space-work");
+    const sideSpaceId = SpaceId.makeUnsafe("space-side");
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    let state = makeState(makeThread());
+
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: workSpaceId,
+          name: "Work",
+          icon: "bag",
+          sortOrder: 0,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: workSpaceId },
+      ),
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: sideSpaceId,
+          name: "Side",
+          icon: "rocket",
+          sortOrder: 1,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: sideSpaceId },
+      ),
+      makeDomainEvent("project.meta-updated", {
+        projectId: ProjectId.makeUnsafe("project-1"),
+        spaceId: workSpaceId,
+        updatedAt: createdAt,
+      }),
+    ]);
+
+    expect(state.projects[0]?.spaceId).toBe(workSpaceId);
+    expect(state.spaces.map((space) => space.id)).toEqual([workSpaceId, sideSpaceId]);
+
+    state = applyShellEvent(state, {
+      kind: "space-order-updated",
+      sequence: 4,
+      orderedSpaceIds: [sideSpaceId, workSpaceId],
+    });
+    expect(state.spaces.map((space) => space.id)).toEqual([sideSpaceId, workSpaceId]);
+
+    state = applyShellEvent(state, {
+      kind: "space-removed",
+      sequence: 5,
+      spaceId: workSpaceId,
+    });
+    expect(state.spaces.map((space) => space.id)).toEqual([sideSpaceId]);
+    expect(state.projects[0]?.spaceId).toBeNull();
+  });
+
+  it("keeps state identity when a space order event changes nothing", () => {
+    const workSpaceId = SpaceId.makeUnsafe("space-work");
+    const sideSpaceId = SpaceId.makeUnsafe("space-side");
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    let state = makeState(makeThread());
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: workSpaceId,
+          name: "Work",
+          icon: "bag",
+          sortOrder: 0,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: workSpaceId },
+      ),
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: sideSpaceId,
+          name: "Side",
+          icon: "rocket",
+          sortOrder: 1,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: sideSpaceId },
+      ),
+    ]);
+
+    const noopUpdatedAt = "2026-07-15T11:00:00.000Z";
+    const afterNoop = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "space.order-updated",
+        {
+          spaceId: workSpaceId,
+          orderedSpaceIds: [workSpaceId, sideSpaceId],
+          updatedAt: noopUpdatedAt,
+        },
+        { aggregateKind: "space", aggregateId: workSpaceId },
+      ),
+    ]);
+    expect(afterNoop).toBe(state);
+
+    const afterMove = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "space.order-updated",
+        {
+          spaceId: sideSpaceId,
+          orderedSpaceIds: [sideSpaceId, workSpaceId],
+          updatedAt: noopUpdatedAt,
+        },
+        { aggregateKind: "space", aggregateId: sideSpaceId },
+      ),
+    ]);
+    expect(afterMove.spaces.map((space) => [space.id, space.updatedAt])).toEqual([
+      [sideSpaceId, noopUpdatedAt],
+      [workSpaceId, noopUpdatedAt],
+    ]);
+  });
+
+  it("applies a Space order immediately for optimistic drag feedback", () => {
+    const workSpaceId = SpaceId.makeUnsafe("space-work");
+    const sideSpaceId = SpaceId.makeUnsafe("space-side");
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    const state = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: workSpaceId,
+          name: "Work",
+          icon: "bag",
+          sortOrder: 0,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: workSpaceId },
+      ),
+      makeDomainEvent(
+        "space.created",
+        {
+          spaceId: sideSpaceId,
+          name: "Side",
+          icon: "rocket",
+          sortOrder: 1,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        { aggregateKind: "space", aggregateId: sideSpaceId },
+      ),
+    ]);
+
+    const reordered = applySpaceOrder(state, [sideSpaceId, workSpaceId]);
+
+    expect(reordered.spaces.map((space) => space.id)).toEqual([sideSpaceId, workSpaceId]);
+    expect(reordered.spaces.map((space) => space.sortOrder)).toEqual([0, 1]);
+  });
+
   it("markThreadUnread moves lastVisitedAt before completion for a completed thread", () => {
     const latestTurnCompletedAt = "2026-02-25T12:30:00.000Z";
     const initialState = makeState(
@@ -612,6 +783,7 @@ describe("store pure functions", () => {
   it("adds projects immediately from live project.created events", () => {
     const next = applyOrchestrationEvents(
       {
+        spaces: [],
         projects: [],
         threads: [],
         sidebarThreadSummaryById: {},
@@ -651,6 +823,7 @@ describe("store pure functions", () => {
 
   it("updates existing projects immediately from live project.meta-updated events", () => {
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: ProjectId.makeUnsafe("project-live"),
@@ -715,6 +888,7 @@ describe("store pure functions", () => {
   it("removes projects immediately from live project.deleted events", () => {
     const next = applyOrchestrationEvents(
       {
+        spaces: [],
         projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
         threads: [],
         sidebarThreadSummaryById: {},
@@ -785,6 +959,7 @@ describe("store pure functions", () => {
 
   it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: ProjectId.makeUnsafe("project-old"),
@@ -834,6 +1009,7 @@ describe("store pure functions", () => {
     });
     const initialState = syncServerReadModel(
       {
+        spaces: [],
         projects: [
           makeProject({
             id: ProjectId.makeUnsafe("project-shell"),
@@ -850,6 +1026,7 @@ describe("store pure functions", () => {
       },
       {
         snapshotSequence: 1,
+        spaces: [],
         updatedAt: "2026-02-27T00:00:00.000Z",
         projects: [
           makeReadModelProject({
@@ -1914,6 +2091,7 @@ describe("store pure functions", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -1951,6 +2129,7 @@ describe("store pure functions", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -1983,6 +2162,7 @@ describe("store pure functions", () => {
 
   it("collapses all projects when toggled off", () => {
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: ProjectId.makeUnsafe("project-1"),
@@ -2013,6 +2193,7 @@ describe("store pure functions", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -3681,6 +3862,7 @@ describe("store read model sync", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const project3 = ProjectId.makeUnsafe("project-3");
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project2,
@@ -3703,6 +3885,7 @@ describe("store read model sync", () => {
     };
     const readModel: OrchestrationReadModel = {
       snapshotSequence: 2,
+      spaces: [],
       updatedAt: "2026-02-27T00:00:00.000Z",
       projects: [
         makeReadModelProject({
@@ -3733,6 +3916,7 @@ describe("store read model sync", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
     const initialState: AppState = {
+      spaces: [],
       projects: [
         makeProject({
           id: project1,
@@ -3756,6 +3940,7 @@ describe("store read model sync", () => {
 
     const snapshotWithoutProject2: OrchestrationReadModel = {
       snapshotSequence: 2,
+      spaces: [],
       updatedAt: "2026-02-27T00:00:00.000Z",
       projects: [
         makeReadModelProject({
@@ -3768,6 +3953,7 @@ describe("store read model sync", () => {
     };
     const snapshotWithProject2Restored: OrchestrationReadModel = {
       snapshotSequence: 3,
+      spaces: [],
       updatedAt: "2026-02-27T00:01:00.000Z",
       projects: [
         makeReadModelProject({
@@ -3933,6 +4119,7 @@ describe("store read model sync", () => {
   it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
     const readModel = {
       snapshotSequence: 1,
+      spaces: [],
       updatedAt: "2026-02-28T00:00:00.000Z",
       projects: [
         makeReadModelProject({

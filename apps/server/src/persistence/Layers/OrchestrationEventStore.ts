@@ -9,6 +9,7 @@ import {
   OrchestrationEventMetadata,
   OrchestrationEventType,
   ProjectId,
+  SpaceId,
   ThreadId,
 } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -36,7 +37,7 @@ const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMeta
 const AppendEventRequestSchema = Schema.Struct({
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  streamId: Schema.Union([ProjectId, ThreadId]),
+  streamId: Schema.Union([SpaceId, ProjectId, ThreadId]),
   type: OrchestrationEventType,
   causationEventId: Schema.NullOr(EventId),
   correlationId: Schema.NullOr(CommandId),
@@ -52,7 +53,7 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
   eventId: EventId,
   type: OrchestrationEventType,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([SpaceId, ProjectId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),

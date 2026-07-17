@@ -285,6 +285,7 @@ function createSnapshotForTargetUser(options: {
 
   return {
     snapshotSequence: 1,
+    spaces: [],
     projects: [
       {
         id: PROJECT_ID,

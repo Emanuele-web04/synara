@@ -12,6 +12,7 @@ import {
   ThreadId,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
+  type OrchestrationSpaceShell,
   type OrchestrationShellStreamEvent,
   type OrchestrationSessionStatus,
   type TurnId,
@@ -36,6 +37,7 @@ import {
   type ChatAttachment,
   type ChatMessage,
   type Project,
+  type Space,
   type SidebarThreadSummary,
   type Thread,
   type ThreadSession,
@@ -53,6 +55,7 @@ import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 // ── State ────────────────────────────────────────────────────────────
 
 export interface AppState {
+  spaces: Space[];
   projects: Project[];
   threads: Thread[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
@@ -74,6 +77,7 @@ export interface AppState {
 }
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
+type ReadModelSpace = OrchestrationReadModel["spaces"][number];
 type ReadModelThread = OrchestrationReadModel["threads"][number];
 type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][number];
 type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
@@ -133,6 +137,7 @@ const THREAD_SUMMARY_ACTIVITY_KINDS = new Set([
 const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
 
 const initialState: AppState = {
+  spaces: [],
   projects: [],
   threads: [],
   sidebarThreadSummaryById: {},
@@ -627,6 +632,96 @@ function normalizeProjectScripts(
   return arraysShallowEqual(previous, nextScripts) ? previous : nextScripts;
 }
 
+function normalizeSpace(
+  incoming: ReadModelSpace | OrchestrationSpaceShell,
+  previous: Space | undefined,
+): Space {
+  if (
+    previous &&
+    previous.id === incoming.id &&
+    previous.name === incoming.name &&
+    previous.icon === incoming.icon &&
+    previous.sortOrder === incoming.sortOrder &&
+    previous.createdAt === incoming.createdAt &&
+    previous.updatedAt === incoming.updatedAt
+  ) {
+    return previous;
+  }
+  return {
+    id: incoming.id,
+    name: incoming.name,
+    icon: incoming.icon,
+    sortOrder: incoming.sortOrder,
+    createdAt: incoming.createdAt,
+    updatedAt: incoming.updatedAt,
+  };
+}
+
+function mapSpaces(
+  incoming: ReadonlyArray<ReadModelSpace | OrchestrationSpaceShell>,
+  previous: Space[],
+): Space[] {
+  const previousById = new Map(previous.map((space) => [space.id, space] as const));
+  const next = incoming
+    .map((space) => normalizeSpace(space, previousById.get(space.id)))
+    .toSorted((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  return arraysShallowEqual(previous, next) ? previous : next;
+}
+
+function upsertSpace(
+  state: AppState,
+  incoming: ReadModelSpace | OrchestrationSpaceShell,
+): AppState {
+  const existing = state.spaces.find((space) => space.id === incoming.id);
+  const nextSpace = normalizeSpace(incoming, existing);
+  if (existing === nextSpace) {
+    return state;
+  }
+  const spaces = existing
+    ? state.spaces.map((space) => (space.id === incoming.id ? nextSpace : space))
+    : [...state.spaces, nextSpace];
+  return {
+    ...state,
+    spaces: spaces.toSorted(
+      (left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id),
+    ),
+  };
+}
+
+function removeSpace(state: AppState, spaceId: Space["id"]): AppState {
+  const spaces = state.spaces.filter((space) => space.id !== spaceId);
+  let projectsChanged = false;
+  const projects = state.projects.map((project) => {
+    if ((project.spaceId ?? null) !== spaceId) return project;
+    projectsChanged = true;
+    return { ...project, spaceId: null };
+  });
+  if (spaces.length === state.spaces.length && !projectsChanged) return state;
+  return { ...state, spaces, projects: projectsChanged ? projects : state.projects };
+}
+
+/**
+ * Single implementation for both order sources: shell stream events carry no timestamp,
+ * domain events do. Unmoved spaces keep their object identity so a no-op reorder (or a
+ * replayed event) leaves the state referentially unchanged.
+ */
+export function applySpaceOrder(
+  state: AppState,
+  orderedSpaceIds: ReadonlyArray<Space["id"]>,
+  updatedAt?: string,
+): AppState {
+  const orderById = new Map(orderedSpaceIds.map((spaceId, index) => [spaceId, index] as const));
+  const spaces = state.spaces
+    .map((space) => {
+      const sortOrder = orderById.get(space.id);
+      return sortOrder === undefined || sortOrder === space.sortOrder
+        ? space
+        : { ...space, sortOrder, ...(updatedAt !== undefined ? { updatedAt } : {}) };
+    })
+    .toSorted((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  return arraysShallowEqual(spaces, state.spaces) ? state : { ...state, spaces };
+}
+
 function normalizeProjectFromReadModel(
   incoming: ReadModelProject,
   previous: Project | undefined,
@@ -657,6 +752,7 @@ function normalizeProjectFromReadModel(
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    previous.spaceId === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -675,6 +771,7 @@ function normalizeProjectFromReadModel(
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
+    spaceId: incoming.spaceId ?? null,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -711,6 +808,7 @@ function normalizeProjectFromShell(
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
+    previous.spaceId === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
     previous.scripts === scripts
@@ -729,6 +827,7 @@ function normalizeProjectFromShell(
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
+    spaceId: incoming.spaceId ?? null,
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
@@ -3180,6 +3279,34 @@ function applyOrchestrationEvent(
   options?: ApplyOrchestrationEventOptions,
 ): AppState {
   switch (event.type) {
+    case "space.created":
+      return upsertSpace(state, {
+        id: event.payload.spaceId,
+        name: event.payload.name,
+        icon: event.payload.icon,
+        sortOrder: event.payload.sortOrder,
+        createdAt: event.payload.createdAt,
+        updatedAt: event.payload.updatedAt,
+      });
+
+    case "space.meta-updated": {
+      const existing = state.spaces.find((space) => space.id === event.payload.spaceId);
+      return existing
+        ? upsertSpace(state, {
+            ...existing,
+            name: event.payload.name ?? existing.name,
+            icon: event.payload.icon ?? existing.icon,
+            updatedAt: event.payload.updatedAt,
+          })
+        : state;
+    }
+
+    case "space.order-updated":
+      return applySpaceOrder(state, event.payload.orderedSpaceIds, event.payload.updatedAt);
+
+    case "space.deleted":
+      return removeSpace(state, event.payload.spaceId);
+
     case "project.created":
       return upsertProjectFromReadModel(state, {
         id: event.payload.projectId,
@@ -3189,6 +3316,7 @@ function applyOrchestrationEvent(
         defaultModelSelection: event.payload.defaultModelSelection,
         scripts: event.payload.scripts,
         isPinned: event.payload.isPinned ?? false,
+        spaceId: event.payload.spaceId ?? null,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -3212,6 +3340,8 @@ function applyOrchestrationEvent(
             : existingProject.defaultModelSelection,
         scripts: event.payload.scripts ?? existingProject.scripts,
         isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
+        spaceId:
+          event.payload.spaceId !== undefined ? event.payload.spaceId : existingProject.spaceId,
         createdAt: existingProject.createdAt ?? event.payload.updatedAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -4104,6 +4234,7 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] !== true,
   );
+  const spaces = mapSpaces(snapshot.spaces, state.spaces);
   const projects = mapProjectsFromShellSnapshot(snapshotProjects, state.projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
 
@@ -4156,6 +4287,7 @@ export function syncServerShellSnapshot(
 
   return {
     ...normalizedState,
+    spaces,
     projects,
     threads,
     sidebarThreadSummaryById,
@@ -4212,6 +4344,12 @@ export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModel
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
   switch (event.kind) {
+    case "space-upserted":
+      return upsertSpace(state, event.space);
+    case "space-removed":
+      return removeSpace(state, event.spaceId);
+    case "space-order-updated":
+      return applySpaceOrder(state, event.orderedSpaceIds);
     case "project-upserted":
       return upsertProjectFromShell(state, event.project);
     case "project-removed":
@@ -4240,6 +4378,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   rememberProjectLocalNames(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  const spaces = mapSpaces(
+    readModel.spaces.filter((space) => space.deletedAt === null),
+    state.spaces,
+  );
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter(
       (project) => project.deletedAt === null && deletedProjectIdsById[project.id] !== true,
@@ -4300,6 +4442,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ? state.sidebarThreadSummaryById
     : nextSidebarThreadSummaryById;
   if (
+    spaces === state.spaces &&
     projects === state.projects &&
     threads === state.threads &&
     sidebarThreadSummaryById === state.sidebarThreadSummaryById &&
@@ -4321,6 +4464,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   }
   return {
     ...normalizedState,
+    spaces,
     projects,
     threads,
     sidebarThreadSummaryById,
@@ -4537,6 +4681,7 @@ interface AppStore extends AppState {
   setAllProjectsExpanded: (expanded: boolean) => void;
   collapseProjectsExcept: (activeProjectId: Project["id"] | null) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
+  reorderSpacesLocally: (orderedSpaceIds: ReadonlyArray<Space["id"]>) => void;
   renameProjectLocally: (projectId: Project["id"], name: string | null) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
@@ -4573,6 +4718,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => collapseProjectsExcept(state, activeProjectId)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
+  reorderSpacesLocally: (orderedSpaceIds) =>
+    set((state) => applySpaceOrder(state, orderedSpaceIds)),
   renameProjectLocally: (projectId, name) => {
     set((state) => renameProjectLocally(state, projectId, name));
     persistAppStateNow();

@@ -110,6 +110,9 @@ export function createShellSnapshotFromReadModel(
 ): OrchestrationShellSnapshot {
   return {
     snapshotSequence: snapshot.snapshotSequence,
+    spaces: snapshot.spaces
+      .filter((space) => space.deletedAt === null)
+      .map(({ deletedAt: _deletedAt, ...space }) => space),
     projects: snapshot.projects
       .filter((project) => project.deletedAt === null)
       .map((project) => ({
@@ -119,6 +122,7 @@ export function createShellSnapshotFromReadModel(
         workspaceRoot: project.workspaceRoot,
         defaultModelSelection: project.defaultModelSelection,
         scripts: project.scripts,
+        spaceId: project.spaceId,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       })),

@@ -285,6 +285,7 @@ it.layer(testLayer)("server CLI command", (it) => {
           getSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 0,
+              spaces: [],
               projects: [] as OrchestrationReadModel["projects"],
               threads: [] as OrchestrationReadModel["threads"],
               updatedAt: new Date(0).toISOString(),
@@ -292,6 +293,7 @@ it.layer(testLayer)("server CLI command", (it) => {
           getCommandReadModel: () =>
             Effect.succeed({
               snapshotSequence: 0,
+              spaces: [],
               projects: [] as OrchestrationReadModel["projects"],
               threads: [] as OrchestrationReadModel["threads"],
               updatedAt: new Date(0).toISOString(),
@@ -301,6 +303,7 @@ it.layer(testLayer)("server CLI command", (it) => {
           getShellSnapshot: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
+          getSpaceShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),

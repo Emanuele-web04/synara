@@ -8,12 +8,14 @@ import type {
 import {
   MAX_PINNED_PROJECTS,
   PINNED_MESSAGES_MAX_COUNT,
+  SPACES_MAX_COUNT,
   THREAD_MARKERS_MAX_COUNT,
   TurnId,
 } from "@synara/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
+  workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
@@ -26,12 +28,20 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
+  findSpaceById,
+  isLegacyHomeChatContainerRow,
   listActiveProjectsByWorkspaceRoot,
+  listActiveSpaces,
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
   requireProjectHasNoThreads,
   requireProjectWorkspaceRootAvailable,
+  requireSpace,
+  requireSpaceAbsent,
+  requireSpaceAssignableProject,
+  requireSpaceNameAvailable,
+  type SpaceAssignmentWorkspacePaths,
   requireThread,
   requireThreadAbsent,
   requireThreadArchived,
@@ -218,14 +228,208 @@ function deriveConversationRollbackTarget(
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
   readModel,
+  workspacePaths,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
+  /** Reserved container roots; when provided, space assignment rejects legacy chat containers. */
+  readonly workspacePaths?: SpaceAssignmentWorkspacePaths | undefined;
 }): Effect.fn.Return<
   Omit<OrchestrationEvent, "sequence"> | ReadonlyArray<Omit<OrchestrationEvent, "sequence">>,
   OrchestrationCommandInvariantError
 > {
   switch (command.type) {
+    case "space.create": {
+      yield* requireSpaceAbsent({ readModel, command, spaceId: command.spaceId });
+      yield* requireSpaceNameAvailable({ readModel, command, name: command.name });
+      const activeSpaces = listActiveSpaces(readModel);
+      if (activeSpaces.length >= SPACES_MAX_COUNT) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `A maximum of ${SPACES_MAX_COUNT} custom spaces is supported.`,
+        });
+      }
+      const sortOrder = activeSpaces.reduce(
+        (maximum, space) => Math.max(maximum, space.sortOrder + 1),
+        0,
+      );
+      return {
+        ...withEventBase({
+          aggregateKind: "space",
+          aggregateId: command.spaceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "space.created",
+        payload: {
+          spaceId: command.spaceId,
+          name: command.name,
+          icon: command.icon,
+          sortOrder,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "space.meta.update": {
+      const existingSpace = yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      // Fields equal to the current value are not changes: a Save with nothing edited (or a
+      // rename that resends the icon) must not append an event or bump updatedAt.
+      const nextName =
+        command.name !== undefined && command.name !== existingSpace.name
+          ? command.name
+          : undefined;
+      const nextIcon =
+        command.icon !== undefined && command.icon !== existingSpace.icon
+          ? command.icon
+          : undefined;
+      if (nextName === undefined && nextIcon === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Space metadata update must change a name or icon.",
+        });
+      }
+      if (nextName !== undefined) {
+        yield* requireSpaceNameAvailable({
+          readModel,
+          command,
+          name: nextName,
+          excludeSpaceId: command.spaceId,
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "space",
+          aggregateId: command.spaceId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "space.meta-updated",
+        payload: {
+          spaceId: command.spaceId,
+          ...(nextName !== undefined ? { name: nextName } : {}),
+          ...(nextIcon !== undefined ? { icon: nextIcon } : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "space.reorder": {
+      yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      const activeSpaceIds = listActiveSpaces(readModel).map((space) => space.id);
+      const orderedSpaceIds = command.orderedSpaceIds;
+      const orderedSpaceIdSet = new Set(orderedSpaceIds);
+      const hasExactActiveSet =
+        orderedSpaceIds.length === activeSpaceIds.length &&
+        orderedSpaceIdSet.size === activeSpaceIds.length &&
+        activeSpaceIds.every((spaceId) => orderedSpaceIdSet.has(spaceId));
+      if (!hasExactActiveSet) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Space order must contain every active custom space exactly once.",
+        });
+      }
+      const occurredAt = nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "space",
+          aggregateId: command.spaceId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "space.order-updated",
+        payload: {
+          spaceId: command.spaceId,
+          orderedSpaceIds,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "space.delete": {
+      yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      const occurredAt = nowIso();
+      // Deleted projects are re-filed too: a soft-deleted row must not keep pointing at a
+      // dead space in case a recovery flow ever resurrects it.
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = readModel.projects
+        .filter((project) => project.spaceId === command.spaceId)
+        .map((project) => ({
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: project.id,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "project.meta-updated" as const,
+          payload: {
+            projectId: project.id,
+            spaceId: null,
+            updatedAt: occurredAt,
+          },
+        }));
+      events.push({
+        ...withEventBase({
+          aggregateKind: "space",
+          aggregateId: command.spaceId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "space.deleted",
+        payload: { spaceId: command.spaceId, deletedAt: occurredAt },
+      });
+      return events;
+    }
+
+    case "space.projects.assign": {
+      yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      const occurredAt = nowIso();
+      const seenProjectIds = new Set<string>();
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const projectId of command.projectIds) {
+        if (seenProjectIds.has(projectId)) continue;
+        seenProjectIds.add(projectId);
+        const project = yield* requireProject({ readModel, command, projectId });
+        // Already-filed and concurrently-deleted projects are settled, not errors: the
+        // batch stays atomic for real failures without rejecting a raced retry.
+        if (project.deletedAt !== null || project.spaceId === command.spaceId) continue;
+        if ((project.kind ?? "project") !== "project") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Only ordinary projects can be assigned to a space.",
+          });
+        }
+        yield* requireSpaceAssignableProject({
+          command,
+          projectTitle: project.title,
+          projectWorkspaceRoot: project.workspaceRoot,
+          workspacePaths,
+        });
+        events.push({
+          ...withEventBase({
+            aggregateKind: "project",
+            aggregateId: project.id,
+            occurredAt,
+            commandId: command.commandId,
+          }),
+          type: "project.meta-updated" as const,
+          payload: {
+            projectId: project.id,
+            spaceId: command.spaceId,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      if (events.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The selected projects are already in this space.",
+        });
+      }
+      return events;
+    }
+
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,
@@ -309,6 +513,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         staleProjectIds: new Set(staleProjects.map((project) => project.id)),
       });
 
+      // Filing a new project into the requested space is best-effort: creation must never
+      // fail because the space raced a delete, so an unusable target degrades to Void.
+      const requestedSpace =
+        command.spaceId != null ? findSpaceById(readModel, command.spaceId) : undefined;
+      const creationSpaceId =
+        command.spaceId != null &&
+        nextProjectKind === "project" &&
+        requestedSpace !== undefined &&
+        requestedSpace.deletedAt === null &&
+        !isLegacyHomeChatContainerRow({
+          projectTitle: command.title,
+          projectWorkspaceRoot: command.workspaceRoot,
+          workspacePaths,
+        })
+          ? command.spaceId
+          : null;
+
       events.push({
         ...withEventBase({
           aggregateKind: "project",
@@ -325,6 +546,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
           isPinned: command.isPinned,
+          spaceId: creationSpaceId,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -339,6 +561,83 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      const requestedSpaceId =
+        command.spaceId !== undefined
+          ? command.spaceId
+          : nextProjectKind !== "project" && existingProject.spaceId !== null
+            ? null
+            : undefined;
+      const changedSpaceId =
+        requestedSpaceId !== undefined && requestedSpaceId !== existingProject.spaceId
+          ? requestedSpaceId
+          : undefined;
+      const hasOtherMetadataInput =
+        command.kind !== undefined ||
+        command.title !== undefined ||
+        command.workspaceRoot !== undefined ||
+        command.defaultModelSelection !== undefined ||
+        command.scripts !== undefined ||
+        command.isPinned !== undefined;
+      const isLegacyHomeChatContainer = isLegacyHomeChatContainerRow({
+        projectTitle: existingProject.title,
+        projectWorkspaceRoot: existingProject.workspaceRoot,
+        workspacePaths,
+      });
+      if (
+        command.title !== undefined &&
+        command.title !== existingProject.title &&
+        isLegacyHomeChatContainer
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The legacy Chats container cannot be renamed.",
+        });
+      }
+      if (
+        command.workspaceRoot !== undefined &&
+        !workspaceRootsEqual(command.workspaceRoot, existingProject.workspaceRoot, {
+          platform: process.platform,
+        }) &&
+        isLegacyHomeChatContainer
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The legacy Chats container workspace root cannot be changed.",
+        });
+      }
+      if (command.spaceId !== undefined && command.spaceId !== null) {
+        if (existingProject.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Deleted projects cannot be assigned to a space.",
+          });
+        }
+        if (nextProjectKind !== "project") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Only ordinary projects can be assigned to a space.",
+          });
+        }
+        // Assignability must hold for the *effective* title and root, since the same
+        // command may retitle or move the project.
+        yield* requireSpaceAssignableProject({
+          command,
+          projectTitle: command.title ?? existingProject.title,
+          projectWorkspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
+          workspacePaths,
+        });
+        yield* requireSpace({ readModel, command, spaceId: command.spaceId });
+      }
+      if (
+        requestedSpaceId !== undefined &&
+        changedSpaceId === undefined &&
+        !hasOtherMetadataInput
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project is already assigned to this space.",
+        });
+      }
       // Ownership must hold for the project's *effective* root, not only when the root field is
       // present on the command: a kind-only update (e.g. chat -> studio) would otherwise slip a
       // second workspace-owning project onto a root that a project- or studio-kind row already
@@ -382,6 +681,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
       };

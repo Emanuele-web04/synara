@@ -6,6 +6,7 @@
 import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 
+import { readActiveSpaceId } from "../spacesUiStore";
 import {
   extractDuplicateProjectCreateProjectId,
   isDuplicateProjectCreateError,
@@ -64,6 +65,9 @@ export async function createOrRecoverProjectFromPath(input: {
         provider: "codex",
         model: getDefaultModel("codex"),
       },
+      // A project created while a space is active belongs to that space — filing it
+      // afterwards would bounce the sidebar back to Void to follow the new project.
+      spaceId: readActiveSpaceId(),
       createdAt,
     });
 

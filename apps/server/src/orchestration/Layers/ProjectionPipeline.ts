@@ -28,6 +28,7 @@ import {
   ProjectionPendingApprovalRepository,
 } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { ProjectionSpaceRepository } from "../../persistence/Services/ProjectionSpaces.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import {
   type ProjectionThreadActivity,
@@ -55,6 +56,7 @@ import {
 } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
+import { ProjectionSpaceRepositoryLive } from "../../persistence/Layers/ProjectionSpaces.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
@@ -66,12 +68,14 @@ import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
+  type ShellMetadataOrchestrationEvent,
 } from "../Services/ProjectionPipeline.ts";
 import {
   applyProjectMetadataProjection,
   advanceProjectMetadataSnapshotState,
   PROJECT_METADATA_SNAPSHOT_PROJECTORS,
 } from "../projectMetadataProjection.ts";
+import { applySpaceMetadataProjection } from "../spaceMetadataProjection.ts";
 import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import {
   attachmentRelativePath,
@@ -170,6 +174,10 @@ function isStalePendingApprovalFailure(payload: unknown): boolean {
 }
 
 const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "space.created",
+  "space.meta-updated",
+  "space.order-updated",
+  "space.deleted",
   "project.created",
   "project.meta-updated",
   "project.deleted",
@@ -616,6 +624,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const projectionStateRepository = yield* ProjectionStateRepository;
   const projectionProjectRepository = yield* ProjectionProjectRepository;
+  const projectionSpaceRepository = yield* ProjectionSpaceRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -628,15 +637,25 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
 
-  const applyProjectsProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) =>
-    event.type === "project.created" ||
-    event.type === "project.meta-updated" ||
-    event.type === "project.deleted"
-      ? applyProjectMetadataProjection({
-          event,
-          projectionProjectRepository,
-        }).pipe(Effect.asVoid)
-      : Effect.void;
+  const applyProjectsProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) => {
+    switch (event.type) {
+      case "project.created":
+      case "project.meta-updated":
+      case "project.deleted":
+        return applyProjectMetadataProjection({ event, projectionProjectRepository }).pipe(
+          Effect.asVoid,
+        );
+      case "space.created":
+      case "space.meta-updated":
+      case "space.order-updated":
+      case "space.deleted":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository }).pipe(
+          Effect.asVoid,
+        );
+      default:
+        return Effect.void;
+    }
+  };
 
   const applyThreadsProjection: ProjectorDefinition["apply"] = (event, attachmentSideEffects) =>
     Effect.gen(function* () {
@@ -1905,6 +1924,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       );
 
     switch (event.type) {
+      case "space.created":
+      case "space.meta-updated":
+      case "space.order-updated":
+      case "space.deleted":
       case "project.created":
       case "project.meta-updated":
       case "project.deleted":
@@ -2098,13 +2121,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  const applyShellMetadataProjection = (event: ShellMetadataOrchestrationEvent) => {
+    switch (event.type) {
+      case "space.created":
+      case "space.meta-updated":
+      case "space.order-updated":
+      case "space.deleted":
+        return applySpaceMetadataProjection({ event, projectionSpaceRepository });
+      case "project.created":
+      case "project.meta-updated":
+      case "project.deleted":
+        return applyProjectMetadataProjection({ event, projectionProjectRepository });
+    }
+  };
+
   const projectMetadataEvent: OrchestrationProjectionPipelineShape["projectMetadataEvent"] = (
     event,
   ) =>
-    applyProjectMetadataProjection({
-      event,
-      projectionProjectRepository,
-    }).pipe(
+    applyShellMetadataProjection(event).pipe(
       Effect.flatMap(() =>
         advanceProjectMetadataSnapshotState({
           event,
@@ -2129,6 +2163,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
       Effect.flatMap(() => {
         switch (event.type) {
+          case "space.created":
+          case "space.meta-updated":
+          case "space.order-updated":
+          case "space.deleted":
           case "project.created":
           case "project.meta-updated":
           case "project.deleted":
@@ -2217,6 +2255,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
 ).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionSpaceRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

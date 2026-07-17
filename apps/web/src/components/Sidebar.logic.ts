@@ -53,6 +53,14 @@ export type SidebarActionBadge = {
   readonly accessibleLabel: string;
 };
 
+export function isProjectsSidebarSurface(input: {
+  readonly isOnSettings: boolean;
+  readonly isOnStudio: boolean;
+  readonly isOnWorkspace: boolean;
+}): boolean {
+  return !input.isOnSettings && !input.isOnStudio && !input.isOnWorkspace;
+}
+
 /** Keep partial review counts visible without presenting them as exact. */
 export function resolvePullRequestReviewBadge(
   result: PullRequestReviewRequestCountResult | undefined,

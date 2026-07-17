@@ -35,10 +35,12 @@ const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.makeUnsafe(value);
 
+const TestServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "synara-orchestration-engine-test-",
+});
+
 async function createOrchestrationSystem() {
-  const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-    prefix: "synara-orchestration-engine-test-",
-  });
+  const ServerConfigLayer = TestServerConfigLayer;
   const orchestrationLayer = OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionPipelineLive),
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -346,10 +348,6 @@ describe("OrchestrationEngine", () => {
       },
     };
 
-    const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-      prefix: "synara-orchestration-engine-test-",
-    });
-
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
         Layer.provide(OrchestrationProjectionPipelineLive),
@@ -357,7 +355,7 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, flakyStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
-        Layer.provideMerge(ServerConfigLayer),
+        Layer.provideMerge(TestServerConfigLayer),
         Layer.provideMerge(NodeServices.layer),
       ),
     );
@@ -456,6 +454,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -596,6 +596,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -709,6 +711,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
@@ -833,6 +837,8 @@ describe("OrchestrationEngine", () => {
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
         Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(TestServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
       ),
     );
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));

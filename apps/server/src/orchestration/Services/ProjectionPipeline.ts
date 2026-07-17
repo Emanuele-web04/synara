@@ -12,6 +12,11 @@ import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
+import type { SpaceMetadataOrchestrationEvent } from "../spaceMetadataProjection.ts";
+
+export type ShellMetadataOrchestrationEvent =
+  | ProjectMetadataOrchestrationEvent
+  | SpaceMetadataOrchestrationEvent;
 
 /**
  * OrchestrationProjectionPipelineShape - Service API for projection execution.
@@ -54,7 +59,7 @@ export interface OrchestrationProjectionPipelineShape {
    * surrounding transaction.
    */
   readonly projectMetadataEvent: (
-    event: ProjectMetadataOrchestrationEvent,
+    event: ShellMetadataOrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 

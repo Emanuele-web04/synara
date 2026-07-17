@@ -37,6 +37,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         },
         scripts: [],
         isPinned: false,
+        spaceId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
         deletedAt: null,

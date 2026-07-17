@@ -69,6 +69,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+k", command: "sidebar.search" },
   { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
+  { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },
+  { key: "mod+alt+arrowright", command: "space.next", when: "!terminalFocus" },
   { key: "mod+j", command: "terminal.toggle" },
   { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
   { key: "mod+shift+arrowright", command: "terminal.splitRight", when: "terminalFocus" },

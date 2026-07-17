@@ -120,6 +120,8 @@ import { resolveSubagentPresentationForThread } from "../lib/subagentPresentatio
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
 import { ensureStudioProject, isStudioContainerProject } from "../lib/studioProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
+import { resolveActiveSpaceId } from "../lib/spaceGrouping";
+import { readActiveSpaceId } from "../spacesUiStore";
 import {
   createOrRecoverProjectFromPath,
   PROJECT_CREATE_EXISTING_SYNC_ERROR,
@@ -7519,6 +7521,11 @@ export default function ChatView({
     }
     // Keep the optimistic label short while the server asks Codex for a better summary.
     const title = buildPromptThreadTitleFallback(titleSeed);
+    const currentStoreState = useStore.getState();
+    const activeSpaceIdForSend = resolveActiveSpaceId(
+      readActiveSpaceId(),
+      currentStoreState.spaces,
+    );
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,
@@ -7526,7 +7533,7 @@ export default function ChatView({
       isFirstMessage,
       isHomeChatContainer,
       isStudioContainer,
-      projects: useStore.getState().projects,
+      projects: currentStoreState.projects,
       selectedWorkspaceRoot: isContainerLandingProject
         ? (resolvedThreadWorktreePath ?? null)
         : null,
@@ -7567,6 +7574,11 @@ export default function ChatView({
             workspaceRoot: firstSendTarget.creation.workspaceRoot,
             createWorkspaceRootIfMissing: firstSendTarget.creation.createWorkspaceRootIfMissing,
             defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
+            // Managed chat rows stay global; a folder mention creates an ordinary project
+            // and should inherit the Space where the first send originated.
+            ...(firstSendTarget.creation.kind === "project"
+              ? { spaceId: activeSpaceIdForSend }
+              : {}),
             createdAt,
           });
           targetProjectIdForSend = projectId;

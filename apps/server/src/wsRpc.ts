@@ -181,6 +181,10 @@ const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
 // actually project to a shell update.
 function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   switch (event.type) {
+    case "space.created":
+    case "space.meta-updated":
+    case "space.order-updated":
+    case "space.deleted":
     case "project.created":
     case "project.meta-updated":
     case "project.deleted":
@@ -480,6 +484,34 @@ export const makeWsRpcLayer = () =>
         event: OrchestrationEvent,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never> => {
         switch (event.type) {
+          case "space.created":
+          case "space.meta-updated":
+            return projectionReadModelQuery.getSpaceShellById(event.payload.spaceId).pipe(
+              Effect.map((space) =>
+                Option.map(space, (nextSpace) => ({
+                  kind: "space-upserted" as const,
+                  sequence: event.sequence,
+                  space: nextSpace,
+                })),
+              ),
+              Effect.catch(() => Effect.succeed(Option.none())),
+            );
+          case "space.order-updated":
+            return Effect.succeed(
+              Option.some({
+                kind: "space-order-updated" as const,
+                sequence: event.sequence,
+                orderedSpaceIds: event.payload.orderedSpaceIds,
+              }),
+            );
+          case "space.deleted":
+            return Effect.succeed(
+              Option.some({
+                kind: "space-removed" as const,
+                sequence: event.sequence,
+                spaceId: event.payload.spaceId,
+              }),
+            );
           case "project.created":
           case "project.meta-updated":
             return projectionReadModelQuery.getProjectShellById(event.payload.projectId).pipe(

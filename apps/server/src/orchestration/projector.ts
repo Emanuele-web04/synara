@@ -22,6 +22,10 @@ import { Effect, Schema } from "effect";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  SpaceCreatedPayload,
+  SpaceDeletedPayload,
+  SpaceMetaUpdatedPayload,
+  SpaceOrderUpdatedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -287,6 +291,7 @@ function upsertThreadActivity(
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
+    spaces: [],
     projects: [],
     threads: [],
     updatedAt: nowIso,
@@ -304,6 +309,77 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "space.created":
+      return decodeForEvent(SpaceCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const existing = nextBase.spaces.find((entry) => entry.id === payload.spaceId);
+          const nextSpace = {
+            id: payload.spaceId,
+            name: payload.name,
+            icon: payload.icon,
+            sortOrder: payload.sortOrder,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          };
+          return {
+            ...nextBase,
+            spaces: existing
+              ? nextBase.spaces.map((entry) => (entry.id === payload.spaceId ? nextSpace : entry))
+              : [...nextBase.spaces, nextSpace],
+          };
+        }),
+      );
+
+    case "space.meta-updated":
+      return decodeForEvent(SpaceMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          spaces: nextBase.spaces.map((space) =>
+            space.id === payload.spaceId
+              ? {
+                  ...space,
+                  ...(payload.name !== undefined ? { name: payload.name } : {}),
+                  ...(payload.icon !== undefined ? { icon: payload.icon } : {}),
+                  updatedAt: payload.updatedAt,
+                }
+              : space,
+          ),
+        })),
+      );
+
+    case "space.order-updated":
+      return decodeForEvent(SpaceOrderUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const orderBySpaceId = new Map(
+            payload.orderedSpaceIds.map((spaceId, index) => [spaceId, index] as const),
+          );
+          return {
+            ...nextBase,
+            spaces: nextBase.spaces.map((space) => {
+              const sortOrder = orderBySpaceId.get(space.id);
+              // A listed space whose position did not move is not a change; skipping it keeps
+              // this read model, the SQL projection, and the client store byte-identical.
+              return sortOrder === undefined || sortOrder === space.sortOrder
+                ? space
+                : { ...space, sortOrder, updatedAt: payload.updatedAt };
+            }),
+          };
+        }),
+      );
+
+    case "space.deleted":
+      return decodeForEvent(SpaceDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          spaces: nextBase.spaces.map((space) =>
+            space.id === payload.spaceId
+              ? { ...space, deletedAt: payload.deletedAt, updatedAt: payload.deletedAt }
+              : space,
+          ),
+        })),
+      );
+
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -316,6 +392,7 @@ export function projectEvent(
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
+            spaceId: payload.spaceId ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -350,6 +427,7 @@ export function projectEvent(
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+                  ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
