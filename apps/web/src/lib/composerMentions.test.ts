@@ -123,4 +123,17 @@ describe("formatComposerMentionToken", () => {
   it("escapes embedded quotes and backslashes in quoted tokens", () => {
     expect(formatComposerMentionToken(String.raw`C:\A "B"`)).toBe(String.raw`@"C:\\A \"B\""`);
   });
+
+  it("parses an unclosed quote followed by a backslash run in linear time (no ReDoS)", () => {
+    // Regression guard: with an ambiguous escape alternation this backtracks
+    // exponentially and the test times out instead of finishing instantly.
+    const attack = `@"${"\\".repeat(512)}x no closing quote`;
+    const matches = [
+      ...attack.matchAll(createComposerMentionTokenRegex({ includeTrailingTokenAtEnd: true })),
+    ];
+    // Without a closing quote only the unquoted fallback token matches.
+    expect(matches.map((match) => extractComposerMentionPath(match))).toEqual([
+      `"${"\\".repeat(512)}x`,
+    ]);
+  });
 });

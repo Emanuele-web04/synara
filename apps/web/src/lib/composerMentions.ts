@@ -9,7 +9,10 @@ export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";
 }
 
-const QUOTED_MENTION_PATH_SOURCE = String.raw`((?:\\["\\]|[^"])*)`;
+// The alternation must be unambiguous — a backslash may only match the escape
+// branch — or unclosed `@"` + a backslash run backtracks exponentially on the
+// per-keystroke composer parse (ReDoS).
+const QUOTED_MENTION_PATH_SOURCE = String.raw`((?:\\.|[^"\\])*)`;
 
 export function createComposerMentionTokenRegex(options: {
   includeTrailingTokenAtEnd: boolean;
