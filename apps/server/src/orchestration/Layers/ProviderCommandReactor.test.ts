@@ -3088,6 +3088,15 @@ describe("ProviderCommandReactor", () => {
     expect(harness.cancelPendingStudioOutputBaseline).toHaveBeenCalledWith(
       ThreadId.makeUnsafe("thread-1"),
     );
+    await waitFor(async () => {
+      const delivery = await Effect.runPromise(
+        harness.deliveryRepository.firstBlockingDeliveryForThread({
+          consumerName: "provider-command-reactor.v1",
+          threadId: "thread-1",
+        }),
+      );
+      return Option.isSome(delivery) && delivery.value.state === "uncertain";
+    });
     const deliveryBlocker = await Effect.runPromise(
       harness.deliveryRepository.firstBlockingDeliveryForThread({
         consumerName: "provider-command-reactor.v1",
