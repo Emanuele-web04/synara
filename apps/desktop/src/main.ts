@@ -150,8 +150,8 @@ import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManag
 import { registerBrowserIpcHandlers, sendBrowserCopyLink, sendBrowserState } from "./browserIpc";
 import {
   BrowserUsePipeServer,
-  SYNARA_BROWSER_USE_PIPE_ENV,
   SYNARA_BROWSER_USE_PIPE_PATH,
+  resolveBrowserUsePipeBackendEnv,
 } from "./browserUsePipeServer";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import {
@@ -2697,7 +2697,10 @@ function backendNodeArgs(): string[] {
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   return {
-    ...process.env,
+    ...resolveBrowserUsePipeBackendEnv(
+      process.env,
+      browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
+    ),
     // Point the backend's HTTP static route at the same swap-immune snapshot the
     // synara:// protocol serves, so both surfaces survive app.asar being replaced.
     ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
@@ -2706,9 +2709,6 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_PORT: String(backendPort),
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
-    ...(SYNARA_BROWSER_USE_PIPE_PATH
-      ? { [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH }
-      : {}),
   };
 }
 
@@ -3265,10 +3265,6 @@ function registerIpcHandlers(): void {
   }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
-  void ensureBrowserUsePipeServer().catch((error) => {
-    console.warn("[Synara browser] Failed to start browser-use native pipe", error);
-  });
-
   registerBrowserIpcHandlers(ipcMain, browserManager);
 }
 
@@ -3527,6 +3523,11 @@ async function bootstrap(): Promise<void> {
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");
+  try {
+    await ensureBrowserUsePipeServer();
+  } catch (error) {
+    console.warn("[Synara browser] Failed to start browser-use native pipe", error);
+  }
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 

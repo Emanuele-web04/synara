@@ -81,6 +81,19 @@ export function resolveConfiguredBrowserUsePipePath(
 
 export const SYNARA_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
 
+export function resolveBrowserUsePipeBackendEnv(
+  inheritedEnv: NodeJS.ProcessEnv,
+  activePipePath: string | null | undefined,
+): NodeJS.ProcessEnv {
+  const backendEnv = { ...inheritedEnv };
+  delete backendEnv[SYNARA_BROWSER_USE_PIPE_ENV];
+  const pipePath = activePipePath?.trim();
+  if (pipePath) {
+    backendEnv[SYNARA_BROWSER_USE_PIPE_ENV] = pipePath;
+  }
+  return backendEnv;
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;

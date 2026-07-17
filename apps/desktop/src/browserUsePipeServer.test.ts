@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   BrowserUsePipeServer,
   SYNARA_BROWSER_USE_PIPE_ENV,
+  resolveBrowserUsePipeBackendEnv,
   resolveConfiguredBrowserUsePipePath,
   resolveDefaultBrowserUsePipePath,
 } from "./browserUsePipeServer";
@@ -115,6 +116,21 @@ describe("browser-use pipe path resolution", () => {
     expect(resolveConfiguredBrowserUsePipePath({}, "darwin")).toMatch(
       /codex-browser-use\/synara-iab-\d+-[0-9a-f-]{36}\.sock$/,
     );
+  });
+
+  it("publishes the browser-use pipe only after a listener becomes active", () => {
+    const inheritedEnv = {
+      KEEP_ME: "yes",
+      [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/stale.sock",
+    };
+    expect(resolveBrowserUsePipeBackendEnv(inheritedEnv, null)).toEqual({ KEEP_ME: "yes" });
+    expect(resolveBrowserUsePipeBackendEnv(inheritedEnv, "  ")).toEqual({ KEEP_ME: "yes" });
+    expect(
+      resolveBrowserUsePipeBackendEnv(inheritedEnv, "/tmp/codex-browser-use/synara.sock"),
+    ).toEqual({
+      KEEP_ME: "yes",
+      [SYNARA_BROWSER_USE_PIPE_ENV]: "/tmp/codex-browser-use/synara.sock",
+    });
   });
 
   it("uses an unguessable path for each browser-use server generation", () => {
