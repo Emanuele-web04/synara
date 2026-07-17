@@ -125,9 +125,11 @@ export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
- *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
+ *  transcript text bleed through its top edge. Match the chat surface to stay seamless.
+ *  `relative z-[1]` keeps the full input outline above the inset stacked rail
+ *  (`-mb-px`), so the top border is never covered by live-changes / task / queue chrome. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
+  "group relative z-[1] chat-composer-shell bg-[var(--color-background-surface)] transition-colors duration-200";
 
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =

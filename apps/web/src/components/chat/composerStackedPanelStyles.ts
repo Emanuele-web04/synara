@@ -7,9 +7,12 @@
 import { COMPACT_CHAT_MARKDOWN_TIGHT_CLASS_NAME } from "~/components/chatMarkdownSpacing";
 import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 
-/** Frame, border, radius, and surface chrome for a stacked composer panel. */
+/** Frame, border, radius, and surface chrome for a stacked composer panel.
+ *  Uses `chat-composer-stacked-top` (not `chat-composer-surface`) so the rail
+ *  reads as a darker recessed strip above the input. No raised z-index: the
+ *  input shell paints later and keeps its top border visible across the seam. */
 export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
-  "chat-composer-surface chat-composer-stacked-top relative z-[1] overflow-hidden border border-b-0",
+  "chat-composer-stacked-top relative overflow-hidden border border-b-0",
   COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,
 ].join(" ");
 
