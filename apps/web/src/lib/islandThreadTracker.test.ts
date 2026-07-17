@@ -198,10 +198,10 @@ describe("selectRecentIslandThreads", () => {
     const threads = [
       makeThread({ id: "t1", createdAt: "2026-01-01T00:00:00Z" }),
       makeThread({ id: "t2", createdAt: "2026-01-03T00:00:00Z" }),
-      makeThread({ id: "t3", createdAt: "2026-01-02T00:00:00Z" }),
+      makeThread({ id: "t4", createdAt: "2026-01-02T00:00:00Z" }),
     ];
     const recent = selectRecentIslandThreads(threads);
-    expect(recent.map((t) => t.id)).toEqual(["t2", "t3", "t1"]);
+    expect(recent.map((t) => t.id)).toEqual(["t2", "t4", "t1"]);
   });
 
   it("excludes archived threads", () => {
