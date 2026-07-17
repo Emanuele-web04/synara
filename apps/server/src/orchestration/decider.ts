@@ -424,7 +424,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (events.length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "The selected projects are already in this space.",
+          detail: "None of the selected projects need to be assigned to this space.",
         });
       }
       return events;

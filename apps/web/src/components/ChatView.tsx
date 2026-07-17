@@ -121,7 +121,6 @@ import { resolveSubagentPresentationForThread } from "../lib/subagentPresentatio
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
 import { ensureStudioProject, isStudioContainerProject } from "../lib/studioProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
-import { resolveActiveSpaceId } from "../lib/spaceGrouping";
 import { readActiveSpaceId } from "../spacesUiStore";
 import {
   createOrRecoverProjectFromPath,
@@ -7527,10 +7526,9 @@ export default function ChatView({
     // Keep the optimistic label short while the server asks Codex for a better summary.
     const title = buildPromptThreadTitleFallback(titleSeed);
     const currentStoreState = useStore.getState();
-    const activeSpaceIdForSend = resolveActiveSpaceId(
-      readActiveSpaceId(),
-      currentStoreState.spaces,
-    );
+    // Keep an optimistically selected Space across the command/snapshot race. The server
+    // validates this best-effort target and degrades genuinely stale/deleted ids to Void.
+    const activeSpaceIdForSend = readActiveSpaceId();
     const firstSendTarget = resolveFirstSendTarget({
       activeProject,
       chatWorkspaceRoot,

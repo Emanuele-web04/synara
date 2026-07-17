@@ -571,7 +571,7 @@ describe("Spaces", () => {
           readModel: batch.readModel,
         }),
       ),
-    ).rejects.toThrow(/already in this space/i);
+    ).rejects.toThrow(/none of the selected projects need to be assigned/i);
   });
 
   it("files new projects into the requested space, degrading unusable targets to Void", async () => {
