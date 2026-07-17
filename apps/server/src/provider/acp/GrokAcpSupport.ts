@@ -10,6 +10,7 @@ import * as EffectAcpErrorsRuntime from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -78,6 +79,7 @@ export function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
+    env: buildProviderChildEnvironment({ provider: "grok" }),
   };
 }
 

@@ -17,7 +17,7 @@ import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 import { getModelSelectionStringOptionValue } from "@synara/shared/model";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../../provider/attachmentProjection.ts";
 import {
@@ -123,6 +123,9 @@ interface OpenCodeCompatibleTextGenerationConfig {
   readonly displayName: string;
   readonly serviceName: string;
   readonly cliSpec: OpenCodeCompatibleCliSpec;
+  readonly resolveServerPassword?: (
+    provider: OpenCodeCompatibleTextGenerationProvider,
+  ) => Effect.Effect<string | undefined>;
 }
 
 function resolveOpenCodeCompatibleModelSelection(
@@ -350,7 +353,9 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const providerOptions = input.providerOptions?.[config.provider];
       const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
       const serverUrl = providerOptions?.serverUrl?.trim() || "";
-      const serverPassword = providerOptions?.serverPassword?.trim() || "";
+      const serverPassword = config.resolveServerPassword
+        ? ((yield* config.resolveServerPassword(config.provider)) ?? "")
+        : "";
       const providerId = parsedModel.providerID;
       const modelId = parsedModel.modelID;
       const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
@@ -367,7 +372,10 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const fileParts = toOpenCodeFileParts({
         attachments: input.attachments,
         resolveAttachmentPath: (attachment) =>
-          resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
+          resolveProviderAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment,
+          }),
       });
 
       const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url">) =>
@@ -714,22 +722,33 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     } satisfies TextGenerationShape;
   });
 
-export const OpenCodeTextGenerationServiceLive = Layer.effect(
-  OpenCodeTextGeneration,
-  makeOpenCodeCompatibleTextGeneration({
-    provider: "opencode",
-    displayName: "OpenCode",
-    serviceName: "OpenCodeTextGeneration",
-    cliSpec: OPENCODE_CLI_SPEC,
-  }),
-);
+export const makeOpenCodeTextGenerationServiceLive = (
+  resolveServerPassword?: OpenCodeCompatibleTextGenerationConfig["resolveServerPassword"],
+) =>
+  Layer.effect(
+    OpenCodeTextGeneration,
+    makeOpenCodeCompatibleTextGeneration({
+      provider: "opencode",
+      displayName: "OpenCode",
+      serviceName: "OpenCodeTextGeneration",
+      cliSpec: OPENCODE_CLI_SPEC,
+      ...(resolveServerPassword ? { resolveServerPassword } : {}),
+    }),
+  );
 
-export const KiloTextGenerationServiceLive = Layer.effect(
-  KiloTextGeneration,
-  makeOpenCodeCompatibleTextGeneration({
-    provider: "kilo",
-    displayName: "Kilo",
-    serviceName: "KiloTextGeneration",
-    cliSpec: KILO_CLI_SPEC,
-  }),
-);
+export const makeKiloTextGenerationServiceLive = (
+  resolveServerPassword?: OpenCodeCompatibleTextGenerationConfig["resolveServerPassword"],
+) =>
+  Layer.effect(
+    KiloTextGeneration,
+    makeOpenCodeCompatibleTextGeneration({
+      provider: "kilo",
+      displayName: "Kilo",
+      serviceName: "KiloTextGeneration",
+      cliSpec: KILO_CLI_SPEC,
+      ...(resolveServerPassword ? { resolveServerPassword } : {}),
+    }),
+  );
+
+export const OpenCodeTextGenerationServiceLive = makeOpenCodeTextGenerationServiceLive();
+export const KiloTextGenerationServiceLive = makeKiloTextGenerationServiceLive();

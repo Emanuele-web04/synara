@@ -12,6 +12,8 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
+  ProviderStartReviewInput,
+  ProviderSteerTurnInput,
   ProviderTurnStartResult,
 } from "@synara/contracts";
 import {
@@ -25,11 +27,12 @@ import {
 import { it, assert, vi } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
 
-import { Effect, Fiber, Layer, Option, PubSub, Ref, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, PubSub, Ref, Scope, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   ProviderAdapterSessionNotFoundError,
+  ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
   ProviderValidationError,
   type ProviderAdapterError,
@@ -77,6 +80,15 @@ function requireReleaseListSessions(release: ReleaseListSessions | undefined): R
   return release;
 }
 
+function withoutResumeCursor(session: ProviderSession): ProviderSession {
+  const { resumeCursor: _omittedResumeCursor, ...rest } = session;
+  return rest;
+}
+
+function asRuntimePayloadRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
 function makeFakeCodexAdapter(
   provider: ProviderKind = "codex",
   options?: { readonly conversationRollback?: "native" | "restart-session" },
@@ -84,22 +96,23 @@ function makeFakeCodexAdapter(
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
-  const startSession = vi.fn((input: ProviderSessionStartInput) =>
-    Effect.sync(() => {
-      const now = new Date().toISOString();
-      const session: ProviderSession = {
-        provider,
-        status: "ready",
-        runtimeMode: input.runtimeMode,
-        threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? { opaque: `resume-${String(input.threadId)}` },
-        cwd: input.cwd ?? process.cwd(),
-        createdAt: now,
-        updatedAt: now,
-      };
-      sessions.set(session.threadId, session);
-      return session;
-    }),
+  const startSession = vi.fn(
+    (input: ProviderSessionStartInput): Effect.Effect<ProviderSession, ProviderAdapterError> =>
+      Effect.sync(() => {
+        const now = new Date().toISOString();
+        const session: ProviderSession = {
+          provider,
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          resumeCursor: input.resumeCursor ?? { opaque: `resume-${String(input.threadId)}` },
+          cwd: input.cwd ?? process.cwd(),
+          createdAt: now,
+          updatedAt: now,
+        };
+        sessions.set(session.threadId, session);
+        return session;
+      }),
   );
 
   const sendTurn = vi.fn(
@@ -120,6 +133,24 @@ function makeFakeCodexAdapter(
         turnId: TurnId.makeUnsafe(`turn-${String(input.threadId)}`),
       });
     },
+  );
+
+  const steerTurn = vi.fn(
+    (input: ProviderSteerTurnInput): Effect.Effect<ProviderTurnStartResult, ProviderAdapterError> =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: TurnId.makeUnsafe(`steer-${String(input.threadId)}`),
+      }),
+  );
+
+  const startReview = vi.fn(
+    (
+      input: ProviderStartReviewInput,
+    ): Effect.Effect<ProviderTurnStartResult, ProviderAdapterError> =>
+      Effect.succeed({
+        threadId: input.threadId,
+        turnId: TurnId.makeUnsafe(`review-${String(input.threadId)}`),
+      }),
   );
 
   const interruptTurn = vi.fn(
@@ -201,12 +232,15 @@ function makeFakeCodexAdapter(
     provider,
     capabilities: {
       sessionModelSwitch: "in-session",
+      supportsTurnSteering: true,
       ...(options?.conversationRollback
         ? { conversationRollback: options.conversationRollback }
         : {}),
     },
     startSession,
     sendTurn,
+    steerTurn,
+    startReview,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -250,6 +284,8 @@ function makeFakeCodexAdapter(
     updateSession,
     startSession,
     sendTurn,
+    steerTurn,
+    startReview,
     interruptTurn,
     respondToRequest,
     respondToUserInput,
@@ -302,26 +338,37 @@ const waitUntilEffect = <E = never, R = never>(
 
 function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
-  providers?: { readonly includeRestartRollbackDroid?: boolean },
+  providers?: {
+    readonly includeRestartRollbackDroid?: boolean;
+    readonly includePi?: boolean;
+  },
 ) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
+  const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
+  const pi = makeFakeCodexAdapter("pi");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
       provider === "codex"
         ? Effect.succeed(codex.adapter)
         : provider === "claudeAgent"
           ? Effect.succeed(claude.adapter)
-          : provider === "droid" && providers?.includeRestartRollbackDroid === true
-            ? Effect.succeed(droid.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
+          : provider === "antigravity"
+            ? Effect.succeed(antigravity.adapter)
+            : provider === "droid" && providers?.includeRestartRollbackDroid === true
+              ? Effect.succeed(droid.adapter)
+              : provider === "pi" && providers?.includePi === true
+                ? Effect.succeed(pi.adapter)
+                : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
-      Effect.succeed(
-        providers?.includeRestartRollbackDroid === true
-          ? (["codex", "claudeAgent", "droid"] as const)
-          : (["codex", "claudeAgent"] as const),
-      ),
+      Effect.succeed([
+        "codex",
+        "claudeAgent",
+        "antigravity",
+        ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
+        ...(providers?.includePi === true ? (["pi"] as const) : []),
+      ] as const),
   };
 
   const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
@@ -330,25 +377,26 @@ function makeProviderServiceLayer(
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
 
-  const layer = it.layer(
-    Layer.mergeAll(
-      makeProviderServiceLive(options).pipe(
-        Layer.provide(providerAdapterLayer),
-        Layer.provide(directoryLayer),
-        Layer.provideMerge(AnalyticsService.layerTest),
-      ),
-      directoryLayer,
-
-      runtimeRepositoryLayer,
-      NodeServices.layer,
+  const rawLayer = Layer.mergeAll(
+    makeProviderServiceLive(options).pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provideMerge(AnalyticsService.layerTest),
     ),
+    directoryLayer,
+    runtimeRepositoryLayer,
+    NodeServices.layer,
   );
+  const layer = it.layer(rawLayer);
 
   return {
     codex,
     claude,
+    antigravity,
     droid,
+    pi,
     layer,
+    rawLayer,
   };
 }
 
@@ -356,6 +404,7 @@ const routing = makeProviderServiceLayer();
 const restartRollbackRouting = makeProviderServiceLayer(undefined, {
   includeRestartRollbackDroid: true,
 });
+const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: true });
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-"));
@@ -612,9 +661,431 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("serializes lifecycle mutations and persists a fresh generation per start", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-lifecycle-generation");
+      const startInput: ProviderSessionStartInput = {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      };
+
+      yield* provider.startSession(threadId, startInput);
+      const firstBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const firstGeneration = firstBinding?.lifecycleGeneration;
+      assert.equal(typeof firstGeneration, "string");
+
+      yield* provider.stopSession({ threadId });
+      yield* provider.startSession(threadId, startInput);
+      const secondBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const secondGeneration = secondBinding?.lifecycleGeneration;
+      assert.equal(typeof secondGeneration, "string");
+      assert.notEqual(secondGeneration, firstGeneration);
+
+      const responseCallCount = routing.codex.respondToRequest.mock.calls.length;
+      const staleResponse = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId("request-from-old-generation"),
+          lifecycleGeneration: String(firstGeneration),
+          decision: "accept",
+        }),
+      );
+      assertFailure(
+        staleResponse,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToRequest",
+          issue: `Cannot respond to stale request 'request-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+        }),
+      );
+      assert.equal(routing.codex.respondToRequest.mock.calls.length, responseCallCount);
+
+      const userInputResponseCallCount = routing.codex.respondToUserInput.mock.calls.length;
+      const staleUserInputResponse = yield* Effect.result(
+        provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("user-input-from-old-generation"),
+          lifecycleGeneration: String(firstGeneration),
+          answers: { answer: "stale" },
+        }),
+      );
+      assertFailure(
+        staleUserInputResponse,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue: `Cannot respond to stale request 'user-input-from-old-generation' from provider generation '${String(firstGeneration)}'.`,
+        }),
+      );
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, userInputResponseCallCount);
+
+      yield* routing.codex.waitForRuntimeSubscribers();
+      routing.codex.emit({
+        type: "session.exited",
+        eventId: asEventId("runtime-old-generation-exited"),
+        provider: "codex",
+        threadId,
+        createdAt: "2026-07-14T14:00:00.000Z",
+        lifecycleGeneration: String(firstGeneration),
+        payload: { reason: "late old-runtime exit" },
+      });
+      yield* sleep(25);
+      const bindingAfterStaleEvent = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(bindingAfterStaleEvent?.lifecycleGeneration, secondGeneration);
+      assert.equal(bindingAfterStaleEvent?.status, "running");
+
+      const defaultStart = routing.codex.startSession.getMockImplementation();
+      if (!defaultStart) assert.fail("Expected the fake adapter start implementation");
+      let releaseDelayedStart: () => void = () => undefined;
+      const delayedStart = new Promise<void>((resolve) => {
+        releaseDelayedStart = resolve;
+      });
+      routing.codex.startSession.mockImplementationOnce((input) =>
+        Effect.promise(() => delayedStart).pipe(Effect.andThen(defaultStart(input))),
+      );
+      const startCallCount = routing.codex.startSession.mock.calls.length;
+      const stopCallCount = routing.codex.stopSession.mock.calls.length;
+      const startFiber = yield* provider.startSession(threadId, startInput).pipe(Effect.forkChild);
+      yield* waitUntil(
+        () => routing.codex.startSession.mock.calls.length > startCallCount,
+        500,
+        10,
+        "delayed provider start",
+      );
+      const stopFiber = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+      yield* sleep(25);
+      assert.equal(routing.codex.stopSession.mock.calls.length, stopCallCount);
+
+      releaseDelayedStart();
+      yield* Fiber.join(startFiber);
+      yield* Fiber.join(stopFiber);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("serializes overlapping same-provider and cross-provider starts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-overlapping-provider-starts");
+      const codexInput: ProviderSessionStartInput = {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/provider-starts",
+        runtimeMode: "full-access",
+      };
+
+      yield* provider.startSession(threadId, codexInput);
+      const defaultCodexStart = routing.codex.startSession.getMockImplementation();
+      if (!defaultCodexStart) assert.fail("Expected the fake Codex start implementation");
+
+      let releaseSameProviderStart: () => void = () => undefined;
+      const delayedSameProviderStart = new Promise<void>((resolve) => {
+        releaseSameProviderStart = resolve;
+      });
+      routing.codex.startSession.mockImplementationOnce((input) =>
+        Effect.promise(() => delayedSameProviderStart).pipe(
+          Effect.andThen(defaultCodexStart(input)),
+        ),
+      );
+      const codexStartCount = routing.codex.startSession.mock.calls.length;
+      const claudeStartCount = routing.claude.startSession.mock.calls.length;
+
+      const sameProviderFiber = yield* provider
+        .startSession(threadId, codexInput)
+        .pipe(Effect.forkChild);
+      yield* waitUntil(
+        () => routing.codex.startSession.mock.calls.length > codexStartCount,
+        500,
+        10,
+        "same-provider start",
+      );
+      const crossProviderFiber = yield* provider
+        .startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          cwd: "/tmp/provider-starts",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* sleep(25);
+      assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
+
+      releaseSameProviderStart();
+      yield* Fiber.join(sameProviderFiber);
+      yield* Fiber.join(crossProviderFiber);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const [codexSessions, claudeSessions] = yield* Effect.all([
+        routing.codex.listSessions(),
+        routing.claude.listSessions(),
+      ]);
+      assert.equal(binding?.provider, "claudeAgent");
+      assert.equal(
+        codexSessions.some((session) => session.threadId === threadId),
+        false,
+      );
+      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("restores the previous runtime and generation when provider replacement fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-failed-provider-replacement");
+      const initial = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/failed-provider-replacement",
+        runtimeMode: "full-access",
+      });
+      const originalBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const replacementFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "claudeAgent",
+        threadId,
+      });
+      routing.claude.startSession.mockImplementationOnce(() => Effect.fail(replacementFailure));
+
+      const replacement = yield* Effect.result(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          cwd: "/tmp/failed-provider-replacement",
+          runtimeMode: "full-access",
+        }),
+      );
+      assertFailure(replacement, replacementFailure);
+
+      const restoredBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const [codexSessions, claudeSessions] = yield* Effect.all([
+        routing.codex.listSessions(),
+        routing.claude.listSessions(),
+      ]);
+      const restoreCall = routing.codex.startSession.mock.calls.findLast(
+        ([input]) => input.threadId === threadId,
+      )?.[0];
+      assert.equal(restoredBinding?.provider, "codex");
+      assert.equal(restoredBinding?.status, "running");
+      assert.equal(restoredBinding?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
+      assert.equal(codexSessions.filter((session) => session.threadId === threadId).length, 1);
+      assert.equal(
+        claudeSessions.some((session) => session.threadId === threadId),
+        false,
+      );
+      assert.deepEqual(restoreCall?.resumeCursor, initial.resumeCursor);
+      assert.equal(restoreCall?.lifecycleGeneration, originalBinding?.lifecycleGeneration);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("serializes recovery before a competing provider start", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-recovery-start-race");
+      const initial = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/recovery-start-race",
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.stopRuntimeSession, "function");
+      if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
+      yield* provider.stopRuntimeSession({ threadId });
+
+      const defaultCodexStart = routing.codex.startSession.getMockImplementation();
+      if (!defaultCodexStart) assert.fail("Expected the fake Codex start implementation");
+      let releaseRecovery: () => void = () => undefined;
+      const delayedRecovery = new Promise<void>((resolve) => {
+        releaseRecovery = resolve;
+      });
+      routing.codex.startSession.mockImplementationOnce((input) =>
+        Effect.promise(() => delayedRecovery).pipe(Effect.andThen(defaultCodexStart(input))),
+      );
+      const codexStartCount = routing.codex.startSession.mock.calls.length;
+      const claudeStartCount = routing.claude.startSession.mock.calls.length;
+
+      const recoveryFiber = yield* provider
+        .sendTurn({ threadId, input: "recover", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(
+        () => routing.codex.startSession.mock.calls.length > codexStartCount,
+        500,
+        10,
+        "provider recovery start",
+      );
+      const competingStartFiber = yield* provider
+        .startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          cwd: "/tmp/recovery-start-race",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* sleep(25);
+      assert.equal(routing.claude.startSession.mock.calls.length, claudeStartCount);
+
+      releaseRecovery();
+      yield* Fiber.join(recoveryFiber);
+      yield* Fiber.join(competingStartFiber);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const [codexSessions, claudeSessions] = yield* Effect.all([
+        routing.codex.listSessions(),
+        routing.claude.listSessions(),
+      ]);
+      const recoveryCall = routing.codex.startSession.mock.calls.findLast(
+        ([input]) => input.threadId === threadId,
+      )?.[0];
+      assert.equal(binding?.provider, "claudeAgent");
+      assert.equal(
+        codexSessions.some((session) => session.threadId === threadId),
+        false,
+      );
+      assert.equal(claudeSessions.filter((session) => session.threadId === threadId).length, 1);
+      assert.deepEqual(recoveryCall?.resumeCursor, initial.resumeCursor);
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("requires the source lifecycle generation for modern Claude interactions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-claude-interaction-generation");
+
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = binding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+
+      const approvalCallCount = routing.claude.respondToRequest.mock.calls.length;
+      const missingApprovalGeneration = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId("claude-approval-without-generation"),
+          decision: "accept",
+        }),
+      );
+      assertFailure(
+        missingApprovalGeneration,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToRequest",
+          issue:
+            "Cannot respond to request 'claude-approval-without-generation' without its provider lifecycle generation.",
+        }),
+      );
+      assert.equal(routing.claude.respondToRequest.mock.calls.length, approvalCallCount);
+
+      const userInputCallCount = routing.claude.respondToUserInput.mock.calls.length;
+      const missingUserInputGeneration = yield* Effect.result(
+        provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("claude-user-input-without-generation"),
+          answers: { answer: "continue" },
+        }),
+      );
+      assertFailure(
+        missingUserInputGeneration,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue:
+            "Cannot respond to request 'claude-user-input-without-generation' without its provider lifecycle generation.",
+        }),
+      );
+      assert.equal(routing.claude.respondToUserInput.mock.calls.length, userInputCallCount);
+
+      yield* provider.respondToRequest({
+        threadId,
+        requestId: asRequestId("claude-approval-current-generation"),
+        lifecycleGeneration,
+        decision: "accept",
+      });
+      yield* provider.respondToUserInput({
+        threadId,
+        requestId: asRequestId("claude-user-input-current-generation"),
+        lifecycleGeneration,
+        answers: { answer: "continue" },
+      });
+      assert.equal(routing.claude.respondToRequest.mock.calls.length, approvalCallCount + 1);
+      assert.equal(routing.claude.respondToUserInput.mock.calls.length, userInputCallCount + 1);
+      yield* provider.stopSession({ threadId });
+      routing.claude.startSession.mockClear();
+      routing.claude.respondToRequest.mockClear();
+      routing.claude.respondToUserInput.mockClear();
+      routing.claude.stopSession.mockClear();
+    }),
+  );
+
+  it.effect("requires the source lifecycle generation for modern Antigravity approvals", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-antigravity-interaction-generation");
+
+      yield* provider.startSession(threadId, {
+        provider: "antigravity",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = binding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+
+      const responseCallCount = routing.antigravity.respondToRequest.mock.calls.length;
+      const missingGeneration = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId("antigravity-approval-without-generation"),
+          decision: "accept",
+        }),
+      );
+      assertFailure(
+        missingGeneration,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToRequest",
+          issue:
+            "Cannot respond to request 'antigravity-approval-without-generation' without its provider lifecycle generation.",
+        }),
+      );
+      assert.equal(routing.antigravity.respondToRequest.mock.calls.length, responseCallCount);
+
+      yield* provider.respondToRequest({
+        threadId,
+        requestId: asRequestId("antigravity-approval-current-generation"),
+        lifecycleGeneration,
+        decision: "accept",
+      });
+      assert.equal(routing.antigravity.respondToRequest.mock.calls.length, responseCallCount + 1);
+
+      yield* provider.stopSession({ threadId });
+      routing.antigravity.startSession.mockClear();
+      routing.antigravity.respondToRequest.mockClear();
+      routing.antigravity.stopSession.mockClear();
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      routing.codex.sendTurn.mockClear();
+      routing.codex.interruptTurn.mockClear();
+      routing.codex.respondToRequest.mockClear();
+      routing.codex.respondToUserInput.mockClear();
 
       const session = yield* provider.startSession(asThreadId("thread-1"), {
         provider: "codex",
@@ -623,6 +1094,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
       assert.equal(session.provider, "codex");
+      const binding = Option.getOrUndefined(yield* directory.getBinding(session.threadId));
+      const lifecycleGeneration = binding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
 
       const sessions = yield* provider.listSessions();
       assert.equal(sessions.length, 1);
@@ -636,12 +1110,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       yield* provider.interruptTurn({ threadId: session.threadId });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [
-        [session.threadId, undefined, undefined],
+        [session.threadId, asTurnId("turn-thread-1"), undefined],
       ]);
 
       yield* provider.respondToRequest({
         threadId: session.threadId,
         requestId: asRequestId("req-1"),
+        lifecycleGeneration,
         decision: "accept",
       });
       assert.deepEqual(routing.codex.respondToRequest.mock.calls, [
@@ -651,6 +1126,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* provider.respondToUserInput({
         threadId: session.threadId,
         requestId: asRequestId("req-user-input-1"),
+        lifecycleGeneration,
         answers: {
           sandbox_mode: "workspace-write",
         },
@@ -685,6 +1161,43 @@ routing.layer("ProviderServiceLive routing", (it) => {
           issue: `Cannot route thread '${session.threadId}' because no persisted provider binding exists.`,
         }),
       );
+    }),
+  );
+
+  it.effect("rejects a stale interrupt instead of cancelling the current provider turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-exact-interrupt");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+      routing.codex.interruptTurn.mockClear();
+
+      const staleInterrupt = yield* Effect.result(
+        provider.interruptTurn({
+          threadId,
+          turnId: asTurnId("turn-stale"),
+        }),
+      );
+      assertFailure(
+        staleInterrupt,
+        new ProviderValidationError({
+          operation: "ProviderService.interruptTurn",
+          issue:
+            "Cannot interrupt stale turn 'turn-stale' because 'turn-thread-exact-interrupt' is active.",
+        }),
+      );
+      assert.equal(routing.codex.interruptTurn.mock.calls.length, 0);
+
+      yield* provider.interruptTurn({ threadId });
+      assert.deepEqual(routing.codex.interruptTurn.mock.calls, [
+        [threadId, asTurnId("turn-thread-exact-interrupt"), undefined],
+      ]);
     }),
   );
 
@@ -1013,6 +1526,374 @@ routing.layer("ProviderServiceLive routing", (it) => {
           });
         }
       }
+    }),
+  );
+
+  it.effect("keeps a newer binding active when an overlapping older turn completes late", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-overlapping-stale-terminal");
+      const olderTurnId = asTurnId("turn-overlapping-older");
+      const newerTurnId = asTurnId("turn-overlapping-newer");
+      const olderResumeCursor = { cursor: "older-resume" };
+      const newerResumeCursor = { cursor: "newer-resume" };
+      const olderModelSelection = { provider: "codex" as const, model: "gpt-5.1-codex-mini" };
+      const newerModelSelection = {
+        provider: "opencode" as const,
+        model: "opencode/minimax-m2.5-free",
+      };
+      let olderDispatchStarted = false;
+      let releaseOlderDispatch: ((result: ProviderTurnStartResult) => void) | undefined;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                olderDispatchStarted = true;
+                releaseOlderDispatch = resolve;
+              }),
+          ),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({
+            threadId: input.threadId,
+            turnId: newerTurnId,
+            resumeCursor: newerResumeCursor,
+          }),
+        );
+
+      const olderSendFiber = yield* provider
+        .sendTurn({
+          threadId,
+          input: "older",
+          attachments: [],
+          modelSelection: olderModelSelection,
+        })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => olderDispatchStarted, 500, 20, "older turn dispatch");
+      yield* provider.sendTurn({
+        threadId,
+        input: "newer",
+        attachments: [],
+        modelSelection: newerModelSelection,
+      });
+
+      yield* routing.codex.waitForRuntimeSubscribers();
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-overlapping-older-completed"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        turnId: olderTurnId,
+        payload: { state: "completed" },
+      });
+      yield* sleep(50);
+
+      const release = releaseOlderDispatch;
+      if (!release) {
+        assert.fail("Expected delayed older dispatch release callback");
+      }
+      release({ threadId, turnId: olderTurnId, resumeCursor: olderResumeCursor });
+      yield* Fiber.join(olderSendFiber);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.status, "running");
+      assert.deepEqual(binding?.resumeCursor, newerResumeCursor);
+      assert.equal(runtimePayload.activeTurnId, newerTurnId);
+      assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+      assert.deepEqual(runtimePayload.modelSelection, newerModelSelection);
+    }),
+  );
+
+  it.effect("keeps the newer invocation active when an older dispatch returns last", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-overlapping-return-order");
+      const olderTurnId = asTurnId("turn-return-order-older");
+      const newerTurnId = asTurnId("turn-return-order-newer");
+      let releaseOlder: ((result: ProviderTurnStartResult) => void) | undefined;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                releaseOlder = resolve;
+              }),
+          ),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({
+            threadId: input.threadId,
+            turnId: newerTurnId,
+            resumeCursor: { cursor: "newer" },
+          }),
+        );
+
+      const olderFiber = yield* provider
+        .sendTurn({ threadId, input: "older", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => releaseOlder !== undefined, 500, 20, "older dispatch start");
+      yield* provider.sendTurn({ threadId, input: "newer", attachments: [] });
+      releaseOlder?.({ threadId, turnId: olderTurnId, resumeCursor: { cursor: "older" } });
+      yield* Fiber.join(olderFiber);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(payload.activeTurnId, newerTurnId);
+      assert.deepEqual(binding?.resumeCursor, { cursor: "newer" });
+    }),
+  );
+
+  it.effect("promotes an older successful dispatch when the newer invocation fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-promote-older-success");
+      const olderTurnId = asTurnId("turn-promoted-older");
+      const olderCursor = { cursor: "promoted-older" };
+      const olderModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const newerFailure = new ProviderAdapterSessionNotFoundError({
+        provider: "codex",
+        threadId,
+      });
+      let releaseOlder: ((result: ProviderTurnStartResult) => void) | undefined;
+      let failNewer: (() => void) | undefined;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<ProviderTurnStartResult>((resolve) => {
+                releaseOlder = resolve;
+              }),
+          ),
+        )
+        .mockImplementationOnce(() =>
+          Effect.promise(
+            () =>
+              new Promise<void>((resolve) => {
+                failNewer = resolve;
+              }),
+          ).pipe(Effect.andThen(Effect.fail(newerFailure))),
+        );
+
+      const olderFiber = yield* provider
+        .sendTurn({
+          threadId,
+          input: "older",
+          attachments: [],
+          modelSelection: olderModelSelection,
+        })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => releaseOlder !== undefined, 500, 20, "older dispatch start");
+      const newerFiber = yield* provider
+        .sendTurn({ threadId, input: "newer", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => failNewer !== undefined, 500, 20, "newer dispatch start");
+
+      releaseOlder?.({ threadId, turnId: olderTurnId, resumeCursor: olderCursor });
+      yield* Fiber.join(olderFiber);
+      const beforeNewerFailure = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const beforeFailurePayload = beforeNewerFailure?.runtimePayload as
+        | Record<string, unknown>
+        | undefined;
+      assert.notEqual(beforeFailurePayload?.activeTurnId, olderTurnId);
+
+      failNewer?.();
+      const failedResult = yield* Effect.result(Fiber.join(newerFiber));
+      assertFailure(failedResult, newerFailure);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(binding?.status, "running");
+      assert.equal(payload.activeTurnId, olderTurnId);
+      assert.deepEqual(binding?.resumeCursor, olderCursor);
+      assert.deepEqual(payload.modelSelection, olderModelSelection);
+    }),
+  );
+
+  it.effect("rolls back turn bookkeeping when started-turn persistence fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-started-persistence-failure");
+      const failedTurnId = asTurnId("turn-persistence-failed");
+      const nextTurnId = asTurnId("turn-after-persistence-failure");
+      const persistenceFailure = new ProviderSessionDirectoryPersistenceError({
+        operation: "test",
+        detail: "injected started-turn persistence failure",
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: failedTurnId }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: nextTurnId }),
+        );
+      const upsertSpy = vi
+        .spyOn(directory, "upsert")
+        .mockImplementationOnce(() => Effect.fail(persistenceFailure));
+
+      const failedResult = yield* Effect.result(
+        provider.sendTurn({ threadId, input: "fails to persist", attachments: [] }),
+      );
+      assertFailure(failedResult, persistenceFailure);
+      upsertSpy.mockRestore();
+
+      yield* provider.sendTurn({ threadId, input: "next turn", attachments: [] });
+      yield* routing.codex.waitForRuntimeSubscribers();
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-unscoped-after-persistence-failure"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        payload: { state: "completed" },
+      });
+      yield* sleep(50);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(binding?.status, "stopped");
+      assert.equal(payload.activeTurnId, null);
+      assert.equal(payload.lastRuntimeEvent, "turn.completed");
+    }),
+  );
+
+  it.effect("persists steer turn lifecycle, cursor, and model metadata", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-steer-persistence");
+      const turnId = asTurnId("turn-steer-persistence");
+      const resumeCursor = { cursor: "steer-resume" };
+      const modelSelection = {
+        provider: "opencode" as const,
+        model: "opencode/minimax-m2.5-free",
+      };
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.steerTurn.mockImplementationOnce((input) =>
+        Effect.succeed({ threadId: input.threadId, turnId, resumeCursor }),
+      );
+
+      yield* provider.steerTurn({
+        threadId,
+        input: "steer toward this",
+        attachments: [],
+        modelSelection,
+      });
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.status, "running");
+      assert.deepEqual(binding?.resumeCursor, resumeCursor);
+      assert.equal(runtimePayload.activeTurnId, turnId);
+      assert.equal(runtimePayload.lastRuntimeEvent, "provider.steerTurn");
+      assert.deepEqual(runtimePayload.modelSelection, modelSelection);
+    }),
+  );
+
+  it.effect("keeps a newer review binding when an older steer returns late", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-review-newer-generation");
+      const staleSteerTurnId = asTurnId("turn-stale-steer");
+      const reviewTurnId = asTurnId("turn-newer-review");
+      const staleSteerCursor = { cursor: "stale-steer-resume" };
+      const reviewCursor = { cursor: "newer-review-resume" };
+      const initialModelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+      const staleSteerModelSelection = {
+        provider: "opencode" as const,
+        model: "opencode/minimax-m2.5-free",
+      };
+      let steerStarted = false;
+      let releaseSteer: ((result: ProviderTurnStartResult) => void) | undefined;
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: initialModelSelection,
+      });
+      routing.codex.steerTurn.mockImplementationOnce(() =>
+        Effect.promise(
+          () =>
+            new Promise<ProviderTurnStartResult>((resolve) => {
+              steerStarted = true;
+              releaseSteer = resolve;
+            }),
+        ),
+      );
+      routing.codex.startReview.mockImplementationOnce((input) =>
+        Effect.succeed({
+          threadId: input.threadId,
+          turnId: reviewTurnId,
+          resumeCursor: reviewCursor,
+        }),
+      );
+
+      const steerFiber = yield* provider
+        .steerTurn({
+          threadId,
+          input: "older steer",
+          attachments: [],
+          modelSelection: staleSteerModelSelection,
+        })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => steerStarted, 500, 20, "delayed steer dispatch");
+
+      yield* provider.startReview({
+        threadId,
+        target: { type: "uncommittedChanges" },
+      });
+
+      const release = releaseSteer;
+      if (!release) {
+        assert.fail("Expected delayed steer release callback");
+      }
+      release({ threadId, turnId: staleSteerTurnId, resumeCursor: staleSteerCursor });
+      yield* Fiber.join(steerFiber);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.status, "running");
+      assert.deepEqual(binding?.resumeCursor, reviewCursor);
+      assert.equal(runtimePayload.activeTurnId, reviewTurnId);
+      assert.equal(runtimePayload.lastRuntimeEvent, "provider.startReview");
+      assert.deepEqual(runtimePayload.modelSelection, initialModelSelection);
     }),
   );
 
@@ -1546,6 +2427,61 @@ routing.layer("ProviderServiceLive routing", (it) => {
 });
 
 restartRollbackRouting.layer("ProviderServiceLive restart-based rollback", (it) => {
+  it.effect("requires the source lifecycle generation for modern ACP interactions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-droid-interaction-generation");
+
+      yield* provider.startSession(threadId, {
+        provider: "droid",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = binding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+
+      const responseCallCount = restartRollbackRouting.droid.respondToRequest.mock.calls.length;
+      const missingGeneration = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId("droid-approval-without-generation"),
+          decision: "accept",
+        }),
+      );
+      assertFailure(
+        missingGeneration,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToRequest",
+          issue:
+            "Cannot respond to request 'droid-approval-without-generation' without its provider lifecycle generation.",
+        }),
+      );
+      assert.equal(
+        restartRollbackRouting.droid.respondToRequest.mock.calls.length,
+        responseCallCount,
+      );
+
+      yield* provider.respondToRequest({
+        threadId,
+        requestId: asRequestId("droid-approval-current-generation"),
+        lifecycleGeneration,
+        decision: "accept",
+      });
+      assert.equal(
+        restartRollbackRouting.droid.respondToRequest.mock.calls.length,
+        responseCallCount + 1,
+      );
+
+      yield* provider.stopSession({ threadId });
+      restartRollbackRouting.droid.startSession.mockClear();
+      restartRollbackRouting.droid.respondToRequest.mockClear();
+      restartRollbackRouting.droid.stopSession.mockClear();
+    }),
+  );
+
   it.effect("clears Droid's native cursor instead of reporting a fake rewind", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1572,8 +2508,180 @@ restartRollbackRouting.layer("ProviderServiceLive restart-based rollback", (it) 
   );
 });
 
+piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it) => {
+  it.effect("requires the source lifecycle generation for modern Pi user input", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-pi-interaction-generation");
+
+      yield* provider.startSession(threadId, {
+        provider: "pi",
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      });
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const lifecycleGeneration = binding?.lifecycleGeneration;
+      assert.equal(typeof lifecycleGeneration, "string");
+
+      const responseCallCount = piInteractionRouting.pi.respondToUserInput.mock.calls.length;
+      const missingGeneration = yield* Effect.result(
+        provider.respondToUserInput({
+          threadId,
+          requestId: asRequestId("pi-user-input-without-generation"),
+          answers: { answer: "continue" },
+        }),
+      );
+      assertFailure(
+        missingGeneration,
+        new ProviderValidationError({
+          operation: "ProviderService.respondToUserInput",
+          issue:
+            "Cannot respond to request 'pi-user-input-without-generation' without its provider lifecycle generation.",
+        }),
+      );
+      assert.equal(piInteractionRouting.pi.respondToUserInput.mock.calls.length, responseCallCount);
+
+      yield* provider.respondToUserInput({
+        threadId,
+        requestId: asRequestId("pi-user-input-current-generation"),
+        lifecycleGeneration,
+        answers: { answer: "continue" },
+      });
+      assert.equal(
+        piInteractionRouting.pi.respondToUserInput.mock.calls.length,
+        responseCallCount + 1,
+      );
+
+      yield* provider.stopSession({ threadId });
+      piInteractionRouting.pi.startSession.mockClear();
+      piInteractionRouting.pi.respondToUserInput.mockClear();
+      piInteractionRouting.pi.stopSession.mockClear();
+    }),
+  );
+});
+
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
+  it.effect("does not schedule idle cleanup for a stale terminal event", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-stale-terminal");
+      const olderTurnId = asTurnId("turn-idle-stale-older");
+      const newerTurnId = asTurnId("turn-idle-stale-newer");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: olderTurnId }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: newerTurnId }),
+        );
+      yield* provider.sendTurn({ threadId, input: "older", attachments: [] });
+      yield* provider.sendTurn({ threadId, input: "newer", attachments: [] });
+
+      idleCleanup.codex.stopSession.mockClear();
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("runtime-idle-stale-older-aborted"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        turnId: olderTurnId,
+        payload: { state: "interrupted" },
+      });
+      yield* sleep(150);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.status, "running");
+      assert.equal(runtimePayload.activeTurnId, newerTurnId);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-idle-newer-completed"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:01.000Z",
+        threadId,
+        turnId: newerTurnId,
+        payload: { state: "completed" },
+      });
+      yield* waitUntil(
+        () => idleCleanup.codex.stopSession.mock.calls.length > 0,
+        500,
+        20,
+        "matching terminal idle cleanup",
+      );
+      assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
+      yield* waitUntilEffect(
+        () =>
+          directory.getBinding(threadId).pipe(
+            Effect.map((current) => {
+              const currentBinding = Option.getOrUndefined(current);
+              const payload = asRuntimePayloadRecord(currentBinding?.runtimePayload);
+              return payload.lastRuntimeEvent === "provider.stopRuntimeSession";
+            }),
+          ),
+        500,
+        20,
+        "matching terminal idle cleanup persistence",
+      );
+      idleCleanup.codex.stopSession.mockClear();
+    }),
+  );
+
+  it.effect("ignores an unscoped terminal event while overlapping turns are outstanding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-idle-ambiguous-terminal");
+      const firstTurnId = asTurnId("turn-ambiguous-first");
+      const secondTurnId = asTurnId("turn-ambiguous-second");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.sendTurn
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: firstTurnId }),
+        )
+        .mockImplementationOnce((input) =>
+          Effect.succeed({ threadId: input.threadId, turnId: secondTurnId }),
+        );
+      yield* provider.sendTurn({ threadId, input: "first", attachments: [] });
+      yield* provider.sendTurn({ threadId, input: "second", attachments: [] });
+
+      idleCleanup.codex.stopSession.mockClear();
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.aborted",
+        eventId: asEventId("runtime-ambiguous-terminal"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        payload: { state: "interrupted" },
+      });
+      yield* sleep(150);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(binding?.status, "running");
+      assert.equal(payload.activeTurnId, secondTurnId);
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect(
     "stops idle ready runtime using the persisted cursor when the live snapshot omits it",
     () =>
@@ -1595,10 +2703,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
           assert.deepEqual(persistedBefore.value.resumeCursor, session.resumeCursor);
         }
 
-        idleCleanup.codex.updateSession(session.threadId, (existing) => {
-          const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-          return withoutResumeCursor;
-        });
+        idleCleanup.codex.updateSession(session.threadId, withoutResumeCursor);
         yield* idleCleanup.codex.waitForRuntimeSubscribers();
         idleCleanup.codex.emit({
           type: "turn.completed",
@@ -1642,10 +2747,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -1700,10 +2802,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -1854,6 +2953,62 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
+  it.effect("keeps lifecycle ownership on the first of two conflicting turn starts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-conflicting-runtime-starts");
+      const firstTurnId = asTurnId("turn-conflicting-start-first");
+      const secondTurnId = asTurnId("turn-conflicting-start-second");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-conflicting-start-first"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:01.000Z",
+        threadId,
+        turnId: firstTurnId,
+        payload: { state: "running" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory.getBinding(threadId).pipe(
+            Effect.map((current) => {
+              const binding = Option.getOrUndefined(current);
+              const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
+              return payload?.activeTurnId === firstTurnId;
+            }),
+          ),
+        500,
+        20,
+        "first runtime turn start persistence",
+      );
+
+      idleCleanup.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-conflicting-start-second"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:02.000Z",
+        threadId,
+        turnId: secondTurnId,
+        payload: { state: "running" },
+      });
+      yield* sleep(50);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const payload = binding?.runtimePayload as Record<string, unknown>;
+      assert.equal(binding?.status, "running");
+      assert.equal(payload.activeTurnId, firstTurnId);
+      assert.equal(payload.lastRuntimeEvent, "turn.started");
+    }),
+  );
+
   it.effect("serializes a fired idle stop before starting new turn work", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1956,10 +3111,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -2021,10 +3173,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -2223,10 +3372,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -2363,10 +3509,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         threadId,
         runtimeMode: "full-access",
       });
-      idleCleanup.codex.updateSession(threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
+      idleCleanup.codex.updateSession(threadId, withoutResumeCursor);
       yield* idleCleanup.codex.waitForRuntimeSubscribers();
       idleCleanup.codex.emit({
         type: "turn.completed",
@@ -2611,10 +3754,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       yield* sleep(50);
 
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const runtimePayload =
-        binding?.runtimePayload && typeof binding.runtimePayload === "object"
-          ? (binding.runtimePayload as Record<string, unknown>)
-          : {};
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
       assert.equal(runtimePayload.activeTurnId, null);
     }),
   );
@@ -2749,6 +3889,72 @@ validation.layer("ProviderServiceLive validation", (it) => {
   );
 });
 
+const boundedFanout = makeProviderServiceLayer({ runtimeEventBufferCapacity: 1 });
+it.effect("ProviderServiceLive backpressures slow subscribers and completes fanout shutdown", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make("sequential");
+    const releaseSlowConsumer = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const services = yield* Layer.buildWithScope(boundedFanout.rawLayer, scope);
+      const provider = yield* Effect.service(ProviderService).pipe(Effect.provide(services));
+      const threadId = asThreadId("thread-bounded-fanout");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* boundedFanout.codex.waitForRuntimeSubscribers();
+
+      const slowConsumerStarted = yield* Deferred.make<void>();
+      const slowConsumer = yield* Stream.runForEach(provider.streamEvents, () =>
+        Deferred.succeed(slowConsumerStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseSlowConsumer)),
+        ),
+      ).pipe(Effect.forkChild);
+
+      const receivedByHealthy = yield* Ref.make<Array<string>>([]);
+      const healthyConsumer = yield* Stream.take(provider.streamEvents, 3).pipe(
+        Stream.runForEach((event) =>
+          Ref.update(receivedByHealthy, (current) => [...current, event.eventId]),
+        ),
+        Effect.forkChild,
+      );
+      yield* sleep(20);
+
+      for (const index of [1, 2, 3]) {
+        boundedFanout.codex.emit({
+          type: "message.delta",
+          eventId: asEventId(`evt-bounded-${index}`),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          turnId: asTurnId("turn-bounded"),
+          delta: String(index),
+        });
+      }
+
+      yield* Deferred.await(slowConsumerStarted);
+      yield* sleep(30);
+      const receivedBeforeRelease = yield* Ref.get(receivedByHealthy);
+      yield* Deferred.succeed(releaseSlowConsumer, undefined);
+      assert.equal(receivedBeforeRelease.length < 3, true);
+      yield* Fiber.join(healthyConsumer);
+      assert.deepEqual(yield* Ref.get(receivedByHealthy), [
+        asEventId("evt-bounded-1"),
+        asEventId("evt-bounded-2"),
+        asEventId("evt-bounded-3"),
+      ]);
+
+      yield* provider.closeRuntimeEvents;
+      yield* provider.closeRuntimeEvents;
+      yield* Fiber.interrupt(slowConsumer);
+    }).pipe(
+      Effect.ensuring(Deferred.succeed(releaseSlowConsumer, undefined).pipe(Effect.asVoid)),
+      Effect.ensuring(Scope.close(scope, Exit.void)),
+    );
+  }),
+);
+
 const liveFallback = makeProviderServiceLayer();
 liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
   it.effect("persists the first binding row as stopped when the turn settles pre-write", () =>
@@ -2786,6 +3992,49 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
 
       const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.equal(binding?.status, "stopped");
+    }),
+  );
+
+  it.effect("retains settlement markers for more than eight overlapping dispatches", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-live-fallback-many-settled");
+      let sequence = 0;
+
+      liveFallback.codex.hasSession.mockImplementation((candidate: ThreadId) =>
+        Effect.succeed(candidate === threadId),
+      );
+      liveFallback.codex.sendTurn.mockImplementation((input: ProviderSendTurnInput) =>
+        Effect.gen(function* () {
+          sequence += 1;
+          const turnId = asTurnId(`turn-many-settled-${sequence}`);
+          liveFallback.codex.emit({
+            type: "turn.completed",
+            eventId: asEventId(`evt-many-settled-${sequence}`),
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            threadId: input.threadId,
+            turnId,
+            payload: { state: "cancelled" },
+          });
+          yield* sleep(50);
+          return { threadId: input.threadId, turnId };
+        }),
+      );
+      yield* liveFallback.codex.waitForRuntimeSubscribers();
+
+      yield* Effect.all(
+        Array.from({ length: 12 }, (_, index) =>
+          provider.sendTurn({ threadId, input: `turn ${index}` }),
+        ),
+        { concurrency: "unbounded" },
+      );
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.status, "stopped");
+      const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
+      assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
     }),
   );
 });

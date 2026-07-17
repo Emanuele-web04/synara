@@ -1,4 +1,5 @@
 import type {
+  GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
   GitStackedAction,
   ModelSelection,
@@ -217,6 +218,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
 
 export function gitSummarizeDiffQueryOptions(input: {
   cwd: string | null;
+  scope?: "workingTree" | "unstaged" | "staged" | "branch";
   cacheScope?: string | null;
   patch: string | null;
   model?: string | null;
@@ -251,7 +253,7 @@ export function gitSummarizeDiffQueryOptions(input: {
       }
       return api.git.summarizeDiff({
         cwd: input.cwd,
-        patch: normalizedPatch,
+        scope: input.scope ?? "workingTree",
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
         ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
@@ -493,17 +495,7 @@ export function gitHandoffThreadMutationOptions(input: {
   queryClient: QueryClient;
 }) {
   return makeGitMutationOptions<
-    {
-      targetMode: "local" | "worktree";
-      currentBranch: string | null;
-      worktreePath: string | null;
-      associatedWorktreePath: string | null;
-      associatedWorktreeBranch: string | null;
-      associatedWorktreeRef: string | null;
-      preferredLocalBranch: string | null;
-      preferredWorktreeBaseBranch: string | null;
-      preferredNewWorktreeName: string | null;
-    },
+    Omit<GitHandoffThreadInput, "cwd">,
     Awaited<ReturnType<NativeApi["git"]["handoffThread"]>>
   >({
     cwd: input.cwd,

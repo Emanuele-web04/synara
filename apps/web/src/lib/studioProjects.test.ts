@@ -93,9 +93,9 @@ describe("studioProjects", () => {
     nativeApiMock.shellSnapshotProjectBatches = [];
     useStore.setState({
       projects: [],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadIds: [],
+      threadShellById: {},
       threadsHydrated: true,
     });
   });

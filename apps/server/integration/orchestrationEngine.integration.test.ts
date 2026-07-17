@@ -540,6 +540,7 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       yield* seedProjectAndThread(harness);
 
       yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        deferCompletion: true,
         events: [
           {
             type: "turn.started",
@@ -582,25 +583,29 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       );
 
       const pendingRow = yield* harness.waitForPendingApproval(
+        THREAD_ID,
         "req-approval-1",
         (row) => row.status === "pending" && row.decision === null,
       );
       assert.equal(pendingRow.status, "pending");
+      assert.notEqual(pendingRow.lifecycleGeneration, null);
 
       yield* harness.engine.dispatch({
         type: "thread.approval.respond",
         commandId: CommandId.makeUnsafe("cmd-approval-respond"),
         threadId: THREAD_ID,
         requestId: APPROVAL_REQUEST_ID,
+        lifecycleGeneration: pendingRow.lifecycleGeneration!,
         decision: "accept",
         createdAt: nowIso(),
       });
 
       const resolvedRow = yield* harness.waitForPendingApproval(
+        THREAD_ID,
         "req-approval-1",
-        (row) => row.status === "resolved" && row.decision === "accept",
+        (row) => row.status === "confirmed" && row.decision === "accept",
       );
-      assert.equal(resolvedRow.status, "resolved");
+      assert.equal(resolvedRow.status, "confirmed");
       assert.equal(resolvedRow.decision, "accept");
 
       const approvalResponses = yield* waitForSync(
@@ -1089,6 +1094,7 @@ it.live("forwards claudeAgent approval responses to the provider session", () =>
         yield* seedProjectAndThread(harness);
 
         yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+          deferCompletion: true,
           events: [
             {
               type: "turn.started",
@@ -1131,18 +1137,26 @@ it.live("forwards claudeAgent approval responses to the provider session", () =>
         );
         assert.equal(thread.session?.threadId, "thread-1");
 
+        const pendingRow = yield* harness.waitForPendingApproval(
+          THREAD_ID,
+          "req-approval-1",
+          (row) => row.status === "pending" && row.lifecycleGeneration !== null,
+        );
+
         yield* harness.engine.dispatch({
           type: "thread.approval.respond",
           commandId: CommandId.makeUnsafe("cmd-claude-approval-respond"),
           threadId: THREAD_ID,
           requestId: APPROVAL_REQUEST_ID,
+          lifecycleGeneration: pendingRow.lifecycleGeneration!,
           decision: "accept",
           createdAt: nowIso(),
         });
 
         yield* harness.waitForPendingApproval(
+          THREAD_ID,
           "req-approval-1",
-          (row) => row.status === "resolved" && row.decision === "accept",
+          (row) => row.status === "confirmed" && row.decision === "accept",
         );
 
         const approvalResponses = yield* waitForSync(
@@ -1163,6 +1177,7 @@ it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
         yield* seedProjectAndThread(harness);
 
         yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+          deferCompletion: true,
           events: [
             {
               type: "turn.started",

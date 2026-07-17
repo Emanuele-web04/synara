@@ -1,8 +1,10 @@
 import {
+  ApprovalRequestId,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
+  type OrchestrationPendingInteraction,
   type OrchestrationThreadActivity,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -50,7 +52,53 @@ function makeActivity(overrides: {
   };
 }
 
+function makePendingInteraction(
+  interactionKind: OrchestrationPendingInteraction["interactionKind"],
+  status: OrchestrationPendingInteraction["status"],
+): OrchestrationPendingInteraction {
+  return {
+    interactionKind,
+    requestId: ApprovalRequestId.makeUnsafe("req-settlement"),
+    threadId: ThreadId.makeUnsafe("thread-settlement"),
+    turnId: null,
+    lifecycleGeneration: "generation-settlement",
+    status,
+    decision: null,
+    responseCommandId: null,
+    responseRequestedAt: null,
+    createdAt: "2026-02-23T00:00:01.000Z",
+    resolvedAt: null,
+  };
+}
+
 describe("derivePendingApprovals", () => {
+  it("shows only actionable durable approval settlements", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-settlement",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-settlement",
+          lifecycleGeneration: "generation-settlement",
+          requestKind: "command",
+        },
+      }),
+    ];
+
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "responding")]),
+    ).toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "uncertain")]),
+    ).toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "retryable")]),
+    ).toHaveLength(1);
+  });
+
   it("tracks open approvals and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -177,9 +225,92 @@ describe("derivePendingApprovals", () => {
 
     expect(derivePendingApprovals(activities)).toEqual([]);
   });
+
+  it("does not let an old generation resolve a replacement approval with the same request id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-generation-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-a",
+          requestKind: "command",
+        },
+      }),
+      makeActivity({
+        id: "approval-generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-b",
+          requestKind: "command",
+        },
+      }),
+      makeActivity({
+        id: "approval-generation-a-resolved",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        tone: "info",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-a",
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "req-reused",
+        lifecycleGeneration: "generation-b",
+        requestKind: "command",
+        createdAt: "2026-02-23T00:00:02.000Z",
+      },
+    ]);
+  });
 });
 
 describe("derivePendingUserInputs", () => {
+  it("shows only actionable durable user-input settlements", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-settlement",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-settlement",
+          lifecycleGeneration: "generation-settlement",
+          questions: [
+            {
+              id: "mode",
+              header: "Mode",
+              question: "Which mode?",
+              options: [{ label: "safe", description: "Use safe mode" }],
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "responding")]),
+    ).toEqual([]);
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "uncertain")]),
+    ).toEqual([]);
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "pending")]),
+    ).toHaveLength(1);
+  });
+
   it("tracks open structured prompts and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -304,6 +435,61 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
+  });
+
+  it("does not let an old generation resolve a replacement user-input request", () => {
+    const question = {
+      id: "mode",
+      header: "Mode",
+      question: "Which mode?",
+      options: [{ label: "safe", description: "Use safe mode" }],
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-generation-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-a",
+          questions: [question],
+        },
+      }),
+      makeActivity({
+        id: "user-input-generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-b",
+          questions: [question],
+        },
+      }),
+      makeActivity({
+        id: "user-input-generation-a-resolved",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-a",
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)).toEqual([
+      {
+        requestId: "req-user-input-reused",
+        lifecycleGeneration: "generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        questions: [question],
+      },
+    ]);
   });
 
   it("preserves multi-select user-input question metadata", () => {

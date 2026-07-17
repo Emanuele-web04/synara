@@ -185,6 +185,12 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Stop provider event producers, drain the lossless fan-out while subscribers
+   * are still live, and then close the publication bus. Safe to call repeatedly.
+   */
+  readonly closeRuntimeEvents: Effect.Effect<void>;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).

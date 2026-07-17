@@ -1346,6 +1346,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           requestId: command.requestId,
+          ...(command.lifecycleGeneration !== undefined
+            ? { lifecycleGeneration: command.lifecycleGeneration }
+            : {}),
           decision: command.decision,
           createdAt: command.createdAt,
         },
@@ -1373,6 +1376,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           requestId: command.requestId,
+          ...(command.lifecycleGeneration !== undefined
+            ? { lifecycleGeneration: command.lifecycleGeneration }
+            : {}),
           answers,
           createdAt: command.createdAt,
         },

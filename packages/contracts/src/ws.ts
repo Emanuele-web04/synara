@@ -122,9 +122,6 @@ import {
 
 export const WS_METHODS = {
   // Project registry methods
-  projectsList: "projects.list",
-  projectsAdd: "projects.add",
-  projectsRemove: "projects.remove",
   projectsDiscoverScripts: "projects.discoverScripts",
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
@@ -216,7 +213,6 @@ export const WS_METHODS = {
   // Streaming subscriptions
   subscribeTerminalEvents: "terminal.subscribeEvents",
   subscribeOrchestrationDomainEvents: "orchestration.subscribeDomainEvents",
-  subscribeGitActionProgress: "git.subscribeActionProgress",
 
   // Provider discovery
   providerGetComposerCapabilities: "provider.getComposerCapabilities",

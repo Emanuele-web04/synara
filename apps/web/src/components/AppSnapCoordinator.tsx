@@ -66,7 +66,7 @@ function captureTimestampMs(capture: DesktopAppSnapCapture): number {
 function isThreadAvailable(threadId: ThreadId): boolean {
   const state = useStore.getState();
   if (state.sidebarThreadSummaryById[threadId]) return true;
-  if (state.threads.some((thread) => thread.id === threadId)) return true;
+  if (state.threadShellById?.[threadId]) return true;
   const draftState = useComposerDraftStore.getState();
   return Boolean(
     draftState.draftsByThreadId[threadId] || draftState.draftThreadsByThreadId[threadId],

@@ -49,6 +49,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
           adapter_key,
           runtime_mode,
           status,
+          lifecycle_generation,
           last_seen_at,
           resume_cursor_json,
           runtime_payload_json
@@ -59,6 +60,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
           ${runtime.adapterKey},
           ${runtime.runtimeMode},
           ${runtime.status},
+          ${runtime.lifecycleGeneration},
           ${runtime.lastSeenAt},
           ${runtime.resumeCursor},
           ${runtime.runtimePayload}
@@ -69,6 +71,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
           adapter_key = excluded.adapter_key,
           runtime_mode = excluded.runtime_mode,
           status = excluded.status,
+          lifecycle_generation = excluded.lifecycle_generation,
           last_seen_at = excluded.last_seen_at,
           resume_cursor_json = excluded.resume_cursor_json,
           runtime_payload_json = excluded.runtime_payload_json
@@ -86,6 +89,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,
+          lifecycle_generation AS "lifecycleGeneration",
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"
@@ -105,6 +109,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,
+          lifecycle_generation AS "lifecycleGeneration",
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"

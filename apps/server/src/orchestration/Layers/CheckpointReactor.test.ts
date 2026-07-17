@@ -107,6 +107,7 @@ function createProviderServiceHarness(
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
     compactThread: () => unsupported(),
+    closeRuntimeEvents: Effect.void,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 
@@ -1833,6 +1834,74 @@ describe("CheckpointReactor", () => {
 
     await waitForEvent(harness.engine, (event) => event.type === "thread.reverted");
     expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v1\n");
+  });
+
+  it("refuses turn zero when the exact baseline is missing without touching the workspace", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const createdAt = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnOneRef = checkpointRefForThreadTurn(threadId, 1);
+
+    runGit(harness.cwd, ["update-ref", turnOneRef, "HEAD"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
+    runGit(harness.cwd, ["add", "README.md"]);
+    runGit(harness.cwd, ["commit", "-m", "Move HEAD after the missing baseline"]);
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "tracked working change\n", "utf8");
+    fs.writeFileSync(path.join(harness.cwd, "untracked.txt"), "keep me\n", "utf8");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-missing-zero-session-set"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-missing-zero-diff"),
+        threadId,
+        turnId: asTurnId("turn-1"),
+        completedAt: createdAt,
+        checkpointRef: turnOneRef,
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("cmd-missing-zero-revert"),
+        threadId,
+        turnCount: 0,
+        scope: "thread",
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+    );
+    expect(thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed")).toBe(
+      true,
+    );
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+      "tracked working change\n",
+    );
+    expect(fs.readFileSync(path.join(harness.cwd, "untracked.txt"), "utf8")).toBe("keep me\n");
+    expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 
   it("executes provider revert and emits thread.reverted for claude sessions", async () => {
