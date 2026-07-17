@@ -27,11 +27,13 @@ import {
   session,
   shell,
   systemPreferences,
+  Tray,
 } from "electron";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
   IpcMainEvent,
+  IpcMainInvokeEvent,
   MenuItemConstructorOptions,
 } from "electron";
 import * as Effect from "effect/Effect";
@@ -68,6 +70,7 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { isTrustedDesktopRendererUrl } from "./desktopRendererTrust";
 import {
   hasPendingDesktopMigrationRecovery,
   recoverDesktopMigrationIfRequired,
@@ -177,6 +180,29 @@ import {
   sendAppSnapError,
   sendAppSnapState,
 } from "./appSnapIpc";
+import {
+  DesktopRemoteAccessControlPlane,
+  testRemoteCompanionConnection,
+} from "./remoteAccessControlPlane";
+import {
+  registerRemoteAccessIpcHandlers,
+  sendRemoteAccessState,
+  type DesktopRemoteAccessStatus,
+} from "./remoteAccessIpc";
+import {
+  applyRemoteAccessBackendEnvironment,
+  applyRemoteAccessSettingsPatch,
+  readRemoteAccessSettings,
+  remoteAccessRequiresBackendRestart,
+  resolveRemoteAccessSettingsPath,
+  shouldQuitAfterLastWindowClosed,
+  shouldKeepDesktopRunning,
+  writeRemoteAccessSettings,
+} from "./remoteAccessSettings";
+import {
+  collectTailscaleDiagnostics,
+  type TailscaleDiagnostics,
+} from "./tailscaleDiagnostics";
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -187,7 +213,8 @@ syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const desktopDevelopmentServerUrl = process.env.VITE_DEV_SERVER_URL?.trim() || null;
+const isDevelopment = desktopDevelopmentServerUrl !== null;
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
@@ -198,6 +225,7 @@ const BASE_DIR =
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
+const REMOTE_ACCESS_SETTINGS_PATH = resolveRemoteAccessSettingsPath(STATE_DIR);
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -250,6 +278,9 @@ let backendAuthToken = "";
 let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
+let ownerSessionInitialization:
+  | { readonly child: ChildProcess.ChildProcess; readonly controller: AbortController }
+  | null = null;
 let backendInitialWindowOpenInFlight: Promise<void> | null = null;
 let backendListeningDetector: ServerListeningDetector | null = null;
 let restartAttempt = 0;
@@ -273,6 +304,14 @@ let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredUpdaterCacheDirName: string | null = null;
+let remoteAccessSettings = readRemoteAccessSettings(REMOTE_ACCESS_SETTINGS_PATH);
+let remoteAccessDiagnostics: TailscaleDiagnostics | null = null;
+let remoteAccessDiagnosticsInFlight: Promise<TailscaleDiagnostics> | null = null;
+let remoteAccessTray: Tray | null = null;
+let remoteAccessTrayCreationFailed = false;
+let trayUnavailablePromptOpen = false;
+let backendSettingsRestartInProgress = false;
+const remoteAccessControlPlane = new DesktopRemoteAccessControlPlane();
 
 browserManager.subscribe((state) => {
   sendBrowserState(mainWindow?.webContents, state);
@@ -468,6 +507,16 @@ async function waitForBackendHttpReady(
   }
 }
 
+async function isBackendStartupReadyResponse(response: Response): Promise<boolean> {
+  if (!response.ok) return false;
+  try {
+    const payload = (await response.json()) as { startupReady?: unknown };
+    return payload.startupReady === true;
+  } catch {
+    return false;
+  }
+}
+
 function cancelBackendReadinessWait(): void {
   backendReadinessAbortController?.abort();
   backendReadinessAbortController = null;
@@ -475,14 +524,36 @@ function cancelBackendReadinessWait(): void {
 
 async function reserveBackendEndpoint(reason: string): Promise<void> {
   backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
+    Effect.flatMap((net) => {
+      if (!remoteAccessSettings.enabled) {
+        return net.reserveLoopbackPort();
+      }
+      return net.canListenOnHost(remoteAccessSettings.port, "127.0.0.1").pipe(
+        Effect.flatMap((available) =>
+          available
+            ? Effect.succeed(remoteAccessSettings.port)
+            : Effect.fail(
+                new Error(
+                  `Mobile Companion port ${remoteAccessSettings.port} is already in use. ` +
+                    "Choose another unprivileged port in Remote Access settings.",
+                ),
+              ),
+        ),
+      );
+    }),
     Effect.provide(NetService.layer),
     Effect.runPromise,
   );
   backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
-  writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
+  remoteAccessControlPlane.configure({
+    backendHttpUrl,
+    bootstrapCredential: backendAuthToken,
+  });
+  writeDesktopLogHeader(
+    `${reason} resolved backend endpoint port=${backendPort} companion=${remoteAccessSettings.enabled}`,
+  );
 }
 
 async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
@@ -492,22 +563,56 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
       waitForBackendHttpReady(baseUrl, {
         path: "/health",
         timeoutMs: 60_000,
-        isReady: async (response) => {
-          if (!response.ok) {
-            return false;
-          }
-          try {
-            const payload = (await response.json()) as {
-              startupReady?: unknown;
-            };
-            return payload.startupReady === true;
-          } catch {
-            return false;
-          }
-        },
+        isReady: isBackendStartupReadyResponse,
       }),
     cancelHttpWait: cancelBackendReadinessWait,
   });
+}
+
+function cancelOwnerSessionInitialization(child?: ChildProcess.ChildProcess): void {
+  const current = ownerSessionInitialization;
+  if (!current || (child && current.child !== child)) return;
+  current.controller.abort();
+  ownerSessionInitialization = null;
+}
+
+function initializeOwnerSessionAfterBackendReadiness(
+  child: ChildProcess.ChildProcess,
+  baseUrl: string,
+): void {
+  cancelOwnerSessionInitialization();
+  const controller = new AbortController();
+  const initialization = { child, controller } as const;
+  ownerSessionInitialization = initialization;
+
+  void waitForHttpReady(baseUrl, {
+    path: "/health",
+    timeoutMs: 60_000,
+    signal: controller.signal,
+    isReady: isBackendStartupReadyResponse,
+  })
+    .then(async () => {
+      if (controller.signal.aborted || backendProcess !== child) return;
+      await remoteAccessControlPlane.initializeOwnerSession();
+      if (controller.signal.aborted || backendProcess !== child) return;
+      writeDesktopLogHeader("desktop owner control-plane session initialized");
+    })
+    .catch((error) => {
+      if (controller.signal.aborted || isBackendReadinessAborted(error)) return;
+      // Control-plane requests retain a lazy retry path, so a transient exchange
+      // failure must not prevent the desktop renderer from starting.
+      writeDesktopLogHeader(
+        `desktop owner control-plane initialization warning message=${formatErrorMessage(error)}`,
+      );
+      console.warn(
+        "[desktop] Owner control-plane session was not initialized eagerly; it will retry on demand.",
+      );
+    })
+    .finally(() => {
+      if (ownerSessionInitialization === initialization) {
+        ownerSessionInitialization = null;
+      }
+    });
 }
 
 function ensureInitialBackendWindowOpen(baseUrl: string): void {
@@ -1604,6 +1709,344 @@ function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
     app.focus({ steal: true });
   }
   mainWindow.focus();
+}
+
+function remoteAccessMobileUrl(): string | null {
+  return remoteAccessSettings.trustedOrigin
+    ? `${remoteAccessSettings.trustedOrigin}/mobile/`
+    : null;
+}
+
+function remoteAccessConfigurationIssue(): string | null {
+  if (!remoteAccessSettings.enabled) return null;
+  if (!remoteAccessSettings.trustedOrigin) {
+    return "Verify and save this computer's exact Tailnet HTTPS origin.";
+  }
+  if (remoteAccessSettings.keepRunningOnClose && remoteAccessTrayCreationFailed) {
+    return "The system tray is unavailable, so Synara cannot stay hidden for mobile access.";
+  }
+  if (remoteAccessDiagnostics?.funnelEnabled) {
+    return "Tailscale Funnel is enabled. Disable Funnel before using Synara Companion.";
+  }
+  if (
+    remoteAccessDiagnostics?.discoveredOrigin &&
+    remoteAccessDiagnostics.discoveredOrigin !== remoteAccessSettings.trustedOrigin
+  ) {
+    return "The saved Tailnet origin does not match this computer's current Tailscale DNS name.";
+  }
+  return remoteAccessDiagnostics?.issue ?? null;
+}
+
+function remotePairingConfigurationIssue(
+  diagnostics: TailscaleDiagnostics | null,
+): string | null {
+  if (!remoteAccessSettings.enabled) return "Enable Mobile Companion before pairing a device.";
+  if (!remoteAccessSettings.trustedOrigin) {
+    return "Verify and save this computer's exact Tailnet HTTPS origin before pairing.";
+  }
+  if (
+    !backendProcess ||
+    backendProcess.exitCode !== null ||
+    backendProcess.signalCode !== null ||
+    backendPort !== remoteAccessSettings.port
+  ) {
+    return "The Mobile Companion backend is not ready on the configured port.";
+  }
+  if (!diagnostics || diagnostics.connectionState !== "connected") {
+    return "Connect Tailscale and refresh diagnostics before pairing a device.";
+  }
+  if (diagnostics.funnelEnabled) {
+    return "Disable Tailscale Funnel before pairing a device.";
+  }
+  if (diagnostics.discoveredOrigin !== remoteAccessSettings.trustedOrigin) {
+    return "The verified Tailscale DNS origin does not match the saved trusted origin.";
+  }
+  if (
+    diagnostics.serveState !== "matching" ||
+    diagnostics.expectedProxyTarget !== `http://127.0.0.1:${remoteAccessSettings.port}`
+  ) {
+    return "Configure a private Tailscale Serve root route to the Synara Companion port.";
+  }
+  return null;
+}
+
+function getRemoteAccessStatus(): DesktopRemoteAccessStatus {
+  return {
+    settings: remoteAccessSettings,
+    backend: {
+      running: Boolean(
+        backendProcess && backendProcess.exitCode === null && backendProcess.signalCode === null,
+      ),
+      port: backendPort > 0 ? backendPort : null,
+      loopbackUrl: backendHttpUrl || null,
+    },
+    tailscale: remoteAccessDiagnostics,
+    mobileUrl: remoteAccessMobileUrl(),
+    configurationIssue: remoteAccessConfigurationIssue(),
+  };
+}
+
+function emitRemoteAccessStatus(): void {
+  const status = getRemoteAccessStatus();
+  for (const window of BrowserWindow.getAllWindows()) {
+    sendRemoteAccessState(window.webContents, status);
+  }
+  configureRemoteAccessTray();
+}
+
+async function refreshRemoteAccessDiagnostics(): Promise<DesktopRemoteAccessStatus> {
+  const requestedPort = remoteAccessSettings.port;
+  if (!remoteAccessDiagnosticsInFlight) {
+    remoteAccessDiagnosticsInFlight = collectTailscaleDiagnostics({
+      port: requestedPort,
+    }).finally(() => {
+      remoteAccessDiagnosticsInFlight = null;
+    });
+  }
+  remoteAccessDiagnostics = await remoteAccessDiagnosticsInFlight;
+  if (
+    remoteAccessDiagnostics.expectedProxyTarget !==
+    `http://127.0.0.1:${remoteAccessSettings.port}`
+  ) {
+    return refreshRemoteAccessDiagnostics();
+  }
+  emitRemoteAccessStatus();
+  return getRemoteAccessStatus();
+}
+
+function applyLaunchAtLoginSetting(): void {
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    if (remoteAccessSettings.launchAtLogin) {
+      console.warn("[desktop] Launch at login is not managed automatically on this platform.");
+    }
+    return;
+  }
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: remoteAccessSettings.launchAtLogin,
+      openAsHidden: remoteAccessSettings.launchAtLogin,
+    });
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to update launch-at-login setting: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+function showMainWindowFromRemoteAccess(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createWindow();
+  }
+  focusMainWindow();
+}
+
+function resolveTrayIcon(): Electron.NativeImage {
+  const iconPath = resolveResourcePath(process.platform === "win32" ? "icon.ico" : "icon.png");
+  let image = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+  if (process.platform === "darwin" && !image.isEmpty()) {
+    image = image.resize({ width: 18, height: 18 });
+    image.setTemplateImage(true);
+  }
+  return image;
+}
+
+function remoteAccessTrayStatusLabel(): string {
+  if (remoteAccessDiagnostics?.funnelEnabled) return "Remote access: Funnel warning";
+  if (remoteAccessDiagnostics?.serveState === "matching") return "Remote access: Ready";
+  if (!remoteAccessSettings.trustedOrigin) return "Remote access: Setup required";
+  return "Remote access: Check Tailscale Serve";
+}
+
+function configureRemoteAccessTray(): void {
+  if (!remoteAccessSettings.enabled) {
+    remoteAccessTray?.destroy();
+    remoteAccessTray = null;
+    remoteAccessTrayCreationFailed = false;
+    return;
+  }
+
+  if (!remoteAccessTray && !remoteAccessTrayCreationFailed) {
+    const icon = resolveTrayIcon();
+    if (icon.isEmpty()) {
+      console.warn("[desktop] Remote access tray icon could not be loaded.");
+      remoteAccessTrayCreationFailed = true;
+      return;
+    }
+    try {
+      remoteAccessTray = new Tray(icon);
+    } catch (error) {
+      remoteAccessTrayCreationFailed = true;
+      console.warn(`[desktop] Could not create remote access tray: ${formatErrorMessage(error)}`);
+      return;
+    }
+    remoteAccessTray.setToolTip(APP_DISPLAY_NAME);
+    remoteAccessTray.on("click", showMainWindowFromRemoteAccess);
+    remoteAccessTray.on("double-click", showMainWindowFromRemoteAccess);
+  }
+
+  if (!remoteAccessTray) return;
+  const mobileUrl = remoteAccessMobileUrl();
+  remoteAccessTray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Show Synara", click: showMainWindowFromRemoteAccess },
+      { label: remoteAccessTrayStatusLabel(), enabled: false },
+      { type: "separator" },
+      {
+        label: "Copy Mobile URL",
+        enabled: Boolean(mobileUrl),
+        click: () => {
+          if (mobileUrl) clipboard.writeText(mobileUrl);
+        },
+      },
+      {
+        label: "Pair a Device...",
+        click: () => {
+          showMainWindowFromRemoteAccess();
+          dispatchMenuAction("open-mobile-pairing");
+        },
+      },
+      {
+        label: "Pause Remote Access",
+        click: () => {
+          showMainWindowFromRemoteAccess();
+          void updateRemoteAccessSettings({ enabled: false }).catch((error) => {
+            console.warn(
+              `[desktop] Failed to pause remote access: ${formatErrorMessage(error)}`,
+            );
+          });
+        },
+      },
+      { type: "separator" },
+      { label: "Quit Synara", click: () => requestGracefulAppQuit("tray-quit") },
+    ]),
+  );
+}
+
+function showKeepRunningNotice(): void {
+  if (remoteAccessSettings.keepRunningNoticeShown) return;
+  remoteAccessSettings = {
+    ...remoteAccessSettings,
+    keepRunningNoticeShown: true,
+  };
+  try {
+    writeRemoteAccessSettings(REMOTE_ACCESS_SETTINGS_PATH, remoteAccessSettings);
+  } catch (error) {
+    console.warn(
+      `[desktop] Failed to persist tray notice state: ${formatErrorMessage(error)}`,
+    );
+  }
+
+  if (Notification.isSupported()) {
+    const notification = new Notification({
+      title: "Synara is still running",
+      body: "Mobile Companion remains available from the system tray. Choose Quit Synara to stop it.",
+      silent: true,
+    });
+    notification.on("click", showMainWindowFromRemoteAccess);
+    notification.show();
+  } else {
+    void dialog.showMessageBox({
+      type: "info",
+      title: "Synara is still running",
+      message: "Mobile Companion remains available from the system tray.",
+      detail: "Choose Quit Synara from the tray menu when you want to stop remote access.",
+      buttons: ["OK"],
+    });
+  }
+}
+
+async function isCompanionPortAvailable(port: number): Promise<boolean> {
+  return Effect.service(NetService).pipe(
+    Effect.flatMap((net) => net.canListenOnHost(port, "127.0.0.1")),
+    Effect.provide(NetService.layer),
+    Effect.runPromise,
+  );
+}
+
+async function restartBackendForRemoteAccess(): Promise<void> {
+  backendSettingsRestartInProgress = true;
+  try {
+    await stopBackendAndWaitForExit();
+    await reserveBackendEndpoint("remote access settings changed");
+    startBackend();
+    await waitForBackendWindowReady(backendHttpUrl);
+    // The renderer resolves its private desktop WebSocket URL during startup. Reloading after
+    // a controlled port change gives it the new URL without widening the bridge contract.
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+    }, 250).unref();
+  } finally {
+    backendSettingsRestartInProgress = false;
+    emitRemoteAccessStatus();
+  }
+}
+
+async function updateRemoteAccessSettings(patch: unknown): Promise<DesktopRemoteAccessStatus> {
+  const previous = remoteAccessSettings;
+  const previousDiagnostics = remoteAccessDiagnostics;
+  const next = applyRemoteAccessSettingsPatch(previous, patch);
+  const requiresRestart = remoteAccessRequiresBackendRestart(previous, next);
+
+  if (next.trustedOrigin && next.trustedOrigin !== previous.trustedOrigin) {
+    const diagnostics = await collectTailscaleDiagnostics({ port: next.port });
+    remoteAccessDiagnostics = diagnostics;
+    if (diagnostics.discoveredOrigin !== next.trustedOrigin) {
+      throw new Error(
+        diagnostics.discoveredOrigin
+          ? `Trusted origin must match this computer's Tailscale DNS origin: ${diagnostics.discoveredOrigin}`
+          : "Connect Tailscale and refresh diagnostics before saving the trusted origin.",
+      );
+    }
+  }
+
+  if (
+    requiresRestart &&
+    next.enabled &&
+    next.port !== backendPort &&
+    !(await isCompanionPortAvailable(next.port))
+  ) {
+    throw new Error(
+      `Mobile Companion port ${next.port} is already in use. Choose another unprivileged port.`,
+    );
+  }
+
+  writeRemoteAccessSettings(REMOTE_ACCESS_SETTINGS_PATH, next);
+  remoteAccessSettings = next;
+  applyLaunchAtLoginSetting();
+  configureRemoteAccessTray();
+
+  try {
+    if (requiresRestart && backendPort > 0) {
+      await restartBackendForRemoteAccess();
+    }
+  } catch (error) {
+    // Restore the last known-good launch configuration and backend. This keeps a failed
+    // port/origin change from leaving the desktop shell permanently disconnected.
+    remoteAccessSettings = previous;
+    remoteAccessDiagnostics = previousDiagnostics;
+    writeRemoteAccessSettings(REMOTE_ACCESS_SETTINGS_PATH, previous);
+    applyLaunchAtLoginSetting();
+    configureRemoteAccessTray();
+    if (!isQuitting) {
+      await restartBackendForRemoteAccess().catch((rollbackError) => {
+        console.error(
+          "[desktop] Failed to restore backend after remote settings rollback: " +
+            formatErrorMessage(rollbackError),
+        );
+      });
+    }
+    throw error;
+  }
+
+  if (remoteAccessSettings.enabled) {
+    void refreshRemoteAccessDiagnostics().catch((error) => {
+      console.warn(`[desktop] Tailscale diagnostics failed: ${formatErrorMessage(error)}`);
+    });
+  } else {
+    remoteAccessDiagnostics = null;
+  }
+  emitRemoteAccessStatus();
+  return getRemoteAccessStatus();
 }
 
 // Show a native OS notification and refocus the app window when the alert is clicked.
@@ -2711,20 +3154,24 @@ function backendNodeArgs(): string[] {
 
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
-  return {
-    ...resolveBrowserUsePipeBackendEnv(
-      process.env,
-      browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
-    ),
-    // Point the backend's HTTP static route at the same swap-immune snapshot the
-    // synara:// protocol serves, so both surfaces survive app.asar being replaced.
-    ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
-    SYNARA_MODE: "desktop",
-    SYNARA_NO_BROWSER: "1",
-    SYNARA_PORT: String(backendPort),
-    SYNARA_HOME: BASE_DIR,
-    SYNARA_AUTH_TOKEN: backendAuthToken,
-  };
+  return applyRemoteAccessBackendEnvironment(
+    {
+      ...resolveBrowserUsePipeBackendEnv(
+        process.env,
+        browserUsePipeServer ? SYNARA_BROWSER_USE_PIPE_PATH : null,
+      ),
+      // Point the backend's HTTP static route at the same swap-immune snapshot the
+      // synara:// protocol serves, so both surfaces survive app.asar being replaced.
+      ...(servedStaticRoot?.snapshotted ? { SYNARA_STATIC_DIR: servedStaticRoot.dir } : {}),
+      SYNARA_MODE: "desktop",
+      SYNARA_NO_BROWSER: "1",
+      SYNARA_PORT: String(backendPort),
+      SYNARA_HOST: "127.0.0.1",
+      SYNARA_HOME: BASE_DIR,
+      SYNARA_AUTH_TOKEN: backendAuthToken,
+    },
+    remoteAccessSettings,
+  );
 }
 
 function scheduleBackendRestart(reason: string): void {
@@ -2768,6 +3215,7 @@ function startBackend(): void {
     return;
   }
 
+  remoteAccessControlPlane.resetOwnerSession();
   const captureBackendLogs = app.isPackaged && backendLogSink !== null;
   const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
@@ -2796,9 +3244,11 @@ function startBackend(): void {
 
   child.once("spawn", () => {
     restartAttempt = 0;
+    emitRemoteAccessStatus();
   });
 
   child.on("error", (error) => {
+    cancelOwnerSessionInitialization(child);
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
       backendListeningDetector = null;
@@ -2807,10 +3257,12 @@ function startBackend(): void {
       backendProcess = null;
     }
     closeBackendSession(`pid=${child.pid ?? "unknown"} error=${error.message}`);
+    emitRemoteAccessStatus();
     scheduleBackendRestart(error.message);
   });
 
   child.on("exit", (code, signal) => {
+    cancelOwnerSessionInitialization(child);
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(
         new Error(
@@ -2825,14 +3277,21 @@ function startBackend(): void {
     closeBackendSession(
       `pid=${child.pid ?? "unknown"} code=${code ?? "null"} signal=${signal ?? "null"}`,
     );
-    if (isQuitting) return;
+    emitRemoteAccessStatus();
+    if (isQuitting || backendSettingsRestartInProgress) return;
     const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
     scheduleBackendRestart(reason);
   });
+
+  // The process-local startup credential is exchanged as soon as the new
+  // backend reports full startup readiness. The bearer remains encapsulated in
+  // the main-process control-plane instance and is never sent to the renderer.
+  initializeOwnerSessionAfterBackendReadiness(child, backendHttpUrl);
 }
 
 function stopBackend(): void {
   cancelBackendReadinessWait();
+  cancelOwnerSessionInitialization();
   backendListeningDetector = null;
   if (restartTimer) {
     clearTimeout(restartTimer);
@@ -2855,6 +3314,7 @@ function stopBackend(): void {
 
 async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
   cancelBackendReadinessWait();
+  cancelOwnerSessionInitialization();
   backendListeningDetector = null;
   if (restartTimer) {
     clearTimeout(restartTimer);
@@ -2939,6 +3399,9 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       appSnapManager = null;
       await disposeBrowserUsePipeServerForShutdown(reason);
       await stopBackendAndWaitForExit();
+      remoteAccessTray?.destroy();
+      remoteAccessTray = null;
+      remoteAccessControlPlane.clear();
       browserManager.dispose();
       restoreStdIoCapture?.();
       writeDesktopLogHeader(`${reason} shutdown complete`);
@@ -2965,6 +3428,13 @@ function requestGracefulAppQuit(reason: string): void {
     .finally(() => {
       app.quit();
     });
+}
+
+function authorizeRemoteAccessIpc(event: IpcMainInvokeEvent): boolean {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || event.sender !== window.webContents) return false;
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false;
+  return isTrustedDesktopRendererUrl(event.senderFrame.url, desktopDevelopmentServerUrl);
 }
 
 function registerIpcHandlers(): void {
@@ -3281,6 +3751,63 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
+  registerRemoteAccessIpcHandlers(ipcMain, {
+    getStatus: getRemoteAccessStatus,
+    updateSettings: updateRemoteAccessSettings,
+    refreshDiagnostics: refreshRemoteAccessDiagnostics,
+    copyMobileUrl: () => {
+      const mobileUrl = remoteAccessMobileUrl();
+      if (!mobileUrl) return false;
+      clipboard.writeText(mobileUrl);
+      return true;
+    },
+    copyServeCommand: () => {
+      const command =
+        remoteAccessDiagnostics?.expectedServeCommand ??
+        `tailscale serve --bg http://127.0.0.1:${remoteAccessSettings.port}`;
+      clipboard.writeText(command);
+      return true;
+    },
+    copyServeResetCommand: () => {
+      clipboard.writeText("tailscale serve reset");
+      return true;
+    },
+    testConnection: () =>
+      testRemoteCompanionConnection(remoteAccessSettings.trustedOrigin),
+    createPairingLink: async (input) => {
+      const label =
+        typeof input === "object" &&
+        input !== null &&
+        "label" in input &&
+        typeof input.label === "string"
+          ? input.label
+          : undefined;
+      const initialIssue = remotePairingConfigurationIssue(remoteAccessDiagnostics);
+      if (initialIssue && !remoteAccessSettings.enabled) throw new Error(initialIssue);
+
+      remoteAccessDiagnostics = await collectTailscaleDiagnostics({
+        port: remoteAccessSettings.port,
+      });
+      emitRemoteAccessStatus();
+      const configurationIssue = remotePairingConfigurationIssue(remoteAccessDiagnostics);
+      if (configurationIssue) throw new Error(configurationIssue);
+
+      const connection = await testRemoteCompanionConnection(remoteAccessSettings.trustedOrigin);
+      if (!connection.reachable) throw new Error(connection.message);
+
+      return remoteAccessControlPlane.createPairingLink({
+        trustedOrigin: remoteAccessSettings.trustedOrigin,
+        privateRouteVerified: true,
+        ...(label ? { label } : {}),
+      });
+    },
+    listDevices: () => remoteAccessControlPlane.listDevices(),
+    revokeDevice: (sessionId) => {
+      if (typeof sessionId !== "string") throw new Error("Missing device session id.");
+      return remoteAccessControlPlane.revokeDevice(sessionId);
+    },
+    revokeAllDevices: () => remoteAccessControlPlane.revokeAllDevices(),
+  }, authorizeRemoteAccessIpc);
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -3406,6 +3933,13 @@ function createWindow(): BrowserWindow {
     Menu.buildFromTemplate(menuTemplate).popup({ window });
   });
 
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedDesktopRendererUrl(url, desktopDevelopmentServerUrl)) {
+      event.preventDefault();
+      console.warn("[desktop] Blocked an untrusted top-level renderer navigation.");
+    }
+  });
+
   window.webContents.setWindowOpenHandler(({ url }) => {
     const externalUrl = getSafeExternalUrl(url);
     if (externalUrl) {
@@ -3421,6 +3955,7 @@ function createWindow(): BrowserWindow {
   window.webContents.on("did-finish-load", () => {
     window.setTitle(APP_DISPLAY_NAME);
     emitUpdateState();
+    sendRemoteAccessState(window.webContents, getRemoteAccessStatus());
   });
   window.once("ready-to-show", () => {
     // Preserve the original first-launch behavior, then respect the state saved
@@ -3437,7 +3972,7 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
-  window.on("close", () => {
+  window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
         version: 1,
@@ -3447,10 +3982,60 @@ function createWindow(): BrowserWindow {
     } catch (error) {
       console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
     }
+    if (
+      shouldKeepDesktopRunning(remoteAccessSettings) &&
+      !isQuitting &&
+      !isUpdaterInstallPreparing &&
+      !isUpdaterQuitAndInstallInFlight
+    ) {
+      configureRemoteAccessTray();
+      if (remoteAccessTray) {
+        event.preventDefault();
+        window.hide();
+        showKeepRunningNotice();
+        return;
+      } else if (process.platform === "linux") {
+        event.preventDefault();
+        if (!trayUnavailablePromptOpen) {
+          trayUnavailablePromptOpen = true;
+          void dialog
+            .showMessageBox(window, {
+              type: "warning",
+              title: "System tray unavailable",
+              message: "Synara cannot stay hidden for mobile access on this desktop.",
+              detail: "Keep the window open, or quit Synara and stop Mobile Companion.",
+              buttons: ["Keep Window Open", "Quit Synara"],
+              defaultId: 0,
+              cancelId: 0,
+            })
+            .then(({ response }) => {
+              if (response === 1) requestGracefulAppQuit("tray-unavailable-quit");
+            })
+            .finally(() => {
+              trayUnavailablePromptOpen = false;
+            });
+        }
+        return;
+      }
+    }
+    const isLastWindow = BrowserWindow.getAllWindows().filter((candidate) => !candidate.isDestroyed())
+      .length <= 1;
+    if (
+      isLastWindow &&
+      !isQuitting &&
+      shouldQuitAfterLastWindowClosed({
+        platform: process.platform,
+        settings: remoteAccessSettings,
+        trayAvailable: remoteAccessTray !== null,
+      })
+    ) {
+      event.preventDefault();
+      requestGracefulAppQuit("last-window-close");
+    }
   });
 
   if (isDevelopment) {
-    void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
+    void window.loadURL(desktopDevelopmentServerUrl!);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
     void window.loadURL(desktopIdentity.entryUrl);
@@ -3634,6 +4219,8 @@ if (hasSingleInstanceLock) {
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       initializeDesktopAppSnap();
+      applyLaunchAtLoginSetting();
+      configureRemoteAccessTray();
       configureApplicationMenu();
       try {
         registerDesktopProtocol();
@@ -3648,6 +4235,11 @@ if (hasSingleInstanceLock) {
       void bootstrap().catch((error) => {
         handleFatalStartupError("bootstrap", error);
       });
+      if (remoteAccessSettings.enabled) {
+        void refreshRemoteAccessDiagnostics().catch((error) => {
+          console.warn(`[desktop] Tailscale diagnostics failed: ${formatErrorMessage(error)}`);
+        });
+      }
 
       app.on("browser-window-blur", () => {
         markDesktopAppBackgrounded();
@@ -3693,7 +4285,13 @@ if (hasSingleInstanceLock) {
 }
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  if (
+    shouldQuitAfterLastWindowClosed({
+      platform: process.platform,
+      settings: remoteAccessSettings,
+      trayAvailable: remoteAccessTray !== null,
+    })
+  ) {
     app.quit();
   }
 });

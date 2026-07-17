@@ -487,6 +487,13 @@ function ChatRouteGlobalShortcuts() {
         toggleSidebar();
         return;
       }
+      if (action === "open-mobile-pairing") {
+        void navigate({
+          to: "/settings",
+          search: { section: "remote-access", target: "setting-one-time-pairing-code" },
+        });
+        return;
+      }
       if (action !== "open-settings") return;
       void navigate({ to: "/settings" });
     });

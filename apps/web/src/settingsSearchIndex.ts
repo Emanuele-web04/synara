@@ -202,6 +202,81 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
   },
 
+  // ── Remote Access ─────────────────────────────────────────────────────────────
+  {
+    id: "remote-access:enabled",
+    section: "remote-access",
+    title: "Remote access",
+    keywords:
+      "Enable experimental Mobile Companion restricted API private Tailnet remote phone PWA",
+  },
+  {
+    id: "remote-access:port",
+    section: "remote-access",
+    title: "Companion port",
+    keywords: "Stable loopback backend port 127.0.0.1 3773 restart",
+  },
+  {
+    id: "remote-access:origin",
+    section: "remote-access",
+    title: "Trusted Tailnet origin",
+    keywords: "Exact HTTPS ts.net hostname origin security Tailscale MagicDNS",
+  },
+  {
+    id: "remote-access:tray",
+    section: "remote-access",
+    title: "Keep Synara running",
+    keywords: "Tray menu bar close window backend mobile host available",
+  },
+  {
+    id: "remote-access:launch-at-login",
+    section: "remote-access",
+    title: "Launch at login",
+    keywords: "Start desktop automatically boot sign in mobile availability",
+  },
+  {
+    id: "remote-access:tailscale",
+    section: "remote-access",
+    title: "Tailscale",
+    keywords: "CLI status signed in diagnostics refresh Tailnet",
+  },
+  {
+    id: "remote-access:serve",
+    section: "remote-access",
+    title: "Private HTTPS route",
+    keywords: "Tailscale Serve command private proxy Funnel reset connection test",
+  },
+  {
+    id: "remote-access:serve-reset",
+    section: "remote-access",
+    title: "Reset Serve configuration",
+    keywords: "Copy tailscale serve reset command remove private route Funnel public exposure",
+  },
+  {
+    id: "remote-access:phone-setup",
+    section: "remote-access",
+    title: "Phone setup",
+    keywords: "Install Tailscale iPhone Android sign in same Tailnet private internet",
+  },
+  {
+    id: "remote-access:url",
+    section: "remote-access",
+    title: "Mobile URL",
+    keywords: "Copy phone PWA address companion",
+  },
+  {
+    id: "remote-access:pair",
+    section: "remote-access",
+    title: "One-time pairing code",
+    keywords: "QR manual 12 character token pair device expires five minutes",
+  },
+  {
+    id: "remote-access:devices",
+    section: "remote-access",
+    title: "Device access",
+    keywords: "Paired phones sessions revoke disconnect notifications",
+  },
+
   // ── AppSnap ───────────────────────────────────────────────────────────────────
   {
     id: "appsnap:enable",

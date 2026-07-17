@@ -100,6 +100,31 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     isSupported: () => ipcRenderer.invoke(IPC.notificationsIsSupported),
     show: (input) => ipcRenderer.invoke(IPC.notificationsShow, input),
   },
+  remoteAccess: {
+    getStatus: () => ipcRenderer.invoke(IPC.remoteAccess.getStatus),
+    updateSettings: (patch) =>
+      ipcRenderer.invoke(IPC.remoteAccess.updateSettings, patch),
+    refreshDiagnostics: () => ipcRenderer.invoke(IPC.remoteAccess.refreshDiagnostics),
+    copyMobileUrl: () => ipcRenderer.invoke(IPC.remoteAccess.copyMobileUrl),
+    copyServeCommand: () => ipcRenderer.invoke(IPC.remoteAccess.copyServeCommand),
+    copyServeResetCommand: () =>
+      ipcRenderer.invoke(IPC.remoteAccess.copyServeResetCommand),
+    testConnection: () => ipcRenderer.invoke(IPC.remoteAccess.testConnection),
+    createPairingLink: (input) =>
+      ipcRenderer.invoke(IPC.remoteAccess.createPairingLink, input),
+    listDevices: () => ipcRenderer.invoke(IPC.remoteAccess.listDevices),
+    revokeDevice: (sessionId) =>
+      ipcRenderer.invoke(IPC.remoteAccess.revokeDevice, sessionId),
+    revokeAllDevices: () => ipcRenderer.invoke(IPC.remoteAccess.revokeAllDevices),
+    onState: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, status: unknown) => {
+        if (typeof status !== "object" || status === null) return;
+        listener(status as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IPC.remoteAccess.state, wrappedListener);
+      return () => ipcRenderer.removeListener(IPC.remoteAccess.state, wrappedListener);
+    },
+  },
   appSnap: {
     getState: () => ipcRenderer.invoke(IPC.appSnap.getState),
     setEnabled: (enabled) => ipcRenderer.invoke(IPC.appSnap.setEnabled, enabled),
