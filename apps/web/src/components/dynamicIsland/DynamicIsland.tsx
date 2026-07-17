@@ -10,8 +10,8 @@ import {
   type ProviderApprovalDecision,
   type ProviderUserInputAnswers,
   type UserInputQuestion,
-} from "@t3tools/contracts";
-import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
+} from "@synara/contracts";
+import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useAppSettings } from "~/appSettings";
@@ -39,6 +39,7 @@ import {
 } from "~/session-logic";
 import { useStore } from "~/store";
 import type { Thread } from "~/types";
+import { createAllThreadsSelector } from "~/storeSelectors";
 import { cn } from "~/lib/utils";
 
 const ISLAND_TOP_PX = CHAT_SURFACE_HEADER_HEIGHT_PX + 4;
@@ -53,7 +54,7 @@ function useIslandThreadTracker(): {
   idleThread: Thread | null;
   recentThreads: Thread[];
 } {
-  const threads = useStore((s) => s.threads);
+  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const [hysteresisId, setHysteresisId] = useState<string | null>(null);
   const pendingIdRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
