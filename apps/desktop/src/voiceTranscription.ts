@@ -202,7 +202,7 @@ async function resolveDesktopVoiceAuth(
 
 // --- Network upload --------------------------------------------------------
 
-async function requestDesktopVoiceTranscription(input: {
+export async function requestDesktopVoiceTranscription(input: {
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
   readonly token: string;
