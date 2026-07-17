@@ -491,7 +491,7 @@ export function deriveWorkflowRunState(input: {
   if (!workflow) {
     return null;
   }
-  const settled = workflow.status !== "running" && workflow.status !== "paused";
+  const settled = workflow.status !== "running";
   const pausedByUser =
     workflow.status === "stopped" && (input.pausedByUserTaskIds?.has(workflow.taskId) ?? false);
   const canResume = workflow.runId !== null && workflow.scriptPath !== null;

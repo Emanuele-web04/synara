@@ -151,6 +151,8 @@ export interface ProviderServiceShape {
    */
   readonly clearSessionResumeCursor?: (input: {
     readonly threadId: ThreadId;
+    /** Clear only persisted resume state without stopping a runtime that owns live tasks. */
+    readonly preserveActiveRuntime?: boolean;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**

@@ -50,7 +50,7 @@ describe("deriveComposerSubagentStripItems", () => {
     ).toEqual([]);
   });
 
-  it("scopes rows to the live turn when it spawned subagents", () => {
+  it("keeps prior running background rows alongside subagents from the live turn", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [
         workEntry({
@@ -75,15 +75,24 @@ describe("deriveComposerSubagentStripItems", () => {
       liveTurnId: TurnId.makeUnsafe("turn-2"),
     });
 
-    expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      threadId: "sub-1",
-      primaryLabel: "Blue",
-      role: "reviewer",
-      fullLabel: "Blue [reviewer]",
-      statusKind: "running",
-      isActive: true,
-    });
+    expect(items).toHaveLength(2);
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: "old-agent",
+          primaryLabel: "Ada",
+          statusKind: "running",
+        }),
+        expect.objectContaining({
+          threadId: "sub-1",
+          primaryLabel: "Blue",
+          role: "reviewer",
+          fullLabel: "Blue [reviewer]",
+          statusKind: "running",
+          isActive: true,
+        }),
+      ]),
+    );
   });
 
   it("merges snapshots of one subagent, keeping identity while the latest status wins", () => {

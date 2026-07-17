@@ -595,6 +595,31 @@ describe("deriveActiveBackgroundTasksState", () => {
       taskIds: ["task-subagent-1"],
     });
   });
+
+  it("retires paused tasks from active background work", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "background-task-start-paused",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "Task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-paused", taskType: "subagent" },
+      }),
+      makeActivity({
+        id: "background-task-paused",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.updated",
+        summary: "Task paused",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { taskId: "task-paused", status: "paused" },
+      }),
+    ];
+
+    expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
+  });
 });
 
 describe("findLatestProposedPlan", () => {

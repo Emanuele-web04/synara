@@ -63,6 +63,11 @@ const ProviderRollbackConversationInput = Schema.Struct({
   numTurns: NonNegativeInt,
 });
 
+const ClearSessionResumeCursorInput = Schema.Struct({
+  threadId: ThreadId,
+  preserveActiveRuntime: Schema.optional(Schema.Boolean),
+});
+
 type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
 type StopRuntimeSessionInput = Parameters<StopRuntimeSession>[0];
 type StopRuntimeSessionEffect = ReturnType<StopRuntimeSession>;
@@ -1230,7 +1235,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
         yield* routed.adapter.steerSubagent(routed.threadId, input.providerThreadId, {
-          input: input.input,
+          input: input.input ?? "",
           ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
@@ -1427,7 +1432,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
           operation: "ProviderService.clearSessionResumeCursor",
-          schema: ProviderStopSessionInput,
+          schema: ClearSessionResumeCursorInput,
           payload: rawInput,
         });
         yield* waitForRuntimeIdleStop(input.threadId);
@@ -1444,7 +1449,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
             const adapter = yield* registry.getByProvider(binding.provider);
             const hasActiveSession = yield* adapter.hasSession(input.threadId);
-            if (hasActiveSession) {
+            if (hasActiveSession && input.preserveActiveRuntime !== true) {
               yield* adapter.stopSession(input.threadId);
             }
             yield* directory.upsert({
@@ -1452,7 +1457,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: binding.provider,
               ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
               ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-              status: "stopped",
+              status:
+                hasActiveSession && input.preserveActiveRuntime === true
+                  ? (binding.status ?? "running")
+                  : "stopped",
               resumeCursor: null,
               runtimePayload: binding.runtimePayload,
             });

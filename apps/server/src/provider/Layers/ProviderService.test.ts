@@ -1801,6 +1801,59 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
+  it.effect("clears a stale cursor without stopping a runtime that owns live tasks", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-clear-resume-live-task");
+
+      idleCleanup.claude.stopSession.mockClear();
+      const session = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.claude.waitForRuntimeSubscribers();
+      idleCleanup.claude.emit({
+        type: "task.started",
+        eventId: asEventId("runtime-clear-resume-live-task-started"),
+        provider: "claudeAgent",
+        createdAt: "2026-07-17T12:00:00.000Z",
+        threadId,
+        payload: { taskId: "background-task-clear-resume" },
+      });
+
+      assert.equal(typeof provider.hasLiveRuntimeTasks, "function");
+      if (provider.hasLiveRuntimeTasks) {
+        yield* waitUntilEffect(
+          () => provider.hasLiveRuntimeTasks!({ threadId }),
+          500,
+          20,
+          "live runtime task registration",
+        );
+      }
+      assert.equal(typeof provider.clearSessionResumeCursor, "function");
+      if (provider.clearSessionResumeCursor) {
+        yield* provider.clearSessionResumeCursor({
+          threadId,
+          preserveActiveRuntime: true,
+        });
+      }
+
+      assert.equal(idleCleanup.claude.stopSession.mock.calls.length, 0);
+      assert.equal(yield* idleCleanup.claude.hasSession(threadId), true);
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.resumeCursor, null);
+      }
+      assert.equal(
+        (yield* provider.listSessions()).some((entry) => entry.threadId === session.threadId),
+        true,
+      );
+    }),
+  );
+
   it.effect("serializes a fired idle stop before starting new turn work", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

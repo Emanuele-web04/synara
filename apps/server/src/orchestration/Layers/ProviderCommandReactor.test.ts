@@ -305,6 +305,14 @@ describe("ProviderCommandReactor", () => {
     );
     const clearSessionResumeCursor = vi.fn((input: unknown) =>
       Effect.sync(() => {
+        const preserveActiveRuntime =
+          typeof input === "object" &&
+          input !== null &&
+          "preserveActiveRuntime" in input &&
+          (input as { preserveActiveRuntime?: boolean }).preserveActiveRuntime === true;
+        if (preserveActiveRuntime) {
+          return;
+        }
         const threadId =
           typeof input === "object" && input !== null && "threadId" in input
             ? (input as { threadId?: ThreadId }).threadId
@@ -2596,6 +2604,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
+      preserveActiveRuntime: true,
     });
   });
 
@@ -4829,6 +4838,78 @@ describe("ProviderCommandReactor", () => {
       turnId: "turn-child",
       providerThreadId: "child-provider-1",
     });
+  });
+
+  it("steers attachment-only turns through an inferred synthetic subagent parent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const attachment = {
+      type: "file" as const,
+      id: "synthetic-subagent-attachment",
+      name: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-synthetic-steer-parent"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-synthetic-steer-parent"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-synthetic-steer-child"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
+        projectId: asProjectId("project-1"),
+        title: "Synthetic child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-synthetic-attachment-steer"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
+        message: {
+          messageId: asMessageId("msg-synthetic-attachment-steer"),
+          role: "user",
+          text: "",
+          attachments: [attachment],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.steerSubagent.mock.calls.length === 1);
+    expect(harness.steerSubagent.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      providerThreadId: "child-provider-steer",
+      attachments: [attachment],
+    });
+    expect(harness.startSession).not.toHaveBeenCalledWith(
+      ThreadId.makeUnsafe("subagent:thread-1:child-provider-steer"),
+      expect.anything(),
+    );
   });
 
   it("reacts to thread.approval.respond by forwarding provider approval response", async () => {

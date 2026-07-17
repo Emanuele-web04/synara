@@ -205,6 +205,35 @@ describe("deriveWorkflowRunState", () => {
     expect(state?.agents[2]?.durationMs).toBe(800);
   });
 
+  it("treats a paused workflow as settled and resumable", () => {
+    const state = deriveWorkflowRunState({
+      activities: [
+        workflowStarted(),
+        activity({
+          id: "wf-launch-paused",
+          createdAt: "2026-07-14T00:00:02.000Z",
+          kind: "task.updated",
+          payload: {
+            taskId: "wf-1",
+            workflowRunId: "wf_paused",
+            workflowScriptPath: "/sessions/abc/workflow-paused.ts",
+          },
+        }),
+        activity({
+          id: "wf-paused",
+          createdAt: "2026-07-14T00:00:03.000Z",
+          kind: "task.updated",
+          payload: { taskId: "wf-1", status: "paused" },
+        }),
+      ],
+    });
+
+    expect(state?.status).toBe("paused");
+    expect(state?.settled).toBe(true);
+    expect(state?.runId).toBe("wf_paused");
+    expect(state?.scriptPath).toBe("/sessions/abc/workflow-paused.ts");
+  });
+
   it("links rows to subagent child threads by tool use id", () => {
     const state = deriveWorkflowRunState({
       activities: [workflowStarted(), agentStarted({ toolUseId: "tool-1" })],

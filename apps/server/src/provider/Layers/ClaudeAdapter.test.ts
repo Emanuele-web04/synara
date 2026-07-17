@@ -1530,7 +1530,6 @@ describe("ClaudeAdapterLive", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
@@ -1829,7 +1828,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("projects steer attachments as disk-path references in the delivered text", () => {
+  it.effect("projects attachment-only steer messages as disk-path references", () => {
     const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-steer-attachments-"));
     const harness = makeHarness({ baseDir });
     return Effect.gen(function* () {
@@ -1898,7 +1897,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(yield* invokeHook(), {});
 
       yield* adapter.steerSubagent(session.threadId, "tool-task-steer-attach-1", {
-        input: "Use the attached notes",
+        input: "",
         attachments: [attachment],
       });
 
@@ -1909,7 +1908,6 @@ describe("ClaudeAdapterLive", () => {
           ? hookOutput.hookSpecificOutput.additionalContext
           : undefined;
       assert.isDefined(additionalContext);
-      assert.include(additionalContext, "Use the attached notes");
       assert.include(additionalContext, "<attached_files>");
       assert.include(additionalContext, attachmentPath);
     }).pipe(
@@ -2243,6 +2241,65 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.stopTask(session.threadId, "wf-1");
       assert.deepEqual(harness.query.stopTaskCalls, ["wf-1"]);
       assert.equal(harness.query.interruptCalls.length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("retires paused workflows from live task association", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.started" && event.payload.taskId === "agent-after-pause",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-paused",
+        task_type: "local_workflow",
+        workflow_name: "paused workflow",
+        description: "Pause before the next task",
+        session_id: "sdk-session-workflow-paused",
+        uuid: "workflow-paused-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "wf-paused",
+        patch: { status: "paused" },
+        session_id: "sdk-session-workflow-paused",
+        uuid: "workflow-paused-updated",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "agent-after-pause",
+        subagent_type: "researcher",
+        description: "Unrelated task",
+        session_id: "sdk-session-workflow-paused",
+        uuid: "agent-after-pause-started",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const unrelatedAgent = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "agent-after-pause",
+      );
+      assert.equal(unrelatedAgent?.type, "task.started");
+      if (unrelatedAgent?.type === "task.started") {
+        assert.equal(unrelatedAgent.payload.workflowTaskId, undefined);
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2673,6 +2730,54 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (stateChanged?.type === "session.state.changed") {
         assert.equal(stateChanged.payload.state, "waiting");
         assert.equal(stateChanged.providerRefs?.providerParentThreadId, THREAD_ID);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("retires a subagent on a terminal task_updated without task_notification", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-terminal-update",
+        tool_use_id: "tool-task-terminal-update",
+        subagent_type: "code-reviewer",
+        description: "Terminal patch only",
+        session_id: "sdk-session-terminal-update",
+        uuid: "task-started-terminal-update",
+      } as unknown as SDKMessage);
+
+      yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
+      yield* adapter.steerSubagent(session.threadId, "tool-task-terminal-update", {
+        input: "queued before completion",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-terminal-update",
+        patch: { status: "completed" },
+        session_id: "sdk-session-terminal-update",
+        uuid: "task-updated-terminal-update",
+      } as unknown as SDKMessage);
+
+      yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 10)));
+      const result = yield* adapter
+        .steerSubagent(session.threadId, "tool-task-terminal-update", { input: "too late" })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.instanceOf(result.failure, ProviderAdapterRequestError);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

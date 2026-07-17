@@ -81,6 +81,8 @@ function settledWorkflowPresentation(workflowRun: WorkflowRunState): {
     return { label: "Paused", toneClassName: "text-amber-300/80" };
   }
   switch (workflowRun.status) {
+    case "paused":
+      return { label: "Paused", toneClassName: "text-amber-300/80" };
     case "failed":
       return { label: "Failed", toneClassName: "text-rose-300/85" };
     case "stopped":

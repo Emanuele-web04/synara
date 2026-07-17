@@ -198,10 +198,22 @@ export function deriveComposerSubagentStripItems(input: {
     ? entriesWithSubagents.filter((entry) => entry.turnId === input.liveTurnId)
     : [];
   if (liveTurnEntries.length > 0) {
-    return withParentRow(
-      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId),
-      input.parentRow,
+    const liveTurnProviderThreadIds = new Set(
+      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
+        (item) => item.providerThreadId,
+      ),
     );
+    const visibleItems = collectStripItems(
+      entriesWithSubagents,
+      backgroundedThreadIds,
+      viewedThreadId,
+    ).filter(
+      (item) =>
+        liveTurnProviderThreadIds.has(item.providerThreadId) ||
+        item.statusKind === "running" ||
+        item.statusKind === "queued",
+    );
+    return withParentRow(visibleItems, input.parentRow);
   }
 
   // No subagents spawned by the live turn: keep the latest known set visible only

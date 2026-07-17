@@ -646,12 +646,16 @@ const make = Effect.gen(function* () {
   const clearStaleProviderResumeState = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly cause: ProviderServiceError;
+    readonly preserveActiveRuntime?: boolean;
   }) {
     if (providerService.clearSessionResumeCursor) {
       yield* providerService
-        .clearSessionResumeCursor({ threadId: input.threadId })
+        .clearSessionResumeCursor({
+          threadId: input.threadId,
+          ...(input.preserveActiveRuntime === true ? { preserveActiveRuntime: true } : {}),
+        })
         .pipe(Effect.catch(() => Effect.void));
-    } else {
+    } else if (input.preserveActiveRuntime !== true) {
       yield* providerService
         .stopSession({ threadId: input.threadId })
         .pipe(Effect.catch(() => Effect.void));
@@ -1032,61 +1036,61 @@ const make = Effect.gen(function* () {
     }
     // Subagent threads have no provider session of their own: their messages
     // steer the running child task through the parent session (mirrors the
-    // interrupt seam), never the session-bootstrap path below.
-    if (thread.parentThreadId) {
-      const providerThread = yield* resolveProviderSessionThread(input.threadId);
-      const subagentProviderThreadId = providerThread
-        ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
-        : undefined;
-      if (providerThread && subagentProviderThreadId) {
-        // Parity with the steerTurn path below: inline portable skill
-        // instructions, normalize skill/agent mentions, and forward the
-        // structured context so the adapter can project attachments into the
-        // text-only subagent steering channel.
-        const steerProvider = (providerThread.session?.providerName ??
-          providerThread.modelSelection.provider) as ProviderKind;
-        const steerSkillInlineText =
-          input.skills !== undefined && input.skills.length > 0
-            ? yield* Effect.tryPromise(() =>
-                buildInlineSkillInstructions({
-                  provider: steerProvider,
-                  skills: input.skills ?? [],
-                  maxChars: Math.max(
-                    0,
-                    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - 1_000,
-                  ),
-                }),
-              ).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning("failed to inline portable skill instructions", {
-                    threadId: input.threadId,
-                    error,
-                  }).pipe(Effect.as("")),
+    // interrupt seam), never the session-bootstrap path below. Parent metadata
+    // may be absent on older/local-only rows, so synthetic ids use the same
+    // projection-backed parent inference as interrupt routing.
+    const providerThread = yield* resolveProviderSessionThread(input.threadId);
+    const subagentProviderThreadId = providerThread
+      ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
+      : undefined;
+    if (providerThread && subagentProviderThreadId) {
+      // Parity with the steerTurn path below: inline portable skill
+      // instructions, normalize skill/agent mentions, and forward the
+      // structured context so the adapter can project attachments into the
+      // text-only subagent steering channel.
+      const steerProvider = (providerThread.session?.providerName ??
+        providerThread.modelSelection.provider) as ProviderKind;
+      const steerSkillInlineText =
+        input.skills !== undefined && input.skills.length > 0
+          ? yield* Effect.tryPromise(() =>
+              buildInlineSkillInstructions({
+                provider: steerProvider,
+                skills: input.skills ?? [],
+                maxChars: Math.max(
+                  0,
+                  PROVIDER_SEND_TURN_MAX_INPUT_CHARS - input.messageText.length - 1_000,
                 ),
-              )
-            : "";
-        const steerMessageWithSkills = steerSkillInlineText
-          ? `${input.messageText}\n\n${steerSkillInlineText}`
-          : input.messageText;
-        const normalizedSteerInput = toNonEmptyProviderInput(
-          normalizeSkillMentionTextForProvider({
-            provider: steerProvider,
-            messageText: steerMessageWithSkills,
-            ...(input.skills !== undefined ? { skills: input.skills } : {}),
-          }),
-        );
-        yield* providerService.steerSubagent({
-          threadId: providerThread.id,
-          providerThreadId: subagentProviderThreadId,
-          input: normalizedSteerInput ?? input.messageText,
-          ...(input.attachments !== undefined && input.attachments.length > 0
-            ? { attachments: input.attachments }
-            : {}),
+              }),
+            ).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to inline portable skill instructions", {
+                  threadId: input.threadId,
+                  error,
+                }).pipe(Effect.as("")),
+              ),
+            )
+          : "";
+      const steerMessageWithSkills = steerSkillInlineText
+        ? `${input.messageText}\n\n${steerSkillInlineText}`
+        : input.messageText;
+      const normalizedSteerInput = toNonEmptyProviderInput(
+        normalizeSkillMentionTextForProvider({
+          provider: steerProvider,
+          messageText: steerMessageWithSkills,
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
-          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-        });
-        return;
-      }
+        }),
+      );
+      yield* providerService.steerSubagent({
+        threadId: providerThread.id,
+        providerThreadId: subagentProviderThreadId,
+        ...(normalizedSteerInput ? { input: normalizedSteerInput } : {}),
+        ...(input.attachments !== undefined && input.attachments.length > 0
+          ? { attachments: input.attachments }
+          : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+      });
+      return;
     }
     const activeSessionBeforeEnsure = yield* providerService
       .listSessions()
@@ -1364,13 +1368,17 @@ const make = Effect.gen(function* () {
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
       });
-      const replayWithTranscriptBootstrap = (cause: ProviderServiceError) =>
+      const replayWithTranscriptBootstrap = (
+        cause: ProviderServiceError,
+        preserveActiveRuntime = false,
+      ) =>
         Effect.gen(function* () {
           // Claude cannot continue from a missing native session; clear the
           // dead cursor and replay once with Synara transcript context.
           yield* clearStaleProviderResumeState({
             threadId: input.threadId,
             cause,
+            ...(preserveActiveRuntime ? { preserveActiveRuntime: true } : {}),
           });
           yield* ensureSessionForStaleRetry;
 
@@ -1439,7 +1447,7 @@ const make = Effect.gen(function* () {
                   messageId: input.messageId,
                 },
               );
-              return yield* replayWithTranscriptBootstrap(error);
+              return yield* replayWithTranscriptBootstrap(error, true);
             }
             yield* providerService
               .stopRuntimeSession({ threadId: input.threadId })

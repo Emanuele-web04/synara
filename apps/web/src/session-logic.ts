@@ -672,7 +672,12 @@ export function deriveActiveBackgroundTasksState(
     // task.completed notification following on the same turn.
     if (activity.kind === "task.updated") {
       const status = payload && typeof payload.status === "string" ? payload.status : undefined;
-      if (status === "completed" || status === "failed" || status === "killed") {
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "killed" ||
+        status === "paused"
+      ) {
         activeTasks.delete(taskId);
       }
       continue;

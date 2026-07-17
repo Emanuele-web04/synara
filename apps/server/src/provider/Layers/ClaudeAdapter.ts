@@ -3325,10 +3325,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           if (status === undefined && isBackgrounded === undefined) {
             return;
           }
-          if (
-            (status === "completed" || status === "failed" || status === "killed") &&
-            context.liveWorkflowTaskIds.has(message.task_id)
-          ) {
+          const isTerminalStatus =
+            status === "completed" || status === "failed" || status === "killed";
+          const isSettledRuntimeStatus = isTerminalStatus || status === "paused";
+          if (isSettledRuntimeStatus && context.liveWorkflowTaskIds.has(message.task_id)) {
             context.liveWorkflowTaskIds.delete(message.task_id);
             yield* stopWorkflowRuntimePoller(context, message.task_id);
           }
@@ -3384,6 +3384,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             providerRefs: nativeProviderRefs(run.context),
             raw,
           });
+          if (isTerminalStatus) {
+            context.subagentRuns.delete(run.toolUseId);
+            context.pendingSubagentSteers.delete(run.toolUseId);
+            context.pendingSubagentStops.delete(run.toolUseId);
+            if (run.context.turnState) {
+              yield* completeTurn(
+                run.context,
+                status === "completed"
+                  ? "completed"
+                  : status === "failed"
+                    ? "failed"
+                    : "interrupted",
+              );
+            }
+          }
           return;
         }
 
@@ -4945,7 +4960,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           include: "all-files",
           includeImage: () => true,
         });
-        const message = attachmentsBlock ? `${input.input}\n\n${attachmentsBlock}` : input.input;
+        const message = [input.input, attachmentsBlock]
+          .filter((part): part is string => typeof part === "string" && part.length > 0)
+          .join("\n\n");
         const pending = context.pendingSubagentSteers.get(providerThreadId) ?? [];
         pending.push(message);
         context.pendingSubagentSteers.set(providerThreadId, pending);
