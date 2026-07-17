@@ -16,6 +16,9 @@ import {
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
+  ProviderStopTaskInput,
+  ProviderBackgroundTaskInput,
+  ProviderSteerSubagentInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
@@ -257,6 +260,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const directory = yield* ProviderSessionDirectory;
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
+    const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     // Fired idle callbacks outlive their timer map entry, so use generations to
     // invalidate async stop work when new user work starts in that gap.
     const runtimeIdleGenerations = new Map<ThreadId, symbol>();
@@ -294,6 +298,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const scheduleRuntimeIdleStop = (threadId: ThreadId) => {
       clearRuntimeIdleTimer(threadId);
+      // A parent turn can finish while provider-native tasks keep running in
+      // the same subprocess. Those tasks own the runtime until the last one
+      // settles, even though the adapter session otherwise looks idle-ready.
+      if ((liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0) {
+        return;
+      }
       if (runtimeIdleStopMs <= 0) {
         retireRuntimeIdleGeneration(threadId);
         return;
@@ -306,6 +316,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
+    };
+
+    const markRuntimeTaskLive = (threadId: ThreadId, taskId: string): void => {
+      const taskIds = liveRuntimeTaskIds.get(threadId) ?? new Set<string>();
+      taskIds.add(taskId);
+      liveRuntimeTaskIds.set(threadId, taskIds);
+      clearRuntimeIdleTimer(threadId);
+    };
+
+    const markRuntimeTaskSettled = (threadId: ThreadId, taskId: string): void => {
+      const taskIds = liveRuntimeTaskIds.get(threadId);
+      taskIds?.delete(taskId);
+      if (taskIds && taskIds.size > 0) {
+        return;
+      }
+      liveRuntimeTaskIds.delete(threadId);
+      scheduleRuntimeIdleStop(threadId);
     };
 
     const waitForRuntimeIdleStop = (threadId: ThreadId): Effect.Effect<void> =>
@@ -342,6 +369,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         case "turn.started":
           clearRuntimeIdleTimer(event.threadId);
           return;
+        case "task.started":
+        case "task.progress":
+          markRuntimeTaskLive(event.threadId, event.payload.taskId);
+          return;
+        case "task.updated":
+          if (
+            event.payload.status === "completed" ||
+            event.payload.status === "failed" ||
+            event.payload.status === "killed" ||
+            event.payload.status === "paused"
+          ) {
+            markRuntimeTaskSettled(event.threadId, event.payload.taskId);
+          } else {
+            markRuntimeTaskLive(event.threadId, event.payload.taskId);
+          }
+          return;
+        case "task.completed":
+          markRuntimeTaskSettled(event.threadId, event.payload.taskId);
+          return;
         case "session.started":
         case "thread.started":
         case "turn.completed":
@@ -354,10 +400,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             event.payload.state === "archived" ||
             event.payload.state === "closed"
           ) {
+            if (event.payload.state === "archived" || event.payload.state === "closed") {
+              liveRuntimeTaskIds.delete(event.threadId);
+            }
             scheduleRuntimeIdleStop(event.threadId);
           }
           return;
         case "session.exited":
+          liveRuntimeTaskIds.delete(event.threadId);
           clearRuntimeIdleTimer(event.threadId);
           retireRuntimeIdleGeneration(event.threadId);
           return;
@@ -1113,6 +1163,83 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const stopTask: ProviderServiceShape["stopTask"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.stopTask",
+          schema: ProviderStopTaskInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.stopTask",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.stopTask) {
+          return yield* toValidationError(
+            "ProviderService.stopTask",
+            `Provider '${routed.adapter.provider}' does not support stopping a provider task.`,
+          );
+        }
+        yield* routed.adapter.stopTask(routed.threadId, input.taskId);
+        yield* analytics.record("provider.task.stopped", {
+          provider: routed.adapter.provider,
+        });
+      });
+
+    const backgroundTask: ProviderServiceShape["backgroundTask"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.backgroundTask",
+          schema: ProviderBackgroundTaskInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.backgroundTask",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.backgroundTask) {
+          return yield* toValidationError(
+            "ProviderService.backgroundTask",
+            `Provider '${routed.adapter.provider}' does not support backgrounding a provider task.`,
+          );
+        }
+        yield* routed.adapter.backgroundTask(routed.threadId, input.toolUseId);
+        yield* analytics.record("provider.task.backgrounded", {
+          provider: routed.adapter.provider,
+        });
+      });
+
+    const steerSubagent: ProviderServiceShape["steerSubagent"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.steerSubagent",
+          schema: ProviderSteerSubagentInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.steerSubagent",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.steerSubagent) {
+          return yield* toValidationError(
+            "ProviderService.steerSubagent",
+            `Provider '${routed.adapter.provider}' does not support messaging a running subagent.`,
+          );
+        }
+        yield* routed.adapter.steerSubagent(routed.threadId, input.providerThreadId, {
+          input: input.input,
+          ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        });
+        yield* analytics.record("provider.subagent.steered", {
+          provider: routed.adapter.provider,
+        });
+      });
+
     const respondToRequest: ProviderServiceShape["respondToRequest"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -1164,6 +1291,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
+        liveRuntimeTaskIds.delete(input.threadId);
         yield* waitForRuntimeIdleStop(input.threadId);
         yield* directory.remove(input.threadId);
         retireRuntimeIdleGeneration(input.threadId);
@@ -1207,6 +1335,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (!isExpectedIdleStopCurrent()) {
           return;
         }
+        liveRuntimeTaskIds.delete(input.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
           provider: binding.provider,
@@ -1234,6 +1363,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const stopRuntimeSession: StopRuntimeSession = (rawInput) =>
       stopRuntimeSessionInternal(rawInput);
 
+    const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
+      Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
+
     stopIdleRuntimeSession = (threadId, generation) => {
       const stopEffect = Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
@@ -1253,7 +1385,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             binding.status === "stopped" &&
             (bindingRuntimePayload.lastRuntimeEvent === "thread.state.changed" ||
               bindingRuntimePayload.lastRuntimeEvent === "provider.compactThread"));
-        if (!session || !isIdleReadySession || session.activeTurnId !== undefined) {
+        if (
+          !session ||
+          !isIdleReadySession ||
+          session.activeTurnId !== undefined ||
+          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0
+        ) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
@@ -1500,6 +1637,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           clearTimeout(timer);
         }
         runtimeIdleTimers.clear();
+        liveRuntimeTaskIds.clear();
         runtimeIdleGenerations.clear();
         runtimeIdleStopsInFlight.clear();
         stopIdleRuntimeSession = null;
@@ -1516,10 +1654,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       steerTurn,
       startReview,
       interruptTurn,
+      stopTask,
+      backgroundTask,
+      steerSubagent,
       respondToRequest,
       respondToUserInput,
       stopSession,
       stopRuntimeSession,
+      hasLiveRuntimeTasks,
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,

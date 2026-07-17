@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderBackgroundTaskInput,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
@@ -24,7 +25,9 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderSteerSubagentInput,
   ProviderStopSessionInput,
+  ProviderStopTaskInput,
   ThreadId,
   ProviderTurnStartResult,
 } from "@synara/contracts";
@@ -85,6 +88,27 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Stop a provider-native background task. No-op when the routed adapter does
+   * not support task control.
+   */
+  readonly stopTask: (input: ProviderStopTaskInput) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Move an in-flight foreground task to the background. No-op when the routed
+   * adapter does not support task control.
+   */
+  readonly backgroundTask: (
+    input: ProviderBackgroundTaskInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Deliver a mid-task user message to a running subagent of an active session.
+   */
+  readonly steerSubagent: (
+    input: ProviderSteerSubagentInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Respond to a provider approval request.
    */
   readonly respondToRequest: (
@@ -112,6 +136,14 @@ export interface ProviderServiceShape {
   readonly stopRuntimeSession?: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Whether provider-native background tasks are currently keeping the
+   * thread's runtime alive. Restart-oriented recovery paths must check this
+   * before stopRuntimeSession: killing the shared subprocess silently
+   * terminates those tasks.
+   */
+  readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
 
   /**
    * Forget a stale provider-native resume cursor while preserving local routing

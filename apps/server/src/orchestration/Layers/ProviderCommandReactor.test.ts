@@ -244,6 +244,12 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const stopTask = vi.fn<ProviderServiceShape["stopTask"]>(() => Effect.void);
+    const backgroundTask = vi.fn<ProviderServiceShape["backgroundTask"]>(() => Effect.void);
+    const hasLiveRuntimeTasks = vi.fn<NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]>>(
+      () => Effect.succeed(false),
+    );
+    const steerSubagent = vi.fn<ProviderServiceShape["steerSubagent"]>(() => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
@@ -361,6 +367,10 @@ describe("ProviderCommandReactor", () => {
       startReview,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
+      stopTask,
+      backgroundTask,
+      hasLiveRuntimeTasks,
+      steerSubagent,
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
@@ -454,6 +464,10 @@ describe("ProviderCommandReactor", () => {
       startReview,
       forkThread,
       interruptTurn,
+      stopTask,
+      backgroundTask,
+      hasLiveRuntimeTasks,
+      steerSubagent,
       respondToRequest,
       respondToUserInput,
       rollbackConversation,
@@ -1994,6 +2008,279 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("routes subagent-thread turn starts to the parent session as steers", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-subagent-thread-create"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
+        projectId: asProjectId("project-1"),
+        title: "Subagent",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-5" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-subagent-steer-1"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:tool-steer-1"),
+        message: {
+          messageId: asMessageId("subagent-steer-message-1"),
+          role: "user",
+          text: "focus on the tests",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.steerSubagent.mock.calls.length === 1);
+    expect(harness.steerSubagent.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      providerThreadId: "tool-steer-1",
+      input: "focus on the tests",
+    });
+    // The subagent thread must never boot a provider session of its own.
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("dispatches thread.task.background to the provider service", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-before-background"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-background"),
+          role: "user",
+          text: "spawn something",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe("cmd-task-background-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        toolUseId: "tool-task-bg-1",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(() => harness.backgroundTask.mock.calls.length === 1);
+    expect(harness.backgroundTask.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      toolUseId: "tool-task-bg-1",
+    });
+  });
+
+  it("dispatches thread.task.stop to the provider service", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-before-task-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-task-stop"),
+          role: "user",
+          text: "spawn something",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("cmd-task-stop-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        taskId: "task-stop-1",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(() => harness.stopTask.mock.calls.length === 1);
+    expect(harness.stopTask.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      taskId: "task-stop-1",
+    });
+  });
+
+  it("appends a failure activity when a task stop is requested without an active session", async () => {
+    const harness = await createHarness();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("cmd-task-stop-no-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        taskId: "task-stop-orphan",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.task.stop.failed") ??
+        false
+      );
+    });
+    expect(harness.stopTask).not.toHaveBeenCalled();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.task.stop.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      detail: "No active provider session is bound to this thread.",
+    });
+  });
+
+  it("surfaces provider task stop failures as a thread activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.stopTask.mockImplementationOnce(() => Effect.die(new Error("task stop exploded")));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-before-task-stop-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-task-stop-failure"),
+          role: "user",
+          text: "spawn something",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.stop",
+        commandId: CommandId.makeUnsafe("cmd-task-stop-failing"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        taskId: "task-stop-failing",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.task.stop.failed") ??
+        false
+      );
+    });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.task.stop.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      detail: expect.stringContaining("task stop exploded"),
+    });
+  });
+
+  it("surfaces provider task background failures as a thread activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.backgroundTask.mockImplementationOnce(() =>
+      Effect.die(new Error("task background exploded")),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-before-task-background-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-task-background-failure"),
+          role: "user",
+          text: "spawn something",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.task.background",
+        commandId: CommandId.makeUnsafe("cmd-task-background-failing"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        toolUseId: "tool-task-bg-failing",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some(
+          (activity) => activity.kind === "provider.task.background.failed",
+        ) ?? false
+      );
+    });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    const failureActivity = thread?.activities.find(
+      (activity) => activity.kind === "provider.task.background.failed",
+    );
+    expect(failureActivity?.payload).toMatchObject({
+      detail: expect.stringContaining("task background exploded"),
+    });
+  });
+
   it("waits for the message-start checkpoint before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
     const captureGate = new Promise<void>((resolve) => {
@@ -2136,7 +2423,7 @@ describe("ProviderCommandReactor", () => {
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
     });
     const now = new Date().toISOString();
-    harness.sendTurn.mockImplementationOnce(() =>
+    const staleResumeFailure = () =>
       Effect.fail(
         new ProviderAdapterRequestError({
           provider: "claudeAgent",
@@ -2144,8 +2431,12 @@ describe("ProviderCommandReactor", () => {
           detail:
             "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
         }),
-      ),
-    );
+      );
+    // Both the original send and the native-resume retry fail stale, so the
+    // reactor falls back to the transcript bootstrap.
+    harness.sendTurn
+      .mockImplementationOnce(staleResumeFailure)
+      .mockImplementationOnce(staleResumeFailure);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2190,19 +2481,122 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    // Native-resume retry first: stop only the runtime so the persisted cursor survives.
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const nativeRetrySendInput = harness.sendTurn.mock.calls[1]?.[0] as {
+      readonly input?: string;
+    };
+    expect(nativeRetrySendInput.input).not.toContain("<thread_context>");
+    // Second stale failure clears the cursor and bootstraps the transcript.
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
-    expect(harness.startSession.mock.calls.length).toBe(2);
-    const retryStartInput = harness.startSession.mock.calls[1]?.[1];
+    expect(harness.startSession.mock.calls.length).toBe(3);
+    const retryStartInput = harness.startSession.mock.calls[2]?.[1];
     expect(retryStartInput).not.toHaveProperty("resumeCursor");
 
-    const retrySendInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    const retrySendInput = harness.sendTurn.mock.calls[2]?.[0] as { readonly input?: string };
     expect(retrySendInput.input).toContain("<thread_context>");
     expect(retrySendInput.input).toContain("Move the changelog navigation to the left.");
     expect(retrySendInput.input).toContain("<latest_user_message>");
     expect(retrySendInput.input).toContain("nice but bring it on the left.");
+  });
+
+  it("retries a stale Claude resume natively before paying the transcript bootstrap", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+    });
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "turn/setModel",
+          detail:
+            "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-native-resume-retry"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-native-resume-retry"),
+          role: "user",
+          text: "keep going.",
+          attachments: [],
+        },
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    // The session restarts once with the persisted cursor intact...
+    expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.startSession.mock.calls.length).toBe(2);
+    // ...and the retry succeeds natively: no cursor clear, no bootstrap replay.
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    const retrySendInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
+    expect(retrySendInput.input).not.toContain("<thread_context>");
+    expect(retrySendInput.input).toContain("keep going.");
+  });
+
+  it("skips the native resume retry when background tasks keep the runtime alive", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+    });
+    const now = new Date().toISOString();
+    harness.hasLiveRuntimeTasks.mockImplementation(() => Effect.succeed(true));
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "claudeAgent",
+          method: "turn/setModel",
+          detail:
+            "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-stale-live-tasks"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-stale-live-tasks"),
+          role: "user",
+          text: "keep going.",
+          attachments: [],
+        },
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    // Live background tasks own the runtime subprocess: the retry must not
+    // stop it, and recovery goes straight to the transcript bootstrap.
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
   });
 
   it("marks the thread session errored when normal turn start fails", async () => {
@@ -4300,6 +4694,64 @@ describe("ProviderCommandReactor", () => {
       threadId: "thread-1",
       turnId: "turn-child",
       providerThreadId: "child-provider-1",
+    });
+  });
+
+  it("routes subagent interrupts even when the child thread has no session of its own", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-parent-sessionless"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-create-subagent-sessionless"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+        projectId: asProjectId("project-1"),
+        title: "Halley [explorer]",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.makeUnsafe("cmd-turn-interrupt-subagent-sessionless"),
+        threadId: ThreadId.makeUnsafe("subagent:thread-1:child-provider-2"),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
+      threadId: "thread-1",
+      providerThreadId: "child-provider-2",
     });
   });
 

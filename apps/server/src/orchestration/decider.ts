@@ -1182,8 +1182,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.providerName ?? targetThread.modelSelection.provider;
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      // Subagent threads never queue: their messages steer the running child task
+      // through the parent session, so deferring until the turn settles would
+      // deliver the message only after the subagent already finished.
       const shouldQueue =
-        isThreadRunning && (dispatchMode === "queue" || activeProvider !== "codex");
+        targetThread.parentThreadId === null &&
+        isThreadRunning &&
+        (dispatchMode === "queue" || activeProvider !== "codex");
       const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1272,6 +1277,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.task.stop": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.task-stop-requested",
+        payload: {
+          threadId: command.threadId,
+          taskId: command.taskId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.task.background": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.task-background-requested",
+        payload: {
+          threadId: command.threadId,
+          toolUseId: command.toolUseId,
           createdAt: command.createdAt,
         },
       };

@@ -1750,6 +1750,57 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
     }),
   );
 
+  it.effect("keeps the runtime alive until background tasks settle", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-idle-background-task");
+
+      idleCleanup.claude.stopSession.mockClear();
+      const session = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* idleCleanup.claude.waitForRuntimeSubscribers();
+      idleCleanup.claude.emit({
+        type: "task.started",
+        eventId: asEventId("runtime-background-task-started"),
+        provider: "claudeAgent",
+        createdAt: "2026-07-16T20:00:00.000Z",
+        threadId,
+        payload: { taskId: "background-task-1" },
+      });
+      idleCleanup.claude.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-background-parent-completed"),
+        provider: "claudeAgent",
+        createdAt: "2026-07-16T20:00:01.000Z",
+        threadId,
+        payload: { state: "completed" },
+      });
+
+      yield* sleep(150);
+      assert.equal(idleCleanup.claude.stopSession.mock.calls.length, 0);
+
+      idleCleanup.claude.emit({
+        type: "task.updated",
+        eventId: asEventId("runtime-background-task-completed"),
+        provider: "claudeAgent",
+        createdAt: "2026-07-16T20:00:02.000Z",
+        threadId,
+        payload: { taskId: "background-task-1", status: "completed" },
+      });
+
+      yield* waitUntil(
+        () => idleCleanup.claude.stopSession.mock.calls.length > 0,
+        500,
+        20,
+        "idle runtime stop after background task settlement",
+      );
+      assert.deepEqual(idleCleanup.claude.stopSession.mock.calls[0]?.[0], session.threadId);
+    }),
+  );
+
   it.effect("serializes a fired idle stop before starting new turn work", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -2540,6 +2591,68 @@ validation.layer("ProviderServiceLive validation", (it) => {
       }
       assert.equal(failure.failure.operation, "ProviderService.startSession");
       assert.equal(failure.failure.issue.includes("invalid-provider"), true);
+    }),
+  );
+
+  it.effect("fails loudly when the adapter does not support stopping a task", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      yield* provider.startSession(asThreadId("thread-task-stop-unsupported"), {
+        provider: "codex",
+        threadId: asThreadId("thread-task-stop-unsupported"),
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.result(
+        provider.stopTask({
+          threadId: asThreadId("thread-task-stop-unsupported"),
+          taskId: "task-1",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      if (failure.failure._tag !== "ProviderValidationError") {
+        return;
+      }
+      assert.equal(failure.failure.operation, "ProviderService.stopTask");
+      assert.equal(failure.failure.issue.includes("does not support stopping"), true);
+    }),
+  );
+
+  it.effect("fails loudly when the adapter does not support backgrounding a task", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      yield* provider.startSession(asThreadId("thread-task-bg-unsupported"), {
+        provider: "codex",
+        threadId: asThreadId("thread-task-bg-unsupported"),
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.result(
+        provider.backgroundTask({
+          threadId: asThreadId("thread-task-bg-unsupported"),
+          toolUseId: "tool-1",
+        }),
+      );
+
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.equal(failure.failure._tag, "ProviderValidationError");
+      if (failure.failure._tag !== "ProviderValidationError") {
+        return;
+      }
+      assert.equal(failure.failure.operation, "ProviderService.backgroundTask");
+      assert.equal(failure.failure.issue.includes("does not support backgrounding"), true);
     }),
   );
 

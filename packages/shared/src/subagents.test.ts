@@ -6,6 +6,7 @@ import {
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
   extractSubagentIdentityHints,
+  isWorkerTierSubagentRole,
   resolveSubagentIdentityHint,
 } from "./subagents";
 
@@ -72,6 +73,31 @@ describe("decodeSubagentReceiverAgents", () => {
       },
     ]);
   });
+
+  it("carries flat effort and background hints onto the child row", () => {
+    expect(
+      decodeSubagentReceiverAgents(
+        {
+          agentType: "worker-high",
+          agentNickname: "Deep audit",
+          model: "sonnet",
+          effort: "high",
+          background: true,
+        },
+        ["child-provider-1"],
+      ),
+    ).toEqual([
+      {
+        providerThreadId: "child-provider-1",
+        nickname: "Deep audit",
+        // Worker-tier agent types are internal effort carriers, never a role.
+        model: "sonnet",
+        modelIsRequestedHint: true,
+        effort: "high",
+        background: true,
+      },
+    ]);
+  });
 });
 
 describe("extractSubagentIdentityHints", () => {
@@ -96,6 +122,70 @@ describe("extractSubagentIdentityHints", () => {
       role: "explorer",
     });
   });
+
+  it("drops worker-tier agent types from role hints while keeping real roles", () => {
+    const hints = extractSubagentIdentityHints({
+      receiverAgents: [
+        {
+          threadId: "child-provider-1",
+          agentNickname: "Locke",
+          agentType: "worker-low",
+          effort: "low",
+        },
+        {
+          threadId: "child-provider-2",
+          agentNickname: "Hume",
+          agentType: "explorer",
+        },
+      ],
+    });
+
+    expect(
+      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" }),
+    ).toMatchObject({
+      nickname: "Locke",
+      effort: "low",
+    });
+    expect(
+      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" })?.role,
+    ).toBeUndefined();
+    expect(
+      resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-2" }),
+    ).toMatchObject({
+      nickname: "Hume",
+      role: "explorer",
+    });
+  });
+
+  it("drops worker-tier agent types from agent state hints", () => {
+    const hints = extractSubagentIdentityHints({
+      agentStates: {
+        "child-provider-1": {
+          agentRole: "worker-xhigh",
+          status: "running",
+        },
+      },
+    });
+
+    const resolved = resolveSubagentIdentityHint({ hints, providerThreadId: "child-provider-1" });
+    expect(resolved?.status).toBe("running");
+    expect(resolved?.role).toBeUndefined();
+  });
+});
+
+describe("isWorkerTierSubagentRole", () => {
+  it.each(["worker-low", "worker-medium", "worker-high", "worker-xhigh", " Worker-Low "])(
+    "recognizes %s as a worker tier",
+    (role) => {
+      expect(isWorkerTierSubagentRole(role)).toBe(true);
+    },
+  );
+  it.each(["explorer", "worker", "worker-", "worker-extreme", null, undefined])(
+    "keeps %s as a real role",
+    (role) => {
+      expect(isWorkerTierSubagentRole(role)).toBe(false);
+    },
+  );
 });
 
 describe("resolveSubagentIdentityHint", () => {

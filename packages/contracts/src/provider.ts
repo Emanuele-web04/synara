@@ -117,6 +117,30 @@ export const ProviderInterruptTurnInput = Schema.Struct({
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
 
+export const ProviderStopTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+});
+export type ProviderStopTaskInput = typeof ProviderStopTaskInput.Type;
+
+export const ProviderBackgroundTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+});
+export type ProviderBackgroundTaskInput = typeof ProviderBackgroundTaskInput.Type;
+
+export const ProviderSteerSubagentInput = Schema.Struct({
+  threadId: ThreadId,
+  providerThreadId: TrimmedNonEmptyString,
+  input: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  attachments: Schema.optional(
+    Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
+  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+});
+export type ProviderSteerSubagentInput = typeof ProviderSteerSubagentInput.Type;
+
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });
