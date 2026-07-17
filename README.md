@@ -13,6 +13,8 @@ It brings chats, terminals, browser previews, diffs, branches, provider sessions
 - Keep split chats, terminals, browser previews, and agent output visible in the same window.
 - Hand off a thread to another provider when you want a second model to pick up with the same context.
 - Review diffs, create branches, commit, push, and open PRs from the app.
+- Opt into the experimental Mobile Companion to monitor and steer existing projects from an
+  installed PWA over private Tailscale Serve HTTPS.
 - Keep your workspace local. Synara stores chats, projects, and history on your machine and talks directly to the providers you choose.
 
 ## How to use
@@ -28,6 +30,9 @@ You can also run Synara locally while the project is still early:
 bun install
 bun run dev
 ```
+
+See [Remote Access and Mobile Companion](./REMOTE.md) for the opt-in Tailnet setup, security model,
+supported mobile operations, and troubleshooting guidance.
 
 ## Privacy
 
