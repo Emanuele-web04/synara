@@ -293,6 +293,17 @@ describe("ChatMarkdown user variant", () => {
     expect(markup).not.toContain("Deep Research");
   });
 
+  it("keeps Object.prototype member names as literal inline code", async () => {
+    // `inlineCodeFilePath` strips wrapping quotes, so the quoted forms reach the icon
+    // tables as the bare keys `constructor` / `__proto__`.
+    for (const token of ["constructor", "__proto__", '"constructor"', '"__proto__"']) {
+      const markup = await renderUserMarkdown(`what if a key is \`${token}\``);
+
+      expect(markup).toContain("<code>");
+      expect(markup).not.toContain('data-slot="central-icon"');
+    }
+  });
+
   it("renders @-mention tokens as mention chips", async () => {
     const markup = await renderUserMarkdown("check @src/utils/model.ts please");
 
