@@ -38,7 +38,7 @@ function isLikelyWavBuffer(buffer: Buffer): boolean {
 }
 
 function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
-  const base64 = normalizeVoiceBase64(input.audio);
+  const base64 = normalizeVoiceBase64(input.audioBase64);
   if (!base64) {
     throw new Error("No voice audio was provided.");
   }
@@ -62,13 +62,12 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const child = ChildProcess.spawn(
-      ...prepareWindowsSafeProcess("codex", ["mcp", "get-auth"], { cwd }),
-      {
-        cwd,
-        stdio: ["pipe", "pipe", "inherit"],
-      },
-    );
+    const { command: childCmd, args: childArgs, shell: childShell } = prepareWindowsSafeProcess("codex", ["mcp", "get-auth"], { cwd });
+    const child = ChildProcess.spawn(childCmd, childArgs, {
+      cwd,
+      stdio: ["pipe", "pipe", "inherit"],
+      shell: childShell,
+    });
     let stdout = "";
     let resolved = false;
     let rejected = false;
