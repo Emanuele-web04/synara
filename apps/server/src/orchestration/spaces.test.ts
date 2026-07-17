@@ -406,6 +406,108 @@ describe("Spaces", () => {
     expect(assignedEvents[0]?.type).toBe("project.meta-updated");
   });
 
+  it("rejects metadata-only updates that turn an assigned project into legacy Home", async () => {
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    const spaceId = SpaceId.makeUnsafe("space-work");
+    const projectId = ProjectId.makeUnsafe("project-transition-to-home");
+    const workspacePaths = {
+      homeDir: "/Users/dev",
+      chatWorkspaceRoot: "/Users/dev/Documents/Synara/Chats",
+    };
+    let readModel = createEmptyReadModel(createdAt);
+
+    ({ readModel } = await dispatch(readModel, {
+      type: "space.create",
+      commandId: CommandId.makeUnsafe("cmd-space-work"),
+      spaceId,
+      name: "Work",
+      icon: "bag",
+      createdAt,
+    }));
+    ({ readModel } = await dispatch(readModel, {
+      type: "project.create",
+      commandId: CommandId.makeUnsafe("cmd-create-transition-to-home"),
+      projectId,
+      title: "Synara",
+      workspaceRoot: "/tmp/synara",
+      createdAt,
+    }));
+    ({ readModel } = await dispatch(readModel, {
+      type: "project.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-assign-transition-to-home"),
+      projectId,
+      spaceId,
+    }));
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-transition-to-home"),
+            projectId,
+            title: "Home",
+            workspaceRoot: "/Users/dev",
+          },
+          readModel,
+          workspacePaths,
+        }),
+      ),
+    ).rejects.toThrow(/chats container/i);
+  });
+
+  it("rejects restoring Home metadata on an assigned renamed legacy row", async () => {
+    const createdAt = "2026-07-15T10:00:00.000Z";
+    const spaceId = SpaceId.makeUnsafe("space-work");
+    const projectId = ProjectId.makeUnsafe("project-renamed-legacy-home");
+    const workspacePaths = {
+      homeDir: "/Users/dev",
+      chatWorkspaceRoot: "/Users/dev/Documents/Synara/Chats",
+    };
+    let readModel = createEmptyReadModel(createdAt);
+
+    ({ readModel } = await dispatch(readModel, {
+      type: "space.create",
+      commandId: CommandId.makeUnsafe("cmd-space-work"),
+      spaceId,
+      name: "Work",
+      icon: "bag",
+      createdAt,
+    }));
+    // A legacy row may already have been renamed before the invariant existed. Its root
+    // remains the user's home directory, so restoring the canonical title would make it
+    // the Home container again without changing spaceId.
+    ({ readModel } = await dispatch(readModel, {
+      type: "project.create",
+      commandId: CommandId.makeUnsafe("cmd-create-renamed-legacy-home"),
+      projectId,
+      title: "Personal chats",
+      workspaceRoot: "/Users/dev",
+      createdAt,
+    }));
+    ({ readModel } = await dispatch(readModel, {
+      type: "project.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-assign-renamed-legacy-home"),
+      projectId,
+      spaceId,
+    }));
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-restore-legacy-home-title"),
+            projectId,
+            title: "Home",
+          },
+          readModel,
+          workspacePaths,
+        }),
+      ),
+    ).rejects.toThrow(/chats container/i);
+  });
+
   it("assigns a batch of projects atomically, skipping settled ones", async () => {
     const createdAt = "2026-07-15T10:00:00.000Z";
     const spaceId = SpaceId.makeUnsafe("space-work");

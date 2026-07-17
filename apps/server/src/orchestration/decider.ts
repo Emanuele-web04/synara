@@ -567,6 +567,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           : nextProjectKind !== "project" && existingProject.spaceId !== null
             ? null
             : undefined;
+      const effectiveSpaceId =
+        requestedSpaceId !== undefined ? requestedSpaceId : existingProject.spaceId;
       const changedSpaceId =
         requestedSpaceId !== undefined && requestedSpaceId !== existingProject.spaceId
           ? requestedSpaceId
@@ -605,6 +607,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
       }
+      if (effectiveSpaceId !== null) {
+        // Assignability is an invariant of the resulting row, not only of commands that
+        // explicitly set spaceId. Metadata-only updates must not turn an already-filed
+        // project into the legacy Home/Chats container while retaining its space.
+        yield* requireSpaceAssignableProject({
+          command,
+          projectTitle: command.title ?? existingProject.title,
+          projectWorkspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
+          workspacePaths,
+        });
+      }
       if (command.spaceId !== undefined && command.spaceId !== null) {
         if (existingProject.deletedAt !== null) {
           return yield* new OrchestrationCommandInvariantError({
@@ -618,14 +631,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             detail: "Only ordinary projects can be assigned to a space.",
           });
         }
-        // Assignability must hold for the *effective* title and root, since the same
-        // command may retitle or move the project.
-        yield* requireSpaceAssignableProject({
-          command,
-          projectTitle: command.title ?? existingProject.title,
-          projectWorkspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
-          workspacePaths,
-        });
         yield* requireSpace({ readModel, command, spaceId: command.spaceId });
       }
       if (
