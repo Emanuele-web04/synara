@@ -1490,9 +1490,7 @@ describe("EventRouter scoped orchestration sync", () => {
       try {
         await vi.waitFor(
           () => {
-            expect(useStore.getState().threadIds?.includes(THREAD_ID)).toBe(
-              true,
-            );
+            expect(useStore.getState().threadIds?.includes(THREAD_ID)).toBe(true);
           },
           { timeout: 4_000, interval: 16 },
         );

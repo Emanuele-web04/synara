@@ -3946,7 +3946,9 @@ describe("store read model sync", () => {
     );
 
     expect(next.threadShellById?.[threadId]?.title).toBe("Newer local title");
-    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe("Newer local title");
+    expect(threadsOf(next).find((thread) => thread.id === threadId)?.title).toBe(
+      "Newer local title",
+    );
     expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
     expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
   });

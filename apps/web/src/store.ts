@@ -4335,9 +4335,7 @@ export function syncServerShellSnapshot(
 
   const derivedThreads = getThreadsFromState(normalizedState);
   const prevThreads = getThreadsFromState(state);
-  const allThreads = arraysShallowEqual(prevThreads, derivedThreads)
-    ? prevThreads
-    : derivedThreads;
+  const allThreads = arraysShallowEqual(prevThreads, derivedThreads) ? prevThreads : derivedThreads;
   const snapshotThreadsOnly = snapshotThreads
     .map((shell) => getThreadFromState(normalizedState, shell.id))
     .filter((thread): thread is Thread => thread !== undefined);
