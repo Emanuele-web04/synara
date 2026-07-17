@@ -486,7 +486,7 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
 } from "./chat/composerPickerStyles";
-import { getComposerTraitSelection } from "./chat/composerTraits";
+import { getComposerTraitSelection, resolveEffortCommitOptionId } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { FolderClosed } from "./FolderClosed";
@@ -547,6 +547,7 @@ import {
 import {
   buildModelSelection,
   buildNextProviderOptions,
+  buildProviderOptionPatch,
   mergeDynamicModelOptions,
   type ProviderModelOption,
 } from "../providerModelOptions";
@@ -8798,6 +8799,10 @@ export default function ChatView({
     selectedProviderModelOptions,
     selectedRuntimeModel,
   );
+  // Recomputed every render (plain derivation, not memoized), so the thread-action
+  // shortcut listener reads it through a ref instead of resubscribing per render.
+  const composerTraitSelectionRef = useRef(composerTraitSelection);
+  composerTraitSelectionRef.current = composerTraitSelection;
   const runtimeUsageContextWindow = useMemo(
     () =>
       activeContextWindow ??
@@ -9455,6 +9460,7 @@ export default function ChatView({
   );
 
   const {
+    createForkThreadFromSlashCommand,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
@@ -9515,6 +9521,153 @@ export default function ChatView({
     setComposerDraftProviderModelOptions,
     editorActions: slashEditorActions,
   });
+
+  // Thread-action shortcuts (approvals, plan/fast mode, effort cycling, send,
+  // dictation, fork) live in a second capture listener because several of their
+  // handlers are declared after the primary shortcut listener above.
+  useEffect(() => {
+    if (surfaceMode === "split" && !isFocusedPane) {
+      return;
+    }
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (!activeThreadId || event.defaultPrevented || event.repeat) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: Boolean(terminalState.terminalOpen),
+          terminalWorkspaceOpen,
+          terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
+          terminalWorkspaceTerminalTabActive,
+          terminalWorkspaceChatTabActive,
+        },
+      });
+      if (!command) return;
+
+      if (
+        command === "thread.approval.accept" ||
+        command === "thread.approval.acceptForSession" ||
+        command === "thread.approval.decline"
+      ) {
+        // Without a pending approval the chord falls through untouched, so
+        // Mod+Enter/Mod+Backspace keep their normal meaning in the composer.
+        if (!activePendingApproval) return;
+        if (respondingRequestIds.includes(activePendingApproval.requestId)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const decision: ProviderApprovalDecision =
+          command === "thread.approval.accept"
+            ? "accept"
+            : command === "thread.approval.acceptForSession"
+              ? "acceptForSession"
+              : "decline";
+        void onRespondToApproval(activePendingApproval.requestId, decision);
+        return;
+      }
+
+      if (command === "thread.planMode.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleInteractionMode();
+        return;
+      }
+
+      if (command === "thread.fastMode.toggle") {
+        if (!composerTraitSelectionRef.current.caps.supportsFastMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleFastMode();
+        return;
+      }
+
+      if (command === "thread.effort.next" || command === "thread.effort.previous") {
+        const selection = composerTraitSelectionRef.current;
+        if (selection.ultrathinkPromptControlled) return;
+        // Prompt-injected levels (e.g. Claude ultrathink) rewrite the prompt instead
+        // of committing a provider option, so cycling skips them.
+        const cycle = selection.effortLevels
+          .filter((option) => !selection.promptInjectedValues.includes(option.value))
+          .map((option) => option.value);
+        if (cycle.length < 2) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const direction = command === "thread.effort.next" ? 1 : -1;
+        const currentIndex = selection.effort ? cycle.indexOf(selection.effort) : -1;
+        const baseIndex = currentIndex === -1 ? (direction === 1 ? -1 : 0) : currentIndex;
+        const nextValue = cycle[(baseIndex + direction + cycle.length) % cycle.length];
+        if (nextValue === undefined) return;
+        setComposerDraftProviderModelOptions(
+          threadId,
+          selectedProvider,
+          buildNextProviderOptions(
+            selectedProvider,
+            selectedProviderModelOptions,
+            buildProviderOptionPatch(
+              selectedProvider,
+              resolveEffortCommitOptionId(selectedProvider, selection.primarySelectDescriptor?.id),
+              nextValue,
+            ),
+          ),
+          { persistSticky: true },
+        );
+        scheduleComposerFocus();
+        return;
+      }
+
+      if (command === "composer.send") {
+        if (!composerSendState.hasSendableContent) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void onSendRef.current(undefined, "queue");
+        return;
+      }
+
+      if (command === "composer.dictation.toggle") {
+        if (!showVoiceNotesControl || isComposerApprovalState || isSendBusy || isConnecting) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleComposerVoiceRecording();
+        return;
+      }
+
+      if (command === "thread.fork") {
+        event.preventDefault();
+        event.stopPropagation();
+        // Surfaces its own "Fork is unavailable" toast for non-server threads.
+        void createForkThreadFromSlashCommand();
+        return;
+      }
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () => window.removeEventListener("keydown", handler, { capture: true });
+  }, [
+    activePendingApproval,
+    activeThreadId,
+    composerSendState,
+    createForkThreadFromSlashCommand,
+    isComposerApprovalState,
+    isConnecting,
+    isFocusedPane,
+    isSendBusy,
+    keybindings,
+    onRespondToApproval,
+    respondingRequestIds,
+    scheduleComposerFocus,
+    selectedProvider,
+    selectedProviderModelOptions,
+    setComposerDraftProviderModelOptions,
+    showVoiceNotesControl,
+    surfaceMode,
+    terminalState.terminalOpen,
+    terminalState.workspaceLayout,
+    terminalWorkspaceChatTabActive,
+    terminalWorkspaceOpen,
+    terminalWorkspaceTerminalTabActive,
+    threadId,
+    toggleComposerVoiceRecording,
+    toggleFastMode,
+    toggleInteractionMode,
+  ]);
 
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
