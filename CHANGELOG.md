@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.5.5 - 2026-07-17
+
+### Added
+
+- Added Antigravity CLI as a first-class provider, including installation and authentication guidance, runtime model and reasoning-effort discovery, session creation and resume, streaming text and reasoning, tool and plan events, approvals, usage reporting, cancellation, and restart recovery.
+- Added dedicated Antigravity branding across provider setup and selection, with stable SVG filter identifiers for predictable rendering.
+- Added shared parsing and normalization for desktop file and folder drops so paths containing spaces, parentheses, encoded characters, or multiple items become valid composer mentions.
+
+### Changed
+
+- Reworked live-turn settlement to follow the owning provider session, preventing transcript chrome from remaining active after a turn has already completed.
+- Optimized chat reconciliation and event projection to reduce repeated scans and redundant updates during active conversations and sidebar-driven state changes.
+- Coalesced pull-request entries through shared list logic and unified picker popup interactions across the workspace.
+- Replaced Pierre-branded side-panel diff headers with Synara's shared visual chrome.
+- Retired the legacy Gemini keybinding and updated provider documentation for Antigravity.
+- Reset bundled theme seeds consistently so shipped theme changes apply predictably without disturbing user-created themes.
+- Bumped Synara release package versions to `0.5.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed WebSocket RPC requests remaining unsettled after close, timeout, send failure, or reconnect boundaries.
+- Fixed working indicators and live-turn UI becoming stuck when provider runtime events and session completion arrived in different orders.
+- Fixed dropped paths with spaces or parentheses being split, escaped incorrectly, or omitted from chat and Kanban task composers.
+- Fixed Cursor model-discovery failures taking down the picker or discarding usable cached and independently discovered model choices.
+- Fixed pull-request list typing under `exactOptionalPropertyTypes` and reduced duplicate list state across project contexts.
+- Fixed Antigravity SVG filter keys relying on floating-point geometry strings instead of the stable generated filter identifiers.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,192 files.
+- `bun run lint` passed with 202 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed and retained the pinned dependency set while noting `@pierre/diffs@1.2.12` is newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks in 8m19s; web passed 219 files, CLI passed 169 files / 1,863 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed. No targeted reruns were required.
+
+## 0.5.4 - 2026-07-15
+
+### Added
+
+- Added a native Pull Requests workspace backed by the GitHub CLI, with cross-project and project-scoped discovery, search, state filters, involvement groups, pinned pull requests, and explicit loading, empty, authentication, and partial-failure states.
+- Added pull-request detail views for summary, code, and timeline context, including checks, reviewers, commits, changed files, diffs, comments, and repository metadata.
+- Added in-place pull-request actions for comments, merge, close, reopen, and pinning, with confirmation and error handling around destructive or remote mutations.
+- Added a global feedback dialog available from the command menu and `/feedback` command.
+- Added durable desktop window-state restoration for position, size, and maximized state, with monitor-bound validation when the display layout changes.
+
+### Changed
+
+- Refactored transcript rendering and provider-session orchestration into clearer shared lifecycles, including temporary-thread cleanup and more predictable runtime state transitions.
+- Added shared pull-request UI primitives and centralized query, cache, mutation, and refresh coordination so list and detail surfaces stay consistent under overlapping requests.
+- Improved pull-request discovery under load with bounded concurrency, single-flight fetches, cached fallback data, project-aware invalidation, and per-repository partial results.
+- Updated the Pi SDK integration and model discovery behavior, including support for custom-provider authentication through `auth.json` semantics.
+- Aligned Grok reasoning-effort handling with provider capabilities, hid Cursor transport-only model variants from user-facing selection, and standardized more of the interface on the system UI font.
+- Refined theme initialization, browser navigation, external-link handling, sidebar behavior, composer actions, and shared disclosure/component styling as part of the workspace integration.
+
+### Fixed
+
+- Fixed pull-request refreshes, mutations, and route changes racing each other into stale lists or mismatched detail state.
+- Fixed unavailable or failing repositories preventing successful pull-request results from other projects from remaining usable.
+- Fixed desktop windows losing their prior bounds or reopening off-screen after restart or monitor changes.
+- Fixed Pi custom-provider models authenticated through local auth configuration being omitted from discoverable models.
+- Fixed temporary thread, transcript, and session transitions leaving inconsistent UI state during creation, navigation, reconnect, or cleanup.
+- Fixed provider model pickers exposing unsupported Cursor variants or inconsistent Grok effort choices.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,187 files.
+- `bun run lint` passed with 192 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed after rerunning with Bun temporary staging available; it retained the pinned dependency set and reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- The first full `bun run test` exposed a stale local Pi SDK install (`0.74.0` instead of lockfile version `0.80.6`) in one custom-provider discovery test. A frozen dependency sync corrected the local graph, and the focused regression passed.
+- Final full `bun run test` passed: 10 Turbo tasks in 18m46s; web passed 217 files / 2,670 tests, CLI passed 169 files / 1,852 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed.
+
+## 0.5.3 - 2026-07-14
+
+### Added
+
+- Added AppSnap, an opt-in macOS capture workflow that attaches the active app window to the current task when both Option keys are pressed.
+- Added a packaged native AppSnap helper with Screen Recording permission guidance, capture feedback, focus-safe window selection, parent-process monitoring, and app icon extraction.
+- Added a dedicated AppSnap settings panel and first-run welcome dialog so supported desktop installs can discover, configure, and disable the shortcut.
+- Added durable browser-side blob storage for pending image attachments so captures survive navigation and app restarts without inflating local-storage drafts.
+
+### Changed
+
+- Improved long user-message readability with overflow-aware collapsing, richer markdown attachment chips, and more predictable transcript measurement on the simple non-virtualized timeline path.
+- Refactored session orchestration, composer attachment persistence, and transcript rendering to reduce duplicated state transitions and keep live work predictable.
+- Included the native AppSnap helper and its Swift sources in macOS development and packaged desktop build paths.
+
+### Fixed
+
+- Fixed AppSnap recovery after permission changes, helper restarts, capture overlap, timeout, and transient probe failures.
+- Fixed pending AppSnap blobs being omitted from manual attach-and-send flows or attachment-limit calculations.
+- Fixed duplicate attachment persistence and duplicate feedback sounds during capture retries and already-handled capture events.
+- Fixed ACP request failures dropping useful structured error detail before it reached the UI.
+- Fixed rich user markdown, attachment chips, and long-message previews producing inconsistent layout or timeline height updates.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,106 files.
+- `bun run lint` passed with 189 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed and refreshed temporary install/lockfile state while retaining the pinned dependency set.
+- `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks in 8m43s; web passed 205 files / 2,544 tests, CLI passed 162 files / 1,772 tests with 2 skipped files and 7 skipped tests, and all remaining package suites passed. No targeted reruns were required.
+
+## 0.5.2 - 2026-07-13
+
+### Added
+
+- Added Factory Droid as a first-class ACP provider, including runtime model discovery, session import, context-preserving forks and restarts, token multipliers, provider-aware model switching, and Factory branding.
+- Added `Alt+]` / `Alt+[` shortcuts for cycling through available models without leaving the conversation.
+- Kept unfinished task lists visible in the transcript after a turn completes, so follow-up work is easier to resume.
+
+### Changed
+
+- Changed file undo to restore turn-scoped workspace changes without trimming chat history or rolling back the conversation that explains them.
+- Improved cross-platform agent workflows with runtime Codex reasoning options, more reliable Windows CLI launching, platform-aware project folder labels, and graceful Git status checks outside repositories.
+- Softened the file-change header treatment so active diffs are easier to scan.
+- Removed the Windows process regression job from CI.
+- Stable 0.5.x releases now publish on GitHub Latest, while 0.4.x remains the historical compatibility line.
+- Superseded the withdrawn 0.5.1 build after its activity-sequence migration could stall startup on large local histories.
+
+### Fixed
+
+- Fixed model cycling and runtime-discovered reasoning options so the active provider's available choices remain consistent while a conversation is open.
+- Fixed task-list projection so unfinished work is not hidden when a turn settles.
+- Fixed startup on large databases by replacing the quadratic activity-sequence backfill with an indexed linear migration; the recovered 1.1 GB production database retained all 21 projects, 70 threads, 14,683 messages, and 180,862 activities.
+- Fixed stable updater feeds to publish both GitHub Latest metadata and the `synara-*` channel aliases expected by installed desktop builds.
+
+### Verification
+
+- `bun run fmt:check` passed across 13,087 files.
+- `bun run lint` passed with 184 warnings and 0 errors.
+- `bun run typecheck` passed across all 8 packages; only existing TS44 informational JSON/schema-preference messages were reported.
+- `bun run release:smoke` passed after rerunning outside the sandbox; it reported `@pierre/diffs@1.2.12` as newer than the pinned `1.2.8`.
+- `bun run build` passed with 6 successful tasks and the existing Astro, tsdown/plugin-timing, desktop module-type, unresolved `original-fs`, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 Turbo tasks; web passed 201 files / 2,481 tests, CLI passed 162 files / 1,771 tests with 2 skipped files and 7 skipped tests, and the remaining packages passed their suites with 1 skipped shared test.
+
 ## 0.5.0 - 2026-07-11
 
 ### Added

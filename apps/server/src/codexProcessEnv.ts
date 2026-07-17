@@ -27,6 +27,7 @@ import {
 } from "@synara/shared/shell";
 
 import { resolveBaseCodexHomePath, resolveSynaraCodexHomeOverlayPath } from "./codexHomePaths.ts";
+import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
@@ -300,11 +301,19 @@ export function buildCodexProcessEnv(
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
-  const effectiveEnv =
+  const configuredEnv =
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
       : baseEnv;
   const platform = input.platform ?? process.platform;
+  const browserUsePipePath =
+    platform === "win32"
+      ? undefined
+      : resolveCodexBrowserUsePipePath({ env: configuredEnv, platform });
+  const effectiveEnv = buildProviderChildEnvironment({
+    provider: "codex",
+    baseEnv: configuredEnv,
+  });
 
   if (platform === "darwin" || platform === "linux") {
     try {
@@ -331,19 +340,8 @@ export function buildCodexProcessEnv(
     }
   }
 
-  if (platform !== "win32") {
-    const browserUsePipePath = resolveCodexBrowserUsePipePath({ env: effectiveEnv, platform });
-    const allowedSockets =
-      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
-        ?.split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0) ?? [];
-    if (!allowedSockets.includes(browserUsePipePath)) {
-      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
-        ...allowedSockets,
-        browserUsePipePath,
-      ].join(",");
-    }
+  if (browserUsePipePath) {
+    effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = browserUsePipePath;
   }
 
   return effectiveEnv;

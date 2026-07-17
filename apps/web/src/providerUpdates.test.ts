@@ -4,14 +4,20 @@
 // Exports: Vitest suites for providerUpdates.ts
 
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   getVisibleProviderUpdateStatuses,
   isProviderUpdateActive,
   providerUpdateNotificationKey,
+  shouldOfferProviderUpdateAction,
   shouldShowProviderUpdateStatus,
+  withProviderUpdateTimeout,
 } from "./providerUpdates";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function providerStatus(
   provider: ProviderKind,
@@ -54,14 +60,15 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       codex: { ...provider, binaryPath: "codex", homePath: "" },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
-      gemini: { ...provider, binaryPath: "gemini" },
+      antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
-      kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPassword: "" },
+      droid: { ...provider, binaryPath: "droid" },
+      kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },
       opencode: {
         ...provider,
         binaryPath: "opencode",
         serverUrl: "",
-        serverPassword: "",
+        serverPasswordConfigured: false,
         experimentalWebSockets: false,
       },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
@@ -210,5 +217,55 @@ describe("isProviderUpdateActive", () => {
     expect(isProviderUpdateActive(providerStatus("codex", { updateState: succeededState }))).toBe(
       false,
     );
+  });
+});
+
+describe("withProviderUpdateTimeout", () => {
+  it("rejects a provider request that never settles", async () => {
+    vi.useFakeTimers();
+    const pending = new Promise<never>(() => undefined);
+    const assertion = expect(
+      withProviderUpdateTimeout({
+        provider: "kilo",
+        request: pending,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("Kilo update timed out after 1 second");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await assertion;
+  });
+
+  it("clears its watchdog when the provider request finishes", async () => {
+    vi.useFakeTimers();
+    await expect(
+      withProviderUpdateTimeout({
+        provider: "antigravity",
+        request: Promise.resolve("updated"),
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe("updated");
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("shouldOfferProviderUpdateAction", () => {
+  it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {
+    expect(
+      shouldOfferProviderUpdateAction(
+        providerStatus("antigravity", {
+          versionAdvisory: {
+            status: "unknown",
+            currentVersion: "1.1.2",
+            latestVersion: null,
+            updateCommand: "agy update",
+            canUpdate: true,
+            checkedAt: "2026-07-15T14:00:00.000Z",
+            message: null,
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 });

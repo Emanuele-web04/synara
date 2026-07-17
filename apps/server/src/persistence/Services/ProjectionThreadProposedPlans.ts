@@ -5,7 +5,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "@synara/contracts";
-import { Schema, ServiceMap } from "effect";
+import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
@@ -36,6 +36,13 @@ export const ListProjectionThreadProposedPlansInput = Schema.Struct({
 export type ListProjectionThreadProposedPlansInput =
   typeof ListProjectionThreadProposedPlansInput.Type;
 
+export const GetLatestProjectionThreadProposedPlanSummaryInput = Schema.Struct({
+  threadId: ThreadId,
+  preferredTurnId: Schema.NullOr(TurnId),
+});
+export type GetLatestProjectionThreadProposedPlanSummaryInput =
+  typeof GetLatestProjectionThreadProposedPlanSummaryInput.Type;
+
 export const DeleteProjectionThreadProposedPlansInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -49,9 +56,9 @@ export interface ProjectionThreadProposedPlanRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadProposedPlansInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadProposedPlan>, ProjectionRepositoryError>;
-  readonly listSummaryByThreadId: (
-    input: ListProjectionThreadProposedPlansInput,
-  ) => Effect.Effect<ReadonlyArray<ProjectionThreadProposedPlanSummary>, ProjectionRepositoryError>;
+  readonly getLatestSummaryByThreadId: (
+    input: GetLatestProjectionThreadProposedPlanSummaryInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadProposedPlanSummary>, ProjectionRepositoryError>;
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadProposedPlansInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

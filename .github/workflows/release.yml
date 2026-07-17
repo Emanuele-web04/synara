@@ -39,7 +39,10 @@ jobs:
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
       update_channel: ${{ steps.release_meta.outputs.update_channel }}
-      ref: ${{ github.sha }}
+      source_commit: ${{ steps.source_provenance.outputs.source_commit }}
+      source_tag: ${{ steps.source_provenance.outputs.source_tag }}
+      lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
+      ref: ${{ steps.source_provenance.outputs.source_commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -68,6 +71,24 @@ jobs:
           RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
         run: node scripts/resolve-release-update-policy.ts "$RELEASE_VERSION"
 
+      - id: source_provenance
+        name: Verify exact release source
+        env:
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          SOURCE_REF_TYPE: ${{ github.ref_type }}
+          SOURCE_REF_NAME: ${{ github.ref_name }}
+        run: |
+          node scripts/verify-release-source-provenance.ts \
+            "$RELEASE_VERSION" \
+            "$RELEASE_TAG" \
+            "$PUBLISH_RELEASE" \
+            "$EXPECTED_COMMIT" \
+            "$SOURCE_REF_TYPE" \
+            "$SOURCE_REF_NAME"
+
       - name: Verify public updater repository
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,7 +100,7 @@ jobs:
           fi
 
       - name: Verify pinned compatibility feed
-        if: ${{ steps.release_meta.outputs.release_lane == 'clean' && steps.release_mode.outputs.publish_release == 'true' }}
+        if: ${{ steps.release_meta.outputs.release_lane == 'clean' && steps.release_mode.outputs.publish_release == 'true' && steps.release_meta.outputs.mirror_to_stable_channel == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           BRIDGE_TAG: ${{ steps.release_meta.outputs.bridge_tag }}
@@ -183,10 +204,8 @@ jobs:
         # typecheck, and tests. Artifact jobs only need dependencies available.
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Align package versions to release version
-        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
-      - name: Build desktop artifact
+      - id: build_artifact
+        name: Build desktop artifact
         shell: bash
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -194,6 +213,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -201,14 +221,26 @@ jobs:
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+          SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
+          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
         run: |
+          signed=false
           args=(
             --platform "${{ matrix.platform }}"
             --target "${{ matrix.target }}"
             --arch "${{ matrix.arch }}"
             --build-version "${{ needs.preflight.outputs.version }}"
+            --source-commit "$SOURCE_COMMIT"
+            --lockfile-sha256 "$LOCKFILE_SHA256"
             --verbose
           )
+
+          if [[ -n "$SOURCE_TAG" ]]; then
+            args+=(--source-tag "$SOURCE_TAG")
+          fi
 
           has_all() {
             for value in "$@"; do
@@ -220,18 +252,20 @@ jobs:
           }
 
           if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER"; then
+            if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER" "$APPLE_TEAM_ID"; then
               key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
               printf '%s' "$APPLE_API_KEY" > "$key_path"
               export APPLE_API_KEY="$key_path"
               echo "macOS signing enabled."
+              signed=true
               args+=(--signed)
+            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
+              echo "Publishing macOS artifacts requires every signing and notarization secret."
+              exit 1
             else
-              echo "macOS signing disabled (missing one or more Apple signing secrets)."
+              echo "Build-only macOS artifact will be unsigned because publication is disabled."
             fi
           elif [[ "${{ matrix.platform }}" == "win" ]]; then
-            # Windows signing is optional. Keep producing the NSIS installer when
-            # Azure signing is unavailable, matching Synara's existing releases.
             if has_all \
               "$AZURE_TENANT_ID" \
               "$AZURE_CLIENT_ID" \
@@ -239,11 +273,16 @@ jobs:
               "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
               "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
               "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"; then
+              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME" \
+              "$AZURE_TRUSTED_SIGNING_SUBJECT_DN"; then
               echo "Windows signing enabled (Azure Trusted Signing)."
+              signed=true
               args+=(--signed)
+            elif [[ "$SYNARA_PUBLISH_RELEASE" == "true" ]]; then
+              echo "Publishing Windows artifacts requires every Azure Trusted Signing secret."
+              exit 1
             else
-              echo "Windows signing is optional; building an unsigned installer because one or more Azure Trusted Signing secrets are missing."
+              echo "Build-only Windows artifact will be unsigned because publication is disabled."
             fi
           else
             echo "Signing disabled for ${{ matrix.platform }}."
@@ -271,6 +310,8 @@ jobs:
             bun run dist:desktop:artifact -- "${args[@]}"
           fi
 
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
+
       - name: Collect release assets
         shell: bash
         run: |
@@ -295,6 +336,42 @@ jobs:
               mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ matrix.arch }}.yml"
             fi
           fi
+
+      - name: Verify and record artifact provenance
+        shell: bash
+        env:
+          EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          EXPECTED_WINDOWS_PUBLISHER: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+          EXPECTED_WINDOWS_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+          SOURCE_TAG: ${{ needs.preflight.outputs.source_tag }}
+          LOCKFILE_SHA256: ${{ needs.preflight.outputs.lockfile_sha256 }}
+          PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}
+          SIGNED_ARTIFACT: ${{ steps.build_artifact.outputs.signed }}
+        run: |
+          node scripts/write-release-artifact-provenance.ts \
+            --assets-dir release-publish \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --target "${{ matrix.target }}" \
+            --version "${{ needs.preflight.outputs.version }}" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "$SOURCE_TAG" \
+            --lockfile-sha256 "$LOCKFILE_SHA256" \
+            --publication "$PUBLISH_RELEASE" \
+            --signed "$SIGNED_ARTIFACT" \
+            --expected-mac-team-id "$EXPECTED_MAC_TEAM_ID" \
+            --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
+            --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
+
+      - name: Smoke packaged desktop startup
+        shell: bash
+        run: |
+          node scripts/verify-packaged-desktop-startup.ts \
+            --assets-dir release-publish \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --version "${{ needs.preflight.outputs.version }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -330,9 +407,6 @@ jobs:
         # Preflight already validates lifecycle scripts; the publish job only
         # needs dependencies available to build the package.
         run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Align package versions to release version
-        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build CLI package
         run: bun run build --filter=@synara/web --filter=@synara/cli
@@ -439,7 +513,7 @@ jobs:
           done
 
       - name: Recheck pinned compatibility feed
-        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        if: ${{ needs.preflight.outputs.release_lane == 'clean' && needs.preflight.outputs.mirror_to_stable_channel == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
@@ -466,6 +540,7 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+            release-assets/*.provenance.json
           fail_on_unmatched_files: true
 
       - name: Mirror Synara artifacts onto the pinned updater feed

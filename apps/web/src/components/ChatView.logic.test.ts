@@ -1,4 +1,5 @@
 import { MessageId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
+import { CheckpointRef, EventId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +14,7 @@ import {
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  hasFileUndoSettled,
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
@@ -27,8 +29,11 @@ import {
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveCycledModelSlug,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
@@ -46,6 +51,88 @@ import {
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("file undo completion", () => {
+  const pending = {
+    threadId: ThreadId.makeUnsafe("thread-file-undo"),
+    turnCount: 2,
+    existingFailureActivityIds: [],
+  };
+  const summary = {
+    turnId: TurnId.makeUnsafe("turn-2"),
+    checkpointTurnCount: 2,
+    checkpointTurnCounts: [2],
+    checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread-file-undo/turn/2"),
+    status: "ready" as const,
+    completedAt: "2026-07-12T17:59:00.000Z",
+    files: [{ path: "src/file.ts", additions: 1, deletions: 0 }],
+  };
+
+  it("stays pending after command acceptance until the projected file diff settles", () => {
+    const baseThread = {
+      id: pending.threadId,
+      turnDiffSummaries: [summary],
+      activities: [],
+    };
+
+    expect(hasFileUndoSettled({ pending, thread: baseThread })).toBe(false);
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          ...baseThread,
+          turnDiffSummaries: [{ ...summary, files: [] }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("settles when the matching revert failure is projected", () => {
+    expect(
+      hasFileUndoSettled({
+        pending,
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "reset failed" },
+              turnId: null,
+              createdAt: "2026-07-12T18:00:01.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores a matching failure activity that predates this undo request", () => {
+    expect(
+      hasFileUndoSettled({
+        pending: { ...pending, existingFailureActivityIds: ["activity-file-undo-failed"] },
+        thread: {
+          id: pending.threadId,
+          turnDiffSummaries: [summary],
+          activities: [
+            {
+              id: EventId.makeUnsafe("activity-file-undo-failed"),
+              tone: "error",
+              kind: "checkpoint.revert.failed",
+              summary: "Checkpoint revert failed",
+              payload: { turnCount: 2, detail: "old failure" },
+              turnId: null,
+              createdAt: "2026-07-12T17:00:00.000Z",
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("composer menu selection", () => {
   const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
@@ -606,7 +693,7 @@ describe("voice helpers", () => {
 });
 
 describe("environment panel visibility", () => {
-  it("opens normal chat threads by default", () => {
+  it("keeps normal chat threads closed by default unless the setting opts in", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
@@ -614,16 +701,35 @@ describe("environment panel visibility", () => {
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
       }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
+      }),
     ).toBe(true);
   });
 
-  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed even when setting is open", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -632,6 +738,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
         isConstrainedChatLayout: false,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
     expect(
@@ -640,6 +747,7 @@ describe("environment panel visibility", () => {
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
         isConstrainedChatLayout: true,
+        settingsDefaultOpen: true,
       }),
     ).toBe(false);
   });
@@ -661,6 +769,63 @@ describe("environment panel visibility", () => {
       resolveEnvironmentPanelOpen({
         defaultOpen: false,
         userPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("persists explicit toggles but keeps action-driven closes session-only", () => {
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: true, persist: true })).toEqual({
+      userPreferenceOpen: true,
+      settingsDefaultOpen: true,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: true })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: false,
+    });
+    expect(resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false })).toEqual({
+      userPreferenceOpen: false,
+      settingsDefaultOpen: null,
+    });
+  });
+
+  it("resolves landing preferences on first send without changing non-landing state", () => {
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: true,
+        settingsDefaultOpen: true,
+        currentPreferenceOpen: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEnvironmentPanelPreferenceAfterFirstSend({
+        isCenteredEmptyLanding: false,
+        settingsDefaultOpen: false,
+        currentPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("clears an action-close override so default-open applies after first send", () => {
+    const actionClose = resolveEnvironmentPanelPreferenceUpdate({ open: false, persist: false });
+    const afterFirstSend = resolveEnvironmentPanelPreferenceAfterFirstSend({
+      isCenteredEmptyLanding: true,
+      settingsDefaultOpen: true,
+      currentPreferenceOpen: actionClose.userPreferenceOpen,
+    });
+
+    expect(actionClose.settingsDefaultOpen).toBeNull();
+    expect(afterFirstSend).toBeNull();
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        userPreferenceOpen: afterFirstSend,
       }),
     ).toBe(true);
   });
@@ -687,6 +852,87 @@ describe("environment panel visibility", () => {
         environmentPanelOpen: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveCycledModelSlug", () => {
+  const options = [{ slug: "a" }, { slug: "b" }, { slug: "c" }, { slug: "d" }];
+
+  it("returns null when fewer than two models are available", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options: [{ slug: "a" }],
+        direction: "next",
+      }),
+    ).toBeNull();
+  });
+
+  it("cycles next/previous through the full list", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "next",
+      }),
+    ).toBe("b");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "a",
+        options,
+        direction: "previous",
+      }),
+    ).toBe("d");
+  });
+
+  it("puts favorites first and cycles within that ordered list", () => {
+    // Ordered: d, b, a, c — from c next wraps to d; from d next is b
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "c",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "d",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("b");
+  });
+
+  it("starts at the ordered boundary when the current model is unavailable", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "next",
+      }),
+    ).toBe("d");
+    expect(
+      resolveCycledModelSlug({
+        currentModel: "removed-model",
+        options,
+        favoriteSlugs: ["d", "b"],
+        direction: "previous",
+      }),
+    ).toBe("c");
+  });
+
+  it("normalizes whitespace and ignores duplicate or unavailable favorites", () => {
+    expect(
+      resolveCycledModelSlug({
+        currentModel: " d ",
+        options: [{ slug: " a " }, { slug: "b" }, { slug: "b" }, { slug: "d" }],
+        favoriteSlugs: [" missing ", " d ", "d"],
+        direction: "next",
+      }),
+    ).toBe("a");
   });
 });
 
@@ -873,6 +1119,23 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         },
         draftModelSelection: null,
         providerModelsLoading: true,
+      }),
+    ).toBe(false);
+  });
+
+  // #103: Cursor CLI missing must not leave the whole model control in a permanent loading state.
+  it("does not keep the Cursor bootstrap skeleton after discovery is no longer loading", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "cursor",
+        selectedModel: "auto",
+        persistedModelSelection: {
+          provider: "cursor",
+          model: "auto",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: false,
+        requiresDiscoveredModels: true,
       }),
     ).toBe(false);
   });

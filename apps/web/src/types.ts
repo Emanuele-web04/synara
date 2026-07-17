@@ -6,6 +6,7 @@ import type {
   ModelSelection,
   MessageDispatchOrigin,
   OrchestrationMessageSource,
+  OrchestrationPendingInteraction,
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
@@ -139,6 +140,7 @@ export interface TurnDiffSummary {
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
+  checkpointTurnCounts?: number[] | undefined;
 }
 
 // Ephemeral client-side progress of the "New worktree" first-send setup
@@ -231,6 +233,7 @@ export interface Thread extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
@@ -267,6 +270,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
 

@@ -16,10 +16,12 @@ import { type PendingApproval } from "../../session-logic";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 
 const APPROVAL_REQUEST_ID = ApprovalRequestId.makeUnsafe("approval-test-1");
+const LIFECYCLE_GENERATION = "generation-test-1";
 
 function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
   return {
     requestId: APPROVAL_REQUEST_ID,
+    lifecycleGeneration: LIFECYCLE_GENERATION,
     requestKind: "command",
     createdAt: "2026-07-03T01:00:00.000Z",
     detail: 'Bash: {"command":"bun run test"}',
@@ -29,7 +31,11 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
 
 async function mountApprovalPanel(input?: { approval?: PendingApproval; isResponding?: boolean }) {
   const onRespond = vi.fn(
-    async (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision) => undefined,
+    async (
+      _requestId: ApprovalRequestId,
+      _decision: ProviderApprovalDecision,
+      _lifecycleGeneration?: string,
+    ) => undefined,
   );
   const screen = await render(
     <ComposerPendingApprovalPanel
@@ -61,7 +67,11 @@ describe("ComposerPendingApprovalPanel", () => {
       await page.getByRole("button", { name: new RegExp(label, "u") }).click();
 
       expect(mounted.onRespond).toHaveBeenCalledTimes(1);
-      expect(mounted.onRespond).toHaveBeenCalledWith(APPROVAL_REQUEST_ID, decision);
+      expect(mounted.onRespond).toHaveBeenCalledWith(
+        APPROVAL_REQUEST_ID,
+        decision,
+        LIFECYCLE_GENERATION,
+      );
     } finally {
       await mounted.cleanup();
     }

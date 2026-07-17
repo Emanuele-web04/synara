@@ -7,14 +7,19 @@ import * as FS from "node:fs";
 import * as Path from "node:path";
 
 import { isUpdateVersionNewer } from "./updateState";
+import {
+  isUpdateArtifactIdentity,
+  updateArtifactIdentitiesEqual,
+  type UpdateArtifactIdentity,
+} from "./updateArtifactIdentity";
 
-const INSTALL_MARKER_SCHEMA_VERSION = 1;
+const INSTALL_MARKER_SCHEMA_VERSION = 2;
 const INSTALL_MARKER_STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type InstallMarkerPhase = "requested" | "handoff" | "failed";
 
 export interface UpdateInstallMarker {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly attemptId: string;
   readonly fromVersion: string;
   readonly toVersion: string;
@@ -23,6 +28,22 @@ export interface UpdateInstallMarker {
   readonly phase: InstallMarkerPhase;
   readonly consecutiveFailures: number;
   readonly lastFailureAt: string | null;
+  readonly artifact: UpdateArtifactIdentity;
+}
+
+export interface UpdateInstallHandoffExpectation {
+  readonly attemptId: string;
+  readonly artifact: UpdateArtifactIdentity;
+}
+
+export function installMarkerMatchesHandoffExpectation(
+  marker: UpdateInstallMarker,
+  expected: UpdateInstallHandoffExpectation,
+): boolean {
+  return (
+    marker.attemptId === expected.attemptId &&
+    updateArtifactIdentitiesEqual(marker.artifact, expected.artifact)
+  );
 }
 
 export type InstallMarkerReadResult =
@@ -63,7 +84,8 @@ function isUpdateInstallMarker(value: unknown): value is UpdateInstallMarker {
     typeof marker.consecutiveFailures === "number" &&
     Number.isInteger(marker.consecutiveFailures) &&
     marker.consecutiveFailures >= 0 &&
-    isNullableIsoTimestamp(marker.lastFailureAt)
+    isNullableIsoTimestamp(marker.lastFailureAt) &&
+    isUpdateArtifactIdentity(marker.artifact)
   );
 }
 
@@ -77,6 +99,7 @@ export function createUpdateInstallMarker(args: {
   readonly requestedAt: string;
   readonly consecutiveFailures: number;
   readonly lastFailureAt?: string | null;
+  readonly artifact: UpdateArtifactIdentity;
 }): UpdateInstallMarker {
   return {
     schemaVersion: INSTALL_MARKER_SCHEMA_VERSION,
@@ -88,6 +111,7 @@ export function createUpdateInstallMarker(args: {
     phase: "requested",
     consecutiveFailures: args.consecutiveFailures,
     lastFailureAt: args.lastFailureAt ?? null,
+    artifact: args.artifact,
   };
 }
 
@@ -105,7 +129,7 @@ export function readInstallMarker(filePath: string): InstallMarkerReadResult {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!isUpdateInstallMarker(parsed)) {
-      return { status: "invalid", error: "Marker does not match schema version 1." };
+      return { status: "invalid", error: "Marker does not match schema version 2." };
     }
     return { status: "valid", marker: parsed };
   } catch (error) {
@@ -142,14 +166,21 @@ export function writeInstallMarker(filePath: string, marker: UpdateInstallMarker
 
 export function markInstallHandoffSync(
   filePath: string,
+  expected: UpdateInstallHandoffExpectation,
   nowIso = new Date().toISOString(),
 ): UpdateInstallMarker | null {
   const result = readInstallMarker(filePath);
   if (result.status !== "valid") {
     return null;
   }
-  if (result.marker.phase === "failed" || result.marker.handoffAt !== null) {
-    return result.marker;
+  if (
+    !installMarkerMatchesHandoffExpectation(result.marker, expected) ||
+    result.marker.phase === "failed"
+  ) {
+    return null;
+  }
+  if (result.marker.handoffAt !== null) {
+    return result.marker.phase === "handoff" ? result.marker : null;
   }
   const marker: UpdateInstallMarker = {
     ...result.marker,

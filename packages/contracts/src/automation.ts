@@ -136,6 +136,7 @@ export type AutomationAllowedCapability = typeof AutomationAllowedCapability.Typ
 
 export const AutomationPermissionSnapshot = Schema.Struct({
   provider: ProviderKind,
+  settingsRevision: Schema.optional(NonNegativeInt),
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   completionPolicyVersion: Schema.optional(NonNegativeInt),

@@ -32,12 +32,6 @@ describe("buildSettingsSkillGroups", () => {
         scope: "claude",
       }),
       skill({
-        name: "check-code",
-        description: "Gemini copy",
-        path: "/Users/test/.gemini/skills/check-code/SKILL.md",
-        scope: "gemini",
-      }),
-      skill({
         name: "cursor-only",
         path: "/Users/test/.cursor/skills/cursor-only/SKILL.md",
         scope: "cursor",
@@ -46,12 +40,11 @@ describe("buildSettingsSkillGroups", () => {
 
     const shared = groups.find((group) => group.key === "check-code");
     expect(shared?.section).toBe("shared");
-    expect(shared?.providers).toEqual(["codex", "claudeAgent", "gemini"]);
-    expect(shared?.sources.map((source) => source.origin)).toEqual(["codex", "claude", "gemini"]);
+    expect(shared?.providers).toEqual(["codex", "claudeAgent"]);
+    expect(shared?.sources.map((source) => source.origin)).toEqual(["codex", "claude"]);
     expect(shared?.sources.map((source) => source.skill.path)).toEqual([
       "/Users/test/.codex/skills/check-code/SKILL.md",
       "/Users/test/.claude/skills/check-code/SKILL.md",
-      "/Users/test/.gemini/skills/check-code/SKILL.md",
     ]);
 
     const cursorOnly = groups.find((group) => group.key === "cursor-only");

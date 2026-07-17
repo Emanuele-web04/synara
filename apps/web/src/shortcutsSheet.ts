@@ -96,11 +96,6 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Start a fresh thread with Cursor selected.",
   },
   {
-    command: "chat.newGemini",
-    label: "New Gemini thread",
-    description: "Start a fresh thread with Gemini selected.",
-  },
-  {
     command: "chat.split",
     label: "Split chat",
     description: "Open the current conversation in a second pane.",
@@ -119,6 +114,18 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "modelPicker.toggle",
     label: "Model picker",
     description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "model.next",
+    label: "Next model",
+    description:
+      "Cycle to the next model for the active provider (favorites first, then remaining models).",
+  },
+  {
+    command: "model.previous",
+    label: "Previous model",
+    description:
+      "Cycle to the previous model for the active provider (favorites first, then remaining models).",
   },
   {
     command: "traitsPicker.toggle",

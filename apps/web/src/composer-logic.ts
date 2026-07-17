@@ -1,5 +1,9 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
+import {
+  composerMentionQuotedPathHasClosingQuote,
+  decodeComposerMentionQuotedPath,
+} from "./lib/composerMentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
@@ -362,10 +366,10 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   const quotedMentionStart = linePrefix.lastIndexOf('@"');
   if (quotedMentionStart !== -1) {
     const afterOpen = linePrefix.slice(quotedMentionStart + 2);
-    if (!afterOpen.includes("@") && !afterOpen.includes('"')) {
+    if (!composerMentionQuotedPathHasClosingQuote(afterOpen)) {
       return {
         kind: "mention",
-        query: afterOpen,
+        query: decodeComposerMentionQuotedPath(afterOpen),
         rangeStart: lineStart + quotedMentionStart,
         rangeEnd: cursor,
       };

@@ -76,14 +76,17 @@ jobs:
           cd apps/web
           ./node_modules/.bin/playwright install --with-deps chromium
 
-      # Non-blocking: the ChatView geometry parity tests currently fail on headless
-      # Linux (they were never exercised in CI while the runner queue was dead).
-      # Keep the suite running for signal; make this blocking again once the
-      # Linux-rendering failures are fixed.
-      - name: Browser test
-        continue-on-error: true
+      - name: Browser test (stable)
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser
+        run: bun run --cwd apps/web test:browser:stable
+
+      # Pixel/font/layout comparisons are tracked explicitly in
+      # apps/web/BROWSER_TEST_QUARANTINE.md while their Linux rendering is fixed.
+      # All untagged browser tests run in the blocking stable step above.
+      - name: Browser test (Linux geometry quarantine)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: bun run --cwd apps/web test:browser:geometry
 
       - name: Build desktop pipeline
         run: bun run build:desktop
@@ -92,6 +95,33 @@ jobs:
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
+
+  windows_process:
+    name: Windows Process Regression
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Test Windows process planning
+        run: bun run --cwd packages/shared test src/windowsProcess.test.ts
+
+      - name: Test Effect Windows process spawn
+        run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
 
   release_smoke:
     name: Release Smoke

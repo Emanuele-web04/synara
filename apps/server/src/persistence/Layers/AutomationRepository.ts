@@ -124,6 +124,8 @@ const decodeRun = Schema.decodeUnknownEffect(AutomationRun);
 /** Upper bound on how many run rows the list query returns to a client snapshot. */
 const MAX_RUN_LIST_ROWS = 500;
 
+class AutomationRunClaimRejected extends Error {}
+
 function toDefinition(row: AutomationDefinitionDbRow) {
   return decodeDefinition({
     ...row,
@@ -796,7 +798,7 @@ const makeAutomationRepository = Effect.gen(function* () {
   const listRecoverableRunRows = SqlSchema.findAll({
     Request: ListRecoverableAutomationRunsInput,
     Result: AutomationRunDbRow,
-    execute: ({ limit }) =>
+    execute: ({ limit, afterCreatedAt, afterRunId }) =>
       sql`
         SELECT
           run_id AS "id",
@@ -822,6 +824,11 @@ const makeAutomationRepository = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM automation_runs
         WHERE status IN ('pending', 'claimed', 'running', 'waiting-for-approval')
+          AND (
+            ${afterCreatedAt ?? null} IS NULL
+            OR created_at > ${afterCreatedAt ?? null}
+            OR (created_at = ${afterCreatedAt ?? null} AND run_id > ${afterRunId ?? ""})
+          )
         ORDER BY created_at ASC, run_id ASC
         LIMIT ${limit}
       `,
@@ -987,6 +994,20 @@ const makeAutomationRepository = Effect.gen(function* () {
         UPDATE automation_definitions
         SET iteration_count = iteration_count + 1, updated_at = ${now}
         WHERE automation_id = ${id}
+      `,
+  });
+
+  const incrementIterationIfRunnableRow = SqlSchema.findAll({
+    Request: IncrementAutomationIterationInput,
+    Result: Schema.Struct({ id: AutomationDefinition.fields.id }),
+    execute: ({ id, now }) =>
+      sql`
+        UPDATE automation_definitions
+        SET iteration_count = iteration_count + 1, updated_at = ${now}
+        WHERE automation_id = ${id}
+          AND archived_at IS NULL
+          AND (max_iterations IS NULL OR iteration_count < max_iterations)
+        RETURNING automation_id AS "id"
       `,
   });
 
@@ -1217,6 +1238,45 @@ const makeAutomationRepository = Effect.gen(function* () {
       ),
     );
   };
+
+  const createRunAndIncrementDefinition: AutomationRepositoryShape["createRunAndIncrementDefinition"] =
+    (input, scheduleAdvance) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const run = yield* createRun(input);
+            const inserted = run.id === input.id;
+            if (inserted) {
+              const updated = yield* incrementIterationIfRunnableRow({
+                id: input.automationId,
+                now: input.now,
+              });
+              if (updated.length === 0) {
+                return yield* Effect.fail(new AutomationRunClaimRejected());
+              }
+            }
+            if (scheduleAdvance) {
+              yield* scheduleAdvance.disable
+                ? disableDefinitionRow({ id: input.automationId, now: input.now })
+                : setDefinitionNextRunAtRow({
+                    id: input.automationId,
+                    nextRunAt: scheduleAdvance.nextRunAt,
+                    updatedAt: input.now,
+                  });
+            }
+            return inserted ? Option.some(run) : Option.none<AutomationRun>();
+          }),
+        )
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof AutomationRunClaimRejected
+              ? Effect.succeed(Option.none<AutomationRun>())
+              : Effect.fail(error),
+          ),
+          Effect.mapError(
+            toPersistenceSqlError("AutomationRepository.createRunAndIncrementDefinition"),
+          ),
+        );
 
   const getRunById: AutomationRepositoryShape["getRunById"] = (input) =>
     getRunRowById(input).pipe(
@@ -1449,6 +1509,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     archiveDefinition,
     list,
     createRun,
+    createRunAndIncrementDefinition,
     getRunById,
     markRunStarted,
     markRunFailed,

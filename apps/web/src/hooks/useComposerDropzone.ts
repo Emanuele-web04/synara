@@ -6,6 +6,7 @@
 import { useCallback, useRef, type ClipboardEvent, type DragEvent } from "react";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
+import { isDroppedComposerDirectory, splitDroppedComposerFiles } from "~/lib/composerDropPaths";
 
 export function isComposerHandledDrag(dataTransfer: DataTransfer): boolean {
   return (
@@ -106,7 +107,10 @@ function isComposerHandledDragForMode(
   if (items.length === 0) {
     return true;
   }
-  return items.some((item) => item.kind === "file" && item.type.startsWith("image/"));
+  return items.some(
+    (item) =>
+      item.kind === "file" && (item.type.startsWith("image/") || isDroppedComposerDirectory(item)),
+  );
 }
 
 export function useComposerDropzone(input: {
@@ -124,12 +128,20 @@ export function useComposerDropzone(input: {
         readonly genericFiles: "fallthrough";
       };
   readonly appendReferenceText?: ((text: string) => void) | undefined;
+  /** Absolute paths from desktop OS drops that should become @mentions (folders). */
+  readonly appendPathMentions?: ((paths: readonly string[]) => void) | undefined;
   readonly focusComposer?: (() => void) | undefined;
   readonly dragDepthRef?: { current: number } | undefined;
   readonly setIsDragOverComposer: (dragging: boolean) => void;
 }) {
-  const { addImages, fileSupport, appendReferenceText, focusComposer, setIsDragOverComposer } =
-    input;
+  const {
+    addImages,
+    fileSupport,
+    appendReferenceText,
+    appendPathMentions,
+    focusComposer,
+    setIsDragOverComposer,
+  } = input;
   const internalDragDepthRef = useRef(0);
   const dragDepthRef = input.dragDepthRef ?? internalDragDepthRef;
 
@@ -213,8 +225,21 @@ export function useComposerDropzone(input: {
       if (!event.dataTransfer.types.includes("Files")) {
         return;
       }
-      const splitFiles = splitComposerDropzoneFiles(event.dataTransfer.files);
-      if (shouldResetComposerDropzoneAfterUnhandledFileDrop(splitFiles, fileSupport.genericFiles)) {
+      // Desktop OS drops: resolve absolute paths so folders become @mentions
+      // instead of unreadable attachment blobs (#351).
+      const dropped = splitDroppedComposerFiles({
+        files: event.dataTransfer.files,
+        items: event.dataTransfer.items,
+      });
+      const splitFiles = {
+        imageFiles: dropped.imageFiles,
+        genericFiles: dropped.genericFiles,
+      };
+      const hasPathMentions = dropped.pathMentions.length > 0;
+      if (
+        !hasPathMentions &&
+        shouldResetComposerDropzoneAfterUnhandledFileDrop(splitFiles, fileSupport.genericFiles)
+      ) {
         if (shouldPreventDefaultForUnhandledFileDrop(splitFiles, fileSupport.genericFiles)) {
           event.preventDefault();
         }
@@ -223,10 +248,14 @@ export function useComposerDropzone(input: {
       }
       event.preventDefault();
       resetComposerDragState();
+      if (hasPathMentions) {
+        appendPathMentions?.(dropped.pathMentions);
+      }
       handleSplitFiles(splitFiles);
       focusComposer?.();
     },
     [
+      appendPathMentions,
       appendReferenceText,
       fileSupport.genericFiles,
       focusComposer,

@@ -1,8 +1,10 @@
 import {
+  ApprovalRequestId,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
+  type OrchestrationPendingInteraction,
   type OrchestrationThreadActivity,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -50,7 +52,53 @@ function makeActivity(overrides: {
   };
 }
 
+function makePendingInteraction(
+  interactionKind: OrchestrationPendingInteraction["interactionKind"],
+  status: OrchestrationPendingInteraction["status"],
+): OrchestrationPendingInteraction {
+  return {
+    interactionKind,
+    requestId: ApprovalRequestId.makeUnsafe("req-settlement"),
+    threadId: ThreadId.makeUnsafe("thread-settlement"),
+    turnId: null,
+    lifecycleGeneration: "generation-settlement",
+    status,
+    decision: null,
+    responseCommandId: null,
+    responseRequestedAt: null,
+    createdAt: "2026-02-23T00:00:01.000Z",
+    resolvedAt: null,
+  };
+}
+
 describe("derivePendingApprovals", () => {
+  it("shows only actionable durable approval settlements", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-settlement",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-settlement",
+          lifecycleGeneration: "generation-settlement",
+          requestKind: "command",
+        },
+      }),
+    ];
+
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "responding")]),
+    ).toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "uncertain")]),
+    ).toEqual([]);
+    expect(
+      derivePendingApprovals(activities, [makePendingInteraction("approval", "retryable")]),
+    ).toHaveLength(1);
+  });
+
   it("tracks open approvals and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -177,9 +225,92 @@ describe("derivePendingApprovals", () => {
 
     expect(derivePendingApprovals(activities)).toEqual([]);
   });
+
+  it("does not let an old generation resolve a replacement approval with the same request id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "approval-generation-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-a",
+          requestKind: "command",
+        },
+      }),
+      makeActivity({
+        id: "approval-generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-b",
+          requestKind: "command",
+        },
+      }),
+      makeActivity({
+        id: "approval-generation-a-resolved",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        tone: "info",
+        payload: {
+          requestId: "req-reused",
+          lifecycleGeneration: "generation-a",
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "req-reused",
+        lifecycleGeneration: "generation-b",
+        requestKind: "command",
+        createdAt: "2026-02-23T00:00:02.000Z",
+      },
+    ]);
+  });
 });
 
 describe("derivePendingUserInputs", () => {
+  it("shows only actionable durable user-input settlements", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-settlement",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-settlement",
+          lifecycleGeneration: "generation-settlement",
+          questions: [
+            {
+              id: "mode",
+              header: "Mode",
+              question: "Which mode?",
+              options: [{ label: "safe", description: "Use safe mode" }],
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "responding")]),
+    ).toEqual([]);
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "uncertain")]),
+    ).toEqual([]);
+    expect(
+      derivePendingUserInputs(activities, [makePendingInteraction("userInput", "pending")]),
+    ).toHaveLength(1);
+  });
+
   it("tracks open structured prompts and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -304,6 +435,61 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
+  });
+
+  it("does not let an old generation resolve a replacement user-input request", () => {
+    const question = {
+      id: "mode",
+      header: "Mode",
+      question: "Which mode?",
+      options: [{ label: "safe", description: "Use safe mode" }],
+    };
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-generation-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-a",
+          questions: [question],
+        },
+      }),
+      makeActivity({
+        id: "user-input-generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-b",
+          questions: [question],
+        },
+      }),
+      makeActivity({
+        id: "user-input-generation-a-resolved",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-reused",
+          lifecycleGeneration: "generation-a",
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)).toEqual([
+      {
+        requestId: "req-user-input-reused",
+        lifecycleGeneration: "generation-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        questions: [question],
+      },
+    ]);
   });
 
   it("preserves multi-select user-input question metadata", () => {
@@ -440,7 +626,7 @@ describe("deriveActiveTaskListState", () => {
     expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 
-  it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
+  it("keeps an unfinished task list visible after its turn completes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "unfinished-plan-from-turn-1",
@@ -469,7 +655,44 @@ describe("deriveActiveTaskListState", () => {
       }),
     ];
 
-    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
+      createdAt: "2026-02-23T00:00:01.000Z",
+      turnId: "turn-1",
+      tasks: [
+        { task: "Inspect theme implementation", status: "pending" },
+        { task: "Patch token plumbing", status: "pending" },
+      ],
+    });
+  });
+
+  it("uses sequence rather than a random activity id for same-millisecond snapshots", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "z-stale",
+        sequence: 10,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "inProgress" }] },
+      }),
+      makeActivity({
+        id: "a-final",
+        sequence: 11,
+        createdAt,
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { tasks: [{ task: "Ship", status: "completed" }] },
+      }),
+    ];
+
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))?.tasks).toEqual([
+      { task: "Ship", status: "completed" },
+    ]);
   });
 
   it("treats an empty task update as an explicit clear", () => {
@@ -1354,9 +1577,9 @@ describe("deriveWorkLogEntries", () => {
           title: "Ran command",
           data: {
             item: {
-              command: "gemini --version",
+              command: "agy --version",
             },
-            rawOutput: "gemini 1.2.3\n",
+            rawOutput: "agy 1.2.3\n",
           },
         },
       }),
@@ -1366,9 +1589,9 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.toolDetails).toEqual({
       kind: "command",
       title: "Ran",
-      command: "gemini --version",
+      command: "agy --version",
       output: {
-        output: "gemini 1.2.3\n",
+        output: "agy 1.2.3\n",
       },
     });
   });
@@ -3487,8 +3710,8 @@ describe("PROVIDER_OPTIONS", () => {
   it("lists available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
-    const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const grok = PROVIDER_OPTIONS.find((option) => option.value === "grok");
+    const droid = PROVIDER_OPTIONS.find((option) => option.value === "droid");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
@@ -3496,8 +3719,9 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
-      { value: "gemini", label: "Gemini", available: true },
+      { value: "antigravity", label: "Antigravity", available: true },
       { value: "grok", label: "Grok", available: true },
+      { value: "droid", label: "Droid", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
@@ -3512,14 +3736,14 @@ describe("PROVIDER_OPTIONS", () => {
       label: "Cursor",
       available: true,
     });
-    expect(gemini).toEqual({
-      value: "gemini",
-      label: "Gemini",
-      available: true,
-    });
     expect(grok).toEqual({
       value: "grok",
       label: "Grok",
+      available: true,
+    });
+    expect(droid).toEqual({
+      value: "droid",
+      label: "Droid",
       available: true,
     });
     expect(kilo).toEqual({

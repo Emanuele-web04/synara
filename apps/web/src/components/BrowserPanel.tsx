@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useStore } from "zustand";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -507,8 +506,8 @@ export function BrowserPanel({
 }: BrowserPanelProps) {
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
-  const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
-  const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
+  const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
+  const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const composerDraftImageCount = useComposerDraftStore(
@@ -1386,7 +1385,7 @@ export function BrowserPanel({
             }}
             placeholder="Search or enter a URL"
             className={cn(
-              "font-mono min-w-0 [-webkit-app-region:no-drag]",
+              "min-w-0 [-webkit-app-region:no-drag]",
               BROWSER_CHROME_CONTROL_CLASS_NAME,
               BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
             )}

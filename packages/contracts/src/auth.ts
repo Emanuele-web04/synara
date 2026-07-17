@@ -58,6 +58,11 @@ export const AuthWebSocketTokenResult = Schema.Struct({
 });
 export type AuthWebSocketTokenResult = typeof AuthWebSocketTokenResult.Type;
 
+export const AuthLogoutResult = Schema.Struct({
+  revoked: Schema.Boolean,
+});
+export type AuthLogoutResult = typeof AuthLogoutResult.Type;
+
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,

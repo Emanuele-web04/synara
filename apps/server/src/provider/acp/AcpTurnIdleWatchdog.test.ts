@@ -154,4 +154,39 @@ describe("forkAcpTurnIdleWatchdog", () => {
     const fired = await Effect.runPromise(program);
     expect(fired).toBe(false);
   });
+
+  it("uses the live timeout override for provider work hidden from the parent stream", async () => {
+    const program = Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      let fired = false;
+      let nestedWorkActive = true;
+
+      yield* forkAcpTurnIdleWatchdog({
+        idleTimeoutMs: 1,
+        currentIdleTimeoutMs: () => (nestedWorkActive ? 60_000 : 1),
+        checkIntervalMs: 1,
+        scope,
+        isTurnActive: () => true,
+        isAwaitingHuman: () => false,
+        lastActivityAt: () => Date.now() - 100,
+        touchActivity: () => {},
+        onIdleTimeout: () =>
+          Effect.sync(() => {
+            fired = true;
+          }),
+      });
+
+      yield* Effect.sleep(10);
+      const stayedAliveDuringNestedWork = !fired;
+      nestedWorkActive = false;
+      yield* Effect.sleep(10);
+      yield* Scope.close(scope, Exit.void);
+      return { fired, stayedAliveDuringNestedWork };
+    });
+
+    await expect(Effect.runPromise(program)).resolves.toEqual({
+      fired: true,
+      stayedAliveDuringNestedWork: true,
+    });
+  });
 });

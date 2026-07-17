@@ -4,6 +4,7 @@ import type {
   AuthBootstrapResult,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
+  AuthLogoutResult,
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthRevokeClientSessionInput,
@@ -69,6 +70,20 @@ import type {
   GitUnstageFilesInput,
   GitUnstageFilesResult,
 } from "./git";
+import type {
+  PullRequestActionInput,
+  PullRequestActionResult,
+  PullRequestCommentInput,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestReviewRequestCountInput,
+  PullRequestReviewRequestCountResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
+  PullRequestsListInput,
+  PullRequestsListResult,
+} from "./pullRequests";
 import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
@@ -137,6 +152,10 @@ import type {
   OrchestrationGetFullThreadDiffResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
+  OrchestrationListProviderDeliveryBlockersInput,
+  OrchestrationListProviderDeliveryBlockersResult,
+  OrchestrationReconcileProviderDeliveryInput,
+  OrchestrationReconcileProviderDeliveryResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
@@ -305,6 +324,51 @@ export interface BrowserCaptureScreenshotResult {
   bytes: Uint8Array;
 }
 
+export type DesktopAppSnapPlatform = "macos" | "windows" | "linux" | "other";
+export type DesktopAppSnapPermission =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
+export type DesktopAppSnapStatus =
+  | "unsupported"
+  | "disabled"
+  | "permission-required"
+  | "starting"
+  | "ready"
+  | "error";
+
+export interface DesktopAppSnapState {
+  platform: DesktopAppSnapPlatform;
+  supported: boolean;
+  enabled: boolean;
+  status: DesktopAppSnapStatus;
+  shortcut: "both-option-keys" | null;
+  inputMonitoringPermission: DesktopAppSnapPermission;
+  screenRecordingPermission: DesktopAppSnapPermission;
+  message: string | null;
+}
+
+export interface DesktopAppSnapCapture {
+  id: string;
+  capturedAt: string;
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  bytes: Uint8Array;
+  sourceAppName: string | null;
+  sourceBundleIdentifier: string | null;
+  sourceAppIconDataUrl: string | null;
+  sourceWindowTitle: string | null;
+}
+
+export interface DesktopAppSnapErrorEvent {
+  code: string;
+  message: string;
+  capturedAt: string;
+}
+
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
   method: string;
   params?: Record<string, unknown>;
@@ -337,6 +401,11 @@ export interface SynaraStorageSnapshot {
 
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  /**
+   * Absolute filesystem path for a File from drag/drop or file inputs.
+   * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
+   */
+  getPathForFile?: (file: File) => string | null;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
     defaultFilename: string;
@@ -376,6 +445,16 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  appSnap: {
+    getState: () => Promise<DesktopAppSnapState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
+    requestPermissions: () => Promise<DesktopAppSnapState>;
+    listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
+    acknowledgeCapture: (captureId: string) => Promise<void>;
+    onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
+    onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
+    onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
   };
   storageMigration: {
     readSnapshot: () => SynaraStorageSnapshot | null;
@@ -498,6 +577,17 @@ export interface NativeApi {
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
     onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
   };
+  pullRequests: {
+    list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
+    reviewRequestCount: (
+      input: PullRequestReviewRequestCountInput,
+    ) => Promise<PullRequestReviewRequestCountResult>;
+    detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
+    diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
+    action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
+    comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
+    setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
+  };
   contextMenu: {
     show: <T extends string>(
       items: readonly ContextMenuItem<T>[],
@@ -521,6 +611,7 @@ export interface NativeApi {
     listAuthClients: () => Promise<ReadonlyArray<AuthClientSession>>;
     revokeAuthClient: (input: AuthRevokeClientSessionInput) => Promise<{ revoked: boolean }>;
     revokeOtherAuthClients: () => Promise<{ revokedCount: number }>;
+    logoutAuthSession: () => Promise<AuthLogoutResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -576,6 +667,12 @@ export interface NativeApi {
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
+    listProviderDeliveryBlockers: (
+      input?: OrchestrationListProviderDeliveryBlockersInput,
+    ) => Promise<OrchestrationListProviderDeliveryBlockersResult>;
+    reconcileProviderDelivery: (
+      input: OrchestrationReconcileProviderDeliveryInput,
+    ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;

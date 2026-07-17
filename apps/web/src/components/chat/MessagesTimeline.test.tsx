@@ -3,7 +3,7 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { MessageId, TurnId } from "@synara/contracts";
+import { CheckpointRef, MessageId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -623,7 +623,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("mb-3");
   });
 
-  it("renders plain user text without preformatted shrink-wrap markup", async () => {
+  it("renders user text as markdown with hard line breaks", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -661,13 +661,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
-      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
-    );
+    expect(markup).toContain("chat-markdown--user");
+    // remark-breaks keeps the user's single newline as a hard break.
+    expect(markup).toContain("tl<br/>\ndr");
     expect(markup).not.toContain("<pre");
   });
 
-  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
+  it("clamps long user messages visually and renders a separate Show more button", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
     const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
@@ -708,7 +708,14 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Show more");
-    expect(markup).not.toContain(hiddenTail);
+    // The full text stays rendered; collapsing is a visual max-height clamp with
+    // a fade mask, so markdown structures are never sliced mid-syntax.
+    expect(markup).toContain(hiddenTail);
+    expect(markup).toContain('data-user-message-clamp="true"');
+    expect(markup).toContain("max-height:");
+    expect(markup).toContain("mask-image:linear-gradient");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toMatch(/aria-controls="[^"]+"/);
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {
@@ -728,7 +735,7 @@ describe("MessagesTimeline", () => {
               id: MessageId.makeUnsafe("message-2"),
               role: "user",
               text: [
-                "yoo what's @terminal-1:1-5 mean",
+                "yoo what's **bold** @terminal-1:1-5 mean",
                 "",
                 "<terminal_context>",
                 "- Terminal 1 lines 1-5:",
@@ -760,6 +767,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
+    expect(markup).toContain("<strong>bold</strong>");
   });
 
   it("renders assistant selection chips from hidden prompt markup when attachments are missing", async () => {
@@ -2791,6 +2799,10 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [
@@ -2806,6 +2818,7 @@ describe("MessagesTimeline", () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2816,6 +2829,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");

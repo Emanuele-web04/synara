@@ -163,7 +163,9 @@ async function refreshClaudeCreds(creds: ClaudeCreds): Promise<ClaudeCreds | nul
     return null;
   }
   const refreshed = await refreshOAuthAccessToken({
+    service: "provider-oauth-claude",
     refreshUrl: REFRESH_URL,
+    allowedOrigins: [new URL(REFRESH_URL).origin],
     refreshToken: creds.refreshToken,
     clientId: CLIENT_ID,
     scope: SCOPES,
@@ -341,7 +343,9 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
 
 function fetchClaudeUsage(accessToken: string) {
   return fetchJson({
+    service: "provider-usage-claude",
     url: USAGE_URL,
+    allowedOrigins: [new URL(USAGE_URL).origin],
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",

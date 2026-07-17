@@ -1,5 +1,11 @@
 import { Option, Schema } from "effect";
-import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  CommandId,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderStartOptions } from "./orchestration";
 
@@ -144,7 +150,9 @@ export type GitPullInput = typeof GitPullInput.Type;
 // Read-only diff summary requests reuse the shared git text-generation model settings.
 export const GitSummarizeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  patch: Schema.String,
+  scope: Schema.optional(Schema.Literals(["workingTree", "unstaged", "staged", "branch"])).pipe(
+    Schema.withConstructorDefault(() => Option.some("workingTree" as const)),
+  ),
   codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
   providerOptions: Schema.optional(ProviderStartOptions),
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
@@ -212,6 +220,8 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;
 
 export const GitHandoffThreadInput = Schema.Struct({
+  commandId: CommandId,
+  threadId: ThreadId,
   cwd: TrimmedNonEmptyStringSchema,
   targetMode: GitHandoffThreadMode,
   currentBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -253,6 +263,7 @@ export type GitStashAndCheckoutInput = typeof GitStashAndCheckoutInput.Type;
 
 export const GitStashDropInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  stashRef: TrimmedNonEmptyStringSchema,
 });
 export type GitStashDropInput = typeof GitStashDropInput.Type;
 
@@ -339,6 +350,12 @@ export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
 
 export const GitHubRepositoryResult = Schema.Struct({
   repository: Schema.NullOr(
+    Schema.Struct({
+      nameWithOwner: TrimmedNonEmptyStringSchema,
+      url: TrimmedNonEmptyStringSchema,
+    }),
+  ),
+  repositories: Schema.Array(
     Schema.Struct({
       nameWithOwner: TrimmedNonEmptyStringSchema,
       url: TrimmedNonEmptyStringSchema,

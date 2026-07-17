@@ -897,7 +897,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["stash", "push", "-m", "test stash"]);
         expect(yield* git(tmp, ["stash", "list"])).toContain("test stash");
 
-        yield* core.stashDrop({ cwd: tmp });
+        yield* core.stashDrop({ cwd: tmp, stashRef: "stash@{0}" });
 
         expect((yield* git(tmp, ["stash", "list"])).trim()).toBe("");
       }),
@@ -1506,6 +1506,114 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "README.md"), "updated\n");
         const dirty = yield* core.statusDetails(tmp);
         expect(dirty.hasWorkingTreeChanges).toBe(true);
+      }),
+    );
+
+    it.effect("preserves adversarial filenames in status details", () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileName = "line\nbreak\tname.txt";
+        yield* writeTextFile(path.join(tmp, fileName), "before\n");
+        yield* git(tmp, ["add", "--", fileName]);
+        yield* git(tmp, ["commit", "-m", "add adversarial filename"]);
+        yield* writeTextFile(path.join(tmp, fileName), "after\nsecond\n");
+
+        const details = yield* (yield* GitCore).statusDetails(tmp);
+
+        expect(details.workingTree.files).toEqual([
+          { path: fileName, insertions: 2, deletions: 1 },
+        ]);
+      }),
+    );
+
+    it.effect("does not resolve upstream before rejecting non-repository directories", () =>
+      Effect.gen(function* () {
+        const operations: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) =>
+          Effect.sync(() => {
+            operations.push(input.operation);
+            if (input.operation === "GitCore.statusDetails.isInsideWorkTree") {
+              return {
+                code: 128,
+                stdout: "",
+                stderr: "fatal: not a git repository",
+              };
+            }
+            throw new Error(`Unexpected git command: ${input.operation}`);
+          }),
+        );
+
+        const details = yield* core.statusDetails("C:\\Users\\Windows");
+
+        expect(details.isRepo).toBe(false);
+        expect(operations).toEqual(["GitCore.statusDetails.isInsideWorkTree"]);
+      }),
+    );
+
+    it.effect("preserves failures from the repository precheck", () =>
+      Effect.gen(function* () {
+        const precheckError = new GitCommandError({
+          operation: "GitCore.statusDetails.isInsideWorkTree",
+          command: "git rev-parse --is-inside-work-tree",
+          cwd: "C:\\repo",
+          detail: "git rev-parse --is-inside-work-tree timed out.",
+        });
+        const core = yield* makeIsolatedGitCore(() => Effect.fail(precheckError));
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: precheckError.operation,
+            detail: precheckError.detail,
+          });
+        }
+      }),
+    );
+
+    it.effect("rejects unrelated nonzero repository precheck results", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.succeed({
+            code: 128,
+            stdout: "",
+            stderr: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          }),
+        );
+
+        const result = yield* Effect.result(core.statusDetails("C:\\repo"));
+
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            _tag: "GitCommandError",
+            operation: "GitCore.statusDetails.isInsideWorkTree",
+            detail: "fatal: detected dubious ownership in repository at 'C:\\repo'",
+          });
+        }
+      }),
+    );
+
+    it.effect("keeps missing repository directories on the non-repository fallback", () =>
+      Effect.gen(function* () {
+        const core = yield* makeIsolatedGitCore(() =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitCore.statusDetails.isInsideWorkTree",
+              command: "git rev-parse --is-inside-work-tree",
+              cwd: "C:\\missing",
+              detail: "ENOENT: no such file or directory",
+            }),
+          ),
+        );
+
+        const details = yield* core.statusDetails("C:\\missing");
+
+        expect(details.isRepo).toBe(false);
       }),
     );
 

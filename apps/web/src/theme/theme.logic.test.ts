@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CODE_THEME_OPTIONS,
   DEFAULT_CHROME_THEME_BY_VARIANT,
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
@@ -50,7 +51,7 @@ describe("parseStoredThemeState", () => {
       chromeThemes: {
         dark: {
           accent: "#606acc",
-          contrast: 60,
+          contrast: 0,
         },
         light: DEFAULT_THEME_STATE.chromeThemes.light,
       },
@@ -78,6 +79,36 @@ describe("parseStoredThemeState", () => {
     expect(migrated.mode).toBe("dark");
     expect(migrated.codeThemeIds.dark).toBe("linear");
     expect(migrated.chromeThemes.dark.accent).toBe("#606acc");
+  });
+
+  it("preserves a custom UI font when migrating a stored state without the system-font flag", () => {
+    const migrated = normalizeThemeState({
+      chromeThemes: {
+        dark: {
+          fonts: { ui: "Inter" },
+        },
+      },
+    });
+
+    expect(migrated.systemUiFont).toBe(false);
+    expect(migrated.chromeThemes.dark.fonts.ui).toBe("Inter");
+  });
+
+  it("uses the system UI font for older states that did not store a custom font", () => {
+    expect(normalizeThemeState({ mode: "dark" }).systemUiFont).toBe(true);
+  });
+
+  it("keeps an explicit system-font preference even when the theme stores a UI font", () => {
+    expect(
+      normalizeThemeState({
+        chromeThemes: {
+          dark: {
+            fonts: { ui: "Inter" },
+          },
+        },
+        systemUiFont: true,
+      }).systemUiFont,
+    ).toBe(true);
   });
 });
 
@@ -137,10 +168,18 @@ describe("theme share strings", () => {
 });
 
 describe("code theme seeds", () => {
+  it("starts every bundled theme variant at zero contrast", () => {
+    for (const option of CODE_THEME_OPTIONS) {
+      for (const variant of option.variants) {
+        expect(getCodeThemeSeed(option.id, variant).contrast).toBe(0);
+      }
+    }
+  });
+
   it("loads the exact normalized seed for a bundled code theme", () => {
     expect(getCodeThemeSeed("linear", "dark")).toEqual({
       accent: "#606acc",
-      contrast: 60,
+      contrast: 0,
       fonts: {
         code: null,
         ui: "Inter",
@@ -353,7 +392,7 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.aliases["--color-token-terminal-ansi-yellow"]).toBe("#f5b44a");
   });
 
-  it("matches Codex's default dark chrome composer/dropdown control color", () => {
+  it("uses the zero-contrast dark composer and dropdown control color", () => {
     const tokens = buildResolvedThemeTokens(
       {
         codeThemeId: "codex",
@@ -362,8 +401,8 @@ describe("buildThemeCssVariables", () => {
       "dark",
     );
 
-    expect(tokens.derived.controlBackgroundOpaque).toBe("rgb(45, 45, 45)");
-    expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(45, 45, 45)");
+    expect(tokens.derived.controlBackgroundOpaque).toBe("rgb(30, 30, 30)");
+    expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(30, 30, 30)");
   });
 
   it("matches Codex's light composer surface token path", () => {
@@ -379,7 +418,7 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--composer-surface"]).toBe(
       "color-mix(in oklab, var(--color-background-control) 90%, transparent)",
     );
-    expect(cssVariables.variables["--color-background-control"]).toBe("rgba(250, 250, 248, 0.96)");
+    expect(cssVariables.variables["--color-background-control"]).toBe("rgba(249, 249, 248, 0.96)");
   });
 
   it("uses the light-theme foreground color for the primary button background", () => {

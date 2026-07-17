@@ -17,6 +17,10 @@ import {
   WS_METHODS,
   OrchestrationSessionStatus,
 } from "@synara/contracts";
+import {
+  ATTACHMENT_CANCEL_ROUTE_PATH,
+  ATTACHMENT_UPLOAD_ROUTE_PATH,
+} from "@synara/shared/binaryTransfer";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
@@ -48,6 +52,7 @@ import {
   sendEffectRpcChunk,
   sendEffectRpcExit,
 } from "../test/effectRpcWebSocketMock";
+import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
@@ -67,6 +72,7 @@ const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
 let attachmentResponseDelayMs = 0;
+let attachmentUploadSequence = 0;
 
 interface WsRequestEnvelope {
   id: string;
@@ -142,23 +148,7 @@ function isoAt(offsetSeconds: number): string {
 }
 
 function createBaseServerConfig(): ServerConfig {
-  return {
-    cwd: "/repo/project",
-    worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
-    keybindings: [],
-    issues: [],
-    providers: [
-      {
-        provider: "codex",
-        status: "ready",
-        available: true,
-        authStatus: "authenticated",
-        checkedAt: NOW_ISO,
-      },
-    ],
-    availableEditors: [],
-  };
+  return createBrowserTestServerConfig(NOW_ISO);
 }
 
 function createUserMessage(options: {
@@ -813,6 +803,35 @@ function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithSettledCompletedInlinePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithSettledInlinePlan();
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            activities: thread.activities.map((activity) =>
+              activity.kind === "turn.tasks.updated"
+                ? {
+                    ...activity,
+                    payload: {
+                      tasks: [
+                        { task: "Inspecting ChatView boundaries", status: "completed" },
+                        { task: "Patch the shared checklist receiver", status: "completed" },
+                        { task: "Run final validation", status: "completed" },
+                      ],
+                    },
+                  }
+                : activity,
+            ),
+          }
+        : thread,
+    ),
+  };
+}
+
 // A plan-mode thread whose latest turn has settled and that still has an
 // actionable (unimplemented) proposed plan. This is exactly the state where the
 // live composer shows the plan-follow-up prompt, so it's the setup that used to
@@ -990,6 +1009,12 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
+  }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
+  if (tag === WS_METHODS.automationList) {
+    return { definitions: [], runs: [] };
   }
   if (tag === WS_METHODS.gitListBranches) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
@@ -1196,13 +1221,33 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
         method === WS_METHODS.subscribeTerminalEvents ||
-        method === WS_METHODS.subscribeOrchestrationDomainEvents
+        method === WS_METHODS.subscribeOrchestrationDomainEvents ||
+        method === WS_METHODS.subscribeProjectDevServerEvents ||
+        method === WS_METHODS.subscribeAutomationEvents
       ) {
         return;
       }
       sendEffectRpcExit(client, parsed.request.id, resolveWsRpc(requestBody));
     });
   }),
+  http.post(`*${ATTACHMENT_UPLOAD_ROUTE_PATH}`, async ({ request }) => {
+    const url = new URL(request.url);
+    const bytes = await request.arrayBuffer();
+    attachmentUploadSequence += 1;
+    return HttpResponse.json(
+      {
+        type: url.searchParams.get("type") ?? "file",
+        id: `att_v2_${String(attachmentUploadSequence).padStart(32, "0")}`,
+        name: url.searchParams.get("name") ?? "attachment.bin",
+        mimeType: url.searchParams.get("mimeType") ?? "application/octet-stream",
+        sizeBytes: bytes.byteLength,
+      },
+      { status: 201 },
+    );
+  }),
+  http.post(`*${ATTACHMENT_CANCEL_ROUTE_PATH}`, () =>
+    HttpResponse.json({ cancelled: true }, { status: 200 }),
+  ),
   http.get("*/attachments/:attachmentId", async () => {
     if (attachmentResponseDelayMs > 0) {
       await new Promise<void>((resolve) => {
@@ -1347,6 +1392,30 @@ function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): vo
       bubbles: true,
       cancelable: true,
     }),
+  );
+}
+
+function dispatchModelCycleShortcut(target: EventTarget, key: "[" | "]"): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    code: key === "]" ? "BracketRight" : "BracketLeft",
+    altKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+async function dispatchModelCycleShortcutWhenReady(
+  target: EventTarget,
+  key: "[" | "]",
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(dispatchModelCycleShortcut(target, key).defaultPrevented).toBe(true);
+    },
+    { timeout: 8_000, interval: 16 },
   );
 }
 
@@ -1560,6 +1629,40 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
+async function waitForMountedChatReady(options: {
+  host: HTMLElement;
+  snapshot: OrchestrationReadModel;
+  routeThreadId: ThreadId;
+}): Promise<void> {
+  const expectedThread = options.snapshot.threads.find(
+    (thread) => thread.id === options.routeThreadId,
+  );
+
+  await vi.waitFor(
+    () => {
+      expect(
+        options.host.querySelector("[data-chat-composer-form='true']"),
+        "Chat composer did not mount.",
+      ).toBeTruthy();
+      expect(
+        wsRequests.some((request) => request._tag === WS_METHODS.serverGetConfig),
+        "Browser RPC configuration did not load.",
+      ).toBe(true);
+
+      if (!expectedThread) return;
+      const state = useStore.getState();
+      expect(state.threadIds?.includes(expectedThread.id)).toBe(true);
+      const hydratedMessageIds = state.messageIdsByThreadId?.[expectedThread.id] ?? [];
+      expect(
+        expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        "Active thread detail did not hydrate.",
+      ).toBe(true);
+    },
+    { timeout: 20_000, interval: 16 },
+  );
+  await waitForLayout();
+}
+
 async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
@@ -1571,18 +1674,13 @@ async function mountChatView(options: {
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
-  const host = document.createElement("div");
-  host.style.position = "fixed";
-  host.style.inset = "0";
-  host.style.width = "100vw";
-  host.style.height = "100vh";
-  host.style.display = "grid";
-  host.style.overflow = "hidden";
-  document.body.append(host);
+  const host = createFullscreenTestHost();
+
+  const initialEntry = options.initialEntry ?? `/${THREAD_ID}`;
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [options.initialEntry ?? `/${THREAD_ID}`],
+      initialEntries: [initialEntry],
     }),
   );
 
@@ -1590,11 +1688,24 @@ async function mountChatView(options: {
     container: host,
   });
 
-  await waitForLayout();
-
-  const cleanup = async () => {
+  try {
+    await waitForMountedChatReady({
+      host,
+      snapshot: options.snapshot,
+      routeThreadId: ThreadId.makeUnsafe(initialEntry.slice(1)),
+    });
+  } catch (cause) {
     await screen.unmount();
-    host.remove();
+    if (host.isConnected) host.remove();
+    throw cause;
+  }
+
+  let cleanedUp = false;
+  const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    await screen.unmount();
+    if (host.isConnected) host.remove();
   };
 
   return {
@@ -1645,16 +1756,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterAll(async () => {
+    await resetWsNativeApiForTest();
     await worker.stop();
   });
 
   beforeEach(async () => {
-    resetWsNativeApiForTest();
+    await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
+    attachmentUploadSequence = 0;
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -1667,7 +1780,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useStore.setState({
       projects: [],
-      threads: [],
+      threadIds: [],
+      threadShellById: {},
+      threadSessionById: {},
+      threadTurnStateById: {},
+      messageIdsByThreadId: {},
+      messageByThreadId: {},
+      activityIdsByThreadId: {},
+      activityByThreadId: {},
+      proposedPlanIdsByThreadId: {},
+      proposedPlanByThreadId: {},
+      turnDiffIdsByThreadId: {},
+      turnDiffSummaryByThreadId: {},
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
@@ -1687,12 +1811,11 @@ describe("ChatView timeline estimator parity (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
-    resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
-    "keeps long user message estimate close at the $name viewport",
+    "[geometry:linux] keeps long user message estimate close at the $name viewport",
     async (viewport) => {
       const userText = "x".repeat(3_200);
       const targetMessageId = `msg-user-target-long-${viewport.name}` as MessageId;
@@ -1724,7 +1847,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     },
   );
 
-  it("tracks wrapping parity while resizing an existing ChatView across the viewport matrix", async () => {
+  it("[geometry:linux] tracks wrapping parity while resizing an existing ChatView across the viewport matrix", async () => {
     const userText = "x".repeat(3_200);
     const targetMessageId = "msg-user-target-resize" as MessageId;
     const mounted = await mountChatView({
@@ -1766,15 +1889,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const narrowest = byMeasuredWidth[0]!;
       const widest = byMeasuredWidth.at(-1)!;
       expect(narrowest.timelineWidthMeasuredPx).toBeLessThan(widest.timelineWidthMeasuredPx);
-      expect(narrowest.measuredRowHeightPx).toBeGreaterThan(widest.measuredRowHeightPx);
-      expect(narrowest.estimatedHeightPx).toBeGreaterThan(widest.estimatedHeightPx);
+      // Both widths exceed the shared 12-line limit, so resizing must not make
+      // the virtualized estimate grow beyond the visible collapsed row.
+      expect(narrowest.estimatedHeightPx).toBe(widest.estimatedHeightPx);
+      expect(
+        Math.abs(narrowest.measuredRowHeightPx - widest.measuredRowHeightPx),
+      ).toBeLessThanOrEqual(8);
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("tracks additional rendered wrapping when ChatView width narrows between desktop and mobile viewports", async () => {
-    const userText = "x".repeat(2_400);
+  it("[geometry:linux] tracks additional rendered wrapping when ChatView width narrows between desktop and mobile viewports", async () => {
+    // Short enough to remain below the 12-line collapse at both widths, while
+    // still wrapping onto materially more lines on mobile.
+    const userText = "x".repeat(320);
     const targetMessageId = "msg-user-target-wrap" as MessageId;
     const snapshot = createSnapshotForTargetUser({
       targetMessageId,
@@ -1810,7 +1939,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     expect(ratio).toBeLessThan(1.35);
   });
 
-  it("collapses header actions into overflow before they can overlap the thread title", async () => {
+  it("[geometry:linux] collapses header actions into overflow before they can overlap the thread title", async () => {
     const longTitle =
       'remove "ago" from the sidebar while the diff panel stays open on smaller viewports';
     const headerOverflowSnapshot = (() => {
@@ -1891,7 +2020,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("keeps the composer visible while a long assistant response forces a viewport relayout", async () => {
+  it("[geometry:linux] keeps the composer visible while a long assistant response forces a viewport relayout", async () => {
     const mounted = await mountChatView({
       viewport: TEXT_VIEWPORT_MATRIX[0],
       snapshot: createSnapshotWithLongAssistantResponse(),
@@ -1950,6 +2079,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -2017,6 +2147,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         patchedScrollContainer.scrollTo = originalScrollTo;
       }
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
@@ -2331,7 +2462,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it.each(ATTACHMENT_VIEWPORT_MATRIX)(
-    "keeps user attachment estimate close at the $name viewport",
+    "[geometry:linux] keeps user attachment estimate close at the $name viewport",
     async (viewport) => {
       const targetMessageId = `msg-user-target-attachments-${viewport.name}` as MessageId;
       const userText = "message with image attachments";
@@ -2714,6 +2845,41 @@ describe("ChatView timeline estimator parity (full app)", () => {
       dispatchComposerPickerShortcut(composerEditor, "m");
 
       await waitForComposerPickerSurfaceOpen();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("cycles the active provider model without opening the picker", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-cycle-shortcut" as MessageId,
+        targetText: "model cycle shortcut",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "]");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.5" });
+      });
+      expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+
+      await dispatchModelCycleShortcutWhenReady(composerEditor, "[");
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ provider: "codex", model: "gpt-5.2" });
+      });
     } finally {
       await mounted.cleanup();
     }
@@ -3180,6 +3346,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("auto-dispatches a queued turn without wiping the live composer draft", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const queuedPrompt = "queued prompt that should auto-send";
     const draftBeingTyped = "draft the user is still typing";
 
@@ -3253,10 +3420,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
   it("auto-dispatches a queued chat turn as a chat message even while a plan follow-up is pending", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const queuedPrompt = "queued chat turn that must stay a chat message";
     const queuedImage = createComposerImage({
       id: "queued-plan-image-1",
@@ -3272,6 +3441,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      await waitForComposerEditor();
       // Make the live composer's interaction mode explicitly "plan" so the
       // plan-follow-up branch in onSend is live. The queued chat turn below
       // carries its own "default" mode and an image attachment, both of which the
@@ -3342,6 +3512,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
@@ -3433,7 +3604,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await expect.element(page.getByText("New project")).toBeInTheDocument();
       await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
-      await expect.element(page.getByText("Folders on this Mac")).not.toBeInTheDocument();
+      await expect.element(page.getByText(/Folders on this/)).not.toBeInTheDocument();
 
       const currentProjectOption = await waitForElement(
         () =>
@@ -4441,6 +4612,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("promotes terminal-first shortcut threads so they render as terminal rows", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -4516,10 +4688,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
   it("promotes a stored terminal draft using its saved context and model selection", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
     const draftThreadId = ThreadId.makeUnsafe("thread-terminal-draft-reuse");
     useComposerDraftStore.setState({
       draftsByThreadId: {
@@ -4644,6 +4818,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
     } finally {
       await mounted.cleanup();
+      restoreNativeApi();
     }
   });
 
@@ -4864,7 +5039,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("hides the inline plan card once the latest turn is settled", async () => {
+  it("hides an unfinished task list once the latest turn is settled", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithSettledInlinePlan(),
@@ -4875,7 +5050,28 @@ describe("ChatView timeline estimator parity (full app)", () => {
         () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
           expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
           expect(document.body.textContent).not.toContain("1 background agent");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides a completed task list once the latest turn is settled", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledCompletedInlinePlan(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Finished the investigation.");
+          expect(document.body.textContent).not.toContain("3 out of 3 tasks completed");
+          expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -4977,7 +5173,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
             document.querySelector("[data-settled-turn-collapse-transition='true']"),
           ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
-          expect(document.body.textContent).not.toContain("Tool 6");
+          const settledTrigger = Array.from(
+            document.querySelectorAll<HTMLButtonElement>("button"),
+          ).find((element) => element.textContent?.includes("Worked for"));
+          if (settledTrigger) {
+            expect(settledTrigger.getAttribute("aria-expanded")).toBe("false");
+          }
         },
         { timeout: 8_000, interval: 16 },
       );

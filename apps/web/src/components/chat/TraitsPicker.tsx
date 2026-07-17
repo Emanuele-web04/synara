@@ -310,9 +310,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             ? "thinkingLevel"
             : provider === "claudeAgent"
               ? "effort"
-              : provider === "gemini"
-                ? "thinkingLevel"
-                : "reasoningEffort");
+              : "reasoningEffort");
       commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
     },
     [

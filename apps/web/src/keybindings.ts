@@ -125,11 +125,6 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenCreationAllowed,
   },
   {
-    command: "chat.newGemini",
-    shortcut: commandShortcut("g", { altKey: true }),
-    whenAst: whenCreationAllowed,
-  },
-  {
     command: "chat.split",
     shortcut: commandShortcut("\\"),
     whenAst: whenCreationAllowed,
@@ -151,6 +146,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "modelPicker.toggle",
     shortcut: commandShortcut("m", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "model.next",
+    shortcut: commandShortcut("]", { altKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "model.previous",
+    shortcut: commandShortcut("[", { altKey: true, modKey: false }),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -691,14 +696,6 @@ export function isChatNewCursorShortcut(
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "chat.newCursor", options);
-}
-
-export function isChatNewGeminiShortcut(
-  event: ShortcutEventLike,
-  keybindings: ResolvedKeybindingsConfig,
-  options?: ShortcutMatchOptions,
-): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newGemini", options);
 }
 
 export function isOpenFavoriteEditorShortcut(

@@ -8,12 +8,18 @@ export const MICROPHONE_USAGE_DESCRIPTION =
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
+export const MAC_APPSNAP_HELPER_STAGE_PATH =
+  "apps/desktop/native/appsnap/build/synara-appsnap-helper";
+export const MAC_APPSNAP_HELPER_ASAR_EXCLUSION = "!apps/desktop/native/appsnap/build/**";
+export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-helper";
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly asarUnpack?: ReadonlyArray<string>;
+  readonly extraFiles?: ReadonlyArray<Record<string, string>>;
+  readonly files?: ReadonlyArray<string>;
   readonly linux?: Record<string, unknown>;
   readonly mac?: Record<string, unknown>;
   readonly nsis?: Record<string, unknown>;
@@ -23,6 +29,7 @@ export interface DesktopPlatformBuildConfig {
 export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
+  readonly signed?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
 }
 
@@ -34,6 +41,13 @@ export interface DesktopNativeBuildHostInput {
 }
 
 export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInput): string | null {
+  if (input.platform === "mac" && input.hostPlatform !== "darwin") {
+    return [
+      "macOS desktop artifacts include the native Swift AppSnap helper.",
+      `Build mac/${input.arch} on macOS so the helper can be compiled and signed.`,
+      `Current host is ${input.hostPlatform}/${input.hostArch}.`,
+    ].join(" ");
+  }
   if (input.platform !== "linux") return null;
   if (input.arch === "universal") {
     return "Linux desktop artifacts support x64 or arm64 builds, not universal builds.";
@@ -57,15 +71,30 @@ export function createDesktopPlatformBuildConfig(
       target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
-      hardenedRuntime: true,
+      hardenedRuntime: input.signed === true,
+      notarize: input.signed === true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH],
+      // The universal build stages the same pre-lipo'd helper in both app trees.
+      // @electron/universal needs this pattern to preserve that existing fat binary.
+      x64ArchFiles: MAC_APPSNAP_HELPER_BUNDLE_PATH,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
       },
     } satisfies Record<string, unknown>;
 
-    return { ...nativePackaging, mac };
+    return {
+      ...nativePackaging,
+      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      extraFiles: [
+        {
+          from: MAC_APPSNAP_HELPER_STAGE_PATH,
+          to: "Helpers/synara-appsnap-helper",
+        },
+      ],
+      mac,
+    };
   }
 
   if (input.platform === "linux") {
@@ -95,7 +124,12 @@ export function createDesktopPlatformBuildConfig(
     win: {
       target: [input.target],
       icon: "icon.ico",
-      ...(input.windowsAzureSignOptions ? { azureSignOptions: input.windowsAzureSignOptions } : {}),
+      ...(input.windowsAzureSignOptions
+        ? {
+            publisherName: input.windowsAzureSignOptions.publisherName,
+            azureSignOptions: input.windowsAzureSignOptions,
+          }
+        : {}),
     },
   };
 }

@@ -6,8 +6,12 @@ import {
   MAX_PINNED_PROJECTS,
   type KeybindingCommand,
   type ProjectId,
+  type PullRequestReviewRequestCountResult,
   type ThreadId,
 } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
@@ -25,8 +29,6 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
-import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
@@ -46,6 +48,55 @@ export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 export type SidebarView = "threads" | "studio" | "workspace";
+export type SidebarActionBadge = {
+  readonly text: string;
+  readonly accessibleLabel: string;
+};
+
+/** Keep partial review counts visible without presenting them as exact. */
+export function resolvePullRequestReviewBadge(
+  result: PullRequestReviewRequestCountResult | undefined,
+): SidebarActionBadge | null {
+  if (!result) return null;
+  if (result.incomplete) {
+    return result.count > 0
+      ? {
+          text: `${result.count}+`,
+          accessibleLabel: `At least ${result.count} ${pluralize(
+            result.count,
+            "pull request is",
+            "pull requests are",
+          )} waiting for your review`,
+        }
+      : {
+          text: "?",
+          accessibleLabel: "The pull request review count is temporarily incomplete",
+        };
+  }
+  return result.count > 0
+    ? {
+        text: String(result.count),
+        accessibleLabel: `${result.count} ${pluralize(
+          result.count,
+          "pull request is",
+          "pull requests are",
+        )} waiting for your review`,
+      }
+    : null;
+}
+
+/** Stable repository-resolution input for PR caches. Sidebar-only presentation changes such as
+ * expand/collapse and ordering do not invalidate; project roots/names do. */
+export function pullRequestRepositoryConfigFingerprint(
+  projects: ReadonlyArray<Pick<Project, "id" | "kind" | "cwd" | "name" | "remoteName">>,
+): string {
+  return JSON.stringify(
+    projects
+      .filter((project) => project.kind === "project")
+      .map((project) => [project.id, project.cwd, project.name, project.remoteName] as const)
+      .toSorted((left, right) => left[0].localeCompare(right[0])),
+  );
+}
 
 /** The optimistic segment follows a destination click and clears when the user returns. */
 export function resolvePendingSidebarViewSelection(
@@ -1426,56 +1477,6 @@ export function deriveSidebarProjectData(input: {
   return byProjectId;
 }
 
-/** Shared PR-state presentation so sidebar badges and kanban cards color PRs identically. */
-export interface PrStatePresentation {
-  label: "PR open" | "PR closed" | "PR merged" | "PR draft" | "PR has conflicts";
-  colorClass: string;
-  iconKind: "pull-request" | "merged-simple";
-}
-
-/**
- * Draft and mergeability are optional because persisted `lastKnownPr` entries written
- * before those fields existed lack them; absence falls back to the plain state badge.
- * Precedence for open PRs: conflicts (actionable) over draft (informational).
- */
-export function resolvePrStatePresentation(pr: {
-  state: "open" | "closed" | "merged";
-  isDraft?: boolean | undefined;
-  mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
-}): PrStatePresentation {
-  if (pr.state === "open") {
-    if (pr.mergeability === "conflicting") {
-      return {
-        label: "PR has conflicts",
-        colorClass: "text-amber-600 dark:text-amber-300/90",
-        iconKind: "pull-request",
-      };
-    }
-    if (pr.isDraft === true) {
-      return {
-        label: "PR draft",
-        // GitHub renders drafts gray; reuse the closed treatment so draft reads as "not live yet".
-        colorClass: "text-zinc-500 dark:text-zinc-400/80",
-        iconKind: "pull-request",
-      };
-    }
-    return {
-      label: "PR open",
-      // Match the diff "+" green so an opened PR reads as the same positive signal.
-      colorClass: "text-[var(--color-decoration-added)]",
-      iconKind: "pull-request",
-    };
-  }
-  if (pr.state === "closed") {
-    return {
-      label: "PR closed",
-      colorClass: "text-zinc-500 dark:text-zinc-400/80",
-      iconKind: "pull-request",
-    };
-  }
-  return {
-    label: "PR merged",
-    colorClass: "text-indigo-500 dark:text-indigo-400",
-    iconKind: "merged-simple",
-  };
-}
+// PR-state presentation (label/color/glyph) moved to
+// ~/components/pullRequest/pullRequestStatePresentation so the sidebar badge, kanban chip,
+// and the pull request feature surfaces all share one mapping.

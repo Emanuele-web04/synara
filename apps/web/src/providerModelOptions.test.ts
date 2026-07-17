@@ -6,14 +6,33 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildModelSelection,
+  buildNextProviderOptions,
   buildProviderOptionPatch,
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  mergeDynamicModelOptions,
+  providerModelCostMultiplierLabel,
   resolveModelGroupDefaultOpen,
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
+
+describe("Antigravity model options", () => {
+  it("keeps the base model and effort as separate selection fields", () => {
+    const options = buildNextProviderOptions("antigravity", undefined, {
+      reasoningEffort: "high",
+    });
+
+    expect(options).toEqual({ reasoningEffort: "high" });
+    expect(buildModelSelection("antigravity", "Gemini 3.5 Flash", options)).toEqual({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+  });
+});
 
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
@@ -44,19 +63,116 @@ describe("formatProviderModelOptionName", () => {
   });
 });
 
-describe("buildProviderOptionPatch", () => {
-  it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
-    expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
-      thinkingBudget: 512,
-    });
-    expect(buildProviderOptionPatch("gemini", "thinkingLevel", "HIGH")).toEqual({
-      thinkingLevel: "HIGH",
-    });
+describe("mergeDynamicModelOptions", () => {
+  it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "antigravity",
+        staticOptions: [
+          { slug: "Gemini 3.5 Flash", name: "Gemini 3.5 Flash" },
+          { slug: "Claude Sonnet 4.6", name: "Claude Sonnet 4.6" },
+          { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+        ],
+        dynamicModels: [
+          { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+          { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+        ],
+      }),
+    ).toEqual([
+      { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+      { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+      { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+    ]);
   });
 
-  it("passes through non-Gemini option ids unchanged", () => {
+  it("preserves runtime descriptions without inventing them for custom models", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "droid",
+      staticOptions: [{ slug: "custom:model", name: "Custom model", isCustom: true }],
+      dynamicModels: [
+        {
+          slug: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          description: " 0.4x Factory token rate ",
+        },
+        { slug: "custom:model", name: "Custom model" },
+      ],
+    });
+
+    expect(options).toEqual([
+      {
+        slug: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        description: "0.4x Factory token rate",
+      },
+      { slug: "custom:model", name: "Custom model" },
+    ]);
+  });
+
+  it("treats the live Droid catalog as authoritative and drops invalid custom slugs", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "droid",
+        staticOptions: [
+          { slug: "retired-model", name: "Retired" },
+          { slug: "made-up-model", name: "Made up", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      }),
+    ).toEqual([{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }]);
+  });
+
+  it("deduplicates Cursor transport variants by their base model", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "cursor",
+        staticOptions: [
+          {
+            slug: "grok-4.5[thinking=true]",
+            name: "Cursor Grok 4.5",
+            isCustom: true,
+          },
+        ],
+        dynamicModels: [
+          {
+            slug: "grok-4.5",
+            name: "Cursor Grok 4.5",
+            upstreamProviderId: "xai",
+            upstreamProviderName: "xAI",
+          },
+          { slug: "grok-4.5[thinking=true]", name: "Cursor Grok 4.5" },
+        ],
+      }),
+    ).toEqual([
+      {
+        slug: "grok-4.5",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+      },
+    ]);
+  });
+});
+
+describe("providerModelCostMultiplierLabel", () => {
+  it("formats live provider multipliers without hardcoding their values", () => {
+    expect(providerModelCostMultiplierLabel("0.38x Factory token rate")).toBe("0.38×");
+    expect(providerModelCostMultiplierLabel("12x Factory token rate")).toBe("12×");
+  });
+
+  it("ignores descriptions that do not begin with a multiplier", () => {
+    expect(providerModelCostMultiplierLabel("Launch Pricing")).toBeNull();
+    expect(providerModelCostMultiplierLabel()).toBeNull();
+  });
+});
+
+describe("buildProviderOptionPatch", () => {
+  it("passes through option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
+    });
+    expect(buildProviderOptionPatch("droid", "reasoningEffort", "high")).toEqual({
+      reasoningEffort: "high",
     });
     expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
       reasoningEffort: "high",
