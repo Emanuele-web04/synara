@@ -396,6 +396,11 @@ export interface SynaraStorageSnapshot {
 
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  /**
+   * Absolute filesystem path for a File from drag/drop or file inputs.
+   * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
+   */
+  getPathForFile?: (file: File) => string | null;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
     defaultFilename: string;

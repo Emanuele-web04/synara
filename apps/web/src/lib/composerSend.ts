@@ -140,6 +140,21 @@ export function readFileAsDataUrl(file: File): Promise<string> {
       reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
+      const nativeMessage =
+        reader.error instanceof Error && reader.error.message.trim().length > 0
+          ? reader.error.message
+          : null;
+      if (
+        nativeMessage &&
+        /could not be found at the time an operation was processed/i.test(nativeMessage)
+      ) {
+        reject(
+          new Error(
+            `Could not read '${file.name || "item"}'. Paths with spaces or special characters may need a path mention (@\"…\") instead of a file attachment.`,
+          ),
+        );
+        return;
+      }
       reject(reader.error ?? new Error("Failed to read attachment."));
     });
     reader.readAsDataURL(file);

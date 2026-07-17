@@ -9,24 +9,63 @@ export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";
 }
 
+// The alternation must be unambiguous — a backslash may only match the escape
+// branch — or unclosed `@"` + a backslash run backtracks exponentially on the
+// per-keystroke composer parse (ReDoS).
+const QUOTED_MENTION_PATH_SOURCE = String.raw`((?:\\.|[^"\\])*)`;
+
 export function createComposerMentionTokenRegex(options: {
   includeTrailingTokenAtEnd: boolean;
   global?: boolean;
 }): RegExp {
   const suffix = options.includeTrailingTokenAtEnd ? "(?=\\s|$)" : "(?=\\s)";
   return new RegExp(
-    `(^|\\s)@(?:"([^"]+)"|([^\\s@]+))${suffix}`,
+    `(^|\\s)@(?:"${QUOTED_MENTION_PATH_SOURCE}"|([^\\s@]+))${suffix}`,
     options.global === false ? "" : "g",
   );
 }
 
+export function decodeComposerMentionQuotedPath(path: string): string {
+  return path.replace(/\\(["\\])/g, "$1");
+}
+
 export function extractComposerMentionPath(match: RegExpExecArray | RegExpMatchArray): string {
-  return (match[2] ?? match[3] ?? "").trim();
+  return match[2] === undefined ? (match[3] ?? "") : decodeComposerMentionQuotedPath(match[2]);
+}
+
+export function composerMentionQuotedPathHasClosingQuote(path: string): boolean {
+  let precedingBackslashes = 0;
+  for (const character of path) {
+    if (character === "\\") {
+      precedingBackslashes += 1;
+      continue;
+    }
+    if (character === '"' && precedingBackslashes % 2 === 0) {
+      return true;
+    }
+    precedingBackslashes = 0;
+  }
+  return false;
+}
+
+function encodeComposerMentionQuotedPath(path: string): string {
+  return path.replace(/["\\]/g, "\\$&");
+}
+
+/**
+ * Paths that need quoting so spaces, parentheses, and shell-ish characters
+ * stay a single mention token (#351). Prefer quoting over relying on the
+ * unquoted `[^()\s@]+` trigger form.
+ */
+export function composerMentionPathNeedsQuoting(path: string): boolean {
+  return /[\s()@"'`$\\]/.test(path);
 }
 
 export function formatComposerMentionToken(path: string): string {
   const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
-  return /\s/.test(normalizedPath) ? `@"${normalizedPath}"` : `@${normalizedPath}`;
+  return composerMentionPathNeedsQuoting(normalizedPath)
+    ? `@"${encodeComposerMentionQuotedPath(normalizedPath)}"`
+    : `@${normalizedPath}`;
 }
 
 function escapeRegExp(value: string): string {
