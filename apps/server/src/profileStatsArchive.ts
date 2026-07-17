@@ -247,6 +247,20 @@ function tokenProviderModelKey(provider: string | null, model: string | null): s
   return `${provider ?? ""}\u0000${model ?? ""}`;
 }
 
+function resolveTokenProviderModel(
+  row: TokenActivityRow,
+  fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
+): { readonly provider: string | null; readonly model: string | null } {
+  const stampedProvider = readString(row.provider);
+  const provider = stampedProvider ?? fallbackSelection?.provider ?? null;
+  const model =
+    readString(row.model) ??
+    (stampedProvider === null || stampedProvider === fallbackSelection?.provider
+      ? (fallbackSelection?.model ?? null)
+      : null);
+  return { provider, model };
+}
+
 function addTokenSnapshotRow(
   rows: Map<string, ThreadTokenSnapshotRow>,
   row: ThreadTokenSnapshotRow,
@@ -278,8 +292,7 @@ export function aggregateThreadTokenRows(
     if (tokenCounterValue(row.totalProcessedTokens) === null) {
       continue;
     }
-    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
-    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
     cumulativeProviderModels.add(tokenProviderModelKey(provider, model));
   }
 
@@ -301,8 +314,7 @@ export function aggregateThreadTokenRows(
     ) {
       continue;
     }
-    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
-    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
     addTokenSnapshotRow(tokensByKey, {
       createdAt: row.createdAt,
       provider,
@@ -314,8 +326,7 @@ export function aggregateThreadTokenRows(
   let previousUsedTotal: number | null = null;
   let previousUsedProviderModelKey: string | null = null;
   for (const row of rows) {
-    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
-    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
     const providerModelKey = tokenProviderModelKey(provider, model);
     if (cumulativeProviderModels.has(providerModelKey)) {
       continue;
@@ -600,7 +611,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
             AS totalProcessedTokens,
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
-          tm.provider AS provider,
+          COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt

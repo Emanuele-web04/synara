@@ -702,6 +702,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             COALESCE(
               tm.provider,
+              json_extract(a.payload_json, '$.provider'),
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
                 THEN json_extract(th.model_selection_json, '$.provider')
@@ -711,7 +712,13 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             COALESCE(
               tm.model,
               CASE
-                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                WHEN th.model_selection_json IS NOT NULL
+                  AND json_valid(th.model_selection_json)
+                  AND (
+                    json_extract(a.payload_json, '$.provider') IS NULL
+                    OR json_extract(a.payload_json, '$.provider') =
+                      json_extract(th.model_selection_json, '$.provider')
+                  )
                 THEN json_extract(th.model_selection_json, '$.model')
               END,
               'unknown'

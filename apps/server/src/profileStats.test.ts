@@ -1354,7 +1354,7 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
-  it("keeps token stats available when a legacy thread has malformed model JSON", async () => {
+  it("uses the activity provider stamp when a legacy thread has malformed model JSON", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -1407,7 +1407,7 @@ describe("ProfileStatsQuery", () => {
               'info',
               'context-window.updated',
               'tokens updated',
-              '{"totalProcessedTokens":1000}',
+              '{"totalProcessedTokens":1000,"provider":"claudeAgent"}',
               1,
               '2026-06-14T09:05:00.000Z'
             ),
@@ -1418,7 +1418,7 @@ describe("ProfileStatsQuery", () => {
               'info',
               'context-window.updated',
               'tokens updated',
-              '{"totalProcessedTokens":1500}',
+              '{"totalProcessedTokens":1500,"provider":"claudeAgent"}',
               2,
               '2026-06-14T09:10:00.000Z'
             )
@@ -1428,9 +1428,9 @@ describe("ProfileStatsQuery", () => {
 
         expect(tokenStats.available).toBe(true);
         expect(tokenStats.lifetimeTotalTokens).toBe(1500);
-        expect(tokenStats.providers).toEqual([]);
+        expect(tokenStats.providers).toEqual(["claudeAgent"]);
         expect(tokenStats.models).toEqual([
-          { provider: "unknown", model: "unknown", tokens: 1500, percent: 100 },
+          { provider: "claudeAgent", model: "unknown", tokens: 1500, percent: 100 },
         ]);
       }),
     );

@@ -73,6 +73,37 @@ describe("agent gateway contracts", () => {
   it("decodes typed capability, creation, wait, and error results", () => {
     assert.doesNotThrow(() =>
       Schema.decodeUnknownSync(SynaraCapabilitiesResult)({
+        targetConstruction: {
+          codex: {
+            modelValueSource: "providers[].models[].slug",
+            primaryOptionKey: "reasoningEffort",
+            alternativeOptionKeys: [],
+            optionSelectionRule: "Use the model-specific rules when present.",
+            providerOptions: [
+              {
+                key: "reasoningEffort",
+                valueType: "string",
+                allowedValues: ["low", "medium", "high"],
+                allowedValuesSource: "provider-contract",
+              },
+            ],
+            optionsByModel: {
+              "gpt-5.5": [
+                {
+                  key: "reasoningEffort",
+                  valueType: "string",
+                  allowedValues: ["low", "high"],
+                  allowedValuesSource: "model-discovery",
+                },
+              ],
+            },
+            exampleTarget: {
+              provider: "codex",
+              model: "gpt-5.5",
+              options: { reasoningEffort: "low" },
+            },
+          },
+        },
         providers: [
           {
             provider: "codex",

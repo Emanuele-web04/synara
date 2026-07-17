@@ -92,6 +92,8 @@ const PENDING_GENERATED_IMAGES_TTL = Duration.minutes(60);
 const ACTIVITY_UPDATE_FINGERPRINT_CACHE_CAPACITY = 4_096;
 const ACTIVITY_UPDATE_FINGERPRINT_TTL = Duration.minutes(360);
 const MAX_NATIVE_CHILDREN_PER_PARENT_TURN = 20;
+const NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY = 2_048;
+const NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL = Duration.minutes(360);
 const ASSISTANT_DELIVERY_MODE_BY_TURN_CACHE_CAPACITY = 2_048;
 const ASSISTANT_DELIVERY_MODE_BY_TURN_TTL = Duration.minutes(60);
 // One turn realistically produces a handful of images; the cap only bounds a
@@ -150,6 +152,10 @@ type ProviderDiffPlaceholder = {
   // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
   // an OrchestrationThread without a defensive copy.
   readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
+};
+type NativeChildSlotState = {
+  initialized: boolean;
+  readonly childIds: Set<string>;
 };
 
 /**
@@ -1656,7 +1662,11 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(undefined),
   });
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
-  const nativeChildIdsBySourceTurn = new Map<string, Set<string>>();
+  const nativeChildIdsBySourceTurn = yield* Cache.make<string, NativeChildSlotState>({
+    capacity: NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY,
+    timeToLive: NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL,
+    lookup: () => Effect.succeed({ initialized: false, childIds: new Set<string>() }),
+  });
 
   const claimNativeChildSlot = Effect.fnUntraced(function* (
     parentThreadId: ThreadId,
@@ -1664,20 +1674,20 @@ const make = Effect.gen(function* () {
     childThreadId: ThreadId,
   ) {
     const budgetKey = `${parentThreadId}:${sourceTurnId ?? "session"}`;
-    let childIds = nativeChildIdsBySourceTurn.get(budgetKey);
-    if (!childIds) {
+    const slotState = yield* Cache.get(nativeChildIdsBySourceTurn, budgetKey);
+    if (!slotState.initialized) {
       const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-      childIds = new Set(
-        snapshot.threads
-          .filter(
-            (thread) =>
-              thread.parentThreadId === parentThreadId &&
-              (thread.sourceTurnId ?? null) === sourceTurnId,
-          )
-          .map((thread) => thread.id),
-      );
-      nativeChildIdsBySourceTurn.set(budgetKey, childIds);
+      for (const thread of snapshot.threads) {
+        if (
+          thread.parentThreadId === parentThreadId &&
+          (thread.sourceTurnId ?? null) === sourceTurnId
+        ) {
+          slotState.childIds.add(thread.id);
+        }
+      }
+      slotState.initialized = true;
     }
+    const childIds = slotState.childIds;
     if (childIds.has(childThreadId)) {
       return { admitted: true, budgetKey } as const;
     }

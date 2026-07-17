@@ -371,6 +371,30 @@ describe("ProfileStatsArchive", () => {
     ]);
   });
 
+  it("keeps a stamped activity provider instead of a mismatched thread fallback", () => {
+    const rows = aggregateThreadTokenRows(
+      [
+        {
+          totalProcessedTokens: 1_500,
+          usedTokens: null,
+          provider: "claudeAgent",
+          model: null,
+          createdAt: "2026-06-13T12:00:00.000Z",
+        },
+      ],
+      { provider: "codex", model: "gpt-5.5" },
+    );
+
+    expect(rows).toEqual([
+      {
+        createdAt: "2026-06-13T12:00:00.000Z",
+        provider: "claudeAgent",
+        model: null,
+        tokens: 1_500,
+      },
+    ]);
+  });
+
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {
     await runArchiveTest(
       Effect.gen(function* () {

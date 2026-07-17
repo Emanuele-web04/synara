@@ -16,19 +16,18 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.equal(registry.verify(second.token)?.provider, "claudeAgent");
   });
 
-  it("reuses one credential per thread/provider and rotates it after revocation", () => {
+  it("keeps replacement runtime credentials independent from outgoing-session revocation", () => {
     let nextId = 0;
     const registry = makeAgentGatewaySessionRegistry({ randomId: () => String(++nextId) });
     const first = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
     const second = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
-    assert.equal(first.token, second.token);
+    assert.notEqual(first.token, second.token);
+    assert.equal(registry.verify(first.token)?.threadId, "thread-1");
+    assert.equal(registry.verify(second.token)?.threadId, "thread-1");
 
     registry.revoke(first.token);
     assert.isNull(registry.verify(first.token));
-
-    const replacement = registry.issue(ThreadId.makeUnsafe("thread-1"), "codex");
-    assert.notEqual(replacement.token, first.token);
-    assert.equal(registry.verify(replacement.token)?.threadId, "thread-1");
+    assert.equal(registry.verify(second.token)?.threadId, "thread-1");
   });
 
   it("binds write authority to one exact turn and invalidates it on revocation", () => {

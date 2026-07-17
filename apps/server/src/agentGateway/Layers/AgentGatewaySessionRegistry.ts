@@ -17,21 +17,13 @@ export function makeAgentGatewaySessionRegistry(options?: {
   const randomId = options?.randomId ?? randomUUID;
   const sessions = new Map<string, AgentGatewaySessionIdentity>();
   const sessionsByKey = new Map<string, AgentGatewaySessionIdentity>();
-  const tokensByThreadProvider = new Map<string, string>();
-
-  const threadProviderKey = (threadId: string, provider: string) => `${threadId}\u0000${provider}`;
 
   return {
     issue: (threadId, provider) => {
-      const identityKey = threadProviderKey(threadId, provider);
-      const existingToken = tokensByThreadProvider.get(identityKey);
-      if (existingToken) {
-        const existingIdentity = sessions.get(existingToken);
-        if (existingIdentity) {
-          return { token: existingToken, ...existingIdentity };
-        }
-        tokensByThreadProvider.delete(identityKey);
-      }
+      // Every provider runtime owns an independent credential. Replacement
+      // runtimes overlap their predecessor during startup, and the outgoing
+      // runtime revokes its own token during teardown. Reusing a token here
+      // would therefore let old-session cleanup invalidate the replacement.
       const issuedAt = now();
       const sessionKey = `gateway-session:${randomId()}`;
       const token = `sagw_session_${randomId()}`;
@@ -44,7 +36,6 @@ export function makeAgentGatewaySessionRegistry(options?: {
       };
       sessions.set(token, identity);
       sessionsByKey.set(sessionKey, identity);
-      tokensByThreadProvider.set(identityKey, token);
       return { token, ...identity };
     },
     verify: (token) => {
@@ -75,10 +66,6 @@ export function makeAgentGatewaySessionRegistry(options?: {
       if (!identity) return;
       sessions.delete(token);
       sessionsByKey.delete(identity.sessionKey);
-      const identityKey = threadProviderKey(identity.threadId, identity.provider);
-      if (tokensByThreadProvider.get(identityKey) === token) {
-        tokensByThreadProvider.delete(identityKey);
-      }
     },
   };
 }

@@ -100,7 +100,34 @@ export const SynaraProviderCatalog = Schema.Struct({
 });
 export type SynaraProviderCatalog = typeof SynaraProviderCatalog.Type;
 
+export const SynaraGatewayTargetOptionValue = Schema.Union([
+  Schema.String,
+  Schema.Number,
+  Schema.Boolean,
+]);
+export type SynaraGatewayTargetOptionValue = typeof SynaraGatewayTargetOptionValue.Type;
+
+export const SynaraGatewayTargetOptionRule = Schema.Struct({
+  key: Schema.String,
+  valueType: Schema.Literals(["string", "number", "boolean"]),
+  allowedValues: Schema.Array(SynaraGatewayTargetOptionValue),
+  allowedValuesSource: Schema.Literals(["provider-contract", "model-discovery"]),
+});
+export type SynaraGatewayTargetOptionRule = typeof SynaraGatewayTargetOptionRule.Type;
+
+export const SynaraGatewayTargetConstruction = Schema.Struct({
+  modelValueSource: Schema.Literal("providers[].models[].slug"),
+  primaryOptionKey: Schema.String,
+  alternativeOptionKeys: Schema.Array(Schema.String),
+  optionSelectionRule: Schema.String,
+  providerOptions: Schema.Array(SynaraGatewayTargetOptionRule),
+  optionsByModel: Schema.Record(Schema.String, Schema.Array(SynaraGatewayTargetOptionRule)),
+  exampleTarget: Schema.NullOr(ModelSelection),
+});
+export type SynaraGatewayTargetConstruction = typeof SynaraGatewayTargetConstruction.Type;
+
 export const SynaraCapabilitiesResult = Schema.Struct({
+  targetConstruction: Schema.Record(Schema.String, SynaraGatewayTargetConstruction),
   providers: Schema.Array(SynaraProviderCatalog),
   limits: Schema.Struct({
     maxThreadsPerOperation: Schema.Int,
