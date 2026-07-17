@@ -108,6 +108,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logProviderEvents: boolean;
   readonly logWebSocketEvents: boolean;
+  /** Enables the restricted mobile Companion surface. Disabled unless explicitly opted in. */
+  readonly companionEnabled?: boolean;
 }
 
 export function preparePrivateServerPaths(

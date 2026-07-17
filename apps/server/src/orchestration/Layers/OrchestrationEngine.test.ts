@@ -180,6 +180,49 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("deduplicates Companion retries despite regenerated server timestamps", async () => {
+    const system = await createOrchestrationSystem();
+    const command = {
+      type: "project.create" as const,
+      commandId: CommandId.makeUnsafe(
+        "companion:create:11111111-1111-4111-8111-111111111111",
+      ),
+      projectId: asProjectId("project-companion-fingerprint-retry"),
+      title: "Companion fingerprint project",
+      workspaceRoot: "/tmp/project-companion-fingerprint-retry",
+      defaultModelSelection: null,
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+
+    const first = await system.run(system.engine.dispatch(command));
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...command,
+          createdAt: "2026-07-14T00:00:01.000Z",
+        }),
+      ),
+    ).resolves.toEqual(first);
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...command,
+          title: "Changed Companion intent",
+          createdAt: "2026-07-14T00:00:02.000Z",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandIdentityCollisionError",
+      commandId: command.commandId,
+    });
+
+    const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));
+    expect(
+      Array.from(events).filter((event) => event.commandId === command.commandId),
+    ).toHaveLength(1);
+    await system.dispose();
+  });
+
   it("returns deterministic read models for repeated reads", async () => {
     const createdAt = now();
     const system = await createOrchestrationSystem();

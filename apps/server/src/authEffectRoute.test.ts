@@ -59,6 +59,7 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         response: {
           authenticated: true,
           role: "owner",
+          accessProfile: "full",
           sessionMethod: "browser-session-cookie",
           expiresAt,
         },
@@ -68,17 +69,19 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
       mutate({
         authenticated: true,
         role: "owner",
+        accessProfile: "full",
         sessionMethod: "bearer-session-token",
         expiresAt,
         sessionToken: "bearer-token",
       }),
     issuePairingCredential: () =>
-      mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
+      mutate({ id: "pairing-id", credential: "PAIRINGTOKEN", accessProfile: "full", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),
     revokePairingLink: () => mutate(true),
     listClientSessions: () => Effect.succeed([]),
     revokeClientSession: () => mutate(true),
     revokeOtherClientSessions: () => mutate(1),
+    revokeCompanionClientSessions: () => mutate(1),
     logoutSession: () => mutate(true),
     authenticateHttpRequest: (request) => {
       const bearer = request.headers.authorization === "Bearer bearer-token";
@@ -91,11 +94,15 @@ function makeServerAuth(sideEffects: { count: number }): ServerAuthShape {
         subject: "owner",
         method: bearer ? "bearer-session-token" : "browser-session-cookie",
         role: "owner",
+        accessProfile: "full",
+        client: { deviceType: "desktop" },
         expiresAt,
         credentialSource: bearer ? "bearer" : "cookie",
       });
     },
     authenticateWebSocketUpgrade: () =>
+      Effect.fail(new AuthError({ message: "Not used in auth route tests.", status: 401 })),
+    authenticateCompanionWebSocketUpgrade: () =>
       Effect.fail(new AuthError({ message: "Not used in auth route tests.", status: 401 })),
     issueWebSocketToken: () => mutate({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () =>
@@ -163,6 +170,7 @@ const mutationRoutes: ReadonlyArray<{ readonly path: string; readonly body?: unk
   { path: "/api/auth/pairing-links/revoke", body: { id: "pairing-id" } },
   { path: "/api/auth/clients/revoke", body: { sessionId: otherSessionId } },
   { path: "/api/auth/clients/revoke-others" },
+  { path: "/api/auth/clients/revoke-companion" },
   { path: "/api/auth/logout" },
 ] as const;
 

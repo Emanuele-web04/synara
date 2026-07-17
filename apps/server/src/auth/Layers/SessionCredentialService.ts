@@ -154,6 +154,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           sessionId: row.value.sessionId,
           subject: row.value.subject,
           role: row.value.role,
+          accessProfile: row.value.accessProfile,
           method: row.value.method,
           client: toClientMetadata(row.value.client),
           issuedAt: row.value.issuedAt,
@@ -315,6 +316,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
       const issuedAt = yield* DateTime.now;
       const expiresAt = DateTime.addDuration(issuedAt, input?.ttl ?? DEFAULT_SESSION_TTL);
       const client = input?.client ?? createDefaultClientMetadata();
+      const accessProfile = input?.accessProfile ?? "full";
       const claims: SessionClaims = {
         v: 1,
         kind: "session",
@@ -332,6 +334,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         sessionId,
         subject: claims.sub,
         role: claims.role,
+        accessProfile,
         method: claims.method,
         client: {
           label: client.label ?? null,
@@ -349,6 +352,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           sessionId,
           subject: claims.sub,
           role: claims.role,
+          accessProfile,
           method: claims.method,
           client,
           issuedAt,
@@ -365,6 +369,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         client,
         expiresAt,
         role: claims.role,
+        accessProfile,
       } satisfies IssuedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -403,6 +408,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         expiresAt: DateTime.makeUnsafe(claims.exp),
         subject: claims.sub,
         role: claims.role,
+        accessProfile: row.value.accessProfile,
       } satisfies VerifiedSession;
     }).pipe(
       Effect.mapError((cause) =>
@@ -542,6 +548,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             expiresAt: row.value.expiresAt,
             subject: row.value.subject,
             role: row.value.role,
+            accessProfile: row.value.accessProfile,
           } satisfies VerifiedSession;
         }),
       );
@@ -563,6 +570,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           sessionId: row.sessionId,
           subject: row.subject,
           role: row.role,
+          accessProfile: row.accessProfile,
           method: row.method,
           client: toClientMetadata(row.client),
           issuedAt: row.issuedAt,
@@ -621,6 +629,51 @@ export const makeSessionCredentialService = Effect.gen(function* () {
         ),
       );
 
+  const updateClientLabel: SessionCredentialServiceShape["updateClientLabel"] = (
+    sessionId,
+    clientLabel,
+  ) => {
+    const normalizedLabel = clientLabel.trim();
+    if (normalizedLabel.length === 0 || normalizedLabel.length > 80) {
+      return Effect.fail(toSessionCredentialError("Client label must be between 1 and 80 characters."));
+    }
+
+    return activeConnectionsSemaphore
+      .withPermit(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const row = yield* authSessions.getById({ sessionId });
+          if (
+            Option.isNone(row) ||
+            row.value.revokedAt !== null ||
+            DateTime.toEpochMillis(row.value.expiresAt) <= now
+          ) {
+            return yield* toSessionCredentialError("Session is no longer active.");
+          }
+
+          const updated = yield* authSessions.setClientLabel({
+            sessionId,
+            clientLabel: normalizedLabel,
+          });
+          if (!updated) return yield* toSessionCredentialError("Session is no longer active.");
+
+          const session = yield* loadActiveSession(sessionId);
+          if (Option.isNone(session)) {
+            return yield* toSessionCredentialError("Session is no longer active.");
+          }
+          yield* emitUpsert(session.value);
+          return session.value;
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof SessionCredentialError
+            ? cause
+            : toSessionCredentialError("Failed to update the session label.", cause),
+        ),
+      );
+  };
+
   const runAuthenticatedConnection: SessionCredentialServiceShape["runAuthenticatedConnection"] = (
     sessionId,
     effect,
@@ -668,6 +721,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    updateClientLabel,
     runAuthenticatedConnection,
   } satisfies SessionCredentialServiceShape;
 });

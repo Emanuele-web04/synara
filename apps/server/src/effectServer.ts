@@ -1,7 +1,7 @@
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
-import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
+import { Effect, Exit, FileSystem, Layer, Path, Schedule, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -39,6 +39,10 @@ import { makeServerReadiness } from "./server/readiness";
 import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
+import { CompanionAttachmentStore } from "./companion/AttachmentStore";
+import { companionHttpRouteLayer } from "./companion/http";
+import { CompanionPushService } from "./companion/PushService";
+import { companionRpcRouteLayer } from "./companion/rpc";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -63,6 +67,8 @@ export interface ServerShape {
     | ServerSettingsService
     | ThreadDeletionReactor
     | SqlClient.SqlClient
+    | CompanionAttachmentStore
+    | CompanionPushService
   >;
   readonly stopSignal: Effect.Effect<void, never>;
 }
@@ -119,6 +125,8 @@ export const createEffectServer = Effect.fn(function* () {
   const serverSettings = yield* ServerSettingsService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const readiness = yield* makeServerReadiness;
+  const companionAttachments = yield* CompanionAttachmentStore;
+  const companionPush = yield* CompanionPushService;
 
   yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
     Effect.catch((error) =>
@@ -145,7 +153,12 @@ export const createEffectServer = Effect.fn(function* () {
     Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
   );
 
-  const routesLayer = Layer.mergeAll(makeEffectHttpRouteLayer(readiness), websocketRpcRouteLayer);
+  const routesLayer = Layer.mergeAll(
+    makeEffectHttpRouteLayer(readiness),
+    websocketRpcRouteLayer,
+    companionRpcRouteLayer,
+    companionHttpRouteLayer,
+  );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
     .serve(httpApp)
@@ -170,6 +183,12 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Effect.addFinalizer(() => clearPersistedServerRuntimeState(config.serverRuntimeStatePath));
   yield* readiness.markHttpListening;
 
+  yield* companionAttachments.cleanupExpired;
+  yield* companionAttachments.cleanupExpired.pipe(
+    Effect.repeat(Schedule.spaced("1 hour")),
+    Effect.forkScoped,
+  );
+
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() =>
     closeServerRuntimePipeline({
@@ -184,6 +203,12 @@ export const createEffectServer = Effect.fn(function* () {
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
+  // Session revocation must immediately remove push destinations and pending
+  // uploads even while remote access itself is paused.
+  yield* Scope.provide(companionPush.startRevocationCleanup, subscriptionsScope);
+  if (config.companionEnabled) {
+    yield* Scope.provide(companionPush.start, subscriptionsScope);
+  }
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
   // Heal turns orphaned by the previous process exit (their in-memory runtimes

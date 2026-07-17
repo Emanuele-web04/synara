@@ -8,7 +8,10 @@ import { resolveSessionCookieName } from "../utils";
 
 export const makeServerAuthPolicy = Effect.gen(function* () {
   const config = yield* ServerConfig;
-  const remoteReachable = isWildcardHost(config.host) || !isLoopbackHost(config.host);
+  // Tailscale Serve deliberately proxies to a loopback-only listener. Companion mode is
+  // therefore remotely reachable even though the raw Synara socket is never bound to LAN.
+  const remoteReachable =
+    config.companionEnabled === true || isWildcardHost(config.host) || !isLoopbackHost(config.host);
 
   const policy: ServerAuthDescriptor["policy"] =
     config.mode === "desktop"

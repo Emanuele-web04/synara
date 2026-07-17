@@ -6,8 +6,10 @@ import type {
   AuthSessionState,
   AuthWebSocketTokenResult,
 } from "@synara/contracts";
+import * as Crypto from "node:crypto";
 import { DateTime, Effect, Layer } from "effect";
 
+import { ServerConfig } from "../../config";
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
   BootstrapCredentialError,
@@ -34,6 +36,29 @@ type BootstrapExchangeResult = {
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
+const WEBSOCKET_AUTH_PROTOCOL_PREFIX = "synara.auth.";
+
+function timingSafeEqualText(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left, "utf8");
+  const rightBytes = Buffer.from(right, "utf8");
+  return (
+    leftBytes.byteLength === rightBytes.byteLength &&
+    Crypto.timingSafeEqual(leftBytes, rightBytes)
+  );
+}
+
+function parseWebSocketProtocolTokens(
+  headers: Record<string, string | undefined>,
+): ReadonlyArray<string> {
+  const protocols = headers["sec-websocket-protocol"];
+  if (!protocols) return [];
+  return protocols
+    .split(",")
+    .map((protocol) => protocol.trim())
+    .filter((protocol) => protocol.startsWith(WEBSOCKET_AUTH_PROTOCOL_PREFIX))
+    .map((protocol) => protocol.slice(WEBSOCKET_AUTH_PROTOCOL_PREFIX.length).trim())
+    .filter((token) => token.length > 0);
+}
 
 export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): AuthError {
   if (cause.status === 500) {
@@ -65,6 +90,8 @@ function toAuthenticatedSession(session: {
   readonly subject: string;
   readonly method: AuthenticatedSession["method"];
   readonly role: AuthenticatedSession["role"];
+  readonly accessProfile: AuthenticatedSession["accessProfile"];
+  readonly client: AuthenticatedSession["client"];
   readonly expiresAt?: DateTime.DateTime;
 }): AuthenticatedSession {
   return {
@@ -72,34 +99,137 @@ function toAuthenticatedSession(session: {
     subject: session.subject,
     method: session.method,
     role: session.role,
+    accessProfile: session.accessProfile,
+    client: session.client,
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
   };
 }
 
 export const makeServerAuth = Effect.gen(function* () {
   const policy = yield* ServerAuthPolicy;
+  const config = yield* ServerConfig;
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
   const descriptor = yield* policy.getDescriptor();
+  const authenticationFailures = new Map<
+    string,
+    { readonly startedAt: number; readonly failures: number }
+  >();
+
+  const failureKey = (token: string) =>
+    Crypto.createHash("sha256").update(token, "utf8").digest("base64url").slice(0, 24);
+
+  const isFailureLimitReached = (key: string, limit: number, now: number) => {
+    const current = authenticationFailures.get(key);
+    return Boolean(current && now - current.startedAt < 60_000 && current.failures >= limit);
+  };
+
+  const recordAuthenticationFailure = (key: string, now: number) => {
+    for (const [entryKey, maximum] of [
+      [key, 8],
+      ["*", 100],
+    ] as const) {
+      const current = authenticationFailures.get(entryKey);
+      authenticationFailures.set(
+        entryKey,
+        !current || now - current.startedAt >= 60_000
+          ? { startedAt: now, failures: 1 }
+          : { ...current, failures: Math.min(current.failures + 1, maximum) },
+      );
+    }
+    if (authenticationFailures.size > 1_024) {
+      for (const [entryKey, entry] of authenticationFailures) {
+        if (now - entry.startedAt >= 60_000) authenticationFailures.delete(entryKey);
+      }
+    }
+  };
+
+  const consumeBootstrapCredentialRateLimited = (credential: string) =>
+    Effect.gen(function* () {
+      const now = Date.now();
+      const key = failureKey(credential);
+      if (isFailureLimitReached(key, 8, now) || isFailureLimitReached("*", 100, now)) {
+        return yield* new AuthError({
+          message: "Too many authentication failures. Try again shortly.",
+          status: 429,
+        });
+      }
+
+      const grant = yield* consumeBootstrapCredential(credential).pipe(
+        Effect.tapError(() => Effect.sync(() => recordAuthenticationFailure(key, now))),
+        Effect.mapError(toBootstrapExchangeAuthError),
+      );
+      authenticationFailures.delete(key);
+      return grant;
+    });
+
+  const consumeBootstrapCredential = (credential: string) => {
+    if (config.authToken && timingSafeEqualText(credential, config.authToken)) {
+      return Effect.succeed({
+        method: "desktop-bootstrap" as const,
+        role: "owner" as const,
+        accessProfile: "full" as const,
+        subject: "desktop-bootstrap",
+        label: "Synara Desktop",
+        expiresAt: DateTime.makeUnsafe(Date.now() + 24 * 60 * 60 * 1_000),
+      });
+    }
+    return bootstrapCredentials.consume(credential);
+  };
+
+  const authenticateRateLimited = (
+    token: string,
+    verify: Effect.Effect<Parameters<typeof toAuthenticatedSession>[0], SessionCredentialError>,
+  ): Effect.Effect<AuthenticatedSession, AuthError> =>
+    Effect.gen(function* () {
+      const now = Date.now();
+      const key = failureKey(token);
+      if (isFailureLimitReached(key, 8, now) || isFailureLimitReached("*", 100, now)) {
+        return yield* new AuthError({
+          message: "Too many authentication failures. Try again shortly.",
+          status: 429,
+        });
+      }
+      const verified = yield* verify.pipe(
+        Effect.tapError((cause: SessionCredentialError) =>
+          Effect.sync(() => recordAuthenticationFailure(key, now)).pipe(
+            Effect.flatMap(() => Effect.logWarning("Rejected authenticated credential.")),
+            Effect.annotateLogs({ reason: cause.message }),
+          ),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new AuthError({
+              message: "Unauthorized request.",
+              status: 401,
+              cause,
+            }),
+        ),
+      );
+      authenticationFailures.delete(key);
+      return toAuthenticatedSession(verified);
+    });
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
-    sessions.verify(token).pipe(
-      Effect.tapError((cause: SessionCredentialError) =>
-        Effect.logWarning("Rejected authenticated session credential.").pipe(
-          Effect.annotateLogs({ reason: cause.message }),
-        ),
-      ),
-      Effect.map(toAuthenticatedSession),
-      Effect.mapError(
-        (cause) =>
+    authenticateRateLimited(token, sessions.verify(token));
+
+  const authenticateWebSocketToken = (
+    token: string,
+  ): Effect.Effect<AuthenticatedSession, AuthError> =>
+    authenticateRateLimited(token, sessions.verifyWebSocketToken(token));
+
+  const requireFullAccess = (
+    session: AuthenticatedSession,
+  ): Effect.Effect<AuthenticatedSession, AuthError> =>
+    session.accessProfile === "full"
+      ? Effect.succeed(session)
+      : Effect.fail(
           new AuthError({
-            message: "Unauthorized request.",
-            status: 401,
-            cause,
+            message: "This session cannot access the desktop RPC endpoint.",
+            status: 403,
           }),
-      ),
-    );
+        );
 
   const authenticateRequest: ServerAuthShape["authenticateHttpRequest"] = (request) => {
     const cookieToken = request.cookies[sessions.cookieName];
@@ -128,6 +258,7 @@ export const makeServerAuth = Effect.gen(function* () {
             authenticated: true,
             auth: descriptor,
             role: session.role,
+            accessProfile: session.accessProfile,
             sessionMethod: session.method,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
           }) satisfies AuthSessionState,
@@ -144,14 +275,14 @@ export const makeServerAuth = Effect.gen(function* () {
     credential,
     requestMetadata,
   ) =>
-    bootstrapCredentials.consume(credential).pipe(
-      Effect.mapError(toBootstrapExchangeAuthError),
+    consumeBootstrapCredentialRateLimited(credential).pipe(
       Effect.flatMap((grant) =>
         sessions
           .issue({
             method: "browser-session-cookie",
             subject: grant.subject,
             role: grant.role,
+            accessProfile: grant.accessProfile,
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -174,6 +305,7 @@ export const makeServerAuth = Effect.gen(function* () {
             response: {
               authenticated: true,
               role: session.role,
+              accessProfile: session.accessProfile,
               sessionMethod: session.method,
               expiresAt: DateTime.toUtc(session.expiresAt),
             } satisfies AuthBootstrapResult,
@@ -184,14 +316,14 @@ export const makeServerAuth = Effect.gen(function* () {
 
   const exchangeBootstrapCredentialForBearerSession: ServerAuthShape["exchangeBootstrapCredentialForBearerSession"] =
     (credential, requestMetadata) =>
-      bootstrapCredentials.consume(credential).pipe(
-        Effect.mapError(toBootstrapExchangeAuthError),
+      consumeBootstrapCredentialRateLimited(credential).pipe(
         Effect.flatMap((grant) =>
           sessions
             .issue({
               method: "bearer-session-token",
               subject: grant.subject,
               role: grant.role,
+              accessProfile: grant.accessProfile,
               client: {
                 ...requestMetadata,
                 ...(grant.label ? { label: grant.label } : {}),
@@ -213,6 +345,7 @@ export const makeServerAuth = Effect.gen(function* () {
             ({
               authenticated: true,
               role: session.role,
+              accessProfile: session.accessProfile,
               sessionMethod: "bearer-session-token",
               expiresAt: DateTime.toUtc(session.expiresAt),
               sessionToken: session.token,
@@ -224,6 +357,7 @@ export const makeServerAuth = Effect.gen(function* () {
     authControlPlane
       .createPairingLink({
         role: input?.role ?? "client",
+        accessProfile: input?.accessProfile ?? "full",
         subject: input?.role === "owner" ? "owner-bootstrap" : "one-time-token",
         ...(input?.label ? { label: input.label } : {}),
       })
@@ -241,6 +375,7 @@ export const makeServerAuth = Effect.gen(function* () {
             ({
               id: issued.id,
               credential: issued.credential,
+              accessProfile: issued.accessProfile,
               ...(issued.label ? { label: issued.label } : {}),
               expiresAt: DateTime.toUtc(issued.expiresAt),
             }) satisfies AuthPairingCredentialResult,
@@ -345,6 +480,32 @@ export const makeServerAuth = Effect.gen(function* () {
       ),
     );
 
+  const revokeCompanionClientSessions: ServerAuthShape["revokeCompanionClientSessions"] = (
+    currentSessionId,
+  ) =>
+    Effect.gen(function* () {
+      const activeSessions = yield* authControlPlane.listSessions();
+      const companionSessions = activeSessions.filter(
+        (session) =>
+          session.sessionId !== currentSessionId && session.accessProfile === "companion",
+      );
+      const revoked = yield* Effect.forEach(
+        companionSessions,
+        (session) => authControlPlane.revokeSession(session.sessionId),
+        { concurrency: 1 },
+      );
+      return revoked.filter(Boolean).length;
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AuthError({
+            message: "Failed to revoke Companion client sessions.",
+            status: 500,
+            cause,
+          }),
+      ),
+    );
+
   const issueWebSocketToken: ServerAuthShape["issueWebSocketToken"] = (session) =>
     sessions.issueWebSocketToken(session.sessionId).pipe(
       Effect.mapError((cause) =>
@@ -372,23 +533,34 @@ export const makeServerAuth = Effect.gen(function* () {
   const authenticateWebSocketUpgrade: ServerAuthShape["authenticateWebSocketUpgrade"] = (
     request,
   ) => {
-    const websocketToken = request.url?.searchParams.get(WEBSOCKET_TOKEN_QUERY_PARAM);
+    const protocolTokens = parseWebSocketProtocolTokens(request.headers);
+    const websocketToken =
+      protocolTokens.length === 1
+        ? protocolTokens[0]
+        : request.url?.searchParams.get(WEBSOCKET_TOKEN_QUERY_PARAM);
     if (websocketToken && websocketToken.trim().length > 0) {
-      return sessions.verifyWebSocketToken(websocketToken).pipe(
-        Effect.map(toAuthenticatedSession),
-        Effect.mapError(
-          (cause) =>
-            new AuthError({
-              message: "Unauthorized request.",
-              status: 401,
-              cause,
-            }),
-        ),
-      );
+      return authenticateWebSocketToken(websocketToken).pipe(Effect.flatMap(requireFullAccess));
     }
 
-    return authenticateRequest(request);
+    return authenticateRequest(request).pipe(Effect.flatMap(requireFullAccess));
   };
+
+  const authenticateCompanionWebSocketUpgrade: ServerAuthShape["authenticateCompanionWebSocketUpgrade"] =
+    (request) => {
+      const protocolTokens = parseWebSocketProtocolTokens(request.headers);
+      if (
+        protocolTokens.length !== 1 ||
+        request.url?.searchParams.has(WEBSOCKET_TOKEN_QUERY_PARAM) === true
+      ) {
+        return Effect.fail(
+          new AuthError({
+            message: "A short-lived Companion websocket credential is required.",
+            status: 401,
+          }),
+        );
+      }
+      return authenticateWebSocketToken(protocolTokens[0]!);
+    };
 
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
     issuePairingCredential({ role: "owner" }).pipe(
@@ -412,9 +584,11 @@ export const makeServerAuth = Effect.gen(function* () {
     listClientSessions,
     revokeClientSession,
     revokeOtherClientSessions,
+    revokeCompanionClientSessions,
     logoutSession,
     authenticateHttpRequest: authenticateRequest,
     authenticateWebSocketUpgrade,
+    authenticateCompanionWebSocketUpgrade,
     issueWebSocketToken,
     issueStartupPairingUrl,
   } satisfies ServerAuthShape;

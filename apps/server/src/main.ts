@@ -136,6 +136,7 @@ const CliEnvConfig = Config.all({
   ),
   logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
   logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
+  companionEnabled: optionalBooleanEnvironmentConfig("SYNARA_COMPANION_ENABLED"),
 });
 
 const ServerConfigLive = (input: CliInput) =>
@@ -252,6 +253,7 @@ const ServerConfigLive = (input: CliInput) =>
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
+        companionEnabled: env.companionEnabled ?? false,
       } satisfies ServerConfigShape;
 
       return config;

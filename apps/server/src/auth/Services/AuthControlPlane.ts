@@ -1,6 +1,7 @@
 import type {
   AuthClientMetadata,
   AuthClientSession,
+  AuthAccessProfile,
   AuthPairingLink,
   AuthSessionId,
 } from "@synara/contracts";
@@ -13,6 +14,7 @@ export interface IssuedPairingLink {
   readonly id: string;
   readonly credential: string;
   readonly role: SessionRole;
+  readonly accessProfile: AuthAccessProfile;
   readonly subject: string;
   readonly label?: string;
   readonly createdAt: DateTime.Utc;
@@ -24,6 +26,7 @@ export interface IssuedBearerSession {
   readonly token: string;
   readonly method: "bearer-session-token";
   readonly role: SessionRole;
+  readonly accessProfile: AuthAccessProfile;
   readonly subject: string;
   readonly client: AuthClientMetadata;
   readonly expiresAt: DateTime.Utc;
@@ -39,10 +42,12 @@ export interface AuthControlPlaneShape {
     readonly ttl?: Duration.Duration;
     readonly label?: string;
     readonly role?: SessionRole;
+    readonly accessProfile?: AuthAccessProfile;
     readonly subject?: string;
   }) => Effect.Effect<IssuedPairingLink, AuthControlPlaneError>;
   readonly listPairingLinks: (input?: {
     readonly role?: SessionRole;
+    readonly accessProfile?: AuthAccessProfile;
     readonly excludeSubjects?: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthControlPlaneError>;
   readonly revokePairingLink: (id: string) => Effect.Effect<boolean, AuthControlPlaneError>;
@@ -50,6 +55,7 @@ export interface AuthControlPlaneShape {
     readonly ttl?: Duration.Duration;
     readonly subject?: string;
     readonly role?: SessionRole;
+    readonly accessProfile?: AuthAccessProfile;
     readonly label?: string;
   }) => Effect.Effect<IssuedBearerSession, AuthControlPlaneError>;
   readonly listSessions: () => Effect.Effect<

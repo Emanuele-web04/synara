@@ -40,6 +40,8 @@ import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTur
 import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { CompanionAttachmentStoreLive } from "./companion/AttachmentStore";
+import { CompanionPushServiceLive } from "./companion/PushService";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -134,6 +136,13 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const companionPushServiceLayer = CompanionPushServiceLive.pipe(
+    Layer.provideMerge(authServicesLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const companionAttachmentStoreLayer = CompanionAttachmentStoreLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
 
   return Layer.mergeAll(
     automationServiceLayer,
@@ -159,5 +168,7 @@ export function makeServerRuntimeServicesLayer() {
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    companionAttachmentStoreLayer,
+    companionPushServiceLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }

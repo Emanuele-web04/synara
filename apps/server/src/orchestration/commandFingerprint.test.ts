@@ -70,4 +70,41 @@ describe("fingerprintOrchestrationCommand", () => {
       fingerprintOrchestrationCommand(withAttachments("generated-b", "spoofed.png")),
     );
   });
+
+  it("ignores only server-assigned timestamps for Companion request IDs", () => {
+    const first = fingerprintOrchestrationCommand(
+      turnCommand({
+        commandId: CommandId.makeUnsafe(
+          "companion:turn:11111111-1111-4111-8111-111111111111",
+        ),
+      }),
+    );
+    const retried = fingerprintOrchestrationCommand(
+      turnCommand({
+        commandId: CommandId.makeUnsafe(
+          "companion:turn:11111111-1111-4111-8111-111111111111",
+        ),
+        createdAt: "2026-07-14T00:01:00.000Z",
+      }),
+    );
+    const changedText = fingerprintOrchestrationCommand(
+      turnCommand({
+        commandId: CommandId.makeUnsafe(
+          "companion:turn:11111111-1111-4111-8111-111111111111",
+        ),
+        createdAt: "2026-07-14T00:01:00.000Z",
+        message: {
+          messageId: MessageId.makeUnsafe(
+            "companion:message:11111111-1111-4111-8111-111111111111",
+          ),
+          role: "user",
+          text: "changed",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(retried).toEqual(first);
+    expect(changedText.value).not.toBe(first.value);
+  });
 });
