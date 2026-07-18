@@ -59,6 +59,7 @@ const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
+let getShellSnapshotRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
@@ -184,6 +185,7 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -442,6 +444,7 @@ describe("EventRouter scoped orchestration sync", () => {
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
+    getShellSnapshotRequestCount = 0;
     localStorage.clear();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
@@ -928,16 +931,16 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforePromotion = subscribeThreadRequestCountById.get(recoveryThreadId)!;
       sendThreadEventPush(bufferedEvent);
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 4_000, interval: 16 },
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+        subscribeCountBeforePromotion,
       );
 
       const baseThread = fixture.snapshot.threads[0]!;
@@ -970,7 +973,9 @@ describe("EventRouter scoped orchestration sync", () => {
       let thread;
       await vi.waitFor(
         () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+            subscribeCountBeforePromotion + 1,
+          );
           thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
@@ -1026,12 +1031,14 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
           ).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforePromotion = subscribeThreadRequestCountById.get(draftThreadId)!;
 
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
@@ -1084,15 +1091,16 @@ describe("EventRouter scoped orchestration sync", () => {
           (thread) => thread.id === draftThreadId,
         )!,
       });
-      sendThreadSnapshotPush(draftThreadId, 2, getThreadDetailFromFixtureSnapshot(draftThreadId));
 
       await vi.waitFor(
         () => {
           expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforePromotion + 1,
+          );
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBe(2);
+          ).toBe(subscribeCountBeforePromotion + 1);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },

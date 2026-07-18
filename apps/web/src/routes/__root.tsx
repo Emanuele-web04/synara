@@ -1252,8 +1252,12 @@ function EventRouter() {
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
+      shellRefreshGeneration += 1;
+      bumpShellRefreshEpoch();
+      subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
+      pendingThreadReplayTargetById.clear();
       threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
@@ -1462,6 +1466,9 @@ function EventRouter() {
       if (item.sequence <= shellSnapshotSequence) {
         return;
       }
+      const isNewShellThread =
+        item.kind === "thread-upserted" &&
+        useStore.getState().threadShellById?.[item.thread.id] === undefined;
       shellSnapshotSequence = item.sequence;
       const mutationApplied = applyFencedShellEvent(item);
       if (mutationApplied && item.kind === "thread-upserted") {
@@ -1469,6 +1476,13 @@ function EventRouter() {
       }
       if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
         if (!threadSnapshotSequenceById.has(item.thread.id)) {
+          if (mutationApplied && isNewShellThread) {
+            // A draft subscription can legitimately start before the server thread
+            // exists, so its stream has no initial snapshot. The first shell row is
+            // authoritative proof that the thread now exists; allow exactly one
+            // replacement subscription to obtain the missing detail snapshot.
+            threadSnapshotRequestInFlight.delete(item.thread.id);
+          }
           void requestThreadSnapshot(item.thread.id);
         }
         void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
