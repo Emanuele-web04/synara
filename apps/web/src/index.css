@@ -93,9 +93,46 @@
 }
 
 @layer components {
+  .github-project-dialog [data-github-dialog-reveal] {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+    transition-property: opacity, transform, filter;
+    transition-duration: 250ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .github-project-dialog [data-github-dialog-reveal="2"] {
+    transition-delay: 40ms;
+  }
+
+  .github-project-dialog [data-github-dialog-reveal="3"] {
+    transition-delay: 80ms;
+  }
+
+  .github-project-dialog[data-starting-style] [data-github-dialog-reveal] {
+    opacity: 0;
+    transform: translateY(12px);
+    filter: blur(3px);
+  }
+
+  .github-project-dialog[data-ending-style] [data-github-dialog-reveal] {
+    opacity: 0;
+    transform: translateY(-4px);
+    filter: blur(2px);
+    transition-duration: 150ms;
+    transition-delay: 0ms;
+  }
+
   .sidebar-icon-button {
     @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
     background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .github-project-dialog [data-github-dialog-reveal] {
+      transition: none !important;
+    }
   }
 
   .sidebar-icon-button:hover {

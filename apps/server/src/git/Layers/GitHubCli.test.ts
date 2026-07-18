@@ -7,7 +7,11 @@ vi.mock("../../processRunner", () => ({
 }));
 
 import { runProcess } from "../../processRunner";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  PULL_REQUEST_LIST_JSON_FIELDS,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import { GitHubCliLive } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -19,6 +23,112 @@ afterEach(() => {
 });
 
 layer("GitHubCliLive", (it) => {
+  it.effect("loads the dedicated pull request viewer with the selected account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "alice\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      const viewer = yield* gh.getViewerLogin({
+        cwd: "/repo",
+        account: { host: "enterprise.example.com", login: "alice" },
+      });
+
+      assert.equal(viewer, "alice");
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "auth",
+        "token",
+        "--hostname",
+        "enterprise.example.com",
+        "--user",
+        "alice",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "user",
+        "--hostname",
+        "enterprise.example.com",
+        "--jq",
+        ".login",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.objectContaining({
+            GH_HOST: "enterprise.example.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
+      );
+    }),
+  );
+
+  it.effect("lists healthy GitHub CLI accounts without inherited token overrides", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          hosts: {
+            "github.com": [
+              {
+                state: "success",
+                active: true,
+                host: "github.com",
+                login: "octocat",
+              },
+              {
+                state: "success",
+                active: false,
+                host: "github.com",
+                login: "hubot",
+              },
+              {
+                state: "error",
+                active: false,
+                host: "github.com",
+                login: "expired",
+              },
+            ],
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listAccounts({ cwd: "/repo" });
+      });
+
+      assert.deepStrictEqual(result, [
+        { host: "github.com", login: "octocat", active: true },
+        { host: "github.com", login: "hubot", active: false },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["auth", "status", "--json", "hosts"],
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.not.objectContaining({ GH_TOKEN: expect.any(String) }),
+        }),
+      );
+    }),
+  );
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
@@ -132,6 +242,81 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("lists workspace pull requests with every picker filter", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValue({
+        stdout: JSON.stringify([
+          {
+            number: 9,
+            title: "Older pull request",
+            url: "https://github.com/o/r/pull/9",
+            baseRefName: "main",
+            headRefName: "feature/older",
+            state: "CLOSED",
+            additions: 4,
+            deletions: 2,
+            updatedAt: "2026-07-01T08:00:00Z",
+            author: { login: "octocat" },
+          },
+          {
+            number: 10,
+            title: "Newer pull request",
+            url: "https://github.com/o/r/pull/10",
+            baseRefName: "main",
+            headRefName: "feature/newer",
+            state: "OPEN",
+            additions: 12,
+            deletions: 3,
+            updatedAt: "2026-07-14T08:00:00Z",
+            author: { login: "hubot" },
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const gh = yield* GitHubCli;
+      const filters = ["all", "reviewing", "authored", "open", "closed", "merged"] as const;
+      for (const filter of filters) {
+        const result = yield* gh.listWorkspacePullRequests({ cwd: "/repo", filter });
+        assert.equal(result[0]?.number, 10);
+      }
+
+      expect(
+        yield* gh.listWorkspacePullRequests({ cwd: "/repo", filter: "open", limit: 25 }),
+      ).toEqual([
+        expect.objectContaining({
+          number: 10,
+          authorLogin: "hubot",
+          authorAvatarUrl: "https://github.com/hubot.png?size=48",
+        }),
+        expect.objectContaining({ number: 9, authorLogin: "octocat" }),
+      ]);
+
+      const expectedFilterArguments = [
+        ["--state", "all"],
+        ["--state", "open", "--search", "review-requested:@me"],
+        ["--state", "all", "--author", "@me"],
+        ["--state", "open"],
+        ["--state", "closed"],
+        ["--state", "merged"],
+      ];
+      for (const [index, expectedArguments] of expectedFilterArguments.entries()) {
+        expect(mockedRunProcess.mock.calls[index]?.[1]).toEqual(
+          expect.arrayContaining(expectedArguments),
+        );
+      }
+      expect(mockedRunProcess.mock.calls[6]?.[1]).toEqual(
+        expect.arrayContaining(["--state", "open", "--limit", "25"]),
+      );
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining(["--limit", "1000", "--json", PULL_REQUEST_LIST_JSON_FIELDS]),
+      );
+    }),
+  );
+
   it.effect("skips malformed list entries instead of hiding the healthy ones", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
@@ -191,6 +376,207 @@ layer("GitHubCliLive", (it) => {
       });
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
         expect.arrayContaining(["repo", "view", "octocat/sample-repo"]),
+      );
+    }),
+  );
+
+  it.effect("returns an authoritative branch URL using the selected account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octocat/sample-repo/tree/feature%2Fpublished\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getBranchBrowserUrl({
+          cwd: "/repo",
+          repository: "octocat/sample-repo",
+          branch: "feature/published",
+          account: { host: "github.com", login: "hubot" },
+        });
+      });
+
+      assert.deepStrictEqual(result, {
+        url: "https://github.com/octocat/sample-repo/tree/feature%2Fpublished",
+      });
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "repos/octocat/sample-repo/branches/feature%2Fpublished",
+        "--jq",
+        "._links.html",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_HOST: "github.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
+      );
+    }),
+  );
+
+  it.effect("returns no URL for a missing branch only after repository access succeeds", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("gh: Branch not found (HTTP 404)"))
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            nameWithOwner: "octocat/sample-repo",
+            url: "https://github.com/octocat/sample-repo",
+            sshUrl: "git@github.com:octocat/sample-repo.git",
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getBranchBrowserUrl({
+          cwd: "/repo",
+          repository: "octocat/sample-repo",
+          branch: "feature/deleted",
+        });
+      });
+
+      assert.deepStrictEqual(result, { url: null });
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "repo",
+        "view",
+        "octocat/sample-repo",
+        "--json",
+        "nameWithOwner,url,sshUrl",
+      ]);
+    }),
+  );
+
+  it.effect("lists every repository page available to the authenticated account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          [
+            {
+              full_name: "octocat/private-tools",
+              html_url: "https://github.com/octocat/private-tools",
+              description: "Developer tooling",
+              default_branch: "main",
+              pushed_at: "2026-07-14T10:00:00Z",
+              private: true,
+              archived: false,
+            },
+          ],
+          [
+            {
+              full_name: "example-org/shared-app",
+              html_url: "https://github.com/example-org/shared-app",
+              description: null,
+              default_branch: null,
+              pushed_at: null,
+              private: false,
+              archived: true,
+            },
+          ],
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositories({ cwd: "/repo" });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          nameWithOwner: "octocat/private-tools",
+          url: "https://github.com/octocat/private-tools",
+          description: "Developer tooling",
+          defaultBranch: "main",
+          pushedAt: "2026-07-14T10:00:00Z",
+          isPrivate: true,
+          isArchived: false,
+        },
+        {
+          nameWithOwner: "example-org/shared-app",
+          url: "https://github.com/example-org/shared-app",
+          description: null,
+          defaultBranch: null,
+          pushedAt: null,
+          isPrivate: false,
+          isArchived: true,
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledOnce();
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining([
+          "api",
+          "--paginate",
+          "--slurp",
+          "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=pushed&direction=desc",
+        ]),
+      );
+    }),
+  );
+
+  it.effect("scopes repository discovery to the selected GitHub account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([[]]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositories({
+          cwd: "/repo",
+          account: { host: "github.com", login: "hubot" },
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "auth",
+        "token",
+        "--hostname",
+        "github.com",
+        "--user",
+        "hubot",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.objectContaining({
+            GH_HOST: "github.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
       );
     }),
   );

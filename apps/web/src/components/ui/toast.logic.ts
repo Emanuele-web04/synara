@@ -8,6 +8,25 @@ export function shouldHideCollapsedToastContent(
   return visibleToastIndex > 0;
 }
 
+export function isOpenThreadToastShortcut(event: {
+  altKey: boolean;
+  code?: string;
+  ctrlKey: boolean;
+  key: string;
+  metaKey: boolean;
+  repeat: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return (
+    !event.repeat &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    (event.code === "KeyL" || event.key.toLowerCase() === "l")
+  );
+}
+
 type ToastWithHeight = {
   height?: number | null | undefined;
 };

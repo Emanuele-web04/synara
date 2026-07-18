@@ -21,6 +21,7 @@ import {
   ThreadEnvironmentMode,
   ThreadId,
   TurnId,
+  WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -30,6 +31,9 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

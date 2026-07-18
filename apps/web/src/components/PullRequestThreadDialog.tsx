@@ -1,4 +1,4 @@
-import type { GitResolvePullRequestResult } from "@synara/contracts";
+import type { GitHubAccountSelection, GitResolvePullRequestResult } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +25,7 @@ import { Spinner } from "./ui/spinner";
 interface PullRequestThreadDialogProps {
   open: boolean;
   cwd: string | null;
+  githubAccount?: GitHubAccountSelection;
   initialReference: string | null;
   onOpenChange: (open: boolean) => void;
   onPrepared: (input: {
@@ -37,6 +38,7 @@ interface PullRequestThreadDialogProps {
 export function PullRequestThreadDialog({
   open,
   cwd,
+  githubAccount,
   initialReference,
   onOpenChange,
   onPrepared,
@@ -56,6 +58,7 @@ export function PullRequestThreadDialog({
       <DialogPopup className="max-w-xl">
         <PullRequestThreadDialogContent
           cwd={cwd}
+          {...(githubAccount ? { githubAccount } : {})}
           initialReference={initialReference}
           onOpenChange={onOpenChange}
           onPrepared={onPrepared}
@@ -68,6 +71,7 @@ export function PullRequestThreadDialog({
 
 function PullRequestThreadDialogContent({
   cwd,
+  githubAccount,
   initialReference,
   onOpenChange,
   onPrepared,
@@ -102,19 +106,28 @@ function PullRequestThreadDialogContent({
     gitResolvePullRequestQueryOptions({
       cwd,
       reference: parsedDebouncedReference,
+      ...(githubAccount ? { account: githubAccount } : {}),
     }),
   );
-  const cachedPullRequest =
-    cwd && parsedReference
-      ? (queryClient.getQueryData<GitResolvePullRequestResult>([
-          "git",
-          "pull-request",
-          cwd,
-          parsedReference,
-        ])?.pullRequest ?? null)
-      : null;
+  const cachedPullRequest = (() => {
+    if (!cwd || !parsedReference) {
+      return null;
+    }
+    const cached = queryClient.getQueryData<GitResolvePullRequestResult>(
+      gitResolvePullRequestQueryOptions({
+        cwd,
+        reference: parsedReference,
+        ...(githubAccount ? { account: githubAccount } : {}),
+      }).queryKey,
+    );
+    return cached?.pullRequest ?? null;
+  })();
   const preparePullRequestThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({ cwd, queryClient }),
+    gitPreparePullRequestThreadMutationOptions({
+      cwd,
+      queryClient,
+      ...(githubAccount ? { account: githubAccount } : {}),
+    }),
   );
 
   const liveResolvedPullRequest =

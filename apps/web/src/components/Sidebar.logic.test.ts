@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildGitHubBranchUrl,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -16,8 +17,10 @@ import {
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
+  getNextVisibleWorkspaceId,
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
+  getThreadJumpTargetIds,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
@@ -38,6 +41,7 @@ import {
   resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
+  resolveConversationTabThreadIds,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -46,9 +50,10 @@ import {
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  sortThreadsForConversationTabs,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, WorktreeWorkspaceId } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -119,6 +124,19 @@ describe("pullRequestRepositoryConfigFingerprint", () => {
     expect(
       pullRequestRepositoryConfigFingerprint([{ ...first, name: "Renamed" }, second]),
     ).not.toBe(baseline);
+  });
+});
+
+describe("buildGitHubBranchUrl", () => {
+  it("builds a GitHub tree link while preserving namespaced branches", () => {
+    expect(
+      buildGitHubBranchUrl("https://github.com/amirghst/ghost-vault", "synara/test branch"),
+    ).toBe("https://github.com/amirghst/ghost-vault/tree/synara/test%20branch");
+  });
+
+  it("rejects missing branches and non-GitHub repositories", () => {
+    expect(buildGitHubBranchUrl("https://github.com/amirghst/ghost-vault", null)).toBeNull();
+    expect(buildGitHubBranchUrl("https://gitlab.com/amirghst/ghost-vault", "main")).toBeNull();
   });
 });
 
@@ -1383,6 +1401,101 @@ describe("getNextVisibleSidebarThreadId", () => {
   });
 });
 
+describe("resolveConversationTabThreadIds", () => {
+  const sidebarThreadIds = [
+    ThreadId.makeUnsafe("thread-newest"),
+    ThreadId.makeUnsafe("thread-middle"),
+    ThreadId.makeUnsafe("thread-oldest"),
+  ];
+  const editorTabThreadIds = sidebarThreadIds.toReversed();
+
+  it("preserves editor tab order instead of cycling in reversed sidebar order", () => {
+    const resolvedThreadIds = resolveConversationTabThreadIds({
+      workspaceScoped: false,
+      workspaceThreadIds: [],
+      editorScoped: true,
+      editorTabThreadIds,
+      visibleSidebarThreadIds: sidebarThreadIds,
+    });
+
+    expect(resolvedThreadIds).toEqual(editorTabThreadIds);
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds: resolvedThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-middle"),
+        direction: "backward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-oldest"));
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds: resolvedThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-middle"),
+        direction: "forward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-newest"));
+  });
+
+  it("uses workspace tab order before editor or sidebar order", () => {
+    const workspaceThreadIds = sortThreadsForConversationTabs([
+      makeThread({
+        id: ThreadId.makeUnsafe("workspace-right"),
+        createdAt: "2026-07-16T10:05:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("workspace-left"),
+        createdAt: "2026-07-16T10:00:00.000Z",
+      }),
+    ]).map((thread) => thread.id);
+
+    expect(
+      resolveConversationTabThreadIds({
+        workspaceScoped: true,
+        workspaceThreadIds,
+        editorScoped: true,
+        editorTabThreadIds,
+        visibleSidebarThreadIds: sidebarThreadIds,
+      }),
+    ).toEqual(workspaceThreadIds);
+    expect(workspaceThreadIds).toEqual([
+      ThreadId.makeUnsafe("workspace-left"),
+      ThreadId.makeUnsafe("workspace-right"),
+    ]);
+  });
+});
+
+describe("workspace keyboard navigation", () => {
+  const workspaceIds = [
+    WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+    WorktreeWorkspaceId.makeUnsafe("workspace-2"),
+    WorktreeWorkspaceId.makeUnsafe("workspace-3"),
+  ];
+
+  it("cycles workspaces in sidebar order with wraparound", () => {
+    expect(
+      getNextVisibleWorkspaceId({
+        visibleWorkspaceIds: workspaceIds,
+        activeWorkspaceId: workspaceIds[2] ?? null,
+        direction: "forward",
+      }),
+    ).toBe(workspaceIds[0]);
+    expect(
+      getNextVisibleWorkspaceId({
+        visibleWorkspaceIds: workspaceIds,
+        activeWorkspaceId: workspaceIds[0] ?? null,
+        direction: "backward",
+      }),
+    ).toBe(workspaceIds[2]);
+  });
+
+  it("assigns command 9 to the last conversation when more than nine are open", () => {
+    const threadIds = Array.from({ length: 12 }, (_, index) =>
+      ThreadId.makeUnsafe(`thread-${index + 1}`),
+    );
+
+    expect(getThreadJumpTargetIds(threadIds)).toEqual([...threadIds.slice(0, 8), threadIds[11]]);
+  });
+});
+
 describe("getSidebarThreadIdForJumpCommand", () => {
   const visibleThreadIds = [
     ThreadId.makeUnsafe("thread-1"),
@@ -1874,6 +1987,39 @@ describe("sortThreadsForSidebar", () => {
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
     ]);
+  });
+});
+
+describe("sortThreadsForConversationTabs", () => {
+  it("keeps tabs in creation order when activity timestamps change", () => {
+    const oldest = makeThread({
+      id: ThreadId.makeUnsafe("thread-1"),
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:10:00.000Z",
+    });
+    const middle = makeThread({
+      id: ThreadId.makeUnsafe("thread-2"),
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+    const newest = makeThread({
+      id: ThreadId.makeUnsafe("thread-3"),
+      createdAt: "2026-03-09T10:06:00.000Z",
+      updatedAt: "2026-03-09T10:06:00.000Z",
+    });
+
+    expect(sortThreadsForConversationTabs([newest, oldest, middle])).toEqual([
+      oldest,
+      middle,
+      newest,
+    ]);
+    expect(
+      sortThreadsForConversationTabs([
+        newest,
+        { ...oldest, updatedAt: "2026-03-09T10:12:00.000Z" },
+        middle,
+      ]).map((thread) => thread.id),
+    ).toEqual([oldest.id, middle.id, newest.id]);
   });
 });
 

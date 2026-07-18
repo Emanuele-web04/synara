@@ -8,6 +8,10 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
+  GitHubAccountSelection,
+  GitHubAccountSummary,
+  GitHubRepositorySummary,
+  GitPullRequestListFilter,
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestActor,
@@ -33,7 +37,11 @@ import type { GitHubCliError } from "../Errors.ts";
  * that cost; if status polling ever feels slow, this field is the first suspect.
  */
 export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
-  "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt";
+  "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt,author";
+
+/** Lightweight fields for repository-wide PR pickers, where list latency matters. */
+export const PULL_REQUEST_LIST_JSON_FIELDS =
+  "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,additions,deletions,updatedAt,author";
 
 export interface GitHubPullRequestSummary {
   readonly number: number;
@@ -52,12 +60,18 @@ export interface GitHubPullRequestSummary {
   readonly headRepositoryOwnerLogin?: string | null;
   /** ISO timestamp of the last PR update; used to rank multiple PRs for one branch. */
   readonly updatedAt?: string | null;
+  readonly authorLogin?: string | null;
+  readonly authorAvatarUrl?: string | null;
 }
 
 export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
   readonly sshUrl: string;
+}
+
+export interface GitHubBranchLookupResult {
+  readonly url: string | null;
 }
 
 export interface GitHubPullRequestReviewCommentsResult {
@@ -134,10 +148,12 @@ export interface GitHubCliShape {
     readonly outputMode?: "error" | "truncate";
     /** Piped to the child's stdin — for payloads that must never appear in argv. */
     readonly stdin?: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
   readonly getViewerLogin: (input: {
     readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<string, GitHubCliError>;
 
   readonly listRepositoryPullRequests: (input: {
@@ -147,6 +163,7 @@ export interface GitHubCliShape {
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestListBatch, GitHubCliError>;
 
   /**
@@ -157,6 +174,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestListItem, GitHubCliError>;
 
   /**
@@ -169,23 +187,27 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly viewer: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
 
   readonly getPullRequestDetail: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
 
   readonly getRepositoryMergeCapabilities: (input: {
     readonly cwd: string;
     readonly repository: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<PullRequestMergeCapabilities, GitHubCliError>;
 
   readonly getPullRequestDiff: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<{ readonly patch: string; readonly truncated: boolean }, GitHubCliError>;
 
   readonly runPullRequestAction: (input: {
@@ -194,6 +216,7 @@ export interface GitHubCliShape {
     readonly number: number;
     readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
     readonly mergeMethod?: PullRequestMergeMethod;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**
@@ -204,7 +227,13 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
     readonly body: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
+
+  /** List every healthy account stored by GitHub CLI without changing the active account. */
+  readonly listAccounts: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<GitHubAccountSummary>, GitHubCliError>;
 
   /**
    * List open pull requests for a head branch.
@@ -213,6 +242,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
@@ -223,6 +253,17 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
+  }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
+
+  /**
+   * List pull requests for the repository, scoped by the workspace picker filter.
+   */
+  readonly listWorkspacePullRequests: (input: {
+    readonly cwd: string;
+    readonly filter: GitPullRequestListFilter;
+    readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
@@ -231,6 +272,7 @@ export interface GitHubCliShape {
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**
@@ -240,6 +282,7 @@ export interface GitHubCliShape {
   readonly getPullRequestWithChecks: (input: {
     readonly cwd: string;
     readonly reference: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<
     {
       readonly summary: GitHubPullRequestSummary;
@@ -259,6 +302,7 @@ export interface GitHubCliShape {
     readonly owner: string;
     readonly repo: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
@@ -267,7 +311,25 @@ export interface GitHubCliShape {
   readonly getRepositoryCloneUrls: (input: {
     readonly cwd: string;
     readonly repository: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
+
+  /** Verify a branch exists on GitHub and return GitHub's authoritative browser URL. */
+  readonly getBranchBrowserUrl: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly branch: string;
+    readonly account?: GitHubAccountSelection;
+  }) => Effect.Effect<GitHubBranchLookupResult, GitHubCliError>;
+
+  /**
+   * List repositories available to the authenticated GitHub account, including
+   * organization and collaborator access.
+   */
+  readonly listRepositories: (input: {
+    readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
+  }) => Effect.Effect<ReadonlyArray<GitHubRepositorySummary>, GitHubCliError>;
 
   /**
    * Create a pull request from branch context and body file.
@@ -278,6 +340,7 @@ export interface GitHubCliShape {
     readonly headSelector: string;
     readonly title: string;
     readonly bodyFile: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**
@@ -285,6 +348,7 @@ export interface GitHubCliShape {
    */
   readonly getDefaultBranch: (input: {
     readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<string | null, GitHubCliError>;
 
   /**
@@ -294,6 +358,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
     readonly force?: boolean;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 }
 

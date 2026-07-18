@@ -38,6 +38,13 @@ describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
   });
 
   it.each([
+    ["git@git.acme.test:platform/widgets.git", "platform/widgets"],
+    ["https://git.acme.test/platform/widgets", "platform/widgets"],
+  ])("parses enterprise remote %s", (remote, expected) => {
+    expect(parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remote, "git.acme.test")).toBe(expected);
+  });
+
+  it.each([
     null,
     "",
     "https://gitlab.com/openai/codex",
@@ -53,6 +60,7 @@ describe("parseGitHubRepositoryNameWithOwnerFromPullRequestUrl", () => {
     ["https://github.com/openai/codex/pull/123", "openai/codex"],
     ["https://github.com/OpenAI/Codex/pull/123/files", "OpenAI/Codex"],
     ["http://github.com/openai/codex/pull/123?diff=split", "openai/codex"],
+    ["https://git.acme.test/platform/widgets/pull/42", "platform/widgets"],
   ])("parses %s", (url, expected) => {
     expect(parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url)).toBe(expected);
   });
@@ -60,7 +68,6 @@ describe("parseGitHubRepositoryNameWithOwnerFromPullRequestUrl", () => {
   it.each([
     null,
     "",
-    "https://gitlab.com/openai/codex/pull/1",
     "https://github.com/openai/codex/issues/1",
     "https://github.com/-owner/codex/pull/1",
     "javascript:alert(1)",

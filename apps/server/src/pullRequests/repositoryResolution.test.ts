@@ -103,6 +103,28 @@ describe("resolveGitHubRepositories", () => {
     expect(calls.map((args) => args[0])).toEqual(["branch", "config"]);
   });
 
+  it("returns an authoritative inventory for the selected GitHub Enterprise host", async () => {
+    const git = makeGit({
+      branchRemote: "origin",
+      urls: {
+        origin: "git@git.acme.test:platform/widgets.git",
+        public: "https://github.com/acme/public-mirror.git",
+      },
+    });
+
+    await expect(
+      Effect.runPromise(resolveGitHubRepositories(git, "/tmp/project", "git.acme.test")),
+    ).resolves.toEqual({
+      authoritative: true,
+      repositories: [
+        {
+          nameWithOwner: "platform/widgets",
+          url: "https://git.acme.test/platform/widgets",
+        },
+      ],
+    });
+  });
+
   it("treats a repository with no matching config keys as authoritatively empty", async () => {
     await expect(
       Effect.runPromise(resolveGitHubRepositories(makeGit({}), "/tmp/project")),

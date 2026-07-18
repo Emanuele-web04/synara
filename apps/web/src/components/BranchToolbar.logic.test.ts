@@ -7,8 +7,47 @@ import {
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveBranchToolbarValue,
+  resolveWorktreeContinuationAction,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
+
+describe("resolveWorktreeContinuationAction", () => {
+  it("returns an existing worktree even when the thread environment is unlocked", () => {
+    expect(
+      resolveWorktreeContinuationAction({
+        activeWorktreePath: null,
+        envMode: "local",
+        envLocked: false,
+        hasServerThread: true,
+        hasReusableWorktree: true,
+      }),
+    ).toBe("handoff");
+  });
+
+  it("starts a new worktree for an unlocked local thread without an existing association", () => {
+    expect(
+      resolveWorktreeContinuationAction({
+        activeWorktreePath: null,
+        envMode: "local",
+        envLocked: false,
+        hasServerThread: true,
+        hasReusableWorktree: false,
+      }),
+    ).toBe("switch");
+  });
+
+  it("offers no worktree transition while already in a worktree", () => {
+    expect(
+      resolveWorktreeContinuationAction({
+        activeWorktreePath: "/repo/.worktrees/existing",
+        envMode: "worktree",
+        envLocked: true,
+        hasServerThread: true,
+        hasReusableWorktree: true,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("resolveDraftEnvModeAfterBranchChange", () => {
   it("switches to local mode when returning from an existing worktree to the main worktree", () => {

@@ -5,9 +5,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveDesktopMenuAccelerator,
+  resolveDesktopTabMenuItems,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
+
+describe("resolveDesktopTabMenuItems", () => {
+  it("routes the native close shortcuts to tab actions on macOS", () => {
+    expect(resolveDesktopTabMenuItems("darwin")).toEqual([
+      {
+        label: "Close Tab",
+        action: "close-active-tab",
+        accelerator: "CmdOrCtrl+W",
+      },
+      {
+        label: "Reopen Closed Tab",
+        action: "reopen-closed-tab",
+        accelerator: "CmdOrCtrl+Shift+W",
+      },
+    ]);
+  });
+
+  it("keeps Linux menu actions without native accelerators", () => {
+    expect(resolveDesktopTabMenuItems("linux")).toEqual([
+      { label: "Close Tab", action: "close-active-tab" },
+      { label: "Reopen Closed Tab", action: "reopen-closed-tab" },
+    ]);
+  });
+});
 
 describe("resolveDesktopMenuAccelerator", () => {
   it("disables custom native menu accelerators on Linux", () => {

@@ -3,7 +3,12 @@
 // Layer: Web orchestration helper
 // Exports: createOrRecoverProjectFromPath
 
-import { type NativeApi, type OrchestrationShellSnapshot, type ProjectId } from "@synara/contracts";
+import {
+  type GitHubAccountSelection,
+  type NativeApi,
+  type OrchestrationShellSnapshot,
+  type ProjectId,
+} from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 
 import {
@@ -31,6 +36,7 @@ export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   createIfMissing?: boolean;
+  githubAccount?: GitHubAccountSelection | null;
   loadSnapshot: () => Promise<OrchestrationShellSnapshot | null>;
   maxAttempts?: number;
   delayMs?: number;
@@ -64,6 +70,7 @@ export async function createOrRecoverProjectFromPath(input: {
         provider: "codex",
         model: getDefaultModel("codex"),
       },
+      ...(input.githubAccount !== undefined ? { githubAccount: input.githubAccount } : {}),
       createdAt,
     });
 
@@ -94,6 +101,14 @@ export async function createOrRecoverProjectFromPath(input: {
       delayMs,
     });
     if (project && snapshot) {
+      if (input.githubAccount !== undefined) {
+        await input.api.orchestration.dispatchCommand({
+          type: "project.meta.update",
+          commandId: newCommandId(),
+          projectId: project.id,
+          githubAccount: input.githubAccount,
+        });
+      }
       return {
         projectId: project.id,
         project,
@@ -104,6 +119,14 @@ export async function createOrRecoverProjectFromPath(input: {
 
     const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
     if (duplicateProjectId) {
+      if (input.githubAccount !== undefined) {
+        await input.api.orchestration.dispatchCommand({
+          type: "project.meta.update",
+          commandId: newCommandId(),
+          projectId: duplicateProjectId as ProjectId,
+          githubAccount: input.githubAccount,
+        });
+      }
       return {
         projectId: duplicateProjectId as ProjectId,
         project: null,

@@ -2,7 +2,12 @@
 // Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
-import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
+import type {
+  GitHubAccountSelection,
+  ProjectId,
+  ThreadEnvironmentMode,
+  ThreadId,
+} from "@synara/contracts";
 
 import type { AppState } from "./store";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
@@ -145,6 +150,20 @@ export function createThreadProjectIdSelector(
       return null;
     }
     return state.threadShellById?.[threadId]?.projectId ?? null;
+  };
+}
+
+export function createThreadGitHubAccountSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => GitHubAccountSelection | undefined {
+  return (state) => {
+    if (!threadId) return undefined;
+    const projectId =
+      state.threadShellById?.[threadId]?.projectId ??
+      state.threads?.find((thread) => thread.id === threadId)?.projectId;
+    return projectId
+      ? (state.projects.find((project) => project.id === projectId)?.githubAccount ?? undefined)
+      : undefined;
   };
 }
 

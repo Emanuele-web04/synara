@@ -22,6 +22,12 @@ import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
+import type { PullRequestWorkspaceAssociation } from "./pullRequestList.logic";
+import {
+  PullRequestRowContextMenu,
+  type PullRequestRowContextMenuActionId,
+  type PullRequestRowContextMenuActions,
+} from "./PullRequestRowContextMenu";
 
 function TruncatedTitle({ title, number }: { title: string; number: number }) {
   return (
@@ -46,15 +52,24 @@ export const PullRequestRow = function PullRequestRow({
   entry,
   selected,
   showProjectTitle = false,
+  workspaceAssociation = null,
+  contextMenuActions = {},
   onClick,
   onTogglePinned,
+  onContextMenuAction,
 }: {
   entry: PullRequestListEntry;
   selected: boolean;
   /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
+  workspaceAssociation?: PullRequestWorkspaceAssociation;
+  contextMenuActions?: PullRequestRowContextMenuActions;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
+  onContextMenuAction?: (
+    actionId: PullRequestRowContextMenuActionId,
+    entry: PullRequestListEntry,
+  ) => void;
 }) {
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
@@ -67,7 +82,7 @@ export const PullRequestRow = function PullRequestRow({
       : `pull request #${entry.number}`,
     isPinned,
   );
-  return (
+  const row = (
     <div
       className={cn(
         // The row bleeds past the page padding and pays the same amount back as its own
@@ -99,6 +114,11 @@ export const PullRequestRow = function PullRequestRow({
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <TruncatedTitle title={entry.title} number={entry.number} />
+            {workspaceAssociation ? (
+              <span className="shrink-0 rounded-full bg-foreground/7 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                {workspaceAssociation === "archived" ? "Archived workspace" : "In Synara"}
+              </span>
+            ) : null}
           </span>
           {/* Fine print, set once on the line: author, repository and branch are one thought at
               one size — the branch used to be the only part stepped down, which made the line
@@ -124,7 +144,7 @@ export const PullRequestRow = function PullRequestRow({
                 className="max-w-[14rem] truncate"
                 title={`${entry.headBranch} → ${entry.baseBranch}`}
               >
-                {entry.headBranch}
+                {entry.headBranch} → {entry.baseBranch}
               </span>
             </PullRequestMetaLine>
           </span>
@@ -162,5 +182,13 @@ export const PullRequestRow = function PullRequestRow({
         <TooltipPopup side="top">{pinLabel}</TooltipPopup>
       </Tooltip>
     </div>
+  );
+  if (!onContextMenuAction) return row;
+  return (
+    <PullRequestRowContextMenu
+      actions={contextMenuActions}
+      onAction={(actionId) => onContextMenuAction(actionId, entry)}
+      trigger={row}
+    />
   );
 };

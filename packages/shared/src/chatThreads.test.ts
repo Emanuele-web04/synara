@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
+  GENERIC_WORKSPACE_CONVERSATION_TITLE,
   isGenericChatThreadTitle,
   sanitizeGeneratedThreadTitle,
 } from "./chatThreads";
@@ -10,7 +11,7 @@ import {
 describe("chatThreads", () => {
   it("builds a short fallback title without forcing case", () => {
     expect(buildPromptThreadTitleFallback("FIX the BROKEN auth redirect in production now")).toBe(
-      "FIX the BROKEN auth redirect in",
+      "FIX the BROKEN auth",
     );
   });
 
@@ -22,14 +23,24 @@ describe("chatThreads", () => {
     expect(sanitizeGeneratedThreadTitle('"Folder picker UI ASAP."')).toBe("Folder picker UI ASAP");
   });
 
-  it("keeps distinguishing identifiers within the six-word cap", () => {
+  it("keeps distinguishing identifiers within the four-word cap", () => {
     expect(sanitizeGeneratedThreadTitle("PR #1234 Conflict Review and more extra")).toBe(
-      "PR #1234 Conflict Review and more",
+      "PR #1234 Conflict Review",
     );
+  });
+
+  it("keeps titles within the narrow tab character budget", () => {
+    const title = sanitizeGeneratedThreadTitle(
+      "Investigate extraordinarilylongidentifier failures",
+    );
+
+    expect(Array.from(title).length).toBeLessThanOrEqual(28);
+    expect(title.endsWith("…")).toBe(true);
   });
 
   it("detects the generic chat placeholder title", () => {
     expect(isGenericChatThreadTitle(" New thread ")).toBe(true);
+    expect(isGenericChatThreadTitle(` ${GENERIC_WORKSPACE_CONVERSATION_TITLE} `)).toBe(true);
     expect(isGenericChatThreadTitle("Manual rename")).toBe(false);
   });
 });

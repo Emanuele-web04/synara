@@ -41,15 +41,21 @@ function listEntry() {
 }
 
 describe("PullRequestListEntry", () => {
-  it("defaults legacy payloads missing pin and mergeability metadata", () => {
-    // The fixture deliberately omits both fields — this is what an older server sends.
+  it("decodes legacy payloads missing viewer authorship, pin, and mergeability metadata", () => {
+    // The fixture deliberately omits all three fields — this is what an older server sends.
     const decoded = decodeListEntry(listEntry());
+    expect(decoded.viewerAuthored).toBeUndefined();
     expect(decoded.isPinned).toBe(false);
     expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
     expect(
-      decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
-    ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
+      decodeListEntry({
+        ...listEntry(),
+        viewerAuthored: true,
+        isPinned: true,
+        mergeability: "conflicting",
+      }),
+    ).toMatchObject({ viewerAuthored: true, isPinned: true, mergeability: "conflicting" });
   });
 });
 

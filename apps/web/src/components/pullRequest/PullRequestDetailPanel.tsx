@@ -1,18 +1,17 @@
 // FILE: PullRequestDetailPanel.tsx
 // Purpose: Orchestrator for the pull request detail surface — owns the queries, gh-backed
-//          actions (merge/ready/draft/close/reopen, fix findings, copy link), the header with
+//          GitHub handoff and lifecycle actions (ready/draft/close/reopen, fix findings, copy
+//          link), the header with
 //          its Summary/Timeline/Code tab switcher, the Code tab's diff viewport, and the
 //          confirm dialogs. Summary and Timeline rendering live in their own tab components.
 // Layer: Pull request presentation
 // Exports: PullRequestDetailPanel
 
-import type {
-  PullRequestAction,
-  PullRequestDetailInput,
-  PullRequestMergeMethod,
-} from "@synara/contracts";
+import type { PullRequestAction, PullRequestDetailInput } from "@synara/contracts";
+import { findWorkspaceForPullRequest } from "@synara/shared/pullRequest";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -25,6 +24,7 @@ import {
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import {
   buildFixFindingsPrompt,
+  buildReviewPullRequestPrompt,
   buildResolveConflictsPrompt,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import {
@@ -49,22 +49,20 @@ import {
 } from "~/components/ui/menu";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { appendComposerPromptText } from "~/lib/chatReferences";
+import { readEditorRailActiveChat } from "~/editorViewState";
 import {
   EllipsisIcon,
   ExternalLinkIcon,
   GitMergeConflictIcon,
-  GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
   HammerIcon,
-  LoaderIcon,
   LinkIcon,
   XIcon,
 } from "~/lib/icons";
-import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
+import { openPullRequestWorkspace, pullRequestWorkspaceMetadata } from "~/lib/pullRequestWorkspace";
 import {
   pullRequestActionMutationOptions,
   pullRequestDetailQueryOptions,
@@ -72,17 +70,17 @@ import {
 } from "~/lib/pullRequestReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useStore } from "~/store";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 
 type DetailTab = "summary" | "timeline" | "code";
+const EMPTY_WORKSPACES = [] as const;
 
-const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
-  merge: "Pull request merged",
+const ACTION_SUCCESS_LABELS: Record<Exclude<PullRequestAction, "merge">, string> = {
   ready: "Marked ready for review",
   draft: "Converted to draft",
   close: "Pull request closed",
@@ -96,13 +94,13 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
 ];
 
 // Header icon controls follow the chat-header recipe (chrome variant + fixed 28px square +
-// full-strength glyph) so they sit level with the Merge pill and the dock chips.
+// full-strength glyph) so they sit level with the GitHub action and the dock chips.
 const PR_HEADER_ICON_BUTTON_CLASS_NAME = cn(
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
 );
 
-// Filled header action pill (Merge / Ready for review): shared 28px control height, roomy
+// Filled header action pill (workspace action / Open on GitHub): shared 28px control height, roomy
 // padding, and the label pinned to the ui size on every breakpoint — Button's xs size would
 // drop it to 10px on desktop, which reads shrunken inside a filled pill.
 //
@@ -140,60 +138,58 @@ export function PullRequestDetailPanel({
 }) {
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
-  const { handleNewThread } = useHandleNewThread();
-  // Panel state keyed to the PR it belongs to: switching PRs (or landing tab)
-  // derives straight back to the defaults with no state-resetting effect.
+  const navigate = useNavigate();
+  const projects = useStore((store) => store.projects);
+  const workspaces = useStore((store) => store.worktreeWorkspaces ?? EMPTY_WORKSPACES);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
+  // Key the local controls to their pull request so switching details derives the
+  // defaults without a state-resetting effect.
   const panelKey = `${input.projectId}\u0000${input.repository}\u0000${input.number}\u0000${initialTab}`;
   const [panelState, setPanelState] = useState<{
     key: string;
     tab: DetailTab;
-    mergeMethod: PullRequestMergeMethod;
-    confirmAction: "merge" | "close" | null;
+    confirmClose: boolean;
   } | null>(null);
   const isCurrentPanelState = panelState !== null && panelState.key === panelKey;
   const tab = isCurrentPanelState ? panelState.tab : initialTab;
-  const mergeMethod = isCurrentPanelState ? panelState.mergeMethod : "merge";
-  const confirmAction = isCurrentPanelState ? panelState.confirmAction : null;
-  const patchPanelState = (patch: {
-    tab?: DetailTab;
-    mergeMethod?: PullRequestMergeMethod;
-    confirmAction?: "merge" | "close" | null;
-  }) =>
+  const confirmClose = isCurrentPanelState ? panelState.confirmClose : false;
+  const patchPanelState = (patch: { tab?: DetailTab; confirmClose?: boolean }) =>
     setPanelState((current) =>
       current !== null && current.key === panelKey
         ? { ...current, ...patch }
-        : { key: panelKey, tab: initialTab, mergeMethod: "merge", confirmAction: null, ...patch },
+        : { key: panelKey, tab: initialTab, confirmClose: false, ...patch },
     );
   const setTab = (next: DetailTab) => patchPanelState({ tab: next });
-  const setMergeMethod = (next: PullRequestMergeMethod) => patchPanelState({ mergeMethod: next });
-  const setConfirmAction = (next: "merge" | "close" | null) =>
-    patchPanelState({ confirmAction: next });
+  const setConfirmClose = (next: boolean) => patchPanelState({ confirmClose: next });
   const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
+  const [workspaceAction, setWorkspaceAction] = useState<"open" | "conversation" | null>(null);
   const actionInFlightRef = useRef(false);
+  const workspaceActionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
-  // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
-  // invalidate exactly like every other prepare-thread flow in the app.
-  const prepareThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({
-      cwd: detail?.workspaceRoot ?? null,
-      queryClient,
-    }),
+  const project = projects.find((candidate) => candidate.id === input.projectId) ?? null;
+  const associatedWorkspace = useMemo(
+    () => (detail ? findWorkspaceForPullRequest(workspaces, detail.projectId, detail) : null),
+    [detail, workspaces],
   );
+  const associatedWorkspaceArchived =
+    associatedWorkspace !== null &&
+    (associatedWorkspace.state === "archived" || associatedWorkspace.archivedAt !== null);
 
   // Promise chains instead of async/try-finally in the two runners below:
   // React Compiler does not yet support try/finally and would skip this
   // component entirely.
-  const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
+  const runAction = (action: Exclude<PullRequestAction, "merge">) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     void actionMutation
       .mutateAsync({
         ...input,
         action,
-        ...(method ? { mergeMethod: method } : {}),
       })
       .then(() => {
         toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
@@ -210,46 +206,74 @@ export function PullRequestDetailPanel({
       });
   };
 
-  // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
-  // prepare a worktree on the PR branch, create the thread, and pre-fill the composer with
-  // the task-specific prompt for the user to review and send.
-  const startPullRequestThread = (
+  const openWorkspace = async (input: {
+    intent: "open" | "new-conversation";
+    prompt?: string;
+    errorTitle: string;
+  }) => {
+    if (!detail || workspaceActionInFlightRef.current) return;
+    workspaceActionInFlightRef.current = true;
+    setWorkspaceAction(input.intent === "open" ? "open" : "conversation");
+    try {
+      if (!project) throw new Error("The project for this pull request is no longer available.");
+      const result = await openPullRequestWorkspace({
+        api: ensureNativeApi(),
+        project,
+        defaultProvider: settings.defaultProvider,
+        intent: input.intent,
+        title: detail.title,
+        conversationTitle: `Review PR #${detail.number}`,
+        pullRequest: pullRequestWorkspaceMetadata(detail),
+        preferredThreadId: associatedWorkspace
+          ? readEditorRailActiveChat(`workspace:${associatedWorkspace.id}`)
+          : null,
+        onSnapshot: syncServerWorkspaceShellSnapshot,
+      });
+      if (input.prompt) appendComposerPromptText(result.threadId, input.prompt);
+      await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: input.errorTitle,
+        description:
+          error instanceof Error ? error.message : "The pull request workspace could not open.",
+      });
+    } finally {
+      workspaceActionInFlightRef.current = false;
+      setWorkspaceAction(null);
+    }
+  };
+
+  const reviewPrompt = detail
+    ? buildReviewPullRequestPrompt({
+        prNumber: detail.number,
+        prTitle: detail.title,
+        prUrl: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        comments: detail.comments,
+        checks: detail.checks,
+        commentsTruncated: detail.commentsTruncated,
+        commentsIncomplete: detail.commentsIncomplete,
+      })
+    : null;
+
+  const startPullRequestThread = async (
     kind: "findings" | "conflicts",
     prompt: string,
     errorTitle: string,
   ) => {
     if (!detail || preparingThread !== null) return;
     setPreparingThread(kind);
-    const mode = settings.defaultThreadEnvMode;
-    void prepareThreadMutation
-      .mutateAsync({ reference: detail.url, mode })
-      .then((prepared) =>
-        Promise.resolve(
-          handleNewThread(detail.projectId, {
-            branch: prepared.branch,
-            worktreePath: prepared.worktreePath,
-            envMode: mode,
-            // This action is an explicit handoff from the PR browser. Reusing the project's
-            // existing draft can leave the user on the PR route and insert the prompt into a
-            // hidden composer, making the button appear inert.
-            fresh: true,
-          }),
-        ).then((threadId) => {
-          if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
-          appendComposerPromptText(threadId, prompt);
-        }),
-      )
-      .catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: errorTitle,
-          description:
-            error instanceof Error ? error.message : "The PR thread could not be prepared.",
-        });
-      })
-      .finally(() => {
-        setPreparingThread(null);
+    try {
+      await openWorkspace({
+        intent: "new-conversation",
+        prompt,
+        errorTitle,
       });
+    } finally {
+      setPreparingThread(null);
+    }
   };
 
   const fixFindings = () => {
@@ -299,19 +323,7 @@ export function PullRequestDetailPanel({
     }
   };
 
-  const allowedMethods = detail
-    ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
-    : [];
-  const selectedMergeMethod = allowedMethods.includes(mergeMethod)
-    ? mergeMethod
-    : (allowedMethods[0] ?? "merge");
   const actionPending = actionMutation.isPending;
-  // Which action is in flight — drives the in-flight labels. Optimistic transitions
-  // (draft/ready/close/reopen) flip the UI instantly via the mutation's cache patch, so
-  // only the pessimistic merge needs a visible progress state.
-  const pendingAction = actionMutation.isPending
-    ? (actionMutation.variables?.action ?? null)
-    : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
@@ -367,6 +379,42 @@ export function PullRequestDetailPanel({
                 {/* Same popup chrome as the composer pickers (model/handoff), with emoji
                     leads for scannability. */}
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
+                  {associatedWorkspace ? (
+                    <>
+                      <MenuItem
+                        disabled={workspaceAction !== null}
+                        onClick={() =>
+                          void openWorkspace({
+                            intent: "open",
+                            errorTitle: associatedWorkspaceArchived
+                              ? "Could not restore workspace"
+                              : "Could not open workspace",
+                          })
+                        }
+                      >
+                        <GitPullRequestIcon className="size-3.5 shrink-0" />
+                        <span>
+                          {associatedWorkspaceArchived ? "Restore workspace" : "Open workspace"}
+                        </span>
+                      </MenuItem>
+                      {!associatedWorkspaceArchived ? (
+                        <MenuItem
+                          disabled={workspaceAction !== null}
+                          onClick={() =>
+                            void openWorkspace({
+                              intent: "new-conversation",
+                              ...(reviewPrompt ? { prompt: reviewPrompt } : {}),
+                              errorTitle: "Could not create review conversation",
+                            })
+                          }
+                        >
+                          <GitPullRequestIcon className="size-3.5 shrink-0" />
+                          <span>New review conversation</span>
+                        </MenuItem>
+                      ) : null}
+                      <MenuSeparator />
+                    </>
+                  ) : null}
                   {detail.state === "open" ? (
                     <>
                       <MenuRadioGroup
@@ -389,29 +437,6 @@ export function PullRequestDetailPanel({
                       <MenuSeparator />
                     </>
                   ) : null}
-                  {/* Merge method lives here rather than in a chevron welded to the Merge pill:
-                      it is a preference for the action, not a second action, and the split
-                      button it used to sit in made Merge a visibly different control from
-                      "Ready for review". Hidden while conflicting — every method would fail. */}
-                  {detail.state === "open" &&
-                  !detail.isDraft &&
-                  detail.mergeability !== "conflicting" &&
-                  allowedMethods.length > 0 ? (
-                    <>
-                      <MenuRadioGroup
-                        value={selectedMergeMethod}
-                        onValueChange={(value) => setMergeMethod(value as PullRequestMergeMethod)}
-                      >
-                        {allowedMethods.map((method) => (
-                          <MenuRadioItem key={method} value={method} disabled={actionPending}>
-                            <GitMergeIcon className="size-3.5 shrink-0" />
-                            <span className="capitalize">{method}</span>
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                      <MenuSeparator />
-                    </>
-                  ) : null}
                   <MenuItem onClick={() => void copyPullRequestLink()}>
                     <LinkIcon className="size-3.5 shrink-0" />
                     <span>Copy link</span>
@@ -423,8 +448,7 @@ export function PullRequestDetailPanel({
                     </span>
                   </MenuItem>
                   {/* Sits beside Fix findings because it is the same kind of action: hand the
-                      work to a new thread. Offered only when there is a conflict to resolve,
-                      which is also when the header's Merge pill is disabled. */}
+                      work to a new thread. Offered only when there is a conflict to resolve. */}
                   {detail.state === "open" && detail.mergeability === "conflicting" ? (
                     <MenuItem onClick={resolveConflicts} disabled={preparingThread !== null}>
                       <GitMergeConflictIcon className="size-3.5 shrink-0" />
@@ -440,7 +464,7 @@ export function PullRequestDetailPanel({
                     <MenuItem
                       variant="destructive"
                       disabled={actionPending}
-                      onClick={() => setConfirmAction("close")}
+                      onClick={() => setConfirmClose(true)}
                     >
                       <GitPullRequestClosedIcon className="size-3.5 shrink-0" />
                       <span>Close pull request</span>
@@ -453,66 +477,44 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </ComposerPickerMenuPopup>
               </Menu>
-              {detail.state === "open" && detail.isDraft ? (
-                // A draft's primary action is publishing it for review — merge/conflicts
-                // only become relevant once it leaves draft.
+              {detail.state === "open" ? (
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
-                  disabled={actionPending}
-                  onClick={() => void runAction("ready")}
+                  disabled={workspaceAction !== null}
+                  onClick={() =>
+                    void openWorkspace({
+                      intent: "open",
+                      ...(!associatedWorkspace && reviewPrompt ? { prompt: reviewPrompt } : {}),
+                      errorTitle: associatedWorkspaceArchived
+                        ? "Could not restore workspace"
+                        : associatedWorkspace
+                          ? "Could not open workspace"
+                          : "Could not create review workspace",
+                    })
+                  }
                 >
-                  Ready for review
+                  {workspaceAction === "open"
+                    ? associatedWorkspaceArchived
+                      ? "Restoring…"
+                      : associatedWorkspace
+                        ? "Opening…"
+                        : "Creating…"
+                    : associatedWorkspaceArchived
+                      ? "Restore workspace"
+                      : associatedWorkspace
+                        ? "Open workspace"
+                        : "Review in new workspace"}
                 </Button>
-              ) : detail.state === "open" && detail.mergeability === "conflicting" ? (
-                // Non-draft only (a draft's next step is "Ready for review"). The header keeps
-                // saying Merge — the action the PR is heading for — but the pill is inert until
-                // the branch is reconciled, and hovering it says why. No method chevron: there
-                // is nothing to choose while every method would fail. "Resolve conflicts" moved
-                // into the "…" menu with the other thread-starting actions.
-                //
-                // aria-disabled, not disabled: Button's disabled state sets
-                // `pointer-events-none`, which would swallow the hover the tooltip needs. With
-                // no onClick attached there is no action to guard against.
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="xs"
-                        aria-disabled="true"
-                        className={cn(
-                          PR_HEADER_ACTION_BUTTON_CLASS_NAME,
-                          "cursor-not-allowed opacity-64",
-                        )}
-                      />
-                    }
-                  >
-                    Merge
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom">Resolve merge conflicts before merging</TooltipPopup>
-                </Tooltip>
-              ) : detail.state === "open" && !detail.isDraft && allowedMethods.length > 0 ? (
-                // One pill, no method chevron beside it: a split button's label can never sit
-                // on the group's centre (it lands half the chevron's width to the left) and its
-                // inner corners are pinned to radius 0, so Merge read as a different control
-                // from the identically-purposed "Ready for review". The method choice lives in
-                // the "…" menu instead, beside the other merge-adjacent actions.
+              ) : (
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
-                  disabled={actionPending}
-                  onClick={() => setConfirmAction("merge")}
+                  onClick={() => void ensureNativeApi().shell.openExternal(detail.url)}
                 >
-                  {pendingAction === "merge" ? (
-                    <>
-                      <LoaderIcon className="size-3.5 animate-spin" />
-                      Merging…
-                    </>
-                  ) : (
-                    "Merge"
-                  )}
+                  Open on GitHub
                 </Button>
-              ) : null}
+              )}
             </>
           ) : null}
           {onClose ? (
@@ -566,19 +568,12 @@ export function PullRequestDetailPanel({
         )}
       </div>
 
-      <AlertDialog
-        open={confirmAction !== null}
-        onOpenChange={(open) => !open && setConfirmAction(null)}
-      >
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
-            </AlertDialogTitle>
+            <AlertDialogTitle>Close pull request?</AlertDialogTitle>
             <AlertDialogDescription>
-              {confirmAction === "merge"
-                ? `This will merge #${input.number} using ${selectedMergeMethod}.`
-                : `This will close #${input.number} without merging it.`}
+              This will close #{input.number} without merging it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -587,16 +582,14 @@ export function PullRequestDetailPanel({
             </AlertDialogClose>
             <Button
               size="sm"
-              variant={confirmAction === "close" ? "destructive" : "default"}
+              variant="destructive"
               disabled={actionPending}
               onClick={() => {
-                const action = confirmAction;
-                setConfirmAction(null);
-                if (action === "merge") void runAction("merge", selectedMergeMethod);
-                if (action === "close") void runAction("close");
+                setConfirmClose(false);
+                void runAction("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              Close
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

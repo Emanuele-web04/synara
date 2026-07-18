@@ -12,5 +12,6 @@
       }
     ]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["seed-desktop-upgrade-smoke.ts"]
 }

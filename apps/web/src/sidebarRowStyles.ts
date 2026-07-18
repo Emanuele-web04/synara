@@ -64,7 +64,7 @@ export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 export const SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME = "pt-0.5";
 
 /** Sidebar row groups whose resting status fades to yield its slot to a hover toolbar. */
-export type SidebarHoverRevealGroup = "project-header" | "thread-row";
+export type SidebarHoverRevealGroup = "project-header" | "thread-row" | "workspace-row";
 
 /**
  * The single rule for "fade a resting glyph out the moment its row reveals the hover
@@ -89,6 +89,8 @@ const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, stri
     "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 group-has-[:focus-visible]/project-header:pointer-events-none group-has-[:focus-visible]/project-header:opacity-0",
   "thread-row":
     "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
+  "workspace-row":
+    "transition-opacity group-hover/workspace-row:pointer-events-none group-hover/workspace-row:opacity-0 group-focus-within/workspace-row:pointer-events-none group-focus-within/workspace-row:opacity-0",
 };
 
 export function sidebarHoverRevealHideClassName(group: SidebarHoverRevealGroup): string {

@@ -1,4 +1,5 @@
 import {
+  type GitHubAccountSelection,
   type OrchestrationProject,
   type OrchestrationReadModel,
   type ProjectId,
@@ -26,6 +27,7 @@ import {
 import {
   buildPullRequestListEntry,
   isValidGitHubRepositoryNameWithOwner,
+  isViewerAuthored,
   isViewerReviewRequested,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
@@ -35,6 +37,11 @@ import {
   shouldLoadReviewingCompanion,
 } from "../../pullRequests.logic";
 import { makeKeyedSingleFlightCache } from "../KeyedSingleFlightCache";
+import {
+  githubAccountIdentityKey,
+  githubAccountScopedCacheKey,
+  stripGithubAccountCacheScope,
+} from "../githubAccountIdentity";
 import { PullRequestService, type PullRequestServiceShape } from "../Services/PullRequestService";
 import { resolveGitHubRepositories, type GitHubRepositoryInventory } from "../repositoryResolution";
 import {
@@ -53,6 +60,7 @@ import {
 export { PULL_REQUEST_PIN_RECOVERY_LIMIT } from "../pullRequestPinRecovery";
 
 const GITHUB_REPOSITORY_CACHE_MAX_ENTRIES = 256;
+const GITHUB_VIEWER_CACHE_MAX_ENTRIES = 16;
 const PULL_REQUEST_LIST_CACHE_MAX_ENTRIES = 512;
 const PULL_REQUEST_PIN_ITEM_CACHE_MAX_ENTRIES = 128;
 const PULL_REQUEST_REVIEW_MATCH_CACHE_MAX_ENTRIES = 32;
@@ -121,7 +129,7 @@ export const makePullRequestService = (
       ttlMs: 30_000,
     });
     const viewerCache = yield* makeKeyedSingleFlightCache<string, GitHubCliError>({
-      maxEntries: 1,
+      maxEntries: GITHUB_VIEWER_CACHE_MAX_ENTRIES,
       ttlMs: 5 * 60_000,
     });
     const listCache = yield* makeKeyedSingleFlightCache<PullRequestListBatch, GitHubCliError>({
@@ -145,33 +153,55 @@ export const makePullRequestService = (
       repository: string,
       number: number,
       options: { readonly invalidateReviewMatches: boolean },
+      account?: GitHubAccountSelection,
     ) =>
       Effect.uninterruptible(
         Effect.all(
           [
-            listCache.invalidateWhere((key) =>
-              pullRequestCacheKeyBelongsToRepository(key, repository),
-            ),
+            listCache.invalidateWhere((key) => {
+              const unscopedKey = stripGithubAccountCacheScope(key, account);
+              return (
+                unscopedKey !== null &&
+                pullRequestCacheKeyBelongsToRepository(unscopedKey, repository)
+              );
+            }),
             ...(options.invalidateReviewMatches
               ? [
-                  reviewMatchCache.invalidateWhere((key) =>
-                    pullRequestCacheKeyBelongsToRepository(key, repository),
-                  ),
+                  reviewMatchCache.invalidateWhere((key) => {
+                    const unscopedKey = stripGithubAccountCacheScope(key, account);
+                    return (
+                      unscopedKey !== null &&
+                      pullRequestCacheKeyBelongsToRepository(unscopedKey, repository)
+                    );
+                  }),
                 ]
               : []),
-            itemCache.invalidate(repositoryPullRequestIdentityKey({ repository, number })),
+            itemCache.invalidate(
+              githubAccountScopedCacheKey(
+                account,
+                repositoryPullRequestIdentityKey({ repository, number }),
+              ),
+            ),
           ],
           { concurrency: 3, discard: true },
         ),
       );
 
     const resolveProjectRepositories = (project: OrchestrationProject) =>
-      repositoryCache.get(project.workspaceRoot, dependencies.resolveRepositories(project));
+      repositoryCache.get(
+        githubAccountScopedCacheKey(project.githubAccount ?? undefined, project.workspaceRoot),
+        dependencies.resolveRepositories(project),
+      );
 
-    const loadViewer = () =>
+    const loadViewer = (cwd: string, account?: GitHubAccountSelection) =>
       viewerCache.get(
-        "viewer",
-        withGitHubRead(dependencies.github.getViewerLogin({ cwd: dependencies.homeDir })),
+        githubAccountIdentityKey(account),
+        withGitHubRead(
+          dependencies.github.getViewerLogin({
+            cwd,
+            ...(account ? { account } : {}),
+          }),
+        ),
       );
 
     const loadRepositoryPullRequests = (
@@ -180,8 +210,12 @@ export const makePullRequestService = (
       state: "open" | "closed" | "merged",
       involvement: PullRequestInvolvement,
       viewer: string,
+      account?: GitHubAccountSelection,
     ) => {
-      const cacheKey = pullRequestListCacheKey(repository, state, involvement, viewer);
+      const cacheKey = githubAccountScopedCacheKey(
+        account,
+        pullRequestListCacheKey(repository, state, involvement, viewer),
+      );
       const limit = 50;
       return listCache.get(
         cacheKey,
@@ -193,6 +227,7 @@ export const makePullRequestService = (
             involvement,
             viewer,
             limit: limit + 1,
+            ...(account ? { account } : {}),
           }),
         ).pipe(
           Effect.map((batch) => ({
@@ -205,12 +240,25 @@ export const makePullRequestService = (
       );
     };
 
-    const loadPullRequestListItem = (cwd: string, repository: string, number: number) => {
-      const key = repositoryPullRequestIdentityKey({ repository, number });
+    const loadPullRequestListItem = (
+      cwd: string,
+      repository: string,
+      number: number,
+      account?: GitHubAccountSelection,
+    ) => {
+      const key = githubAccountScopedCacheKey(
+        account,
+        repositoryPullRequestIdentityKey({ repository, number }),
+      );
       return itemCache.get(
         key,
         withGitHubRead(
-          dependencies.github.getPullRequestListItem({ cwd, repository, number }),
+          dependencies.github.getPullRequestListItem({
+            cwd,
+            repository,
+            number,
+            ...(account ? { account } : {}),
+          }),
         ).pipe(
           Effect.map((item): RecoveredPullRequest => ({ _tag: "found", item })),
           Effect.catch((error) =>
@@ -226,8 +274,12 @@ export const makePullRequestService = (
       cwd: string,
       repository: string,
       viewer: string,
+      account?: GitHubAccountSelection,
     ) => {
-      const key = pullRequestListCacheKey(repository, "open", "reviewing", viewer);
+      const key = githubAccountScopedCacheKey(
+        account,
+        pullRequestListCacheKey(repository, "open", "reviewing", viewer),
+      );
       return reviewMatchCache.get(
         key,
         withGitHubRead(
@@ -236,6 +288,7 @@ export const makePullRequestService = (
             repository,
             viewer,
             limit: PULL_REQUEST_REVIEW_MATCH_LIMIT,
+            ...(account ? { account } : {}),
           }),
         ).pipe(
           Effect.map(
@@ -289,10 +342,20 @@ export const makePullRequestService = (
         return matched.nameWithOwner;
       });
 
-    const loadMergeCapabilities = (cwd: string, repository: string) =>
+    const loadMergeCapabilities = (
+      cwd: string,
+      repository: string,
+      account?: GitHubAccountSelection,
+    ) =>
       mergeCapabilitiesCache.get(
-        repository.toLowerCase(),
-        withGitHubRead(dependencies.github.getRepositoryMergeCapabilities({ cwd, repository })),
+        githubAccountScopedCacheKey(account, repository.toLowerCase()),
+        withGitHubRead(
+          dependencies.github.getRepositoryMergeCapabilities({
+            cwd,
+            repository,
+            ...(account ? { account } : {}),
+          }),
+        ),
       );
 
     const list: PullRequestServiceShape["list"] = (input) =>
@@ -314,7 +377,13 @@ export const makePullRequestService = (
           yield* viewerCache.invalidateAll;
           yield* Effect.forEach(
             projects,
-            (project) => repositoryCache.invalidate(project.workspaceRoot),
+            (project) =>
+              repositoryCache.invalidate(
+                githubAccountScopedCacheKey(
+                  project.githubAccount ?? undefined,
+                  project.workspaceRoot,
+                ),
+              ),
             { concurrency: "unbounded", discard: true },
           );
         }
@@ -358,29 +427,24 @@ export const makePullRequestService = (
           return { viewer: null, entries: [], errors, repositoryBatches: [] };
         }
 
-        const viewer = yield* loadViewer();
-        if (forceRefresh) {
-          yield* Effect.forEach(
-            uniqueRepositories.values(),
-            ({ repository }) =>
-              Effect.forEach(
-                pullRequestListForceRefreshCacheKeys({
-                  repository: repository.nameWithOwner,
-                  state: input.state,
-                  viewer,
-                }),
-                (key) => listCache.invalidate(key),
-                { concurrency: "unbounded", discard: true },
-              ),
-            { concurrency: "unbounded", discard: true },
-          );
-        }
-
         const batches = yield* Effect.forEach(
           uniqueRepositories.values(),
-          ({ projects: repositoryProjects, repository }) =>
+          ({ githubAccount, projects: repositoryProjects, repository }) =>
             Effect.gen(function* () {
               const cwd = repositoryProjects[0]!.workspaceRoot;
+              const account = githubAccount ?? undefined;
+              const viewer = yield* loadViewer(cwd, account);
+              if (forceRefresh) {
+                yield* Effect.forEach(
+                  pullRequestListForceRefreshCacheKeys({
+                    repository: repository.nameWithOwner,
+                    state: input.state,
+                    viewer,
+                  }),
+                  (key) => listCache.invalidate(githubAccountScopedCacheKey(account, key)),
+                  { concurrency: "unbounded", discard: true },
+                );
+              }
               const [result, reviewingResult] = yield* Effect.all(
                 [
                   loadRepositoryPullRequests(
@@ -389,6 +453,7 @@ export const makePullRequestService = (
                     input.state,
                     involvement,
                     viewer,
+                    account,
                   ),
                   shouldLoadReviewingCompanion(input.state, involvement)
                     ? loadRepositoryPullRequests(
@@ -397,6 +462,7 @@ export const makePullRequestService = (
                         input.state,
                         "reviewing",
                         viewer,
+                        account,
                       )
                     : Effect.succeed(null),
                 ],
@@ -406,6 +472,9 @@ export const makePullRequestService = (
                 reviewingResult?.entries.map((pullRequest) => pullRequest.number) ?? [],
               );
               return {
+                accountKey: githubAccountIdentityKey(account),
+                githubAccount,
+                viewer,
                 entries: repositoryProjects.flatMap((project) =>
                   result.entries.map(
                     (pullRequest): PullRequestListEntry =>
@@ -419,6 +488,8 @@ export const makePullRequestService = (
                           viewer,
                           involvement === "reviewing" || reviewingNumbers.has(pullRequest.number),
                         ),
+                        viewerAuthored: isViewerAuthored(pullRequest.author, viewer),
+                        githubAccount,
                         isPinned: pinnedKeys.has(
                           projectPullRequestIdentityKey({
                             projectId: project.id,
@@ -449,9 +520,12 @@ export const makePullRequestService = (
               };
             }).pipe(
               Effect.catch((error) =>
-                isGlobalGitHubCliError(error)
+                githubAccount === null && isGlobalGitHubCliError(error)
                   ? Effect.fail(error)
                   : Effect.succeed({
+                      accountKey: githubAccountIdentityKey(githubAccount),
+                      githubAccount,
+                      viewer: null,
                       entries: [] as PullRequestListEntry[],
                       repositoryBatches: [],
                       errors: repositoryProjects.map((project) => ({
@@ -466,35 +540,88 @@ export const makePullRequestService = (
           { concurrency: 6 },
         );
         const batchEntries = batches.flatMap((batch) => batch.entries);
-        const recovery = yield* recoverPinnedPullRequests({
-          state: input.state,
-          involvement,
-          viewer,
-          forceRefresh,
-          pins: pinnedRows,
-          pinStore: dependencies.pins,
-          batchEntries,
-          recoveryContexts: batches.flatMap((batch) => (batch.recovery ? [batch.recovery] : [])),
-          repositoryKeysByProject,
-          projectById,
-          isGlobalError: isGlobalGitHubCliError,
-          invalidateReviewMatches: (repository, viewerLogin) =>
-            reviewMatchCache.invalidate(
-              pullRequestListCacheKey(repository, "open", "reviewing", viewerLogin),
-            ),
-          loadReviewMatches: loadReviewRequestedPullRequestNumbers,
-          invalidateItem: (key) => itemCache.invalidate(key),
-          loadItem: loadPullRequestListItem,
-        });
+        const recoveryGroups = new Map<
+          string,
+          {
+            readonly githubAccount: GitHubAccountSelection | null;
+            readonly viewer: string;
+            readonly contexts: NonNullable<(typeof batches)[number]["recovery"]>[];
+          }
+        >();
+        for (const batch of batches) {
+          if (!batch.recovery || batch.viewer === null) continue;
+          const existing = recoveryGroups.get(batch.accountKey);
+          if (existing) {
+            existing.contexts.push(batch.recovery);
+          } else {
+            recoveryGroups.set(batch.accountKey, {
+              githubAccount: batch.githubAccount,
+              viewer: batch.viewer,
+              contexts: [batch.recovery],
+            });
+          }
+        }
+        const recoveries = yield* Effect.forEach(
+          recoveryGroups.values(),
+          ({ githubAccount, viewer, contexts }) => {
+            const account = githubAccount ?? undefined;
+            const projectIds = new Set(
+              contexts.flatMap((context) => context.projects.map((project) => project.id)),
+            );
+            return recoverPinnedPullRequests({
+              state: input.state,
+              involvement,
+              viewer,
+              forceRefresh,
+              pins: pinnedRows.filter((row) => projectIds.has(row.projectId)),
+              pinStore: dependencies.pins,
+              batchEntries: batchEntries.filter((entry) => projectIds.has(entry.projectId)),
+              recoveryContexts: contexts,
+              repositoryKeysByProject,
+              projectById,
+              isGlobalError: (error) => githubAccount === null && isGlobalGitHubCliError(error),
+              invalidateReviewMatches: (repository, viewerLogin) =>
+                reviewMatchCache.invalidate(
+                  githubAccountScopedCacheKey(
+                    account,
+                    pullRequestListCacheKey(repository, "open", "reviewing", viewerLogin),
+                  ),
+                ),
+              loadReviewMatches: (cwd, repository, viewerLogin) =>
+                loadReviewRequestedPullRequestNumbers(cwd, repository, viewerLogin, account),
+              invalidateItem: (key) =>
+                itemCache.invalidate(githubAccountScopedCacheKey(account, key)),
+              loadItem: (cwd, repository, number) =>
+                loadPullRequestListItem(cwd, repository, number, account),
+            }).pipe(
+              Effect.map((result) => ({
+                ...result,
+                entries: result.entries.map((entry) => ({
+                  ...entry,
+                  githubAccount,
+                  viewerAuthored: isViewerAuthored(entry.author, viewer),
+                })),
+              })),
+            );
+          },
+          { concurrency: 4 },
+        );
+        const viewers = new Set(
+          batches.flatMap((batch) => (batch.viewer === null ? [] : [batch.viewer])),
+        );
 
         const visibleEntries = coalescePullRequestListEntries([
           ...batchEntries,
-          ...recovery.entries,
+          ...recoveries.flatMap((recovery) => recovery.entries),
         ]);
         return {
-          viewer,
+          viewer: viewers.size === 1 ? viewers.values().next().value! : null,
           entries: orderPullRequestListEntries(visibleEntries),
-          errors: [...errors, ...batches.flatMap((batch) => batch.errors), ...recovery.errors],
+          errors: [
+            ...errors,
+            ...batches.flatMap((batch) => batch.errors),
+            ...recoveries.flatMap((recovery) => recovery.errors),
+          ],
           repositoryBatches: batches.flatMap((batch) => batch.repositoryBatches),
         };
       });
@@ -520,21 +647,26 @@ export const makePullRequestService = (
           return { count: 0, incomplete: inventoryIncomplete };
         }
 
-        const viewer = yield* loadViewer();
         const repositoryCounts = yield* Effect.forEach(
           uniqueRepositories.values(),
-          ({ projects: repositoryProjects, repository }) =>
-            loadReviewRequestedPullRequestNumbers(
-              repositoryProjects[0]!.workspaceRoot,
-              repository.nameWithOwner,
-              viewer,
-            ).pipe(
+          ({ githubAccount, projects: repositoryProjects, repository }) =>
+            Effect.gen(function* () {
+              const cwd = repositoryProjects[0]!.workspaceRoot;
+              const account = githubAccount ?? undefined;
+              const viewer = yield* loadViewer(cwd, account);
+              return yield* loadReviewRequestedPullRequestNumbers(
+                cwd,
+                repository.nameWithOwner,
+                viewer,
+                account,
+              );
+            }).pipe(
               Effect.map((matches) => ({
                 count: matches.numbers.size,
                 incomplete: matches.incomplete,
               })),
               Effect.catch((error) =>
-                isGlobalGitHubCliError(error)
+                githubAccount === null && isGlobalGitHubCliError(error)
                   ? Effect.fail(error)
                   : Effect.succeed({ count: 0, incomplete: true }),
               ),
@@ -579,7 +711,12 @@ export const PullRequestServiceLive = Layer.effect(
       github,
       pins,
       getSnapshot: () => projection.getSnapshot(),
-      resolveRepositories: (project) => resolveGitHubRepositories(git, project.workspaceRoot),
+      resolveRepositories: (project) =>
+        resolveGitHubRepositories(
+          git,
+          project.workspaceRoot,
+          project.githubAccount?.host ?? "github.com",
+        ),
     });
   }),
 );

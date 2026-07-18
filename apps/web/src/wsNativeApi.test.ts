@@ -15,6 +15,7 @@ import {
   type OrchestrationEvent,
   ProjectId,
   ThreadId,
+  WorktreeWorkspaceId,
   type WsPushChannel,
   type WsPushData,
   type WsPushMessage,
@@ -481,6 +482,31 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
     });
+  });
+
+  it("forwards workspace lifecycle preflight requests", async () => {
+    requestMock.mockResolvedValue({
+      workspaceId: "workspace-1",
+      action: "archive",
+      lifecycleGeneration: 3,
+      canStart: true,
+      requiresConfirmation: false,
+      blockers: [],
+      warnings: [],
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const input = {
+      workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+      action: "archive",
+    } as const;
+    await api.orchestration.getWorkspaceLifecyclePreflight(input);
+
+    expect(requestMock).toHaveBeenCalledWith(
+      ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight,
+      input,
+    );
   });
 
   it("forwards terminal output ACKs to the websocket transport", async () => {

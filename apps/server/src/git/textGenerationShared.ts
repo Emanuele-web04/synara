@@ -5,7 +5,11 @@ import {
   type AutomationMode,
   type ChatAttachment,
 } from "@synara/contracts";
-import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
+import {
+  MAX_CHAT_THREAD_TITLE_LENGTH,
+  MAX_CHAT_THREAD_TITLE_WORDS,
+  MIN_CHAT_THREAD_TITLE_WORDS,
+} from "@synara/shared/chatThreads";
 
 import { TextGenerationError } from "./Errors.ts";
 
@@ -543,8 +547,11 @@ export function buildThreadTitlePrompt(input: {
     "Return a JSON object with key: title.",
     "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
-    `- Summarize the user's request in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    `- Summarize the user's request in ${MIN_CHAT_THREAD_TITLE_WORDS}-${MAX_CHAT_THREAD_TITLE_WORDS} words. Prefer ${MIN_CHAT_THREAD_TITLE_WORDS}-3 words; use ${MAX_CHAT_THREAD_TITLE_WORDS} only when needed for a distinguishing identifier.`,
     `- Never exceed ${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    `- Never exceed ${MAX_CHAT_THREAD_TITLE_LENGTH} characters.`,
+    "- Optimize for a narrow UI tab: remove filler words and details that do not distinguish this request.",
+    '- Omit generic words such as "conversation", "chat", and "thread" when the remaining title is still clear.',
     "- Be specific: include distinguishing identifiers from the message when present (PR/issue numbers, branch names, file or feature names, error codes).",
     "- Two different requests should never produce the same title if the message contains anything that tells them apart.",
     "- Use a short noun or verb phrase, not a full sentence.",

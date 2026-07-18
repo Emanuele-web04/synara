@@ -80,6 +80,20 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
+it.effect("accepts git.listPullRequests requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-pr-list-1",
+      body: {
+        _tag: WS_METHODS.gitListPullRequests,
+        cwd: "/repo",
+        filter: "reviewing",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.gitListPullRequests);
+  }),
+);
+
 it.effect("accepts project script discovery requests", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WebSocketRequest, {

@@ -16,14 +16,18 @@ export function isValidGitHubRepositoryNameWithOwner(repository: string): boolea
 /** Normalize a supported GitHub remote URL into its `owner/repository` identity. */
 export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
   url: string | null | undefined,
+  host = "github.com",
 ): string | null {
   const trimmed = url?.trim() ?? "";
   if (trimmed.length === 0) return null;
 
-  const match =
-    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/|git:\/\/github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(
-      trimmed,
-    );
+  const escapedHost = host.trim().replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+  if (escapedHost.length === 0) return null;
+
+  const match = new RegExp(
+    `^(?:git@${escapedHost}:|ssh://git@${escapedHost}/|https://${escapedHost}/|git://${escapedHost}/)([^/\\s]+/[^/\\s]+?)(?:\\.git)?/?$`,
+    "i",
+  ).exec(trimmed);
   const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
   return isValidGitHubRepositoryNameWithOwner(repositoryNameWithOwner)
     ? repositoryNameWithOwner
@@ -34,7 +38,7 @@ export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
 export function parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(
   url: string | null | undefined,
 ): string | null {
-  const match = /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/\d+(?:[/?#].*)?$/i.exec(
+  const match = /^https?:\/\/[^/\s]+\/([^/\s]+)\/([^/\s]+)\/pull\/\d+(?:[/?#].*)?$/i.exec(
     url?.trim() ?? "",
   );
   const owner = match?.[1]?.trim() ?? "";

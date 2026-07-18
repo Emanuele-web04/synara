@@ -7,6 +7,8 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import {
+  chatTabJumpCommandForIndex,
+  chatTabJumpIndexFromCommand,
   formatShortcutLabel,
   isBrowserToggleShortcut,
   isChatNewShortcut,
@@ -92,6 +94,13 @@ const whenCreationAllowed = whenOr(
   whenNot(whenIdentifier("terminalFocus")),
   whenIdentifier("isMac"),
 );
+const whenChatTabCloseAllowed = whenAnd(
+  whenNot(whenIdentifier("terminalFocus")),
+  whenOr(
+    whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    whenIdentifier("terminalWorkspaceChatTabActive"),
+  ),
+);
 
 interface TestBinding {
   shortcut: KeybindingShortcut;
@@ -122,11 +131,6 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
-    shortcut: modShortcut("t"),
-    command: "terminal.new",
-    whenAst: whenIdentifier("terminalFocus"),
-  },
-  {
     shortcut: modShortcut("w"),
     command: "terminal.close",
     whenAst: whenIdentifier("terminalFocus"),
@@ -138,7 +142,10 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("w"),
     command: "terminal.workspace.closeActive",
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+    whenAst: whenAnd(
+      whenIdentifier("terminalWorkspaceOpen"),
+      whenIdentifier("terminalWorkspaceTerminalTabActive"),
+    ),
   },
   {
     shortcut: modShortcut("1"),
@@ -206,6 +213,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenCreationAllowed,
   },
   {
+    shortcut: modShortcut("t"),
+    command: "chat.newConversation",
+    whenAst: whenCreationAllowed,
+  },
+  {
     shortcut: modShortcut("n", { shiftKey: true }),
     command: "chat.newLatestProject",
     whenAst: whenCreationAllowed,
@@ -218,6 +230,16 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("t", { shiftKey: true }),
     command: "chat.newTerminal",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("w"),
+    command: "chat.closeActiveTab",
+    whenAst: whenChatTabCloseAllowed,
+  },
+  {
+    shortcut: modShortcut("w", { shiftKey: true }),
+    command: "chat.reopenClosedTab",
     whenAst: whenCreationAllowed,
   },
   {
@@ -315,14 +337,41 @@ const DEFAULT_BINDINGS = compile([
       whenNot(whenIdentifier("terminalWorkspaceOpen")),
     ),
   },
+  ...Array.from(
+    { length: 9 },
+    (_, index): TestBinding => ({
+      shortcut: modShortcut(String(index + 1), { shiftKey: true }),
+      command: `chat.jump.${index + 1}` as KeybindingCommand,
+      whenAst: whenAnd(
+        whenNot(whenIdentifier("terminalFocus")),
+        whenNot(whenIdentifier("terminalWorkspaceOpen")),
+      ),
+    }),
+  ),
   {
-    shortcut: modShortcut("]", { shiftKey: true }),
+    shortcut: modShortcut("]"),
     command: "chat.visible.next",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("["),
+    command: "chat.visible.previous",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("arrowdown"),
+    command: "workspace.visible.next",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
-    shortcut: modShortcut("[", { shiftKey: true }),
-    command: "chat.visible.previous",
+    shortcut: modShortcut("arrowup"),
+    command: "workspace.visible.previous",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
@@ -345,7 +394,7 @@ describe("isTerminalToggleShortcut", () => {
 });
 
 describe("split/new/close terminal shortcuts", () => {
-  it("requires terminalFocus for default split/new/close bindings", () => {
+  it("requires terminalFocus for default split/close bindings", () => {
     assert.isFalse(
       isTerminalSplitShortcut(event({ key: "d", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -366,14 +415,14 @@ describe("split/new/close terminal shortcuts", () => {
     );
   });
 
-  it("matches split/new when terminalFocus is true", () => {
+  it("matches split/close when terminalFocus is true without assigning terminal.new", () => {
     assert.isTrue(
       isTerminalSplitShortcut(event({ key: "d", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
     );
-    assert.isTrue(
+    assert.isFalse(
       isTerminalNewShortcut(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
         context: { terminalFocus: true },
@@ -583,6 +632,24 @@ describe("thread jump shortcuts", () => {
     assert.isNull(threadJumpIndexFromCommand("chat.new"));
   });
 
+  it("maps direct conversation-tab jump indices to commands and back", () => {
+    assert.strictEqual(chatTabJumpCommandForIndex(0), "chat.jump.1");
+    assert.strictEqual(chatTabJumpCommandForIndex(8), "chat.jump.9");
+    assert.isNull(chatTabJumpCommandForIndex(9));
+    assert.strictEqual(chatTabJumpIndexFromCommand("chat.jump.4"), 3);
+    assert.isNull(chatTabJumpIndexFromCommand("thread.jump.4"));
+  });
+
+  it("resolves direct conversation-tab jumps with Shift+Cmd+number", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "3", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "chat.jump.3",
+    );
+  });
+
   it("resolves numbered thread jumps when the terminal workspace is closed", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "3", metaKey: true }), DEFAULT_BINDINGS, {
@@ -635,19 +702,28 @@ describe("workspace terminal tab shortcuts", () => {
     );
   });
 
-  it("resolves the active workspace close shortcut only while the terminal workspace is open", () => {
+  it("resolves the workspace close shortcut only for the active terminal tab", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: true, terminalFocus: true },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceTerminalTabActive: true,
+          terminalFocus: true,
+        },
       }),
       "terminal.workspace.closeActive",
     );
-    assert.isNull(
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: false, terminalFocus: false },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceChatTabActive: true,
+          terminalFocus: false,
+        },
       }),
+      "chat.closeActiveTab",
     );
   });
 
@@ -693,7 +769,10 @@ describe("workspace terminal tab shortcuts", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), legacyBindings, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: true },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceTerminalTabActive: true,
+        },
       }),
       "terminal.workspace.closeActive",
     );
@@ -767,7 +846,11 @@ describe("shortcutLabelForCommand", () => {
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newChat", "MacIntel"),
       "⌥⌘N",
     );
-    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"), "⌘T");
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newConversation", "MacIntel"),
+      "⌘T",
+    );
+    assert.isNull(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"));
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newTerminal", "MacIntel"),
       "⇧⌘T",
@@ -816,12 +899,21 @@ describe("shortcutLabelForCommand", () => {
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.visible.next", "MacIntel"),
-      "⇧⌘]",
+      "⌘]",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.visible.previous", "MacIntel"),
-      "⇧⌘[",
+      "⌘[",
     );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "workspace.visible.next", "MacIntel"),
+      "⌘Down",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "workspace.visible.previous", "MacIntel"),
+      "⌘Up",
+    );
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.jump.3", "MacIntel"), "⇧⌘3");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
@@ -905,7 +997,14 @@ describe("chat/editor shortcuts", () => {
     );
   });
 
-  it("resolves chat.newTerminal shortcut", () => {
+  it("resolves conversation and terminal creation shortcuts", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newConversation",
+    );
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "t", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -978,6 +1077,10 @@ describe("chat/editor shortcuts", () => {
 
     // macOS: Cmd-chords never reach the shell, so creating a new surface still works.
     assert.strictEqual(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, macTerminal),
+      "chat.newConversation",
+    );
+    assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "t", metaKey: true, shiftKey: true }),
         DEFAULT_BINDINGS,
@@ -1012,6 +1115,9 @@ describe("chat/editor shortcuts", () => {
 
     // Linux/Windows: the same chords are real shell input, so terminal focus blocks them.
     assert.isNull(
+      resolveShortcutCommand(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, linuxTerminal),
+    );
+    assert.isNull(
       resolveShortcutCommand(
         event({ key: "t", ctrlKey: true, shiftKey: true }),
         DEFAULT_BINDINGS,
@@ -1036,38 +1142,41 @@ describe("chat/editor shortcuts", () => {
 
   it("resolves visible chat cycle shortcuts", () => {
     assert.strictEqual(
-      resolveShortcutCommand(event({ key: "]", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      resolveShortcutCommand(event({ key: "]", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: false },
       }),
       "chat.visible.next",
     );
     assert.strictEqual(
-      resolveShortcutCommand(event({ key: "[", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.visible.previous",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "}", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.visible.next",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "{", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      resolveShortcutCommand(event({ key: "[", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: false },
       }),
       "chat.visible.previous",
     );
     assert.isNull(
-      resolveShortcutCommand(event({ key: "]", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      resolveShortcutCommand(event({ key: "]", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+    );
+  });
+
+  it("closes and reopens conversation tabs", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "chat.closeActiveTab",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.reopenClosedTab",
     );
   });
 

@@ -17,6 +17,7 @@ import {
   OrchestrationEvent,
   OrchestrationImportThreadInput,
   OrchestrationShellStreamItem,
+  OrchestrationWorkspaceShellStreamItem,
   OrchestrationSubscribeShellInput,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
@@ -30,11 +31,15 @@ import {
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
+  WorkspaceLifecyclePreflightInput,
 } from "./orchestration";
 import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCreateBranchInput,
+  GitCloneRepositoryInput,
+  GitHubListAccountsInput,
+  GitHubListRepositoriesInput,
   GitCreateDetachedWorktreeInput,
   GitHubRepositoryInput,
   GitHandoffThreadInput,
@@ -42,12 +47,14 @@ import {
   GitCreateWorktreeInput,
   GitInitInput,
   GitListBranchesInput,
+  GitListPullRequestsInput,
   GitPullInput,
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
   GitReadWorkingTreeDiffInput,
   GitRemoveWorktreeInput,
   GitRemoveIndexLockInput,
+  GitRenameBranchInput,
   GitRunStackedActionInput,
   GitStageFilesInput,
   GitStashAndCheckoutInput,
@@ -151,10 +158,15 @@ export const WS_METHODS = {
   gitSummarizeDiff: "git.summarizeDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
+  gitListPullRequests: "git.listPullRequests",
   gitCreateWorktree: "git.createWorktree",
   gitCreateDetachedWorktree: "git.createDetachedWorktree",
   gitRemoveWorktree: "git.removeWorktree",
   gitCreateBranch: "git.createBranch",
+  gitRenameBranch: "git.renameBranch",
+  gitCloneRepository: "git.cloneRepository",
+  gitListGitHubAccounts: "git.listGitHubAccounts",
+  gitListGitHubRepositories: "git.listGitHubRepositories",
   gitCheckout: "git.checkout",
   gitStashAndCheckout: "git.stashAndCheckout",
   gitStashDrop: "git.stashDrop",
@@ -269,6 +281,10 @@ const WebSocketRequestBody = Schema.Union([
     ORCHESTRATION_WS_METHODS.dispatchCommand,
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight,
+    WorkspaceLifecyclePreflightInput,
+  ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getShellSnapshot, OrchestrationGetShellSnapshotInput),
@@ -314,10 +330,15 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitSummarizeDiff, GitSummarizeDiffInput),
   tagRequestBody(WS_METHODS.gitRunStackedAction, GitRunStackedActionInput),
   tagRequestBody(WS_METHODS.gitListBranches, GitListBranchesInput),
+  tagRequestBody(WS_METHODS.gitListPullRequests, GitListPullRequestsInput),
   tagRequestBody(WS_METHODS.gitCreateWorktree, GitCreateWorktreeInput),
   tagRequestBody(WS_METHODS.gitCreateDetachedWorktree, GitCreateDetachedWorktreeInput),
   tagRequestBody(WS_METHODS.gitRemoveWorktree, GitRemoveWorktreeInput),
   tagRequestBody(WS_METHODS.gitCreateBranch, GitCreateBranchInput),
+  tagRequestBody(WS_METHODS.gitRenameBranch, GitRenameBranchInput),
+  tagRequestBody(WS_METHODS.gitCloneRepository, GitCloneRepositoryInput),
+  tagRequestBody(WS_METHODS.gitListGitHubAccounts, GitHubListAccountsInput),
+  tagRequestBody(WS_METHODS.gitListGitHubRepositories, GitHubListRepositoriesInput),
   tagRequestBody(WS_METHODS.gitCheckout, GitCheckoutInput),
   tagRequestBody(WS_METHODS.gitStashAndCheckout, GitStashAndCheckoutInput),
   tagRequestBody(WS_METHODS.gitStashDrop, GitStashDropInput),
@@ -435,6 +456,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.projectDevServerEvent]: typeof ProjectDevServerEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.shellEvent]: OrchestrationShellStreamItem;
+  readonly [ORCHESTRATION_WS_CHANNELS.workspaceShellEvent]: OrchestrationWorkspaceShellStreamItem;
   readonly [ORCHESTRATION_WS_CHANNELS.threadEvent]: OrchestrationThreadStreamItem;
 }
 
@@ -494,6 +516,10 @@ export const WsPushOrchestrationThreadEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.threadEvent,
   OrchestrationThreadStreamItem,
 );
+export const WsPushOrchestrationWorkspaceShellEvent = makeWsPushSchema(
+  ORCHESTRATION_WS_CHANNELS.workspaceShellEvent,
+  OrchestrationWorkspaceShellStreamItem,
+);
 
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.gitActionProgress,
@@ -507,6 +533,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.projectDevServerEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
+  ORCHESTRATION_WS_CHANNELS.workspaceShellEvent,
   ORCHESTRATION_WS_CHANNELS.threadEvent,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
@@ -523,6 +550,7 @@ export const WsPush = Schema.Union([
   WsPushProjectDevServerEvent,
   WsPushOrchestrationDomainEvent,
   WsPushOrchestrationShellEvent,
+  WsPushOrchestrationWorkspaceShellEvent,
   WsPushOrchestrationThreadEvent,
 ]);
 export type WsPush = typeof WsPush.Type;

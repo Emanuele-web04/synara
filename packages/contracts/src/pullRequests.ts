@@ -8,6 +8,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas";
 import { GitPullRequestMergeability } from "./git";
+import { GitHubAccountSelection } from "./github";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
 export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
@@ -117,6 +118,13 @@ export const PullRequestListEntry = Schema.Struct({
   updatedAt: IsoDateTime,
   reviewDecision: Schema.NullOr(Schema.String),
   viewerReviewRequested: Schema.Boolean,
+  // Optional for rolling compatibility with servers that predate account-scoped authorship.
+  // Unlike a decoding default, absence remains observable so the client can use the legacy
+  // aggregate viewer login while the old server is still running.
+  viewerAuthored: Schema.optional(Schema.Boolean),
+  // Account identity keeps identical repository/number pairs isolated when projects use
+  // different authenticated GitHub accounts. Optional preserves rolling compatibility.
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   // A repository-level row can belong to several local projects/worktrees. The fallback keeps a
   // newer client compatible with a server that still sends one project-local row at a time.

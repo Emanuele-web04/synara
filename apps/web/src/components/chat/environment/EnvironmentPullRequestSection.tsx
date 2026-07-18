@@ -11,8 +11,9 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import { presentPullRequestState } from "@synara/shared/pullRequest";
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
@@ -22,6 +23,7 @@ import { PullRequestConflictIcon } from "../../pullRequest/pullRequestStatePrese
 import { PR_QUIET_INK_CLASS_NAME } from "../../pullRequest/pullRequestText";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import { resolvePullRequestAssociation } from "~/lib/gitPullRequestAssociation";
 import {
   ArrowUpRightIcon,
   ChatBubbleIcon,
@@ -35,6 +37,8 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { useRightDockStore } from "~/rightDockStore";
+import { createThreadGitHubAccountSelector, createThreadSelector } from "~/storeSelectors";
+import { useStore } from "~/store";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -205,15 +209,30 @@ export function EnvironmentPullRequestSection({
   onClose: () => void;
 }) {
   const openPane = useRightDockStore((store) => store.openPane);
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
+  );
+  const githubAccount = useStore(
+    useMemo(() => createThreadGitHubAccountSelector(activeThreadId), [activeThreadId]),
+  );
   // Shares the cached git status the git block already fetches — no extra RPC.
-  const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
-  const pr = gitStatus?.pr ?? null;
+  const { data: gitStatus, error: gitStatusError } = useQuery(
+    gitStatusQueryOptions(gitCwd, githubAccount),
+  );
+  const persistedPr = activeThread?.lastKnownPr ?? null;
+  const pr = resolvePullRequestAssociation({
+    live: gitStatus?.pr ?? null,
+    persisted: persistedPr,
+    liveUnavailable:
+      gitStatus === undefined || gitStatusError !== null || gitStatus.prUnavailable === true,
+  });
 
   const snapshotQuery = useQuery(
     gitPullRequestSnapshotQueryOptions({
       cwd: gitCwd,
       reference: pr?.url ?? null,
       enabled: enabled && pr !== null && pr.state === "open",
+      ...(githubAccount ? { account: githubAccount } : {}),
     }),
   );
 
@@ -373,7 +392,7 @@ export function EnvironmentPullRequestSection({
               />
             )
           }
-          label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
+          label={`${presentPullRequestState(displayPr)} on GitHub`}
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             openPullRequest();

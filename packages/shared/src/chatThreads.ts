@@ -4,11 +4,13 @@
 // Exports: generic title checks plus fallback/generated title sanitizers
 
 export const GENERIC_CHAT_THREAD_TITLE = "New thread";
-const MAX_CHAT_THREAD_TITLE_LENGTH = 60;
+export const GENERIC_WORKSPACE_CONVERSATION_TITLE = "New conversation";
+export const MAX_CHAT_THREAD_TITLE_LENGTH = 28;
 // Single source for the title word cap. Exported so the server-side title prompt
 // (textGenerationShared.buildThreadTitlePrompt) derives its wording and fallback
 // limits from the same number the sanitizers enforce here.
-export const MAX_CHAT_THREAD_TITLE_WORDS = 6;
+export const MIN_CHAT_THREAD_TITLE_WORDS = 2;
+export const MAX_CHAT_THREAD_TITLE_WORDS = 4;
 
 function normalizeTitleWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -30,10 +32,17 @@ export function truncateChatThreadTitle(
   maxLength = MAX_CHAT_THREAD_TITLE_LENGTH,
 ): string {
   const trimmed = normalizeTitleWhitespace(text);
-  if (trimmed.length <= maxLength) {
+  const characters = Array.from(trimmed);
+  if (characters.length <= maxLength) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxLength)}...`;
+  if (maxLength <= 1) {
+    return "…";
+  }
+  return `${characters
+    .slice(0, maxLength - 1)
+    .join("")
+    .trimEnd()}…`;
 }
 
 // Build a short deterministic title while the model-generated rename is pending.
@@ -56,5 +65,9 @@ export function sanitizeGeneratedThreadTitle(raw: string): string {
 }
 
 export function isGenericChatThreadTitle(title: string | null | undefined): boolean {
-  return normalizeTitleWhitespace(title ?? "") === GENERIC_CHAT_THREAD_TITLE;
+  const normalizedTitle = normalizeTitleWhitespace(title ?? "");
+  return (
+    normalizedTitle === GENERIC_CHAT_THREAD_TITLE ||
+    normalizedTitle === GENERIC_WORKSPACE_CONVERSATION_TITLE
+  );
 }

@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 
 import { Effect } from "effect";
 import type {
+  GitHubAccountSelection,
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestMergeCapabilities,
@@ -25,6 +26,7 @@ import {
   type GitHubPullRequestDetailData,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
+  PULL_REQUEST_LIST_JSON_FIELDS as WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
 
@@ -45,6 +47,7 @@ export interface FakeGhScenario {
     headRepositoryOwnerLogin?: string | null;
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
+  branchBrowserUrls?: Record<string, string | null>;
   pullRequestChecks?: GitPullRequestCheck[];
   pullRequestReviewComments?: GitPullRequestComment[];
   pullRequestReviewCommentsTruncated?: boolean;
@@ -88,13 +91,16 @@ function isGitHubCliError(error: unknown): error is GitHubCliError {
 export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   service: GitHubCliShape;
   ghCalls: string[];
+  accountCalls: GitHubAccountSelection[];
 } {
   const prListQueue = [...(scenario.prListSequence ?? [])];
   const ghCalls: string[] = [];
+  const accountCalls: GitHubAccountSelection[] = [];
 
   const execute: GitHubCliShape["execute"] = (input) => {
     const args = [...input.args];
     ghCalls.push(args.join(" "));
+    if (input.account) accountCalls.push(input.account);
 
     if (scenario.failWith) {
       return Effect.fail(scenario.failWith);
@@ -252,7 +258,12 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   };
 
   const listPullRequestsWithState = (
-    input: { cwd: string; headSelector: string; limit?: number },
+    input: {
+      cwd: string;
+      headSelector: string;
+      limit?: number;
+      account?: GitHubAccountSelection;
+    },
     options: { state: "open" | "all"; defaultLimit: number },
   ) =>
     execute({
@@ -269,6 +280,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         "--json",
         PULL_REQUEST_SUMMARY_JSON_FIELDS,
       ],
+      ...(input.account ? { account: input.account } : {}),
     }).pipe(Effect.flatMap((result) => decodePullRequestListJson(result.stdout)));
 
   return {
@@ -353,10 +365,44 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(`pr comment ${input.number} --repo ${input.repository}`);
         return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
       },
+      listAccounts: () => Effect.succeed([]),
       listOpenPullRequests: (input) =>
         listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
       listPullRequests: (input) =>
         listPullRequestsWithState(input, { state: "all", defaultLimit: 20 }),
+      listWorkspacePullRequests: (input) => {
+        const state =
+          input.filter === "reviewing"
+            ? "open"
+            : input.filter === "open" || input.filter === "closed" || input.filter === "merged"
+              ? input.filter
+              : "all";
+        const filterArgs =
+          input.filter === "reviewing"
+            ? ["--search", "review-requested:@me"]
+            : input.filter === "authored"
+              ? ["--author", "@me"]
+              : [];
+        return execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "list",
+            "--state",
+            state,
+            ...filterArgs,
+            "--limit",
+            String(input.limit ?? 100),
+            "--json",
+            WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
+          ],
+          ...(input.account ? { account: input.account } : {}),
+        }).pipe(
+          Effect.flatMap((result) =>
+            decodePullRequestListJson(result.stdout, "listWorkspacePullRequests"),
+          ),
+        );
+      },
       createPullRequest: (input) =>
         execute({
           cwd: input.cwd,
@@ -372,11 +418,13 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--body-file",
             input.bodyFile,
           ],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(Effect.asVoid),
       getDefaultBranch: (input) =>
         execute({
           cwd: input.cwd,
           args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(
           Effect.map((result) => {
             const value = result.stdout.trim();
@@ -387,16 +435,36 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         execute({
           cwd: input.cwd,
           args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,
           args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
+      getBranchBrowserUrl: (input) => {
+        const key = `${input.repository}#${input.branch}`;
+        ghCalls.push(
+          `api repos/${input.repository}/branches/${encodeURIComponent(input.branch)} --jq ._links.html`,
+        );
+        if (input.account) accountCalls.push(input.account);
+        if (!(key in (scenario.branchBrowserUrls ?? {}))) {
+          return Effect.fail(
+            new GitHubCliError({
+              operation: "getBranchBrowserUrl",
+              detail: `Unexpected branch lookup: ${key}`,
+            }),
+          );
+        }
+        return Effect.succeed({ url: scenario.branchBrowserUrls?.[key] ?? null });
+      },
+      listRepositories: () => Effect.succeed([]),
       checkoutPullRequest: (input) =>
         execute({
           cwd: input.cwd,
           args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(Effect.asVoid),
       getPullRequestWithChecks: (input) =>
         execute({
@@ -408,6 +476,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--json",
             `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
           ],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(
           Effect.map((result) => ({
             summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
@@ -427,5 +496,6 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       },
     },
     ghCalls,
+    accountCalls,
   };
 }

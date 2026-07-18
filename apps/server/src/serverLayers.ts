@@ -13,6 +13,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
+import { WorktreeWorkspaceReactorLive } from "./orchestration/Layers/WorktreeWorkspaceReactor";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { DevServerManagerLive } from "./devServerManager";
@@ -77,6 +78,15 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
+  const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
+  const worktreeWorkspaceReactorLayer = WorktreeWorkspaceReactorLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(TerminalLayerLive),
+    Layer.provideMerge(devServerManagerLayer),
+  );
   const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
     Layer.provideMerge(checkpointStoreLayer),
   );
@@ -91,8 +101,6 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
-  // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
-  const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
   );
@@ -144,6 +152,7 @@ export function makeServerRuntimeServicesLayer() {
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     orchestrationReactorLayer,
+    worktreeWorkspaceReactorLayer,
     providerCommandReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

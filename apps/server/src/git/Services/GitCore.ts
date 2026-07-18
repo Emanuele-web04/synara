@@ -39,6 +39,7 @@ export interface ExecuteGitInput {
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
+  readonly truncateOutput?: boolean;
   readonly progress?: ExecuteGitProgress;
 }
 
@@ -61,6 +62,7 @@ export interface GitPreparedCommitContext {
 }
 
 export interface ExecuteGitProgress {
+  readonly onStdoutChunk?: (chunk: Uint8Array) => Effect.Effect<void, never>;
   readonly onStdoutLine?: (line: string) => Effect.Effect<void, never>;
   readonly onStderrLine?: (line: string) => Effect.Effect<void, never>;
   readonly onHookStarted?: (hookName: string) => Effect.Effect<void, never>;

@@ -1,4 +1,5 @@
 import type {
+  GitHubAccountSelection,
   GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
   GitStackedAction,
@@ -24,8 +25,20 @@ export const gitQueryKeys = {
   all: ["git"] as const,
   statuses: ["git", "status"] as const,
   pullRequests: ["git", "pull-request"] as const,
-  githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
-  status: (cwd: string | null) => ["git", "status", cwd] as const,
+  githubRepository: (cwd: string | null, account?: GitHubAccountSelection) =>
+    account
+      ? ([
+          "git",
+          "github-repository",
+          cwd,
+          account.host.toLowerCase(),
+          account.login.toLowerCase(),
+        ] as const)
+      : (["git", "github-repository", cwd] as const),
+  status: (cwd: string | null, account?: GitHubAccountSelection) =>
+    account
+      ? (["git", "status", cwd, account.host.toLowerCase(), account.login.toLowerCase()] as const)
+      : (["git", "status", cwd] as const),
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
   workingTreeDiff: (
@@ -55,7 +68,17 @@ export const gitQueryKeys = {
 export const gitMutationKeys = {
   init: (cwd: string | null) => ["git", "mutation", "init", cwd] as const,
   checkout: (cwd: string | null) => ["git", "mutation", "checkout", cwd] as const,
-  runStackedAction: (cwd: string | null) => ["git", "mutation", "run-stacked-action", cwd] as const,
+  runStackedAction: (cwd: string | null, account?: GitHubAccountSelection) =>
+    account
+      ? ([
+          "git",
+          "mutation",
+          "run-stacked-action",
+          cwd,
+          account.host.toLowerCase(),
+          account.login.toLowerCase(),
+        ] as const)
+      : (["git", "mutation", "run-stacked-action", cwd] as const),
   pull: (cwd: string | null) => ["git", "mutation", "pull", cwd] as const,
   preparePullRequestThread: (cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", cwd] as const,
@@ -88,29 +111,34 @@ export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iter
   );
 }
 
-export function gitStatusQueryOptions(cwd: string | null) {
+export function gitStatusQueryOptions(cwd: string | null, account?: GitHubAccountSelection) {
   return queryOptions({
-    queryKey: gitQueryKeys.status(cwd),
+    queryKey: gitQueryKeys.status(cwd, account),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git status is unavailable.");
-      return api.git.status({ cwd });
+      return api.git.status({ cwd, ...(account ? { account } : {}) });
     },
     enabled: cwd !== null,
     staleTime: GIT_STATUS_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: "always",
     refetchInterval: GIT_STATUS_REFETCH_INTERVAL_MS,
+    retry: false,
   });
 }
 
-export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = true) {
+export function gitGithubRepositoryQueryOptions(
+  cwd: string | null,
+  enabled = true,
+  account?: GitHubAccountSelection,
+) {
   return queryOptions({
-    queryKey: gitQueryKeys.githubRepository(cwd),
+    queryKey: gitQueryKeys.githubRepository(cwd, account),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("GitHub repository is unavailable.");
-      return api.git.githubRepository({ cwd });
+      return api.git.githubRepository({ cwd, ...(account ? { account } : {}) });
     },
     enabled: enabled && cwd !== null,
     staleTime: 5 * 60_000,
@@ -138,15 +166,26 @@ export function gitBranchesQueryOptions(cwd: string | null) {
 export function gitResolvePullRequestQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
+  account?: GitHubAccountSelection;
 }) {
   return queryOptions({
-    queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
+    queryKey: [
+      ...gitQueryKeys.pullRequest(input.cwd),
+      input.reference,
+      ...(input.account
+        ? [input.account.host.toLowerCase(), input.account.login.toLowerCase()]
+        : []),
+    ] as const,
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request lookup is unavailable.");
       }
-      return api.git.resolvePullRequest({ cwd: input.cwd, reference: input.reference });
+      return api.git.resolvePullRequest({
+        cwd: input.cwd,
+        reference: input.reference,
+        ...(input.account ? { account: input.account } : {}),
+      });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
@@ -164,16 +203,28 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
   enabled?: boolean;
+  account?: GitHubAccountSelection;
 }) {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
-    queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
+    queryKey: [
+      ...gitQueryKeys.pullRequest(input.cwd),
+      "snapshot",
+      input.reference,
+      ...(input.account
+        ? [input.account.host.toLowerCase(), input.account.login.toLowerCase()]
+        : []),
+    ] as const,
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request snapshot is unavailable.");
       }
-      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+      return api.git.pullRequestSnapshot({
+        cwd: input.cwd,
+        reference: input.reference,
+        ...(input.account ? { account: input.account } : {}),
+      });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
@@ -307,6 +358,8 @@ export function gitRunStackedActionMutationOptions(input: {
   modelSelection?: ModelSelection | null;
   codexHomePath?: string | null;
   providerOptions?: ProviderStartOptions | null;
+  account?: GitHubAccountSelection;
+  baseBranch?: string | null;
 }) {
   return makeGitMutationOptions<
     {
@@ -320,13 +373,15 @@ export function gitRunStackedActionMutationOptions(input: {
   >({
     cwd: input.cwd,
     queryClient: input.queryClient,
-    mutationKey: gitMutationKeys.runStackedAction(input.cwd),
+    mutationKey: gitMutationKeys.runStackedAction(input.cwd, input.account),
     unavailableMessage: "Git action is unavailable.",
     run: (api, cwd, { actionId, action, commitMessage, featureBranch, filePaths }) =>
       api.git.runStackedAction({
         actionId,
         cwd,
         action,
+        ...(input.account ? { account: input.account } : {}),
+        ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
@@ -389,6 +444,7 @@ export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClie
 export function gitPreparePullRequestThreadMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
+  account?: GitHubAccountSelection;
 }) {
   return makeGitMutationOptions<
     { reference: string; mode: "local" | "worktree" },
@@ -399,7 +455,12 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
     unavailableMessage: "Pull request thread preparation is unavailable.",
     run: (api, cwd, { reference, mode }) =>
-      api.git.preparePullRequestThread({ cwd, reference, mode }),
+      api.git.preparePullRequestThread({
+        cwd,
+        reference,
+        mode,
+        ...(input.account ? { account: input.account } : {}),
+      }),
   });
 }
 

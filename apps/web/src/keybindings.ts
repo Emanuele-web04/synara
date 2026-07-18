@@ -1,4 +1,6 @@
 import {
+  CHAT_TAB_JUMP_KEYBINDING_COMMANDS,
+  type ChatTabJumpKeybindingCommand,
   type KeybindingCommand,
   type ResolvedKeybindingRule,
   type KeybindingShortcut,
@@ -77,6 +79,13 @@ const whenThreadJumpAvailable = whenAnd(
 // the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
 // where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
 const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
+const whenChatTabCloseAllowed = whenAnd(
+  whenNotTerminalFocus,
+  whenOr(
+    whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    whenIdentifier("terminalWorkspaceChatTabActive"),
+  ),
+);
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
@@ -92,6 +101,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "chat.new",
     shortcut: commandShortcut("n"),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "chat.newConversation",
+    shortcut: commandShortcut("t"),
     whenAst: whenCreationAllowed,
   },
   {
@@ -129,6 +143,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("\\"),
     whenAst: whenCreationAllowed,
   },
+  {
+    command: "chat.closeActiveTab",
+    shortcut: commandShortcut("w"),
+    whenAst: whenChatTabCloseAllowed,
+  },
+  {
+    command: "chat.reopenClosedTab",
+    shortcut: commandShortcut("w", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
+  },
   // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
   // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
   // recent-view switcher does not open in a normal browser tab. Uses literal Ctrl
@@ -142,6 +166,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "view.recent.previous",
     shortcut: commandShortcut("tab", { ctrlKey: true, shiftKey: true, modKey: false }),
+  },
+  {
+    command: "workspace.visible.next",
+    shortcut: commandShortcut("arrowdown"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "workspace.visible.previous",
+    shortcut: commandShortcut("arrowup"),
+    whenAst: whenNotTerminalFocus,
   },
   {
     command: "modelPicker.toggle",
@@ -219,6 +253,21 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("9"),
     whenAst: whenThreadJumpAvailable,
   },
+  ...CHAT_TAB_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
+    command,
+    shortcut: commandShortcut(String(index + 1), { shiftKey: true }),
+    whenAst: whenThreadJumpAvailable,
+  })),
+  {
+    command: "chat.visible.next",
+    shortcut: commandShortcut("]"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "chat.visible.previous",
+    shortcut: commandShortcut("["),
+    whenAst: whenThreadJumpAvailable,
+  },
   {
     command: "terminal.workspace.newFullWidth",
     shortcut: commandShortcut("j", { shiftKey: true }),
@@ -226,7 +275,10 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "terminal.workspace.closeActive",
     shortcut: commandShortcut("w"),
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+    whenAst: whenAnd(
+      whenIdentifier("terminalWorkspaceOpen"),
+      whenIdentifier("terminalWorkspaceTerminalTabActive"),
+    ),
   },
   {
     command: "terminal.workspace.terminal",
@@ -565,6 +617,15 @@ export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCo
 
 export function threadJumpIndexFromCommand(command: string): number | null {
   const index = THREAD_JUMP_KEYBINDING_COMMANDS.indexOf(command as ThreadJumpKeybindingCommand);
+  return index === -1 ? null : index;
+}
+
+export function chatTabJumpCommandForIndex(index: number): ChatTabJumpKeybindingCommand | null {
+  return CHAT_TAB_JUMP_KEYBINDING_COMMANDS[index] ?? null;
+}
+
+export function chatTabJumpIndexFromCommand(command: string): number | null {
+  const index = CHAT_TAB_JUMP_KEYBINDING_COMMANDS.indexOf(command as ChatTabJumpKeybindingCommand);
   return index === -1 ? null : index;
 }
 

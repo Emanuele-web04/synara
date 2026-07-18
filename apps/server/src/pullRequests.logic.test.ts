@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildPullRequestListEntry,
   isPullRequestMergeMethodAllowed,
   isValidGitHubRepositoryNameWithOwner,
+  isViewerAuthored,
   isViewerReviewRequested,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
@@ -206,6 +208,50 @@ describe("isViewerReviewRequested", () => {
 
   it("does not flag self-authored matches returned by the reviewing query", () => {
     expect(isViewerReviewRequested(viewer, [], "viewer", true)).toBe(false);
+  });
+});
+
+describe("isViewerAuthored", () => {
+  it("matches the repository viewer case-insensitively", () => {
+    expect(
+      isViewerAuthored({ login: "Viewer", name: null, avatarUrl: null, url: null }, "viewer"),
+    ).toBe(true);
+    expect(isViewerAuthored(null, "viewer")).toBe(false);
+  });
+
+  it("projects account-scoped authorship onto list entries", () => {
+    const pullRequest = {
+      number: 42,
+      title: "Account-scoped authorship",
+      url: "https://github.com/acme/widgets/pull/42",
+      author: { login: "alice", name: null, avatarUrl: null, url: null },
+      headBranch: "feature/authorship",
+      baseBranch: "main",
+      state: "open" as const,
+      isDraft: false,
+      additions: 1,
+      deletions: 0,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-02T00:00:00.000Z",
+      reviewDecision: null,
+      reviewRequestLogins: [],
+      mergeability: "unknown" as const,
+      labels: [],
+    };
+
+    expect(
+      buildPullRequestListEntry({
+        project: {
+          id: "project-1" as PullRequestListEntry["projectId"],
+          title: "Project One",
+        },
+        repository: "acme/widgets",
+        pullRequest,
+        viewerReviewRequested: false,
+        viewerAuthored: isViewerAuthored(pullRequest.author, "ALICE"),
+        isPinned: false,
+      }).viewerAuthored,
+    ).toBe(true);
   });
 });
 

@@ -8,14 +8,17 @@
 
 import { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SplashScreen } from "./SplashScreen";
 import {
+  collectKnownThreadIds,
   type EmptyRouteRestoreRecoveryState,
   type LastThreadRoute,
   shouldHoldRememberedRouteFallback,
+  shouldHoldUnresolvedRememberedRouteFallback,
   shouldStartRememberedRouteRecovery,
+  shouldStartUnresolvedRememberedRouteRecovery,
 } from "../chatRouteRestore";
 import { readSidebarUiState } from "./Sidebar.uiState";
 import {
@@ -40,16 +43,37 @@ export type RestoreRouteResolver = (input: RestoreRouteResolverInput) => LastThr
 export function RestoreOrCreateChatRoute({
   resolveRestoreRoute,
   createFreshChat,
+  fallbackRestoreRoute,
+  shouldRecoverUnresolvedRememberedRoute,
 }: {
   // Surface-specific policy for picking the thread route to restore (e.g. the last-visited route
   // for home chats, the latest Studio thread or draft for Studio). The remembered-route recovery
   // below still keys off the total thread count, which is shared across surfaces.
   readonly resolveRestoreRoute: RestoreRouteResolver;
   readonly createFreshChat: () => Promise<StartContainerChatResult>;
+  // Persisted MRU routes hydrate independently from the server thread shell. When the dedicated
+  // sidebar route is absent, expose the leading MRU candidate so startup can refresh the shell
+  // before deciding that there is nothing to restore.
+  readonly fallbackRestoreRoute?: LastThreadRoute | null | undefined;
+  // Some surfaces receive their workspace conversation summaries after the legacy thread shell.
+  // They can opt into one authoritative refresh before treating a missing remembered route as
+  // stale. The callback keeps deliberate cross-surface routes (for example Studio from "/") fast.
+  readonly shouldRecoverUnresolvedRememberedRoute?:
+    | ((lastThreadRoute: LastThreadRoute) => boolean)
+    | undefined;
 }) {
   const navigate = useNavigate();
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
+  const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const knownThreadCount = useMemo(
+    () =>
+      collectKnownThreadIds({
+        threadIds,
+        sidebarThreadSummaryIds: Object.keys(sidebarThreadSummaryById),
+      }).size,
+    [sidebarThreadSummaryById, threadIds],
+  );
   const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
   const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
   const splitViewIds = Object.keys(splitViewsById).filter(
@@ -59,8 +83,11 @@ export function RestoreOrCreateChatRoute({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [emptyRestoreRecoveryState, setEmptyRestoreRecoveryState] =
     useState<EmptyRouteRestoreRecoveryState>("idle");
+  const [unresolvedRestoreRecoveryState, setUnresolvedRestoreRecoveryState] =
+    useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const emptyRestoreRecoveryRunRef = useRef(0);
+  const unresolvedRestoreRecoveryRunRef = useRef(0);
   // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect,
   // and without this guard the superseded run and the new run could both mint a draft.
   const createFreshChatInFlightRef = useRef(false);
@@ -72,7 +99,7 @@ export function RestoreOrCreateChatRoute({
   }, []);
 
   useEffect(() => {
-    if (!(threadIds.length > 0 && emptyRestoreRecoveryState !== "idle")) {
+    if (!(knownThreadCount > 0 && emptyRestoreRecoveryState !== "idle")) {
       return;
     }
     // Timeout-0 keeps the state write asynchronous (compiler-eligible); the
@@ -82,7 +109,7 @@ export function RestoreOrCreateChatRoute({
       setEmptyRestoreRecoveryState("idle");
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [emptyRestoreRecoveryState, threadIds.length]);
+  }, [emptyRestoreRecoveryState, knownThreadCount]);
 
   useEffect(() => {
     if (!threadsHydrated || !splitViewsHydrated) {
@@ -103,7 +130,7 @@ export function RestoreOrCreateChatRoute({
       if (
         shouldStartRememberedRouteRecovery({
           lastThreadRoute,
-          availableThreadCount: threadIds.length,
+          availableThreadCount: knownThreadCount,
           recoveryState: emptyRestoreRecoveryState,
         })
       ) {
@@ -122,7 +149,7 @@ export function RestoreOrCreateChatRoute({
       if (
         shouldHoldRememberedRouteFallback({
           lastThreadRoute,
-          availableThreadCount: threadIds.length,
+          availableThreadCount: knownThreadCount,
           recoveryState: emptyRestoreRecoveryState,
         })
       ) {
@@ -144,6 +171,42 @@ export function RestoreOrCreateChatRoute({
             splitViewId: restorableRoute.splitViewId,
           }),
         });
+        return;
+      }
+
+      const unresolvedRestoreCandidate = lastThreadRoute ?? fallbackRestoreRoute ?? null;
+      const unresolvedRecoveryEnabled = Boolean(
+        unresolvedRestoreCandidate &&
+        shouldRecoverUnresolvedRememberedRoute?.(unresolvedRestoreCandidate),
+      );
+      if (
+        shouldStartUnresolvedRememberedRouteRecovery({
+          enabled: unresolvedRecoveryEnabled,
+          lastThreadRoute: unresolvedRestoreCandidate,
+          recoveryState: unresolvedRestoreRecoveryState,
+          routeRestorable: false,
+        })
+      ) {
+        const recoveryRun = (unresolvedRestoreRecoveryRunRef.current += 1);
+        setUnresolvedRestoreRecoveryState("pending");
+        await Promise.all([
+          refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
+          waitForEmptyRouteRestoreFallbackDelay(),
+        ]);
+        if (mountedRef.current && unresolvedRestoreRecoveryRunRef.current === recoveryRun) {
+          setUnresolvedRestoreRecoveryState("done");
+        }
+        return;
+      }
+
+      if (
+        shouldHoldUnresolvedRememberedRouteFallback({
+          enabled: unresolvedRecoveryEnabled,
+          lastThreadRoute: unresolvedRestoreCandidate,
+          recoveryState: unresolvedRestoreRecoveryState,
+          routeRestorable: false,
+        })
+      ) {
         return;
       }
 
@@ -169,12 +232,15 @@ export function RestoreOrCreateChatRoute({
     attempt,
     createFreshChat,
     emptyRestoreRecoveryState,
+    fallbackRestoreRoute,
     navigate,
     resolveRestoreRoute,
+    shouldRecoverUnresolvedRememberedRoute,
     splitViewIds,
     splitViewsHydrated,
-    threadIds.length,
+    knownThreadCount,
     threadsHydrated,
+    unresolvedRestoreRecoveryState,
   ]);
 
   return (

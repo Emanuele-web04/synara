@@ -8,6 +8,7 @@ import {
   type ProjectId,
   type PullRequestReviewRequestCountResult,
   type ThreadId,
+  type WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
@@ -96,6 +97,35 @@ export function pullRequestRepositoryConfigFingerprint(
       .map((project) => [project.id, project.cwd, project.name, project.remoteName] as const)
       .toSorted((left, right) => left[0].localeCompare(right[0])),
   );
+}
+
+export function buildGitHubBranchUrl(
+  repositoryUrl: string | null | undefined,
+  branch: string | null | undefined,
+): string | null {
+  const normalizedRepositoryUrl = repositoryUrl?.trim();
+  const normalizedBranch = branch?.trim();
+  if (!normalizedRepositoryUrl || !normalizedBranch) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalizedRepositoryUrl);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") {
+      return null;
+    }
+    const repositoryPath = url.pathname.replace(/\/+$/, "").replace(/\.git$/i, "");
+    if (repositoryPath.split("/").filter(Boolean).length !== 2) {
+      return null;
+    }
+    const branchPath = normalizedBranch.split("/").map(encodeURIComponent).join("/");
+    url.pathname = `${repositoryPath}/tree/${branchPath}`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
 }
 
 /** The optimistic segment follows a destination click and clears when the user returns. */
@@ -1118,6 +1148,54 @@ export function getNextVisibleSidebarThreadId(input: {
   return visibleThreadIds[nextIndex] ?? null;
 }
 
+export function resolveConversationTabThreadIds(input: {
+  workspaceScoped: boolean;
+  workspaceThreadIds: readonly Thread["id"][];
+  editorScoped: boolean;
+  editorTabThreadIds: readonly Thread["id"][];
+  visibleSidebarThreadIds: readonly Thread["id"][];
+}): Thread["id"][] {
+  if (input.workspaceScoped && input.workspaceThreadIds.length > 0) {
+    return [...input.workspaceThreadIds];
+  }
+  if (input.editorScoped && input.editorTabThreadIds.length > 0) {
+    return [...input.editorTabThreadIds];
+  }
+  return [...input.visibleSidebarThreadIds];
+}
+
+export function getThreadJumpTargetIds(orderedThreadIds: readonly Thread["id"][]): Thread["id"][] {
+  if (orderedThreadIds.length <= THREAD_JUMP_COMMANDS.length) {
+    return [...orderedThreadIds];
+  }
+
+  return [...orderedThreadIds.slice(0, THREAD_JUMP_COMMANDS.length - 1), orderedThreadIds.at(-1)!];
+}
+
+export function getNextVisibleWorkspaceId(input: {
+  visibleWorkspaceIds: readonly WorktreeWorkspaceId[];
+  activeWorkspaceId: WorktreeWorkspaceId | null;
+  direction: "forward" | "backward";
+}): WorktreeWorkspaceId | null {
+  const { activeWorkspaceId, direction, visibleWorkspaceIds } = input;
+  if (visibleWorkspaceIds.length === 0) return null;
+
+  const activeIndex = activeWorkspaceId
+    ? visibleWorkspaceIds.findIndex((workspaceId) => workspaceId === activeWorkspaceId)
+    : -1;
+  if (activeIndex === -1) {
+    return direction === "forward"
+      ? (visibleWorkspaceIds[0] ?? null)
+      : (visibleWorkspaceIds.at(-1) ?? null);
+  }
+
+  const nextIndex =
+    direction === "forward"
+      ? (activeIndex + 1) % visibleWorkspaceIds.length
+      : (activeIndex - 1 + visibleWorkspaceIds.length) % visibleWorkspaceIds.length;
+  return visibleWorkspaceIds[nextIndex] ?? null;
+}
+
 export function getSidebarThreadIdForJumpCommand(input: {
   visibleThreadIds: readonly Thread["id"][];
   command: string | null;
@@ -1229,6 +1307,18 @@ export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarTh
       rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
     if (byTimestamp !== 0) return byTimestamp;
     return right.id.localeCompare(left.id);
+  });
+}
+
+export function sortThreadsForConversationTabs<
+  T extends { id: Thread["id"] } & Pick<SidebarThreadSortInput, "createdAt">,
+>(threads: readonly T[]): T[] {
+  return threads.toSorted((left, right) => {
+    const leftTimestamp = toSortableTimestamp(left.createdAt);
+    const rightTimestamp = toSortableTimestamp(right.createdAt);
+    if (leftTimestamp === null) return rightTimestamp === null ? 0 : 1;
+    if (rightTimestamp === null) return -1;
+    return leftTimestamp - rightTimestamp;
   });
 }
 

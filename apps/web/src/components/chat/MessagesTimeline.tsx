@@ -176,7 +176,7 @@ import {
   type MessageTrailAnchor,
 } from "./messageTrail.logic";
 
-const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
+const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 3;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
 // the rest are revealed via an inline "Show more" row.
 const MAX_VISIBLE_CHANGED_FILES = 5;
@@ -1012,7 +1012,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                     onClick={() => handleToggleWorkGroup(groupId)}
                   >
-                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                    {isExpanded
+                      ? "Show fewer tool calls"
+                      : `+${hiddenCount} more tool ${hiddenCount === 1 ? "call" : "calls"}`}
                   </button>
                 </div>
               )}
@@ -1385,8 +1387,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                         >
                           {display.toolExpanded
-                            ? "Show less"
-                            : `+${display.hiddenToolCount} more tool calls`}
+                            ? "Show fewer tool calls"
+                            : `+${display.hiddenToolCount} more tool ${display.hiddenToolCount === 1 ? "call" : "calls"}`}
                         </button>
                       </div>
                     )}

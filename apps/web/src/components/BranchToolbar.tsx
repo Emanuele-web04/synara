@@ -2,13 +2,7 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@synara/contracts";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  HandoffIcon,
-  WorktreeIcon,
-} from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -30,6 +24,7 @@ import {
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolveWorktreeContinuationAction,
 } from "./BranchToolbar.logic";
 import {
   BranchToolbarBranchSelector,
@@ -347,13 +342,21 @@ export default function BranchToolbar({
     ],
   );
 
-  const canHandoffToWorktree = Boolean(
-    hasServerThread && envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+  const hasReusableWorktree = Boolean(
+    serverThread?.associatedWorktreePath ??
+    serverThread?.associatedWorktreeBranch ??
+    serverThread?.associatedWorktreeRef,
   );
+  const worktreeContinuationAction = resolveWorktreeContinuationAction({
+    activeWorktreePath,
+    envMode: effectiveEnvMode,
+    envLocked,
+    hasServerThread,
+    hasReusableWorktree,
+  });
+  const canHandoffToWorktree = worktreeContinuationAction === "handoff";
+  const canSwitchToWorktree = worktreeContinuationAction === "switch";
   const canHandoffToLocal = Boolean(hasServerThread && activeWorktreePath);
-  const canSwitchToWorktree = Boolean(
-    !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
-  );
   const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
@@ -391,6 +394,8 @@ export default function BranchToolbar({
               render={
                 <button
                   type="button"
+                  aria-label="Choose where this chat runs"
+                  title="Choose where this chat runs"
                   className={
                     isPanel
                       ? ENVIRONMENT_ROW_CLASS_NAME
@@ -431,7 +436,12 @@ export default function BranchToolbar({
                   <ContinueInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={environmentPresentation.localOptionLabel}
-                    onSelect={() => onEnvModeChange("local")}
+                    disabled={canHandoffToLocal && handoffBusy}
+                    onSelect={() =>
+                      canHandoffToLocal && onHandoffToLocal
+                        ? onHandoffToLocal()
+                        : onEnvModeChange("local")
+                    }
                   />
                 )}
                 {canSwitchToWorktree ? (
@@ -451,17 +461,9 @@ export default function BranchToolbar({
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to new worktree"
+                    label={hasReusableWorktree ? "Return to worktree" : "New worktree"}
                     disabled={handoffBusy}
                     onSelect={() => onHandoffToWorktree()}
-                  />
-                ) : null}
-                {canHandoffToLocal && onHandoffToLocal ? (
-                  <ContinueInMenuItem
-                    icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to local"
-                    disabled={handoffBusy}
-                    onSelect={() => onHandoffToLocal()}
                   />
                 ) : null}
               </MenuGroup>

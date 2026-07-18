@@ -53,6 +53,16 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.id === "composer.focus.toggle" && entry.shortcutLabel === "⌘L",
       ),
     ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "workspace.visible.next" && entry.shortcutLabel === "⌘Down",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "chat.jump.1" && entry.shortcutLabel === "⇧⌘1",
+      ),
+    ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });

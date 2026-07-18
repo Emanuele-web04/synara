@@ -4,6 +4,8 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationWorkspaceShellStreamEvent,
+  type OrchestrationWorkspaceShellSnapshot,
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
@@ -103,6 +105,11 @@ import {
   withProviderUpdateTimeout,
 } from "../providerUpdates";
 import {
+  coalesceOrchestrationUiEvents,
+  ORCHESTRATION_UI_EVENT_FLUSH_MS,
+  shouldFlushOrchestrationUiEvents,
+} from "./-orchestrationUiEventBatching";
+import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
@@ -115,8 +122,13 @@ const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
-const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
+
+function isWorkspaceShellSnapshot(
+  snapshot: OrchestrationShellSnapshot | OrchestrationWorkspaceShellSnapshot,
+): snapshot is OrchestrationWorkspaceShellSnapshot {
+  return "protocolVersion" in snapshot && snapshot.protocolVersion === 2;
+}
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
@@ -766,89 +778,12 @@ function errorDetails(error: unknown): string {
   }
 }
 
-function coalesceOrchestrationUiEvents(
-  events: ReadonlyArray<OrchestrationEvent>,
-): OrchestrationEvent[] {
-  if (events.length < 2) {
-    return [...events];
-  }
-
-  const coalesced: OrchestrationEvent[] = [];
-  for (const event of events) {
-    const previous = coalesced.at(-1);
-    if (
-      previous?.type === "thread.message-sent" &&
-      event.type === "thread.message-sent" &&
-      previous.payload.threadId === event.payload.threadId &&
-      previous.payload.messageId === event.payload.messageId
-    ) {
-      coalesced[coalesced.length - 1] = {
-        ...event,
-        payload: {
-          ...event.payload,
-          attachments: event.payload.attachments ?? previous.payload.attachments,
-          createdAt: previous.payload.createdAt,
-          text:
-            !event.payload.streaming && event.payload.text.length > 0
-              ? event.payload.text
-              : previous.payload.text + event.payload.text,
-        },
-      };
-      continue;
-    }
-
-    coalesced.push(event);
-  }
-
-  return coalesced;
-}
-
 function appendBounded<T>(items: T[], item: T, limit: number): void {
   const normalizedLimit = Math.max(1, Math.floor(limit));
   if (items.length >= normalizedLimit) {
     items.splice(0, items.length - normalizedLimit + 1);
   }
   items.push(item);
-}
-
-function addBoundedSetValue<T>(set: Set<T>, value: T, limit: number): void {
-  const normalizedLimit = Math.max(1, Math.floor(limit));
-  if (set.has(value)) {
-    set.delete(value);
-  }
-  while (set.size >= normalizedLimit) {
-    const oldestValue = set.values().next().value as T | undefined;
-    if (oldestValue === undefined) {
-      break;
-    }
-    set.delete(oldestValue);
-  }
-  set.add(value);
-}
-
-function shouldFlushDomainEventImmediately(
-  event: OrchestrationEvent,
-  immediatelyFlushedAssistantMessageIds: Set<string>,
-): boolean {
-  if (event.type !== "thread.message-sent" || event.payload.role !== "assistant") {
-    return false;
-  }
-
-  if (!event.payload.streaming) {
-    immediatelyFlushedAssistantMessageIds.delete(event.payload.messageId);
-    return false;
-  }
-
-  if (immediatelyFlushedAssistantMessageIds.has(event.payload.messageId)) {
-    return false;
-  }
-
-  addBoundedSetValue(
-    immediatelyFlushedAssistantMessageIds,
-    event.payload.messageId,
-    IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT,
-  );
-  return true;
 }
 
 function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
@@ -886,8 +821,12 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
 
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
+  const applyWorkspaceShellEvent = useStore((store) => store.applyWorkspaceShellEvent);
   const applyOrchestrationEventsHotPath = useStore(
     (store) => store.applyOrchestrationEventsHotPath,
   );
@@ -953,6 +892,8 @@ function EventRouter() {
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
+    let pendingWorkspaceShellEvents: OrchestrationWorkspaceShellStreamEvent[] = [];
+    let useWorkspaceV2 = false;
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
@@ -1005,6 +946,17 @@ function EventRouter() {
       for (const event of nextPending) {
         shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
         applyShellEvent(event);
+      }
+    };
+
+    const flushWorkspaceShellBuffer = (snapshotSequence: number) => {
+      const nextPending = pendingWorkspaceShellEvents
+        .filter((event) => event.sequence > snapshotSequence)
+        .toSorted((left, right) => left.sequence - right.sequence);
+      pendingWorkspaceShellEvents = [];
+      for (const event of nextPending) {
+        shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
+        applyWorkspaceShellEvent(event);
       }
     };
 
@@ -1063,25 +1015,48 @@ function EventRouter() {
     };
 
     const loadShellSnapshotOnce = async () => {
-      const snapshot = await api.orchestration.getShellSnapshot();
+      const snapshot = useWorkspaceV2
+        ? await api.orchestration.getWorkspaceShellSnapshot()
+        : await api.orchestration.getShellSnapshot();
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
-      syncServerShellSnapshot(snapshot);
+      if (isWorkspaceShellSnapshot(snapshot)) {
+        syncServerWorkspaceShellSnapshot(snapshot);
+      } else {
+        syncServerShellSnapshot(snapshot);
+      }
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
       removeOrphanedTerminalsForCurrentState();
-      flushShellBuffer(snapshot.snapshotSequence);
+      if (isWorkspaceShellSnapshot(snapshot)) {
+        flushWorkspaceShellBuffer(snapshot.snapshotSequence);
+      } else {
+        flushShellBuffer(snapshot.snapshotSequence);
+      }
     };
 
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
+      pendingWorkspaceShellEvents = [];
+      subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
       threadSnapshotRequestInFlight.clear();
       threadReplayRequestInFlight.clear();
-      await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      useWorkspaceV2 = await api.orchestration
+        .getCapabilities()
+        .then(
+          (capabilities) =>
+            capabilities.worktreeWorkspacesV2 && capabilities.protocolVersions.includes(2),
+        )
+        .catch(() => false);
+      if (useWorkspaceV2) {
+        await api.orchestration.subscribeWorkspaceShell().catch(() => loadShellSnapshotOnce());
+      } else {
+        await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      }
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
     };
 
@@ -1194,7 +1169,13 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (
+        shouldFlushOrchestrationUiEvents(
+          event,
+          pendingDomainEvents,
+          immediatelyFlushedAssistantMessageIds,
+        )
+      ) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
         return;
@@ -1246,7 +1227,7 @@ function EventRouter() {
         flushPendingDomainEvents();
       },
       {
-        wait: 100,
+        wait: ORCHESTRATION_UI_EVENT_FLUSH_MS,
         leading: false,
         trailing: true,
       },
@@ -1274,6 +1255,39 @@ function EventRouter() {
       }
       shellSnapshotSequence = item.sequence;
       applyShellEvent(item);
+      if (item.kind === "thread-upserted") {
+        reconcilePromotedDraftsFromShellThreads([item.thread]);
+      }
+      if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
+        !threadSnapshotSequenceById.has(item.thread.id)
+      ) {
+        void requestThreadSnapshot(item.thread.id);
+      }
+      if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
+        void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
+      }
+    });
+    const unsubWorkspaceShellEvent = api.orchestration.onWorkspaceShellEvent((item) => {
+      if (item.kind === "snapshot") {
+        shellSnapshotSequence = item.snapshot.snapshotSequence;
+        syncServerWorkspaceShellSnapshot(item.snapshot);
+        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
+        removeOrphanedTerminalsForCurrentState();
+        flushWorkspaceShellBuffer(item.snapshot.snapshotSequence);
+        return;
+      }
+
+      if (shellSnapshotSequence < 0) {
+        appendBounded(pendingWorkspaceShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
+        return;
+      }
+      if (item.sequence <= shellSnapshotSequence) {
+        return;
+      }
+      shellSnapshotSequence = item.sequence;
+      applyWorkspaceShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
       }
@@ -1352,7 +1366,21 @@ function EventRouter() {
       } else if (event.type === "upserted") {
         store.upsertRun(event.server);
       } else {
-        store.removeRun(event.projectId);
+        store.removeRun({ projectId: event.projectId, workspaceId: event.workspaceId });
+        if (event.reason === "exited") {
+          const description =
+            event.message ??
+            (event.exitCode !== undefined && event.exitCode !== null
+              ? `The process exited with code ${event.exitCode}.`
+              : event.exitSignal !== undefined && event.exitSignal !== null
+                ? `The process exited from signal ${event.exitSignal}.`
+                : "The process exited unexpectedly.");
+          toastManager.add({
+            type: "error",
+            title: "Dev server stopped",
+            description,
+          });
+        }
       }
       invalidateLocalServers();
     });
@@ -1520,12 +1548,14 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
+      void api.orchestration.unsubscribeWorkspaceShell().catch(() => undefined);
       void Promise.all(
         [...subscribedThreadIds].map((threadId) =>
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
         ),
       );
       unsubShellEvent();
+      unsubWorkspaceShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
       unsubDevServerEvent();
@@ -1537,12 +1567,14 @@ function EventRouter() {
   }, [
     applyOrchestrationEventsHotPath,
     applyShellEvent,
+    applyWorkspaceShellEvent,
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
     setServerWorkspacePaths,
     syncServerShellSnapshot,
+    syncServerWorkspaceShellSnapshot,
     syncServerThreadDetailHotPath,
   ]);
 

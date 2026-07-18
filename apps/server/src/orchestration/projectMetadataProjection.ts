@@ -36,6 +36,9 @@ export const applyProjectMetadataProjection = (input: {
           defaultModelSelection: input.event.payload.defaultModelSelection,
           scripts: input.event.payload.scripts,
           isPinned: input.event.payload.isPinned ?? false,
+          repositoryIdentity: input.event.payload.repositoryIdentity ?? null,
+          defaultTargetRef: input.event.payload.defaultTargetRef ?? null,
+          githubAccount: input.event.payload.githubAccount ?? null,
           createdAt: input.event.payload.createdAt,
           updatedAt: input.event.payload.updatedAt,
           deletedAt: null,
@@ -64,6 +67,15 @@ export const applyProjectMetadataProjection = (input: {
               : {}),
             ...(input.event.payload.isPinned !== undefined
               ? { isPinned: input.event.payload.isPinned }
+              : {}),
+            ...(input.event.payload.repositoryIdentity !== undefined
+              ? { repositoryIdentity: input.event.payload.repositoryIdentity }
+              : {}),
+            ...(input.event.payload.defaultTargetRef !== undefined
+              ? { defaultTargetRef: input.event.payload.defaultTargetRef }
+              : {}),
+            ...(input.event.payload.githubAccount !== undefined
+              ? { githubAccount: input.event.payload.githubAccount }
               : {}),
             updatedAt: input.event.payload.updatedAt,
           });

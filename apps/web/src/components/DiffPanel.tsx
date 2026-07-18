@@ -497,7 +497,7 @@ export default function DiffPanel({
     enabled: diffQueriesEnabled && activeCwd !== null,
   });
   const gitStatusQuery = useQuery({
-    ...gitStatusQueryOptions(activeCwd ?? null),
+    ...gitStatusQueryOptions(activeCwd ?? null, activeProject?.githubAccount ?? undefined),
     enabled: gitStatusQueriesEnabled,
   });
   const gitRepoStatus = gitBranchesQuery.isSuccess ? gitBranchesQuery.data.isRepo : undefined;

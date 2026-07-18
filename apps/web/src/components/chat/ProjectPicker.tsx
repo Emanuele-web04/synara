@@ -436,6 +436,8 @@ export const ProjectPicker = memo(function ProjectPicker({
             }
             icon={<FolderClosed className="size-3.5" />}
             label={triggerLabel}
+            aria-label={isProjectSelectionMode ? "Choose project" : "Choose working folder"}
+            title={isProjectSelectionMode ? "Choose project" : "Choose working folder"}
             hideChevron
             {...(triggerClassName ? { className: triggerClassName } : {})}
           />

@@ -1,9 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { tableExists } from "./schemaHelpers.ts";
+
 /** Consolidate approvals and user input under one kind-scoped settlement authority. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  if (yield* tableExists(sql, "projection_pending_interactions")) {
+    return;
+  }
   yield* sql`DROP TABLE IF EXISTS projection_pending_interactions_v62`;
   yield* sql`
     CREATE TABLE projection_pending_interactions_v62 (

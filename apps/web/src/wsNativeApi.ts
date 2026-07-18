@@ -21,6 +21,7 @@ import {
   type GitActionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationWorkspaceShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -119,6 +120,8 @@ const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEv
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
+const orchestrationWorkspaceShellEventListeners =
+  createListenerRegistry<OrchestrationWorkspaceShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
 const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
@@ -135,6 +138,7 @@ function clearWsNativeApiListeners(): void {
   automationEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
+  orchestrationWorkspaceShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
   fallbackBrowserStateListeners.clear();
 }
@@ -405,6 +409,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.workspaceShellEvent, (message) => {
+    orchestrationWorkspaceShellEventListeners.emit(message.data);
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     orchestrationThreadEventListeners.emit(message.data);
   });
@@ -503,11 +510,19 @@ export function createWsNativeApi(): NativeApi {
           timeoutMs: null,
         }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
+      listPullRequests: (input) => transport.request(WS_METHODS.gitListPullRequests, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
       createDetachedWorktree: (input) =>
         transport.request(WS_METHODS.gitCreateDetachedWorktree, input),
       removeWorktree: (input) => transport.request(WS_METHODS.gitRemoveWorktree, input),
       createBranch: (input) => transport.request(WS_METHODS.gitCreateBranch, input),
+      renameBranch: (input) => transport.request(WS_METHODS.gitRenameBranch, input),
+      cloneRepository: (input) =>
+        transport.request(WS_METHODS.gitCloneRepository, input, { timeoutMs: null }),
+      listGitHubAccounts: (input) =>
+        transport.request(WS_METHODS.gitListGitHubAccounts, input, { timeoutMs: null }),
+      listGitHubRepositories: (input) =>
+        transport.request(WS_METHODS.gitListGitHubRepositories, input, { timeoutMs: null }),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
       stashAndCheckout: (input) => transport.request(WS_METHODS.gitStashAndCheckout, input),
       stashDrop: (input) => transport.request(WS_METHODS.gitStashDrop, input),
@@ -641,8 +656,13 @@ export function createWsNativeApi(): NativeApi {
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
     },
     orchestration: {
+      getCapabilities: () => transport.request(ORCHESTRATION_WS_METHODS.getCapabilities),
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
+      getWorkspaceShellSnapshot: () =>
+        transport.request(ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot),
+      getWorkspaceLifecyclePreflight: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight, input),
       dispatchCommand: (command) => {
         return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),
@@ -664,6 +684,10 @@ export function createWsNativeApi(): NativeApi {
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
+      subscribeWorkspaceShell: () =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell, {}),
+      unsubscribeWorkspaceShell: () =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell, {}),
       subscribeThread: (input) =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeThread, input),
       unsubscribeThread: (input) =>
@@ -686,6 +710,7 @@ export function createWsNativeApi(): NativeApi {
         };
       },
       onShellEvent: orchestrationShellEventListeners.subscribe,
+      onWorkspaceShellEvent: orchestrationWorkspaceShellEventListeners.subscribe,
       onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
     automation: {

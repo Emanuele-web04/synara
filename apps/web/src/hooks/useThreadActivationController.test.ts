@@ -161,6 +161,7 @@ describe("activateThreadFromSidebarIntent", () => {
     activateThreadFromSidebarIntent(input, THREAD_C);
 
     expect(input.openChatThreadPage).toHaveBeenCalledWith(THREAD_C);
+    expect(input.rememberLastThreadRouteNow).toHaveBeenCalledWith({ threadId: THREAD_C });
     expect(input.setSplitFocusedPane).not.toHaveBeenCalled();
     expect(getFirstNavigateArgs(input).search({ keep: true, splitViewId: "split-active" })).toEqual(
       {

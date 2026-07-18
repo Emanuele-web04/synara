@@ -65,6 +65,18 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedWorkspaceClose.command, "terminal.workspace.closeActive");
 
+    const parsedCloseChatTab = yield* decode(KeybindingRule, {
+      key: "mod+w",
+      command: "chat.closeActiveTab",
+    });
+    assert.strictEqual(parsedCloseChatTab.command, "chat.closeActiveTab");
+
+    const parsedReopenChatTab = yield* decode(KeybindingRule, {
+      key: "mod+shift+w",
+      command: "chat.reopenClosedTab",
+    });
+    assert.strictEqual(parsedReopenChatTab.command, "chat.reopenClosedTab");
+
     const parsedWorkspaceTerminal = yield* decode(KeybindingRule, {
       key: "mod+1",
       command: "terminal.workspace.terminal",
@@ -125,6 +137,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedNewChat.command, "chat.newChat");
 
+    const parsedNewConversation = yield* decode(KeybindingRule, {
+      key: "mod+t",
+      command: "chat.newConversation",
+    });
+    assert.strictEqual(parsedNewConversation.command, "chat.newConversation");
+
     const parsedLatestProject = yield* decode(KeybindingRule, {
       key: "mod+shift+n",
       command: "chat.newLatestProject",
@@ -155,17 +173,29 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedThreadJump.command, "thread.jump.3");
 
+    const parsedChatJump = yield* decode(KeybindingRule, {
+      key: "mod+shift+3",
+      command: "chat.jump.3",
+    });
+    assert.strictEqual(parsedChatJump.command, "chat.jump.3");
+
     const parsedVisibleNext = yield* decode(KeybindingRule, {
-      key: "mod+shift+]",
+      key: "mod+]",
       command: "chat.visible.next",
     });
     assert.strictEqual(parsedVisibleNext.command, "chat.visible.next");
 
     const parsedVisiblePrevious = yield* decode(KeybindingRule, {
-      key: "mod+shift+[",
+      key: "mod+[",
       command: "chat.visible.previous",
     });
     assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
+
+    const parsedWorkspaceNext = yield* decode(KeybindingRule, {
+      key: "mod+arrowdown",
+      command: "workspace.visible.next",
+    });
+    assert.strictEqual(parsedWorkspaceNext.command, "workspace.visible.next");
 
     const parsedRecentNext = yield* decode(KeybindingRule, {
       key: "ctrl+tab",

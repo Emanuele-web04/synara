@@ -38,6 +38,16 @@ describe("desktopUserDataProfile", () => {
     ).toBe("/Users/tester/Library/Application Support/synara-canary");
   });
 
+  it("honors an explicit Electron user-data override", () => {
+    expect(
+      resolveDesktopUserDataPath({
+        appDataBase: "/Users/tester/Library/Application Support",
+        userDataDirectoryName: "synara",
+        overridePath: "/tmp/synara-preview-profile",
+      }),
+    ).toBe("/tmp/synara-preview-profile");
+  });
+
   it("uses XDG_CONFIG_HOME on Linux when available", () => {
     expect(
       resolveDesktopAppDataBase({

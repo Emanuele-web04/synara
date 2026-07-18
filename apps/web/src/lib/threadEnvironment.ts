@@ -36,7 +36,7 @@ export interface ThreadEnvironmentPresentation {
   mode: ThreadEnvironmentMode;
   workspaceState: ResolvedThreadWorkspaceState;
   shortLabel: "Local" | "Worktree";
-  localOptionLabel: "Local project";
+  localOptionLabel: "Local checkout";
   worktreeOptionLabel: "Worktree";
   worktreeBadgeLabel: "Worktree" | "Worktree pending" | null;
 }
@@ -52,7 +52,7 @@ export function resolveThreadEnvironmentPresentation(input: {
     mode,
     workspaceState,
     shortLabel: mode === "worktree" ? "Worktree" : "Local",
-    localOptionLabel: "Local project",
+    localOptionLabel: "Local checkout",
     worktreeOptionLabel: "Worktree",
     worktreeBadgeLabel:
       workspaceState === "worktree-ready"

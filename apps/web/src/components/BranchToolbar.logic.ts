@@ -8,6 +8,22 @@ import { Schema } from "effect";
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
 
+export function resolveWorktreeContinuationAction(input: {
+  activeWorktreePath: string | null;
+  envMode: EnvMode;
+  envLocked: boolean;
+  hasServerThread: boolean;
+  hasReusableWorktree: boolean;
+}): "handoff" | "switch" | null {
+  if (input.activeWorktreePath || input.envMode !== "local") {
+    return null;
+  }
+  if (input.hasServerThread && (input.envLocked || input.hasReusableWorktree)) {
+    return "handoff";
+  }
+  return input.envLocked ? null : "switch";
+}
+
 export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;

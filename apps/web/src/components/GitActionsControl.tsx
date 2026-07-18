@@ -3,14 +3,20 @@
 // Layer: Header action control
 // Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, WorktreeWorkspaceId } from "@synara/contracts";
 import type {
   GitActionProgressEvent,
   GitStackedAction,
   GitStatusResult,
   ModelSelection,
+  OrchestrationThreadPullRequest,
   ThreadId,
 } from "@synara/contracts";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import {
+  contextualWorkspaceGitAction,
+  deriveWorkspaceGitPresentationState,
+} from "@synara/shared/pullRequest";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -97,7 +103,14 @@ import {
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
-import { createThreadSelector } from "~/storeSelectors";
+import {
+  persistPullRequestAssociation,
+  pullRequestAssociationKey,
+  pullRequestAssociationsEqual,
+  resolvePullRequestAssociation,
+} from "~/lib/gitPullRequestAssociation";
+import { useRightDockStore } from "~/rightDockStore";
+import { createThreadGitHubAccountSelector, createThreadSelector } from "~/storeSelectors";
 import { useStore } from "~/store";
 
 interface GitActionsControlProps {
@@ -328,6 +341,17 @@ export default function GitActionsControl({
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
+  const githubAccount = useStore(
+    useMemo(() => createThreadGitHubAccountSelector(activeThreadId), [activeThreadId]),
+  );
+  const activeWorkspace = useStore((store) =>
+    activeThread?.workspaceId
+      ? ((store.worktreeWorkspaces ?? []).find(
+          (workspace) => workspace.id === activeThread.workspaceId,
+        ) ?? null)
+      : null,
+  );
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
@@ -358,7 +382,9 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(gitStatusQueryOptions(gitCwd));
+  const { data: gitStatus = null, error: gitStatusError } = useQuery(
+    gitStatusQueryOptions(gitCwd, githubAccount),
+  );
 
   const { data: branchList = null } = useQuery(gitBranchesQueryOptions(gitCwd));
   // Default to true while loading so we don't flash init controls.
@@ -380,12 +406,44 @@ export default function GitActionsControl({
     void invalidateGitQueries(queryClient);
   }, [isGitStatusOutOfSync, queryClient]);
 
-  const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
+  const persistedPr = activeWorkspace?.lastKnownPr ?? activeThread?.lastKnownPr ?? null;
+  const visiblePr = resolvePullRequestAssociation({
+    live: gitStatus?.pr ?? null,
+    persisted: persistedPr,
+    liveUnavailable:
+      gitStatus === null || gitStatusError !== null || gitStatus.prUnavailable === true,
+  });
+  const visibleStatusPr = visiblePr
+    ? {
+        ...visiblePr,
+        isDraft: visiblePr.isDraft ?? false,
+        mergeability: visiblePr.mergeability ?? ("unknown" as const),
+        additions: visiblePr.additions ?? null,
+        deletions: visiblePr.deletions ?? null,
+        changedFiles: visiblePr.changedFiles ?? null,
+      }
+    : null;
+  const workspaceGitPresentationState = deriveWorkspaceGitPresentationState({
+    workspaceState: activeWorkspace?.state ?? "ready",
+    hasBranch: (gitStatus?.branch ?? currentBranch ?? activeThread?.branch ?? null) !== null,
+    published: gitStatus?.publication?.state === "published",
+    pr: visiblePr,
+  });
+  const contextualGitAction = contextualWorkspaceGitAction(workspaceGitPresentationState);
+  const gitStatusWithPersistedPr =
+    gitStatus && gitStatus.pr === null && visibleStatusPr
+      ? { ...gitStatus, pr: visibleStatusPr }
+      : gitStatus;
+  const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatusWithPersistedPr;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
+  const isPartialStatus = gitStatusForActions?.workingTree.isPartial === true;
+  const hasCompleteStatistics =
+    gitStatusForActions?.workingTree.statisticsState === undefined ||
+    gitStatusForActions.workingTree.statisticsState === "complete";
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
-  const noneSelected = selectedFiles.length === 0;
+  const noneSelected = !isPartialStatus && selectedFiles.length === 0;
 
   const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
@@ -397,42 +455,72 @@ export default function GitActionsControl({
       model: settings.textGenerationModel ?? null,
       modelSelection: gitTextGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
+      ...(githubAccount ? { account: githubAccount } : {}),
+      ...(activeWorkspace?.targetRef ? { baseBranch: activeWorkspace.targetRef } : {}),
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
-  const persistThreadPr = useCallback(
-    async (pr: {
-      number: number;
-      title: string;
-      url: string;
-      baseBranch: string;
-      headBranch: string;
-      state: "open" | "closed" | "merged";
-      isDraft?: boolean;
-      mergeability?: "mergeable" | "conflicting" | "unknown";
-      additions?: number | null;
-      deletions?: number | null;
-      changedFiles?: number | null;
-    }) => {
+  const lastPersistedPullRequestRef = useRef<string | null>(null);
+  const persistActivePullRequest = useCallback(
+    async (pullRequest: OrchestrationThreadPullRequest) => {
       if (!activeThreadId) {
         return;
       }
       const api = readNativeApi();
       if (!api) {
-        return;
+        throw new Error("Pull request persistence is unavailable.");
       }
-      await api.orchestration.dispatchCommand({
-        type: "thread.meta.update",
-        commandId: newCommandId(),
+      const workspaceId = activeThread?.workspaceId
+        ? WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId)
+        : null;
+      await persistPullRequestAssociation({
+        api,
         threadId: activeThreadId,
-        lastKnownPr: pr,
+        workspaceId,
+        pullRequest,
+      });
+      lastPersistedPullRequestRef.current = `${workspaceId ?? activeThreadId}:${pullRequestAssociationKey(
+        pullRequest,
+      )}`;
+    },
+    [activeThread?.workspaceId, activeThreadId],
+  );
+  const reportPullRequestPersistenceFailure = useCallback(
+    (error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Pull request association wasn't saved",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Synara couldn't attach this pull request to the workspace.",
+        data: threadToastData,
       });
     },
-    [activeThreadId],
+    [threadToastData],
   );
 
+  useEffect(() => {
+    const livePr = gitStatus?.pr ?? null;
+    if (!livePr || pullRequestAssociationsEqual(livePr, persistedPr)) {
+      return;
+    }
+    const targetId = activeThread?.workspaceId ?? activeThreadId;
+    if (!targetId) return;
+    const persistenceKey = `${targetId}:${pullRequestAssociationKey(livePr)}`;
+    if (lastPersistedPullRequestRef.current === persistenceKey) return;
+    void persistActivePullRequest(livePr).catch(reportPullRequestPersistenceFailure);
+  }, [
+    activeThread?.workspaceId,
+    activeThreadId,
+    gitStatus?.pr,
+    persistActivePullRequest,
+    persistedPr,
+    reportPullRequestPersistenceFailure,
+  ]);
+
   const isRunStackedActionRunning =
-    useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd) }) > 0;
+    useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd, githubAccount) }) > 0;
   const isPullRunning = useIsMutating({ mutationKey: gitMutationKeys.pull(gitCwd) }) > 0;
   const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
   const isDefaultBranch = useMemo(() => {
@@ -476,25 +564,37 @@ export default function GitActionsControl({
     [activeThread?.associatedWorktreeBranch, activeThread?.title, existingBranchNames],
   );
 
-  const quickAction = useMemo(
-    () =>
-      resolveQuickAction(
-        gitStatusForActions,
-        isGitActionRunning,
-        isDefaultBranch,
-        hasOriginRemote,
-        shouldOfferCreateBranch,
-        defaultBranchName,
-      ),
-    [
-      defaultBranchName,
+  const quickAction = useMemo(() => {
+    if (!gitStatusForActions && !isGitActionRunning && contextualGitAction.available) {
+      if (workspaceGitPresentationState.startsWith("pr-") && contextualGitAction.label) {
+        return {
+          label: contextualGitAction.label,
+          disabled: false,
+          kind: "open_pr" as const,
+        };
+      }
+    }
+    const resolved = resolveQuickAction(
       gitStatusForActions,
-      hasOriginRemote,
-      isDefaultBranch,
       isGitActionRunning,
+      isDefaultBranch,
+      hasOriginRemote,
       shouldOfferCreateBranch,
-    ],
-  );
+      defaultBranchName,
+    );
+    return resolved.kind === "open_pr" && contextualGitAction.label
+      ? { ...resolved, label: contextualGitAction.label }
+      : resolved;
+  }, [
+    contextualGitAction,
+    defaultBranchName,
+    gitStatusForActions,
+    hasOriginRemote,
+    isDefaultBranch,
+    isGitActionRunning,
+    shouldOfferCreateBranch,
+    workspaceGitPresentationState,
+  ]);
   const gitActionMenuItems = useMemo(
     () =>
       buildMenuItems(
@@ -597,34 +697,53 @@ export default function GitActionsControl({
     };
   }, [updateActiveProgressToast]);
 
-  const openExistingPr = useCallback(async () => {
-    const api = readNativeApi();
-    if (!api) {
+  const openPullRequest = useCallback(
+    (pullRequest: { number: number; url: string }) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pullRequest.url);
+      if (activeThreadId && activeThread?.projectId && repository) {
+        openRightDockPane(activeThreadId, {
+          kind: "pullRequest",
+          pullRequestProjectId: activeThread.projectId,
+          pullRequestRepository: repository,
+          pullRequestNumber: pullRequest.number,
+          pullRequestInitialTab: "summary",
+        });
+        return;
+      }
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Link opening is unavailable.",
+          data: threadToastData,
+        });
+        return;
+      }
+      void api.shell.openExternal(pullRequest.url).catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to open PR link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          data: threadToastData,
+        });
+      });
+    },
+    [activeThread?.projectId, activeThreadId, openRightDockPane, threadToastData],
+  );
+
+  const openExistingPr = useCallback(() => {
+    const pullRequest = visibleStatusPr;
+    if (!pullRequest) {
       toastManager.add({
         type: "error",
-        title: "Link opening is unavailable.",
+        title: "No pull request found.",
         data: threadToastData,
       });
       return;
     }
-    const prUrl = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr.url : null;
-    if (!prUrl) {
-      toastManager.add({
-        type: "error",
-        title: "No open PR found.",
-        data: threadToastData,
-      });
-      return;
-    }
-    void api.shell.openExternal(prUrl).catch((err) => {
-      toastManager.add({
-        type: "error",
-        title: "Unable to open PR link",
-        description: err instanceof Error ? err.message : "An error occurred.",
-        data: threadToastData,
-      });
-    });
-  }, [gitStatusForActions, threadToastData]);
+    openPullRequest(pullRequest);
+  }, [openPullRequest, threadToastData, visibleStatusPr]);
 
   const runSyncWithRemote = useCallback(() => {
     const promise = pullMutation.mutateAsync();
@@ -759,7 +878,7 @@ export default function GitActionsControl({
         const result = await promise;
         activeGitActionProgressRef.current = null;
         const resultToast = summarizeGitResult(result);
-        const persistedPr =
+        const pullRequestToPersist: OrchestrationThreadPullRequest | null =
           result.pr.status === "created" || result.pr.status === "opened_existing"
             ? result.pr.number &&
               result.pr.title &&
@@ -778,13 +897,18 @@ export default function GitActionsControl({
             : actionStatus?.pr?.state === "open"
               ? actionStatus.pr
               : null;
-        if (persistedPr) {
-          void persistThreadPr(persistedPr).catch(() => undefined);
+        if (pullRequestToPersist) {
+          try {
+            await persistActivePullRequest(pullRequestToPersist);
+          } catch (error) {
+            reportPullRequestPersistenceFailure(error);
+          }
         }
 
         const existingOpenPrUrl =
           actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;
         const prUrl = result.pr.url ?? existingOpenPrUrl;
+        const prNumber = result.pr.number ?? actionStatus?.pr?.number ?? null;
         const shouldOfferPushCta = action === "commit" && result.commit.status === "created";
         const shouldOfferOpenPrCta =
           (action === "push" ||
@@ -848,10 +972,10 @@ export default function GitActionsControl({
                   actionProps: {
                     children: "View PR",
                     onClick: () => {
-                      const api = readNativeApi();
-                      if (!api) return;
                       closeResultToast();
-                      void api.shell.openExternal(prUrl);
+                      if (prNumber) {
+                        openPullRequest({ number: prNumber, url: prUrl });
+                      }
                     },
                   },
                 }
@@ -886,7 +1010,9 @@ export default function GitActionsControl({
       gitStatusForActions,
       hasOriginRemote,
       isDefaultBranch,
-      persistThreadPr,
+      openPullRequest,
+      persistActivePullRequest,
+      reportPullRequestPersistenceFailure,
       runImmediateGitActionMutation,
       threadToastData,
     ],
@@ -1390,7 +1516,7 @@ export default function GitActionsControl({
                       </span>
                     )}
                   </div>
-                  {allFiles.length > 0 && (
+                  {allFiles.length > 0 && !isPartialStatus && (
                     <Button
                       variant="ghost"
                       size="xs"
@@ -1400,6 +1526,11 @@ export default function GitActionsControl({
                     </Button>
                   )}
                 </div>
+                {isPartialStatus ? (
+                  <p className="text-muted-foreground">
+                    Large change set — showing a partial status. File selection is unavailable.
+                  </p>
+                ) : null}
                 {!gitStatusForActions || allFiles.length === 0 ? (
                   <p className="font-medium">none</p>
                 ) : (
@@ -1457,15 +1588,17 @@ export default function GitActionsControl({
                         })}
                       </div>
                     </ScrollArea>
-                    <div className="flex justify-end font-mono">
-                      <span className="text-success">
-                        +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
-                      </span>
-                      <span className="text-muted-foreground"> / </span>
-                      <span className="text-destructive">
-                        -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
-                      </span>
-                    </div>
+                    {hasCompleteStatistics ? (
+                      <div className="flex justify-end font-mono">
+                        <span className="text-success">
+                          +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
+                        </span>
+                        <span className="text-muted-foreground"> / </span>
+                        <span className="text-destructive">
+                          -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

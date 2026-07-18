@@ -11,6 +11,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { GitHubAccountSelection } from "./github";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -26,12 +27,15 @@ import {
   ThreadMarkerId,
   TrimmedNonEmptyString,
   TurnId,
+  WorktreeWorkspaceId,
+  WorkspaceOperationId,
 } from "./baseSchemas";
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   getShellSnapshot: "orchestration.getShellSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
+  getWorkspaceLifecyclePreflight: "orchestration.getWorkspaceLifecyclePreflight",
   importThread: "orchestration.importThread",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -43,12 +47,18 @@ export const ORCHESTRATION_WS_METHODS = {
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
   unsubscribeThread: "orchestration.unsubscribeThread",
+  getCapabilities: "orchestration.getCapabilities",
+  getWorkspaceShellSnapshot: "orchestration.v2.getShellSnapshot",
+  replayWorkspaceEvents: "orchestration.v2.replayEvents",
+  subscribeWorkspaceShell: "orchestration.v2.subscribeShell",
+  unsubscribeWorkspaceShell: "orchestration.v2.unsubscribeShell",
 } as const;
 
 export const ORCHESTRATION_WS_CHANNELS = {
   domainEvent: "orchestration.domainEvent",
   shellEvent: "orchestration.shellEvent",
   threadEvent: "orchestration.threadEvent",
+  workspaceShellEvent: "orchestration.v2.shellEvent",
 } as const;
 
 export const ProviderKind = Schema.Literals([
@@ -379,11 +389,28 @@ export const OrchestrationProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
+
+const {
+  repositoryIdentity: _projectRepositoryIdentity,
+  defaultTargetRef: _projectDefaultTargetRef,
+  githubAccount: _projectGithubAccount,
+  ...OrchestrationProjectV1Fields
+} = OrchestrationProject.fields;
+const OrchestrationProjectV1 = Schema.Struct(OrchestrationProjectV1Fields);
 
 export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
@@ -393,10 +420,27 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
+
+const {
+  repositoryIdentity: _projectShellRepositoryIdentity,
+  defaultTargetRef: _projectShellDefaultTargetRef,
+  githubAccount: _projectShellGithubAccount,
+  ...OrchestrationProjectShellV1Fields
+} = OrchestrationProjectShell.fields;
+const OrchestrationProjectShellV1 = Schema.Struct(OrchestrationProjectShellV1Fields);
 
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
@@ -601,6 +645,95 @@ export const ThreadMarkers = Schema.Array(ThreadMarker).check(
 );
 export type ThreadMarkers = typeof ThreadMarkers.Type;
 
+export const WorktreeWorkspaceKind = Schema.Literals(["managed", "repository-root", "external"]);
+export type WorktreeWorkspaceKind = typeof WorktreeWorkspaceKind.Type;
+
+export const WorktreeWorkspaceState = Schema.Literals([
+  "provisioning",
+  "ready",
+  "setup-failed",
+  "missing",
+  "archiving",
+  "archived",
+  "error",
+]);
+export type WorktreeWorkspaceState = typeof WorktreeWorkspaceState.Type;
+
+export const WorktreeWorkspaceSetupStatus = Schema.Literals([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+]);
+export type WorktreeWorkspaceSetupStatus = typeof WorktreeWorkspaceSetupStatus.Type;
+
+export const WorktreeWorkspaceSourceKind = Schema.Literals([
+  "new-branch",
+  "branch",
+  "pull-request",
+  "imported",
+]);
+export type WorktreeWorkspaceSourceKind = typeof WorktreeWorkspaceSourceKind.Type;
+
+export const WorktreeWorkspaceOperationKind = Schema.Literals([
+  "provision",
+  "setup",
+  "archive",
+  "restore",
+  "repair",
+]);
+export type WorktreeWorkspaceOperationKind = typeof WorktreeWorkspaceOperationKind.Type;
+
+export const WorktreeWorkspaceActiveOperation = Schema.Struct({
+  id: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  kind: WorktreeWorkspaceOperationKind,
+  stage: TrimmedNonEmptyString,
+  startedAt: IsoDateTime,
+});
+export type WorktreeWorkspaceActiveOperation = typeof WorktreeWorkspaceActiveOperation.Type;
+
+export const WorktreeWorkspaceFailure = Schema.Struct({
+  generation: NonNegativeInt,
+  kind: WorktreeWorkspaceOperationKind,
+  stage: TrimmedNonEmptyString,
+  summary: TrimmedNonEmptyString,
+  logId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type WorktreeWorkspaceFailure = typeof WorktreeWorkspaceFailure.Type;
+
+export const OrchestrationWorktreeWorkspace = Schema.Struct({
+  id: WorktreeWorkspaceId,
+  projectId: ProjectId,
+  repositoryIdentity: Schema.NullOr(TrimmedNonEmptyString),
+  kind: WorktreeWorkspaceKind,
+  state: WorktreeWorkspaceState,
+  title: TrimmedNonEmptyString,
+  path: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  targetRef: TrimmedNonEmptyString,
+  targetResolvedCommit: Schema.NullOr(TrimmedNonEmptyString),
+  createdFromCommit: Schema.NullOr(TrimmedNonEmptyString),
+  sourceKind: WorktreeWorkspaceSourceKind,
+  sourceRef: Schema.NullOr(TrimmedNonEmptyString),
+  setupStatus: WorktreeWorkspaceSetupStatus,
+  setupError: Schema.NullOr(TrimmedNonEmptyString),
+  setupLogId: Schema.NullOr(TrimmedNonEmptyString),
+  lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
+  isPinned: Schema.Boolean,
+  lifecycleGeneration: NonNegativeInt,
+  activeOperation: Schema.NullOr(WorktreeWorkspaceActiveOperation),
+  lastFailure: Schema.NullOr(WorktreeWorkspaceFailure),
+  mutationRevision: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationWorktreeWorkspace = typeof OrchestrationWorktreeWorkspace.Type;
+
 export const ProjectionPendingInteractionKind = Schema.Literals(["approval", "userInput"]);
 export type ProjectionPendingInteractionKind = typeof ProjectionPendingInteractionKind.Type;
 
@@ -635,6 +768,9 @@ export type OrchestrationPendingInteraction = typeof OrchestrationPendingInterac
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -700,9 +836,16 @@ export const OrchestrationThread = Schema.Struct({
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
+const { workspaceId: _threadWorkspaceId, ...OrchestrationThreadV1Fields } =
+  OrchestrationThread.fields;
+const OrchestrationThreadV1 = Schema.Struct(OrchestrationThreadV1Fields);
+
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -759,23 +902,80 @@ export const OrchestrationThreadShell = Schema.Struct({
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
+const { workspaceId: _threadShellWorkspaceId, ...OrchestrationThreadShellV1Fields } =
+  OrchestrationThreadShell.fields;
+const OrchestrationThreadShellV1 = Schema.Struct(OrchestrationThreadShellV1Fields);
+
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
+  workspaces: Schema.optional(Schema.Array(OrchestrationWorktreeWorkspace)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   threads: Schema.Array(OrchestrationThread),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
 
+const OrchestrationReadModelV1 = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  projects: Schema.Array(OrchestrationProjectV1),
+  threads: Schema.Array(OrchestrationThreadV1),
+  updatedAt: IsoDateTime,
+});
+
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
-  projects: Schema.Array(OrchestrationProjectShell),
-  threads: Schema.Array(OrchestrationThreadShell),
+  projects: Schema.Array(OrchestrationProjectShellV1),
+  threads: Schema.Array(OrchestrationThreadShellV1),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
 
+export const OrchestrationWorkspaceShellSnapshot = Schema.Struct({
+  protocolVersion: Schema.Literal(2),
+  snapshotSequence: NonNegativeInt,
+  projects: Schema.Array(OrchestrationProjectShell),
+  workspaces: Schema.Array(OrchestrationWorktreeWorkspace),
+  threads: Schema.Array(OrchestrationThreadShell),
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationWorkspaceShellSnapshot = typeof OrchestrationWorkspaceShellSnapshot.Type;
+
 export const OrchestrationShellStreamEvent = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("project-upserted"),
+    sequence: NonNegativeInt,
+    project: OrchestrationProjectShellV1,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("project-removed"),
+    sequence: NonNegativeInt,
+    projectId: ProjectId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("thread-upserted"),
+    sequence: NonNegativeInt,
+    thread: OrchestrationThreadShellV1,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("thread-removed"),
+    sequence: NonNegativeInt,
+    threadId: ThreadId,
+  }),
+]);
+export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
+
+export const OrchestrationShellStreamItem = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    snapshot: OrchestrationShellSnapshot,
+  }),
+  OrchestrationShellStreamEvent,
+]);
+export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
+
+export const OrchestrationWorkspaceShellStreamEvent = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("project-upserted"),
     sequence: NonNegativeInt,
@@ -796,17 +996,29 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     sequence: NonNegativeInt,
     threadId: ThreadId,
   }),
+  Schema.Struct({
+    kind: Schema.Literal("workspace-upserted"),
+    sequence: NonNegativeInt,
+    workspace: OrchestrationWorktreeWorkspace,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("workspace-removed"),
+    sequence: NonNegativeInt,
+    workspaceId: WorktreeWorkspaceId,
+  }),
 ]);
-export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
+export type OrchestrationWorkspaceShellStreamEvent =
+  typeof OrchestrationWorkspaceShellStreamEvent.Type;
 
-export const OrchestrationShellStreamItem = Schema.Union([
+export const OrchestrationWorkspaceShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
-    snapshot: OrchestrationShellSnapshot,
+    snapshot: OrchestrationWorkspaceShellSnapshot,
   }),
-  OrchestrationShellStreamEvent,
+  OrchestrationWorkspaceShellStreamEvent,
 ]);
-export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
+export type OrchestrationWorkspaceShellStreamItem =
+  typeof OrchestrationWorkspaceShellStreamItem.Type;
 
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
@@ -820,6 +1032,9 @@ export const ProjectCreateCommand = Schema.Struct({
   ),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
   createdAt: IsoDateTime,
 });
 
@@ -836,6 +1051,9 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -844,11 +1062,111 @@ const ProjectDeleteCommand = Schema.Struct({
   projectId: ProjectId,
 });
 
+export const WorktreeWorkspaceCreateCommand = Schema.Struct({
+  type: Schema.Literal("workspace.create"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  operationId: WorkspaceOperationId,
+  title: TrimmedNonEmptyString,
+  targetRef: TrimmedNonEmptyString,
+  branch: Schema.optional(TrimmedNonEmptyString),
+  sourceKind: Schema.optional(Schema.Literals(["new-branch", "branch", "pull-request"])),
+  sourceRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  lastKnownPr: Schema.optional(OrchestrationThreadPullRequest),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  createdAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceAttachCommand = Schema.Struct({
+  type: Schema.Literal("workspace.attach"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  targetRef: TrimmedNonEmptyString,
+  sourceKind: Schema.Literals(["branch", "pull-request", "imported"]),
+  sourceRef: TrimmedNonEmptyString,
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  createdAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceConversationCreateCommand = Schema.Struct({
+  type: Schema.Literal("workspace.conversation.create"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  createdAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceMetaUpdateCommand = Schema.Struct({
+  type: Schema.Literal("workspace.meta.update"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+  targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  isPinned: Schema.optional(Schema.Boolean),
+  updatedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceArchiveRequestCommand = Schema.Struct({
+  type: Schema.Literal("workspace.archive.request"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  expectedGeneration: NonNegativeInt,
+  confirmedWarnings: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  requestedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceProvisionRequestCommand = Schema.Struct({
+  type: Schema.Literal("workspace.provision.request"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  expectedGeneration: NonNegativeInt,
+  requestedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceRestoreRequestCommand = Schema.Struct({
+  type: Schema.Literal("workspace.restore.request"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  expectedGeneration: NonNegativeInt,
+  requestedAt: IsoDateTime,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -899,6 +1217,9 @@ const ThreadHandoffCreateCommand = Schema.Struct({
   threadId: ThreadId,
   sourceThreadId: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -924,6 +1245,9 @@ const ThreadForkCreateCommand = Schema.Struct({
   threadId: ThreadId,
   sourceThreadId: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1241,6 +1565,13 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  WorktreeWorkspaceCreateCommand,
+  WorktreeWorkspaceAttachCommand,
+  WorktreeWorkspaceConversationCreateCommand,
+  WorktreeWorkspaceMetaUpdateCommand,
+  WorktreeWorkspaceProvisionRequestCommand,
+  WorktreeWorkspaceArchiveRequestCommand,
+  WorktreeWorkspaceRestoreRequestCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
@@ -1276,6 +1607,13 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  WorktreeWorkspaceCreateCommand,
+  WorktreeWorkspaceAttachCommand,
+  WorktreeWorkspaceConversationCreateCommand,
+  WorktreeWorkspaceMetaUpdateCommand,
+  WorktreeWorkspaceProvisionRequestCommand,
+  WorktreeWorkspaceArchiveRequestCommand,
+  WorktreeWorkspaceRestoreRequestCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
@@ -1383,7 +1721,97 @@ const ThreadConversationRollbackCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const WorktreeWorkspaceImportLegacyCommand = Schema.Struct({
+  type: Schema.Literal("workspace.import-legacy"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  projectId: ProjectId,
+  repositoryIdentity: Schema.NullOr(TrimmedNonEmptyString),
+  kind: WorktreeWorkspaceKind,
+  state: WorktreeWorkspaceState,
+  title: TrimmedNonEmptyString,
+  path: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  targetRef: TrimmedNonEmptyString,
+  targetResolvedCommit: Schema.NullOr(TrimmedNonEmptyString),
+  createdFromCommit: Schema.NullOr(TrimmedNonEmptyString),
+  setupStatus: WorktreeWorkspaceSetupStatus,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadWorkspaceAssignCommand = Schema.Struct({
+  type: Schema.Literal("thread.workspace.assign"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  workspaceId: WorktreeWorkspaceId,
+  updatedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceProvisionCompleteCommand = Schema.Struct({
+  type: Schema.Literal("workspace.provision.complete"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  targetResolvedCommit: TrimmedNonEmptyString,
+  createdFromCommit: TrimmedNonEmptyString,
+  targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(OrchestrationThreadPullRequest),
+  setupStatus: Schema.Literals(["succeeded", "skipped"]),
+  completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceArchiveCompleteCommand = Schema.Struct({
+  type: Schema.Literal("workspace.archive.complete"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceRestoreCompleteCommand = Schema.Struct({
+  type: Schema.Literal("workspace.restore.complete"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  setupStatus: Schema.Literals(["succeeded", "skipped"]),
+  completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceOperationFailCommand = Schema.Struct({
+  type: Schema.Literal("workspace.operation.fail"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  kind: WorktreeWorkspaceOperationKind,
+  stage: TrimmedNonEmptyString,
+  summary: TrimmedNonEmptyString,
+  logId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  path: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  headRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  targetResolvedCommit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  createdFromCommit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  failedAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
+  WorktreeWorkspaceImportLegacyCommand,
+  ThreadWorkspaceAssignCommand,
+  WorktreeWorkspaceProvisionCompleteCommand,
+  WorktreeWorkspaceArchiveCompleteCommand,
+  WorktreeWorkspaceRestoreCompleteCommand,
+  WorktreeWorkspaceOperationFailCommand,
   ThreadSessionSetCommand,
   ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1408,7 +1836,17 @@ export const OrchestrationEventType = Schema.Literals([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+  "workspace.created",
+  "workspace.meta-updated",
+  "workspace.provision-requested",
+  "workspace.archive-requested",
+  "workspace.archived",
+  "workspace.restore-requested",
+  "workspace.restored",
+  "workspace.ready",
+  "workspace.operation-failed",
   "thread.created",
+  "thread.workspace-assigned",
   "thread.deleted",
   // Legacy desktop installs can still contain these rows in orchestration_events.
   "thread.archived",
@@ -1445,7 +1883,7 @@ export const OrchestrationEventType = Schema.Literals([
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "workspace", "thread"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -1457,6 +1895,15 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1469,6 +1916,9 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
   updatedAt: IsoDateTime,
 });
 
@@ -1477,9 +1927,118 @@ export const ProjectDeletedPayload = Schema.Struct({
   deletedAt: IsoDateTime,
 });
 
+export const WorktreeWorkspaceCreatedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  projectId: ProjectId,
+  repositoryIdentity: Schema.NullOr(TrimmedNonEmptyString),
+  kind: WorktreeWorkspaceKind,
+  state: WorktreeWorkspaceState,
+  title: TrimmedNonEmptyString,
+  path: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  targetRef: TrimmedNonEmptyString,
+  targetResolvedCommit: Schema.NullOr(TrimmedNonEmptyString),
+  createdFromCommit: Schema.NullOr(TrimmedNonEmptyString),
+  sourceKind: WorktreeWorkspaceSourceKind,
+  sourceRef: Schema.NullOr(TrimmedNonEmptyString),
+  setupStatus: WorktreeWorkspaceSetupStatus,
+  setupError: Schema.NullOr(TrimmedNonEmptyString),
+  setupLogId: Schema.NullOr(TrimmedNonEmptyString),
+  lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
+  isPinned: Schema.Boolean,
+  lifecycleGeneration: NonNegativeInt,
+  activeOperation: Schema.NullOr(WorktreeWorkspaceActiveOperation),
+  lastFailure: Schema.NullOr(WorktreeWorkspaceFailure),
+  mutationRevision: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  archivedAt: Schema.NullOr(IsoDateTime),
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+
+export const WorktreeWorkspaceReadyPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  targetResolvedCommit: TrimmedNonEmptyString,
+  createdFromCommit: TrimmedNonEmptyString,
+  setupStatus: Schema.Literals(["succeeded", "skipped"]),
+  completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceMetaUpdatedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+  targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  isPinned: Schema.optional(Schema.Boolean),
+  mutationRevision: NonNegativeInt,
+  updatedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceLifecycleRequestedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  confirmedWarnings: Schema.optional(Schema.Boolean),
+  requestedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceArchivedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  archivedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceRestoredPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: TrimmedNonEmptyString,
+  setupStatus: Schema.Literals(["succeeded", "skipped"]),
+  completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceOperationFailedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  generation: NonNegativeInt,
+  kind: WorktreeWorkspaceOperationKind,
+  stage: TrimmedNonEmptyString,
+  summary: TrimmedNonEmptyString,
+  logId: Schema.NullOr(TrimmedNonEmptyString),
+  path: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  headRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  targetResolvedCommit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  createdFromCommit: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  failedAt: IsoDateTime,
+});
+
+export const ThreadWorkspaceAssignedPayload = Schema.Struct({
+  threadId: ThreadId,
+  workspaceId: WorktreeWorkspaceId,
+  projectId: ProjectId,
+  envMode: ThreadEnvironmentMode,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  workspaceId: Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
@@ -1793,7 +2352,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, WorktreeWorkspaceId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1819,8 +2378,58 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("workspace.created"),
+    payload: WorktreeWorkspaceCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.meta-updated"),
+    payload: WorktreeWorkspaceMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.provision-requested"),
+    payload: WorktreeWorkspaceLifecycleRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.archive-requested"),
+    payload: WorktreeWorkspaceLifecycleRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.archived"),
+    payload: WorktreeWorkspaceArchivedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.restore-requested"),
+    payload: WorktreeWorkspaceLifecycleRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.restored"),
+    payload: WorktreeWorkspaceRestoredPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.ready"),
+    payload: WorktreeWorkspaceReadyPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.operation-failed"),
+    payload: WorktreeWorkspaceOperationFailedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.created"),
     payload: ThreadCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workspace-assigned"),
+    payload: ThreadWorkspaceAssignedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -2061,9 +2670,21 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
+export const OrchestrationCapabilities = Schema.Struct({
+  protocolVersions: Schema.Array(PositiveInt),
+  worktreeWorkspacesV2: Schema.Boolean,
+  canonicalWorkspaceRoutes: Schema.Boolean,
+});
+export type OrchestrationCapabilities = typeof OrchestrationCapabilities.Type;
+
+export const OrchestrationGetCapabilitiesInput = Schema.Struct({});
+export type OrchestrationGetCapabilitiesInput = typeof OrchestrationGetCapabilitiesInput.Type;
+export const OrchestrationGetCapabilitiesResult = OrchestrationCapabilities;
+export type OrchestrationGetCapabilitiesResult = typeof OrchestrationGetCapabilitiesResult.Type;
+
 export const OrchestrationGetSnapshotInput = Schema.Struct({});
 export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
-const OrchestrationGetSnapshotResult = OrchestrationReadModel;
+const OrchestrationGetSnapshotResult = OrchestrationReadModelV1;
 export type OrchestrationGetSnapshotResult = typeof OrchestrationGetSnapshotResult.Type;
 
 export const OrchestrationGetShellSnapshotInput = Schema.Struct({});
@@ -2071,9 +2692,16 @@ export type OrchestrationGetShellSnapshotInput = typeof OrchestrationGetShellSna
 const OrchestrationGetShellSnapshotResult = OrchestrationShellSnapshot;
 export type OrchestrationGetShellSnapshotResult = typeof OrchestrationGetShellSnapshotResult.Type;
 
+export const OrchestrationGetWorkspaceShellSnapshotInput = Schema.Struct({});
+export type OrchestrationGetWorkspaceShellSnapshotInput =
+  typeof OrchestrationGetWorkspaceShellSnapshotInput.Type;
+export const OrchestrationGetWorkspaceShellSnapshotResult = OrchestrationWorkspaceShellSnapshot;
+export type OrchestrationGetWorkspaceShellSnapshotResult =
+  typeof OrchestrationGetWorkspaceShellSnapshotResult.Type;
+
 export const OrchestrationRepairStateInput = Schema.Struct({});
 export type OrchestrationRepairStateInput = typeof OrchestrationRepairStateInput.Type;
-const OrchestrationRepairStateResult = OrchestrationReadModel;
+const OrchestrationRepairStateResult = OrchestrationReadModelV1;
 export type OrchestrationRepairStateResult = typeof OrchestrationRepairStateResult.Type;
 
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
@@ -2105,6 +2733,13 @@ export type OrchestrationReplayEventsInput = typeof OrchestrationReplayEventsInp
 
 const OrchestrationReplayEventsResult = Schema.Array(OrchestrationEvent);
 export type OrchestrationReplayEventsResult = typeof OrchestrationReplayEventsResult.Type;
+
+export const OrchestrationReplayWorkspaceEventsInput = OrchestrationReplayEventsInput;
+export type OrchestrationReplayWorkspaceEventsInput =
+  typeof OrchestrationReplayWorkspaceEventsInput.Type;
+export const OrchestrationReplayWorkspaceEventsResult = Schema.Array(OrchestrationEvent);
+export type OrchestrationReplayWorkspaceEventsResult =
+  typeof OrchestrationReplayWorkspaceEventsResult.Type;
 
 export const ProviderDeliveryReconciliationOutcome = Schema.Literals([
   "accepted",
@@ -2171,6 +2806,14 @@ export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShel
 export const OrchestrationUnsubscribeShellInput = Schema.Struct({});
 export type OrchestrationUnsubscribeShellInput = typeof OrchestrationUnsubscribeShellInput.Type;
 
+export const OrchestrationSubscribeWorkspaceShellInput = Schema.Struct({});
+export type OrchestrationSubscribeWorkspaceShellInput =
+  typeof OrchestrationSubscribeWorkspaceShellInput.Type;
+
+export const OrchestrationUnsubscribeWorkspaceShellInput = Schema.Struct({});
+export type OrchestrationUnsubscribeWorkspaceShellInput =
+  typeof OrchestrationUnsubscribeWorkspaceShellInput.Type;
+
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -2192,7 +2835,51 @@ export const OrchestrationUnsubscribeThreadInput = Schema.Struct({
 });
 export type OrchestrationUnsubscribeThreadInput = typeof OrchestrationUnsubscribeThreadInput.Type;
 
+export const WorkspaceLifecyclePreflightInput = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  action: Schema.Literals(["archive", "restore"]),
+});
+export type WorkspaceLifecyclePreflightInput = typeof WorkspaceLifecyclePreflightInput.Type;
+
+export const WorkspaceLifecyclePreflightIssue = Schema.Struct({
+  code: Schema.Literals([
+    "workspace-not-found",
+    "repository-root",
+    "invalid-state",
+    "operation-active",
+    "agent-active",
+    "terminal-active",
+    "dev-server-active",
+    "path-unavailable",
+    "git-status-unavailable",
+    "working-tree-dirty",
+    "merge-conflicts",
+    "local-only-commits",
+    "unpushed-commits",
+    "branch-unavailable",
+    "path-occupied",
+    "repository-mismatch",
+  ]),
+  message: TrimmedNonEmptyString,
+});
+export type WorkspaceLifecyclePreflightIssue = typeof WorkspaceLifecyclePreflightIssue.Type;
+
+export const WorkspaceLifecyclePreflightResult = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  action: Schema.Literals(["archive", "restore"]),
+  lifecycleGeneration: NonNegativeInt,
+  canStart: Schema.Boolean,
+  requiresConfirmation: Schema.Boolean,
+  blockers: Schema.Array(WorkspaceLifecyclePreflightIssue),
+  warnings: Schema.Array(WorkspaceLifecyclePreflightIssue),
+});
+export type WorkspaceLifecyclePreflightResult = typeof WorkspaceLifecyclePreflightResult.Type;
+
 export const OrchestrationRpcSchemas = {
+  getCapabilities: {
+    input: OrchestrationGetCapabilitiesInput,
+    output: OrchestrationGetCapabilitiesResult,
+  },
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
     output: OrchestrationGetSnapshotResult,
@@ -2201,6 +2888,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationGetShellSnapshotInput,
     output: OrchestrationGetShellSnapshotResult,
   },
+  getWorkspaceShellSnapshot: {
+    input: OrchestrationGetWorkspaceShellSnapshotInput,
+    output: OrchestrationGetWorkspaceShellSnapshotResult,
+  },
   repairState: {
     input: OrchestrationRepairStateInput,
     output: OrchestrationRepairStateResult,
@@ -2208,6 +2899,10 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  getWorkspaceLifecyclePreflight: {
+    input: WorkspaceLifecyclePreflightInput,
+    output: WorkspaceLifecyclePreflightResult,
   },
   importThread: {
     input: OrchestrationImportThreadInput,
@@ -2225,6 +2920,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationReplayEventsInput,
     output: OrchestrationReplayEventsResult,
   },
+  replayWorkspaceEvents: {
+    input: OrchestrationReplayWorkspaceEventsInput,
+    output: OrchestrationReplayWorkspaceEventsResult,
+  },
   listProviderDeliveryBlockers: {
     input: OrchestrationListProviderDeliveryBlockersInput,
     output: OrchestrationListProviderDeliveryBlockersResult,
@@ -2239,6 +2938,14 @@ export const OrchestrationRpcSchemas = {
   },
   unsubscribeShell: {
     input: OrchestrationUnsubscribeShellInput,
+    output: Schema.Void,
+  },
+  subscribeWorkspaceShell: {
+    input: OrchestrationSubscribeWorkspaceShellInput,
+    output: Schema.Void,
+  },
+  unsubscribeWorkspaceShell: {
+    input: OrchestrationUnsubscribeWorkspaceShellInput,
     output: Schema.Void,
   },
   subscribeThread: {

@@ -1,5 +1,9 @@
 import { ProjectId } from "@synara/contracts";
-import type { OrchestrationProject, OrchestrationReadModel } from "@synara/contracts";
+import type {
+  GitHubAccountSelection,
+  OrchestrationProject,
+  OrchestrationReadModel,
+} from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -143,6 +147,128 @@ describe("PullRequestService", () => {
     expect(result.entries[0]?.projectId).toBe(projectB.id);
     expect(result.entries[0]?.projectContexts).toHaveLength(2);
     expect(result.repositoryBatches).toHaveLength(1);
+  });
+
+  it("keeps same-repository reads isolated across selected GitHub accounts", async () => {
+    const accountA: GitHubAccountSelection = { host: "github.com", login: "alice" };
+    const accountB: GitHubAccountSelection = { host: "github.com", login: "bob" };
+    const projectA = {
+      ...makeProject("project-account-a", "Account A", "/tmp/account-a"),
+      githubAccount: accountA,
+    };
+    const projectB = {
+      ...makeProject("project-account-b", "Account B", "/tmp/account-b"),
+      githubAccount: accountB,
+    };
+    const base = createGitHubCliWithFakeGh().service;
+    const viewerAccounts: Array<GitHubAccountSelection | undefined> = [];
+    const listAccounts: Array<GitHubAccountSelection | undefined> = [];
+    const github: GitHubCliShape = {
+      ...base,
+      getViewerLogin: ({ account }) =>
+        Effect.sync(() => {
+          viewerAccounts.push(account);
+          return account?.login ?? "viewer";
+        }),
+      listRepositoryPullRequests: ({ account }) =>
+        Effect.sync(() => {
+          listAccounts.push(account);
+          return makeBatch([
+            {
+              ...makeItem(1),
+              author: {
+                login: account?.login ?? "viewer",
+                name: null,
+                avatarUrl: null,
+                url: null,
+              },
+            },
+          ]);
+        }),
+      runPullRequestAction: () => Effect.void,
+    };
+
+    const result = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService(
+            makeDependencies({
+              projects: [projectA, projectB],
+              repositories: new Map([
+                [projectA.id, "acme/shared"],
+                [projectB.id, "acme/shared"],
+              ]),
+              github,
+            }),
+          );
+          const result = yield* service.list({ state: "open", involvement: "authored" });
+          yield* service.action({
+            projectId: projectA.id,
+            repository: "acme/shared",
+            number: 42,
+            action: "close",
+          });
+          yield* service.list({ state: "open", involvement: "authored" });
+          return result;
+        }),
+      ),
+    );
+
+    expect(viewerAccounts).toEqual([accountA, accountB]);
+    expect(listAccounts).toEqual([accountA, accountB, accountA]);
+    expect(result.viewer).toBeNull();
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries.map((entry) => entry.viewerAuthored)).toEqual([true, true]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("resolves repositories again when a project's selected account changes", async () => {
+    const accountA: GitHubAccountSelection = { host: "github.com", login: "alice" };
+    const accountB: GitHubAccountSelection = { host: "github.com", login: "bob" };
+    let currentProject: OrchestrationProject = {
+      ...makeProject("project-account-switch", "Account switch", "/tmp/account-switch"),
+      githubAccount: accountA,
+    };
+    const resolvedAccounts: Array<GitHubAccountSelection | null | undefined> = [];
+    const dependencies = makeDependencies({
+      projects: [currentProject],
+      repositories: new Map([[currentProject.id, "acme/shared"]]),
+      github: createGitHubCliWithFakeGh().service,
+    });
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* makePullRequestService({
+            ...dependencies,
+            getSnapshot: () => Effect.succeed(makeSnapshot([currentProject])),
+            resolveRepositories: (project) =>
+              Effect.sync(() => {
+                resolvedAccounts.push(project.githubAccount);
+                return {
+                  repositories: [
+                    { nameWithOwner: "acme/shared", url: "https://github.com/acme/shared" },
+                  ],
+                  authoritative: true,
+                };
+              }),
+          });
+          yield* service.list({
+            projectId: currentProject.id,
+            state: "open",
+            involvement: "all",
+          });
+          currentProject = { ...currentProject, githubAccount: accountB };
+          yield* service.list({
+            projectId: currentProject.id,
+            state: "open",
+            involvement: "all",
+          });
+        }),
+      ),
+    );
+
+    expect(resolvedAccounts).toEqual([accountA, accountB]);
   });
 
   it("counts review requests once for projects sharing a repository without loading rich rows", async () => {

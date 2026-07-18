@@ -193,6 +193,7 @@ function activateThreadSingle(input: ThreadActivationControllerInput, threadId: 
     input.clearSelection();
   }
   input.setSelectionAnchor(threadId);
+  input.rememberLastThreadRouteNow({ threadId });
 
   const threadEntryPoint = selectThreadTerminalState(
     input.terminalStateByThreadId,

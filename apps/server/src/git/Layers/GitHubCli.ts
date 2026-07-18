@@ -2,6 +2,10 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubAccountSelection,
+  type GitHubAccountSummary,
+  type GitHubRepositorySummary,
+  type GitPullRequestListFilter,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -22,6 +26,7 @@ import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
+  PULL_REQUEST_LIST_JSON_FIELDS as WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
@@ -34,11 +39,21 @@ import {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
 const GITHUB_HOST = "github.com";
+const WORKSPACE_PULL_REQUEST_LIMIT = 1_000;
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
   "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+
+function environmentWithoutGitHubTokenOverrides(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  delete env.GH_ENTERPRISE_TOKEN;
+  delete env.GITHUB_ENTERPRISE_TOKEN;
+  return env;
+}
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -97,6 +112,10 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
     reason: "other",
     cause: error,
   });
+}
+
+function isGitHubNotFoundError(error: GitHubCliError): boolean {
+  return /(?:\bHTTP\s+404\b|\b404\s+Not Found\b|\bbranch not found\b)/i.test(error.detail);
 }
 
 // GitHub reports MERGEABLE/CONFLICTING/UNKNOWN; UNKNOWN also stands in for the
@@ -162,6 +181,13 @@ const RawGitHubPullRequestSchema = Schema.Struct({
     ),
   ),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
 });
 
 const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
@@ -169,6 +195,33 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   url: TrimmedNonEmptyString,
   sshUrl: TrimmedNonEmptyString,
 });
+
+const RawGitHubAuthAccountSchema = Schema.Struct({
+  state: Schema.String,
+  active: Schema.Boolean,
+  host: Schema.String,
+  login: Schema.String,
+});
+
+const RawGitHubAuthStatusSchema = Schema.Struct({
+  hosts: Schema.Record(Schema.String, Schema.Array(RawGitHubAuthAccountSchema)),
+});
+
+const RawGraphQlErrorSchema = Schema.Struct({
+  message: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawGitHubRepositorySummarySchema = Schema.Struct({
+  full_name: TrimmedNonEmptyString,
+  html_url: TrimmedNonEmptyString,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  default_branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pushed_at: Schema.optional(Schema.NullOr(Schema.String)),
+  private: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  archived: Schema.optional(Schema.NullOr(Schema.Boolean)),
+});
+
+const RawGitHubRepositoryPagesSchema = Schema.Array(Schema.Array(RawGitHubRepositorySummarySchema));
 
 // `gh pr view --json statusCheckRollup` mixes CheckRun and StatusContext nodes; both are
 // covered by one permissive shape and told apart by which fields are populated.
@@ -283,6 +336,8 @@ const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
+const LIST_REPOSITORIES_ENDPOINT =
+  "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=pushed&direction=desc";
 
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
@@ -311,10 +366,6 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     }
   }
 }`;
-
-const RawGraphQlErrorSchema = Schema.Struct({
-  message: Schema.optional(Schema.NullOr(Schema.String)),
-});
 
 const RawReviewThreadCommentSchema = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -392,6 +443,15 @@ function normalizePullRequestSummary(
     (typeof headRepositoryNameWithOwner === "string" && headRepositoryNameWithOwner.includes("/")
       ? (headRepositoryNameWithOwner.split("/")[0] ?? null)
       : null);
+  const authorLogin = raw.author?.login?.trim() || null;
+  const authorAvatarUrl = (() => {
+    if (!authorLogin) return null;
+    try {
+      return `${new URL(raw.url).origin}/${encodeURIComponent(authorLogin)}.png?size=48`;
+    } catch {
+      return null;
+    }
+  })();
   return {
     number: raw.number,
     title: raw.title,
@@ -405,6 +465,8 @@ function normalizePullRequestSummary(
     deletions: normalizeDiffCount(raw.deletions),
     changedFiles: normalizeDiffCount(raw.changedFiles),
     updatedAt: raw.updatedAt?.trim() || null,
+    ...(authorLogin ? { authorLogin } : {}),
+    ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),
@@ -672,9 +734,12 @@ function normalizePullRequestReviewComments(
   return comments;
 }
 
-function getGraphQlErrorDetail(
-  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
-): string | null {
+function getGraphQlErrorDetail(raw: {
+  readonly errors?:
+    | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
+    | null
+    | undefined;
+}): string | null {
   const messages =
     raw.errors
       ?.flatMap((error) => {
@@ -683,6 +748,20 @@ function getGraphQlErrorDetail(
       })
       .join("; ") ?? "";
   return messages.length > 0 ? `GitHub GraphQL returned errors: ${messages}` : null;
+}
+
+function normalizeRepositorySummary(
+  raw: Schema.Schema.Type<typeof RawGitHubRepositorySummarySchema>,
+): GitHubRepositorySummary {
+  return {
+    nameWithOwner: raw.full_name,
+    url: raw.html_url,
+    description: raw.description?.trim() || null,
+    defaultBranch: raw.default_branch ?? null,
+    pushedAt: raw.pushed_at?.trim() || null,
+    isPrivate: raw.private === true,
+    isArchived: raw.archived === true,
+  };
 }
 
 function getPullRequestReviewThreadsPageInfo(
@@ -711,11 +790,14 @@ function decodeGitHubJson<S extends Schema.Top>(
   operation:
     | "listOpenPullRequests"
     | "listPullRequests"
+    | "listRepositoryPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
+    | "listAccounts"
+    | "listRepositories"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
-    | "listRepositoryPullRequests"
+    | "listWorkspacePullRequests"
     | "getPullRequestDetail"
     | "getPullRequestListItem"
     | "listReviewRequestedPullRequestNumbers"
@@ -745,7 +827,10 @@ const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestS
  */
 export function decodePullRequestListJson(
   raw: string,
-  operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
+  operation:
+    | "listOpenPullRequests"
+    | "listPullRequests"
+    | "listWorkspacePullRequests" = "listPullRequests",
 ): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
@@ -770,21 +855,58 @@ export function decodePullRequestListJson(
 }
 
 const makeGitHubCli = Effect.sync(() => {
-  const execute: GitHubCliShape["execute"] = (input) =>
+  const resolveAccountEnvironment = (input: {
+    readonly cwd: string;
+    readonly account: GitHubAccountSelection;
+  }) =>
     Effect.tryPromise({
-      try: (signal) =>
-        runProcess("gh", input.args, {
-          cwd: input.cwd,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          signal,
-          // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
-          // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env: { ...process.env, GH_HOST: GITHUB_HOST },
-          ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
-          ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
-          ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-        }),
+      try: async () => {
+        const baseEnvironment = environmentWithoutGitHubTokenOverrides();
+        const tokenResult = await runProcess(
+          "gh",
+          ["auth", "token", "--hostname", input.account.host, "--user", input.account.login],
+          {
+            cwd: input.cwd,
+            timeoutMs: DEFAULT_TIMEOUT_MS,
+            env: baseEnvironment,
+          },
+        );
+        const token = tokenResult.stdout.trim();
+        if (!token) {
+          throw new Error(
+            `GitHub CLI did not return credentials for ${input.account.login} on ${input.account.host}.`,
+          );
+        }
+        return {
+          ...baseEnvironment,
+          GH_HOST: input.account.host,
+          GH_TOKEN: token,
+          GH_ENTERPRISE_TOKEN: token,
+        } satisfies NodeJS.ProcessEnv;
+      },
       catch: (error) => normalizeGitHubCliError("execute", error),
+    });
+
+  const execute: GitHubCliShape["execute"] = (input) =>
+    Effect.gen(function* () {
+      const env = input.account
+        ? yield* resolveAccountEnvironment({ cwd: input.cwd, account: input.account })
+        : { ...process.env, GH_HOST: GITHUB_HOST };
+      return yield* Effect.tryPromise({
+        try: (signal) =>
+          runProcess("gh", input.args, {
+            cwd: input.cwd,
+            timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            signal,
+            // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
+            // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
+            env,
+            ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
+            ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
+            ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+          }),
+        catch: (error) => normalizeGitHubCliError("execute", error),
+      });
     });
 
   const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
@@ -975,12 +1097,18 @@ const makeGitHubCli = Effect.sync(() => {
           }),
         );
   };
-  const repositorySelector = (repository: string) => `${GITHUB_HOST}/${repository}`;
+  const repositorySelector = (repository: string, account?: GitHubAccountSelection) =>
+    `${account?.host ?? GITHUB_HOST}/${repository}`;
 
   // One implementation behind both list methods so the field list, decoding, and
   // normalization cannot drift between the open-only and any-state lookups.
   const listPullRequestsWithState = (
-    input: { readonly cwd: string; readonly headSelector: string; readonly limit?: number },
+    input: {
+      readonly cwd: string;
+      readonly headSelector: string;
+      readonly limit?: number;
+      readonly account?: GitHubAccountSelection;
+    },
     options: {
       readonly state: "open" | "all";
       readonly defaultLimit: number;
@@ -1001,16 +1129,116 @@ const makeGitHubCli = Effect.sync(() => {
         "--json",
         PULL_REQUEST_SUMMARY_JSON_FIELDS,
       ],
+      ...(input.account ? { account: input.account } : {}),
     }).pipe(
       Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
     );
+
+  const getRepositoryCloneUrls: GitHubCliShape["getRepositoryCloneUrls"] = (input) =>
+    validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
+      Effect.flatMap((repository) =>
+        execute({
+          cwd: input.cwd,
+          args: ["repo", "view", repository, "--json", "nameWithOwner,url,sshUrl"],
+          ...(input.account ? { account: input.account } : {}),
+        }),
+      ),
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        decodeGitHubJson(
+          raw,
+          RawGitHubRepositoryCloneUrlsSchema,
+          "getRepositoryCloneUrls",
+          "GitHub CLI returned invalid repository JSON.",
+        ),
+      ),
+      Effect.map(normalizeRepositoryCloneUrls),
+    );
+
+  const getBranchBrowserUrl: GitHubCliShape["getBranchBrowserUrl"] = (input) =>
+    validateRepository(input.repository, "getBranchBrowserUrl").pipe(
+      Effect.flatMap((repository) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            `repos/${repository}/branches/${encodeURIComponent(input.branch)}`,
+            "--jq",
+            "._links.html",
+          ],
+          ...(input.account ? { account: input.account } : {}),
+        }),
+      ),
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((url) =>
+        url.length > 0
+          ? Effect.succeed({ url })
+          : Effect.fail(
+              new GitHubCliError({
+                operation: "getBranchBrowserUrl",
+                detail: "GitHub returned an empty browser URL for an existing branch.",
+              }),
+            ),
+      ),
+      Effect.catchIf(isGitHubNotFoundError, () =>
+        // GitHub deliberately uses 404 for both a missing branch and an inaccessible
+        // repository. Confirm repository access before classifying the upstream as stale.
+        getRepositoryCloneUrls(input).pipe(Effect.as({ url: null })),
+      ),
+    );
+
+  const listWorkspacePullRequests = (input: {
+    readonly cwd: string;
+    readonly filter: GitPullRequestListFilter;
+    readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
+  }) => {
+    const state =
+      input.filter === "reviewing"
+        ? "open"
+        : input.filter === "open" || input.filter === "closed" || input.filter === "merged"
+          ? input.filter
+          : "all";
+    const filterArgs =
+      input.filter === "reviewing"
+        ? ["--search", "review-requested:@me"]
+        : input.filter === "authored"
+          ? ["--author", "@me"]
+          : [];
+
+    return execute({
+      cwd: input.cwd,
+      args: [
+        "pr",
+        "list",
+        "--state",
+        state,
+        ...filterArgs,
+        "--limit",
+        String(input.limit ?? WORKSPACE_PULL_REQUEST_LIMIT),
+        "--json",
+        WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
+      ],
+      ...(input.account ? { account: input.account } : {}),
+    }).pipe(
+      Effect.flatMap((result) =>
+        decodePullRequestListJson(result.stdout, "listWorkspacePullRequests"),
+      ),
+      Effect.map((pullRequests) =>
+        [...pullRequests].sort((left, right) =>
+          (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+        ),
+      ),
+    );
+  };
 
   const service = {
     execute,
     getViewerLogin: (input) =>
       execute({
         cwd: input.cwd,
-        args: ["api", "user", "--hostname", GITHUB_HOST, "--jq", ".login"],
+        args: ["api", "user", "--hostname", input.account?.host ?? GITHUB_HOST, "--jq", ".login"],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.flatMap((result) => {
           const login = result.stdout.trim();
@@ -1042,7 +1270,7 @@ const makeGitHubCli = Effect.sync(() => {
               "pr",
               "list",
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               ...involvementArgs,
               "--state",
               input.state,
@@ -1051,6 +1279,7 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
@@ -1066,10 +1295,11 @@ const makeGitHubCli = Effect.sync(() => {
               "view",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1111,6 +1341,7 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               "number",
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1133,10 +1364,11 @@ const makeGitHubCli = Effect.sync(() => {
               "view",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               PULL_REQUEST_DETAIL_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1157,10 +1389,11 @@ const makeGitHubCli = Effect.sync(() => {
             args: [
               "repo",
               "view",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge",
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1190,13 +1423,14 @@ const makeGitHubCli = Effect.sync(() => {
               "diff",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--color",
               "never",
               "--patch",
             ],
             maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
             outputMode: "truncate",
+            ...(input.account ? { account: input.account } : {}),
           }).pipe(
             Effect.map((result) => ({
               patch: result.stdout,
@@ -1218,7 +1452,7 @@ const makeGitHubCli = Effect.sync(() => {
       validateRepository(input.repository, "runPullRequestAction").pipe(
         Effect.flatMap((repository) => {
           const reference = String(input.number);
-          const repoArgs = ["--repo", repositorySelector(repository)];
+          const repoArgs = ["--repo", repositorySelector(repository, input.account)];
           const args = (() => {
             switch (input.action) {
               case "merge":
@@ -1233,7 +1467,11 @@ const makeGitHubCli = Effect.sync(() => {
                 return ["pr", "reopen", reference, ...repoArgs];
             }
           })();
-          return execute({ cwd: input.cwd, args }).pipe(Effect.asVoid);
+          return execute({
+            cwd: input.cwd,
+            args,
+            ...(input.account ? { account: input.account } : {}),
+          }).pipe(Effect.asVoid);
         }),
       ),
     commentOnPullRequest: (input) =>
@@ -1249,14 +1487,54 @@ const makeGitHubCli = Effect.sync(() => {
               "comment",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--body-file",
               "-",
             ],
             stdin: input.body,
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.asVoid,
+      ),
+    listAccounts: (input) =>
+      Effect.tryPromise({
+        try: () =>
+          runProcess("gh", ["auth", "status", "--json", "hosts"], {
+            cwd: input.cwd,
+            timeoutMs: DEFAULT_TIMEOUT_MS,
+            env: environmentWithoutGitHubTokenOverrides(),
+          }),
+        catch: (error) => normalizeGitHubCliError("execute", error),
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubAuthStatusSchema,
+            "listAccounts",
+            "GitHub CLI returned invalid account status JSON.",
+          ),
+        ),
+        Effect.map((decoded) => {
+          const accounts: GitHubAccountSummary[] = [];
+          for (const [host, hostAccounts] of Object.entries(decoded.hosts)) {
+            for (const account of hostAccounts) {
+              if (account.state !== "success") continue;
+              accounts.push({
+                host: account.host.trim() || host,
+                login: account.login,
+                active: account.active,
+              });
+            }
+          }
+          return accounts.sort(
+            (left, right) =>
+              Number(right.active) - Number(left.active) ||
+              left.host.localeCompare(right.host) ||
+              left.login.localeCompare(right.login),
+          );
+        }),
       ),
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, {
@@ -1270,10 +1548,12 @@ const makeGitHubCli = Effect.sync(() => {
         defaultLimit: 20,
         operation: "listPullRequests",
       }),
+    listWorkspacePullRequests,
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,
         args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -1296,6 +1576,7 @@ const makeGitHubCli = Effect.sync(() => {
           "--json",
           `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
         ],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -1338,9 +1619,11 @@ const makeGitHubCli = Effect.sync(() => {
             ...(after ? ["-F", `after=${after}`] : []),
           ];
 
-          const raw = yield* execute({ cwd: input.cwd, args }).pipe(
-            Effect.map((result) => result.stdout.trim()),
-          );
+          const raw = yield* execute({
+            cwd: input.cwd,
+            args,
+            ...(input.account ? { account: input.account } : {}),
+          }).pipe(Effect.map((result) => result.stdout.trim()));
           const decoded = yield* decodeGitHubJson(
             raw,
             RawReviewThreadsResponseSchema,
@@ -1380,32 +1663,24 @@ const makeGitHubCli = Effect.sync(() => {
 
         return { comments, truncated };
       }),
-    getRepositoryCloneUrls: (input) =>
-      validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
-        Effect.flatMap((repository) =>
-          execute({
-            cwd: input.cwd,
-            args: [
-              "repo",
-              "view",
-              // Preserve gh's current-host selection for existing fork/Enterprise flows.
-              // The pull-request browser methods above intentionally pin github.com.
-              repository,
-              "--json",
-              "nameWithOwner,url,sshUrl",
-            ],
-          }),
-        ),
+    getRepositoryCloneUrls,
+    getBranchBrowserUrl,
+    listRepositories: (input) =>
+      execute({
+        cwd: input.cwd,
+        ...(input.account ? { account: input.account } : {}),
+        args: ["api", "--paginate", "--slurp", "-X", "GET", LIST_REPOSITORIES_ENDPOINT],
+      }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
           decodeGitHubJson(
             raw,
-            RawGitHubRepositoryCloneUrlsSchema,
-            "getRepositoryCloneUrls",
-            "GitHub CLI returned invalid repository JSON.",
+            RawGitHubRepositoryPagesSchema,
+            "listRepositories",
+            "GitHub CLI returned invalid repository list JSON.",
           ),
         ),
-        Effect.map(normalizeRepositoryCloneUrls),
+        Effect.map((pages) => pages.flatMap((page) => page.map(normalizeRepositorySummary))),
       ),
     createPullRequest: (input) =>
       execute({
@@ -1422,11 +1697,13 @@ const makeGitHubCli = Effect.sync(() => {
           "--body-file",
           input.bodyFile,
         ],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(Effect.asVoid),
     getDefaultBranch: (input) =>
       execute({
         cwd: input.cwd,
         args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((value) => {
           const trimmed = value.stdout.trim();
@@ -1437,6 +1714,7 @@ const makeGitHubCli = Effect.sync(() => {
       execute({
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(Effect.asVoid),
   } satisfies GitHubCliShape;
 

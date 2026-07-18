@@ -3,29 +3,20 @@
 // Exports: Sidebar
 
 import {
-  ArchiveIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
-  CopyIcon,
-  ExternalLinkIcon,
-  FolderOpenIcon,
   KanbanIcon,
   type LucideIcon,
   NewThreadIcon,
-  PencilIcon,
-  PinIcon,
-  PlayIcon,
   SearchIcon,
   SettingsIcon,
-  StopFilledIcon,
   TemporaryThreadIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
   WorktreeIcon,
-  XIcon,
 } from "~/lib/icons";
 import {
   PR_STATE_PRESENTATION_ICONS,
@@ -35,7 +26,7 @@ import {
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { FiGitBranch, FiGithub, FiPlus } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox } from "react-icons/hi2";
@@ -76,19 +67,32 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type OrchestrationWorktreeWorkspace,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
+  WorktreeWorkspaceId,
+  WorkspaceOperationId,
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
+  type PullRequestDetail,
+  type GitHubAccountSelection,
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
 } from "@synara/contracts";
-import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import {
+  GENERIC_WORKSPACE_CONVERSATION_TITLE,
+  isGenericChatThreadTitle,
+} from "@synara/shared/chatThreads";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import {
+  deriveWorkspaceGitPresentationState,
+  presentPullRequestState,
+} from "@synara/shared/pullRequest";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -100,6 +104,17 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
+import { readEditorRailActiveChat, readEditorRailChatTabs } from "../editorViewState";
+import { openInPreferredEditor } from "../editorPreferences";
+import {
+  buildFixFindingsPrompt,
+  buildResolveConflictsPrompt,
+  buildReviewPullRequestPrompt,
+} from "./chat/environment/environmentPullRequest.logic";
+import { appendComposerPromptText } from "../lib/chatReferences";
+import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
+import { openPullRequestWorkspace } from "../lib/pullRequestWorkspace";
+import { requestWorkspaceArchive, requestWorkspaceRestore } from "../lib/workspaceLifecycle";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
   reconcileDeletedThreadFromClient,
@@ -109,6 +124,7 @@ import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
+  chatTabJumpIndexFromCommand,
   resolveShortcutCommand,
   shortcutLabelForCommand,
   splitShortcutLabel,
@@ -129,8 +145,10 @@ import {
 } from "../session-logic";
 import {
   gitRemoveWorktreeMutationOptions,
+  gitGithubRepositoryQueryOptions,
   gitResolvePullRequestQueryOptions,
   gitStatusQueryOptions,
+  invalidateGitQueries,
 } from "../lib/gitReactQuery";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -143,6 +161,7 @@ import {
 } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
+  pullRequestDetailQueryOptions,
   pullRequestQueryKeys,
   pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
@@ -157,6 +176,7 @@ import {
   sidebarLocalServersQueryOptions,
 } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import { resolvePullRequestAssociation } from "../lib/gitPullRequestAssociation";
 import {
   archiveThreadFromClient,
   isThreadAlreadyUnarchivedError,
@@ -173,7 +193,12 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
-import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
+import {
+  DEFAULT_THREAD_TERMINAL_ID,
+  type Project,
+  type SidebarThreadSummary,
+  type Thread,
+} from "../types";
 import {
   applyAutomationEvent,
   automationAttentionCount,
@@ -190,6 +215,20 @@ import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
+import { ArchivedWorkspacesDialog } from "./ArchivedWorkspacesDialog";
+import { listArchivedWorkspaces } from "./archivedWorkspaces.logic";
+import {
+  ProjectContextMenu,
+  type ProjectContextMenuActionId,
+  type ProjectContextMenuActions,
+} from "./ProjectContextMenu";
+import { WorktreeWorkspaceRow } from "./WorktreeWorkspaceRow";
+import type { WorktreeWorkspaceContextMenuActionId } from "./WorktreeWorkspaceContextMenu";
+import {
+  deriveWorktreeWorkspaceContextMenuActions,
+  getWorktreeWorkspaceSidebarLabel,
+  orderWorktreeWorkspacesForSidebar,
+} from "./worktreeWorkspaceSidebar.logic";
 import {
   SIDEBAR_HOVER_CARD_POPUP_PROPS,
   SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
@@ -200,6 +239,7 @@ import {
   createProjectHoverCardAnchor,
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
+import { Input } from "./ui/input";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -211,6 +251,16 @@ import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { GitHubProjectDialog } from "./GitHubProjectDialog";
+import {
+  WorktreeWorkspaceCreateDialog,
+  type WorkspaceCreateSource,
+} from "./WorktreeWorkspaceCreateDialog";
+import {
+  branchNameFromWorkspaceTitle,
+  type BranchRenameAvailability,
+  WorktreeWorkspaceRenameDialog,
+} from "./WorktreeWorkspaceRenameDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import {
   SidebarSearchPalette,
@@ -223,8 +273,15 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
 import {
+  selectProjectRunForTarget,
+  selectWorkspaceProjectRun,
+  useProjectRunStore,
+  type ProjectRunState,
+} from "../projectRunStore";
+import { useRecentViewsStore } from "../recentViewsStore";
+import {
+  buildWorkspaceProjectRunInput,
   selectPrimaryProjectRunCommand,
   upsertProjectRunCommandScripts,
 } from "../projectRunTargets";
@@ -252,27 +309,10 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
-import { Input } from "./ui/input";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
 import { Kbd, KbdGroup } from "./ui/kbd";
-import {
-  Menu,
-  MenuGroup,
-  MenuItem,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuGroup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -304,6 +344,8 @@ import {
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
   getNextVisibleSidebarThreadId,
+  getNextVisibleWorkspaceId,
+  getThreadJumpTargetIds,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
@@ -316,6 +358,8 @@ import {
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
+  resolveProjectStatusIndicator,
+  resolveConversationTabThreadIds,
   resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   type SettingsBackTarget,
@@ -332,6 +376,7 @@ import {
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  sortThreadsForConversationTabs,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
@@ -365,7 +410,6 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
-import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
@@ -431,54 +475,6 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
       })),
     )
   : null;
-
-type ProjectContextMenuId =
-  | "open-in-finder"
-  | "open-in-kanban"
-  | "copy-path"
-  | "start-dev"
-  | "stop-dev"
-  | "open-dev-server"
-  | "rename"
-  | "toggle-pin"
-  | "archive-threads"
-  | "delete-threads"
-  | "delete";
-
-type ProjectContextMenuState = {
-  projectId: ProjectId;
-  position: { x: number; y: number };
-};
-
-const PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME = "w-48 min-w-48";
-const PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME =
-  "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
-const PROJECT_CONTEXT_MENU_ICON_CLASS_NAME =
-  "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
-
-// Gives Base UI a zero-size virtual anchor exactly where the right-click happened.
-function createClientPointMenuAnchor(position: { x: number; y: number }) {
-  return {
-    getBoundingClientRect: () => ({
-      x: position.x,
-      y: position.y,
-      width: 0,
-      height: 0,
-      top: position.y,
-      right: position.x,
-      bottom: position.y,
-      left: position.x,
-    }),
-  };
-}
-
-function ProjectContextMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
-  return (
-    <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-      <Icon aria-hidden="true" />
-    </span>
-  );
-}
 
 function firstLocalServerUrl(server: ServerLocalServerProcess): string | null {
   return server.addresses.find((address) => address.url)?.url ?? null;
@@ -582,7 +578,7 @@ function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
     );
   }
   if (status.pulse) {
-    return <ThreadRunningSpinner />;
+    return <ThreadRunningSpinner className={status.colorClass} />;
   }
   return (
     <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
@@ -1394,8 +1390,12 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const recordRecentView = useRecentViewsStore((store) => store.recordRecentView);
   const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
@@ -1409,6 +1409,7 @@ export default function Sidebar() {
   );
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
+  const projectRunsByTargetKey = useProjectRunStore((state) => state.runsByTargetKey);
   const projectRunsByProjectId = useProjectRunStore((state) => state.runsByProjectId);
   const storeUpsertProjectRun = useProjectRunStore((state) => state.upsertRun);
   const storeRemoveProjectRun = useProjectRunStore((state) => state.removeRun);
@@ -1595,6 +1596,10 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
+  const { data: availableEditors = [] } = useQuery({
+    ...serverConfigQueryOptions(),
+    select: (config) => config.availableEditors,
+  });
   const { data: serverCwd = null } = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.cwd ?? null,
@@ -1608,10 +1613,6 @@ export default function Sidebar() {
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
-  const [projectRunDialogProjectId, setProjectRunDialogProjectId] = useState<ProjectId | null>(
-    null,
-  );
-  const [projectRunDialogCommandDraft, setProjectRunDialogCommandDraft] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -1625,8 +1626,21 @@ export default function Sidebar() {
   const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
-  const [projectContextMenuState, setProjectContextMenuState] =
-    useState<ProjectContextMenuState | null>(null);
+  const [projectRunDialogProjectId, setProjectRunDialogProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [projectRunDialogCommandDraft, setProjectRunDialogCommandDraft] = useState("");
+  const [archivedWorkspacesProjectId, setArchivedWorkspacesProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [restoringWorkspaceIds, setRestoringWorkspaceIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [restoreErrorsByWorkspaceId, setRestoreErrorsByWorkspaceId] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  const [restoreWorkspaceIdToOpen, setRestoreWorkspaceIdToOpen] =
+    useState<WorktreeWorkspaceId | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
   const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
     ReadonlyMap<string, number>
@@ -1662,6 +1676,10 @@ export default function Sidebar() {
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
   const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
+  const [githubProjectDialogOpen, setGitHubProjectDialogOpen] = useState(false);
+  const [workspaceCreateProjectId, setWorkspaceCreateProjectId] = useState<ProjectId | null>(null);
+  const [renamingWorktreeWorkspaceId, setRenamingWorktreeWorkspaceId] =
+    useState<WorktreeWorkspaceId | null>(null);
   const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const [optimisticPinnedStateByThreadId, setOptimisticPinnedStateByThreadId] = useState<
     ReadonlyMap<ThreadId, boolean>
@@ -1689,6 +1707,17 @@ export default function Sidebar() {
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const worktreeWorkspaces = useStore((store) => store.worktreeWorkspaces ?? []);
+  const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
+  const workspaceCreateProject = useMemo(
+    () => projects.find((project) => project.id === workspaceCreateProjectId) ?? null,
+    [projects, workspaceCreateProjectId],
+  );
+  const renamingWorktreeWorkspace = useMemo(
+    () =>
+      worktreeWorkspaces.find((workspace) => workspace.id === renamingWorktreeWorkspaceId) ?? null,
+    [renamingWorktreeWorkspaceId, worktreeWorkspaces],
+  );
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
@@ -1814,6 +1843,22 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const projectGithubRepositoryQueries = useQueries({
+    queries: projects.map((project) =>
+      gitGithubRepositoryQueryOptions(project.cwd, true, project.githubAccount ?? undefined),
+    ),
+  });
+  const projectGithubRepositoryUrlById = useMemo(() => {
+    const urls = new Map<ProjectId, string>();
+    for (let index = 0; index < projects.length; index += 1) {
+      const project = projects[index];
+      const repository = projectGithubRepositoryQueries[index]?.data?.repository;
+      if (project && repository) {
+        urls.set(project.id, repository.url);
+      }
+    }
+    return urls;
+  }, [projectGithubRepositoryQueries, projects]);
   // Resolve the active thread's project for real threads AND not-yet-persisted draft threads.
   // Without the draft fallback, opening a fresh Studio chat (a draft at /$threadId) would drop
   // out of the Studio surface and snap the segmented picker back to Projects.
@@ -2001,11 +2046,188 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
   );
+  const workspaceGitTargets = useMemo(() => {
+    if (workspaceProtocolVersion !== 2) {
+      return [];
+    }
+    return worktreeWorkspaces.flatMap((workspace) => {
+      if (
+        workspace.deletedAt !== null ||
+        workspace.archivedAt !== null ||
+        workspace.state === "archived" ||
+        !workspace.path ||
+        !workspace.branch
+      ) {
+        return [];
+      }
+      return [
+        {
+          workspaceId: workspace.id,
+          branch: workspace.branch,
+          cwd: workspace.path,
+          githubAccount: projectById.get(workspace.projectId)?.githubAccount ?? undefined,
+        },
+      ];
+    });
+  }, [projectById, workspaceProtocolVersion, worktreeWorkspaces]);
+  const workspaceGitQueries = useQueries({
+    queries: workspaceGitTargets.map((target) => ({
+      ...gitStatusQueryOptions(target.cwd, target.githubAccount),
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    })),
+  });
+  const workspaceGitQueryIndexById = useMemo(
+    () => new Map(workspaceGitTargets.map((target, index) => [target.workspaceId, index] as const)),
+    [workspaceGitTargets],
+  );
+  const workspaceBranchUrlById = useMemo(() => {
+    const urls = new Map<WorktreeWorkspaceId, string>();
+    for (let index = 0; index < workspaceGitTargets.length; index += 1) {
+      const target = workspaceGitTargets[index];
+      const status = workspaceGitQueries[index]?.data;
+      if (target && status?.branch === target.branch && status.publication?.state === "published") {
+        urls.set(target.workspaceId, status.publication.url);
+      }
+    }
+    return urls;
+  }, [workspaceGitQueries, workspaceGitTargets]);
+  const workspaceGitPresentationById = useMemo(() => {
+    const presentationById = new Map<
+      WorktreeWorkspaceId,
+      {
+        state: ReturnType<typeof deriveWorkspaceGitPresentationState>;
+        pr: OrchestrationWorktreeWorkspace["lastKnownPr"];
+        status: GitStatusResult | null;
+      }
+    >();
+    for (const workspace of worktreeWorkspaces) {
+      const queryIndex = workspaceGitQueryIndexById.get(workspace.id);
+      const query = queryIndex === undefined ? undefined : workspaceGitQueries[queryIndex];
+      const status = query?.data ?? null;
+      const branchMatches =
+        workspace.branch !== null && status?.branch !== null && status?.branch === workspace.branch;
+      const pr = resolvePullRequestAssociation({
+        live: branchMatches ? (status?.pr ?? null) : null,
+        persisted: workspace.lastKnownPr,
+        liveUnavailable:
+          !branchMatches ||
+          status === null ||
+          query?.error != null ||
+          status.prUnavailable === true,
+      });
+      presentationById.set(workspace.id, {
+        state: deriveWorkspaceGitPresentationState({
+          workspaceState: workspace.state,
+          hasBranch: workspace.branch !== null,
+          published: branchMatches && status.publication?.state === "published",
+          pr,
+        }),
+        pr,
+        status,
+      });
+    }
+    return presentationById;
+  }, [workspaceGitQueries, workspaceGitQueryIndexById, worktreeWorkspaces]);
+  const workspacePullRequestDetailTargets = useMemo(
+    () =>
+      worktreeWorkspaces.flatMap((workspace) => {
+        const pr = workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
+        if (!pr) return [];
+        const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+        if (!repository) return [];
+        return [
+          {
+            workspaceId: workspace.id,
+            input: { projectId: workspace.projectId, repository, number: pr.number },
+          },
+        ];
+      }),
+    [workspaceGitPresentationById, worktreeWorkspaces],
+  );
+  const workspacePullRequestDetailQueries = useQueries({
+    queries: workspacePullRequestDetailTargets.map((target) => ({
+      ...pullRequestDetailQueryOptions(target.input, { pollingEnabled: false }),
+      // Subscribe to a detail panel's cached/live snapshot without introducing per-row fetches.
+      enabled: false,
+    })),
+  });
+  const workspacePullRequestDetailById = useMemo(() => {
+    const details = new Map<WorktreeWorkspaceId, PullRequestDetail>();
+    for (let index = 0; index < workspacePullRequestDetailTargets.length; index += 1) {
+      const target = workspacePullRequestDetailTargets[index];
+      const detail = workspacePullRequestDetailQueries[index]?.data;
+      if (target && detail) details.set(target.workspaceId, detail);
+    }
+    return details;
+  }, [workspacePullRequestDetailQueries, workspacePullRequestDetailTargets]);
+  const renamingWorkspaceGitQueryIndex = renamingWorktreeWorkspace
+    ? workspaceGitQueryIndexById.get(renamingWorktreeWorkspace.id)
+    : undefined;
+  const renamingWorkspaceGitQuery =
+    renamingWorkspaceGitQueryIndex === undefined
+      ? undefined
+      : workspaceGitQueries[renamingWorkspaceGitQueryIndex];
+  const branchRenameAvailability: BranchRenameAvailability = (() => {
+    if (
+      !renamingWorktreeWorkspace ||
+      renamingWorktreeWorkspace.state !== "ready" ||
+      !renamingWorktreeWorkspace.path ||
+      !renamingWorktreeWorkspace.branch
+    ) {
+      return "not-ready";
+    }
+    if (renamingWorkspaceGitQuery?.isPending) {
+      return "checking";
+    }
+    if (renamingWorkspaceGitQuery?.isError) {
+      return "unverified";
+    }
+    const status = renamingWorkspaceGitQuery?.data;
+    if (!status || status.branch !== renamingWorktreeWorkspace.branch || !status.publication) {
+      return "unavailable";
+    }
+    if (
+      renamingWorktreeWorkspace.lastKnownPr ||
+      status.pr ||
+      status.publication.state !== "local_only"
+    ) {
+      return "protected";
+    }
+    return "available";
+  })();
+  const openWorkspaceBranchLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, branchUrl: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Link opening is unavailable.",
+        });
+        return;
+      }
+
+      void api.shell.openExternal(branchUrl).catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to open branch link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      });
+    },
+    [],
+  );
   const projectByIdRef = useRef(projectById);
   const projectRunCommandByProjectIdRef = useRef<
     Map<ProjectId, ReturnType<typeof selectPrimaryProjectRunCommand>>
   >(new Map());
   const projectRunServerByProjectIdRef = useRef<Map<ProjectId, ServerLocalServerProcess>>(
+    new Map(),
+  );
+  const workspaceRunServerByIdRef = useRef<Map<WorktreeWorkspaceId, ServerLocalServerProcess>>(
     new Map(),
   );
   useEffect(() => {
@@ -2217,6 +2439,11 @@ export default function Sidebar() {
         return true;
       }
 
+      if (workspaceProtocolVersion === 2) {
+        setProjectExpanded(projectId, true);
+        setWorkspaceCreateProjectId(projectId);
+        return true;
+      }
       void handleNewThread(projectId, {
         envMode: appSettings.defaultThreadEnvMode,
       }).catch(() => undefined);
@@ -2227,6 +2454,8 @@ export default function Sidebar() {
       appSettings.sidebarThreadSortOrder,
       handleNewThread,
       navigate,
+      setProjectExpanded,
+      workspaceProtocolVersion,
     ],
   );
 
@@ -2260,6 +2489,10 @@ export default function Sidebar() {
       }
 
       setProjectExpanded(projectId, true);
+      if (workspaceProtocolVersion === 2) {
+        setWorkspaceCreateProjectId(projectId);
+        return true;
+      }
       void handleNewThread(projectId, {
         envMode: appSettings.defaultThreadEnvMode,
       }).catch(() => undefined);
@@ -2271,6 +2504,7 @@ export default function Sidebar() {
       handleNewThread,
       navigate,
       setProjectExpanded,
+      workspaceProtocolVersion,
     ],
   );
 
@@ -2359,6 +2593,10 @@ export default function Sidebar() {
         return;
       }
 
+      if (workspaceProtocolVersion === 2) {
+        setWorkspaceCreateProjectId(typedProjectId);
+        return;
+      }
       void handleNewThread(typedProjectId, {
         envMode: resolveSidebarNewThreadEnvMode({
           defaultEnvMode: appSettings.defaultThreadEnvMode,
@@ -2370,6 +2608,7 @@ export default function Sidebar() {
       focusMostRecentThreadForProject,
       handleNewThread,
       sidebarThreads,
+      workspaceProtocolVersion,
     ],
   );
 
@@ -2678,7 +2917,10 @@ export default function Sidebar() {
   );
 
   const addProjectFromPath = useCallback(
-    async (rawCwd: string, options: { createIfMissing?: boolean } = {}) => {
+    async (
+      rawCwd: string,
+      options: { createIfMissing?: boolean; githubAccount?: GitHubAccountSelection } = {},
+    ) => {
       const cwd = rawCwd.trim();
       if (!cwd || isAddingProject) return;
       const api = readNativeApi();
@@ -2694,13 +2936,16 @@ export default function Sidebar() {
 
       try {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
-        const existingRecovery = await recoverExistingAddProjectTarget({
-          existingProjectId: existing?.id,
-          workspaceRoot: cwd,
-          recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
-          recoverByWorkspaceRoot: (workspaceRoot) =>
-            recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
-        });
+        const existingRecovery =
+          options.githubAccount === undefined
+            ? await recoverExistingAddProjectTarget({
+                existingProjectId: existing?.id,
+                workspaceRoot: cwd,
+                recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
+                recoverByWorkspaceRoot: (workspaceRoot) =>
+                  recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
+              })
+            : null;
         if (existingRecovery === "recovered") {
           finishAddingProject();
           return;
@@ -2716,6 +2961,7 @@ export default function Sidebar() {
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
+          ...(options.githubAccount ? { githubAccount: options.githubAccount } : {}),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2753,6 +2999,11 @@ export default function Sidebar() {
         // snapshot is just slow to catch up, continue with the local new-thread flow
         // instead of surfacing a false-negative sidebar sync error.
         setProjectExpanded(creationResult.projectId, true);
+        if (workspaceProtocolVersion === 2) {
+          setWorkspaceCreateProjectId(creationResult.projectId);
+          finishAddingProject();
+          return;
+        }
         void handleNewThread(creationResult.projectId, {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
@@ -2776,6 +3027,7 @@ export default function Sidebar() {
       openExistingProjectFromSnapshot,
       setProjectExpanded,
       syncServerShellSnapshot,
+      workspaceProtocolVersion,
     ],
   );
 
@@ -2786,6 +3038,30 @@ export default function Sidebar() {
       setAddProjectError(description);
     });
   };
+
+  const handleCloneGitHubProject = useCallback(
+    async (repository: string, account: GitHubAccountSelection) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Synara is not connected to the local server.");
+      const cloned = await api.git.cloneRepository({ repository, account });
+      await addProjectFromPath(cloned.path, { githubAccount: account });
+    },
+    [addProjectFromPath],
+  );
+
+  const handleListGitHubAccounts = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) throw new Error("Synara is not connected to the local server.");
+    const result = await api.git.listGitHubAccounts({});
+    return result.accounts;
+  }, []);
+
+  const handleListGitHubRepositories = useCallback(async (account: GitHubAccountSelection) => {
+    const api = readNativeApi();
+    if (!api) throw new Error("Synara is not connected to the local server.");
+    const result = await api.git.listGitHubRepositories({ account });
+    return result.repositories;
+  }, []);
 
   const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
 
@@ -2903,6 +3179,10 @@ export default function Sidebar() {
 
   const handlePrimaryNewThread = useCallback(() => {
     if (primaryNewThreadTarget) {
+      if (workspaceProtocolVersion === 2) {
+        setWorkspaceCreateProjectId(primaryNewThreadTarget.projectId);
+        return;
+      }
       prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
       void handleNewThread(primaryNewThreadTarget.projectId, {
         envMode: resolveSidebarNewThreadEnvMode({
@@ -2925,7 +3205,167 @@ export default function Sidebar() {
     prefetchModelsForProjectNewThread,
     primaryNewThreadTarget,
     threadsHydrated,
+    workspaceProtocolVersion,
   ]);
+
+  const handleCreateWorkspaceConversation = useCallback(
+    async (
+      workspaceId: WorktreeWorkspaceId,
+      project: Project,
+      options?: { entryPoint?: "chat" | "terminal" },
+    ): Promise<ThreadId | null> => {
+      const api = readNativeApi();
+      if (!api) return null;
+      const sibling = sidebarThreads.find((thread) => thread.workspaceId === workspaceId);
+      const provider = appSettings.defaultProvider;
+      const defaultModel = getDefaultModel(provider);
+      const modelSelection =
+        sibling?.modelSelection ??
+        project.defaultModelSelection ??
+        (defaultModel ? { provider, model: defaultModel } : null);
+      if (!modelSelection) return null;
+      const threadId = newThreadId();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.conversation.create",
+          commandId: newCommandId(),
+          workspaceId,
+          threadId,
+          title: GENERIC_WORKSPACE_CONVERSATION_TITLE,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+        const snapshot = await waitForWorkspaceConversationSnapshot({
+          workspaceId,
+          threadId,
+          loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+        });
+        syncServerWorkspaceShellSnapshot(snapshot);
+        if (options?.entryPoint === "terminal") {
+          openTerminalThreadPage(threadId, { terminalOnly: true });
+        }
+        await navigate({ to: "/$threadId", params: { threadId } });
+        return threadId;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add conversation",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+        return null;
+      }
+    },
+    [
+      appSettings.defaultProvider,
+      navigate,
+      openTerminalThreadPage,
+      sidebarThreads,
+      syncServerWorkspaceShellSnapshot,
+    ],
+  );
+
+  const handleCreateManagedWorkspace = useCallback(
+    async (project: Project, input: { title: string; source: WorkspaceCreateSource }) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Synara is not connected to the local server.");
+      const provider = appSettings.defaultProvider;
+      const defaultModel = getDefaultModel(provider);
+      const modelSelection =
+        project.defaultModelSelection ?? (defaultModel ? { provider, model: defaultModel } : null);
+      if (!modelSelection) {
+        throw new Error("Choose a default model before creating a workspace.");
+      }
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(randomUUID());
+      const threadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      if (input.source.kind === "pull-request") {
+        const result = await openPullRequestWorkspace({
+          api,
+          project,
+          defaultProvider: appSettings.defaultProvider,
+          intent: "new-conversation",
+          title: input.title,
+          conversationTitle: `Review ${input.title}`,
+          reference: input.source.reference,
+          onSnapshot: syncServerWorkspaceShellSnapshot,
+        });
+        appendComposerPromptText(
+          result.threadId,
+          buildReviewPullRequestPrompt({
+            prNumber: result.pullRequest.number,
+            prTitle: result.pullRequest.title,
+            prUrl: result.pullRequest.url,
+            headBranch: result.pullRequest.headBranch,
+            baseBranch: result.pullRequest.baseBranch,
+          }),
+        );
+        setProjectExpanded(project.id, true);
+        await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+        return;
+      } else {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.create",
+          commandId: newCommandId(),
+          workspaceId,
+          threadId,
+          projectId: project.id,
+          operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
+          title: input.title,
+          targetRef: input.source.targetRef,
+          branch: input.source.kind === "new-branch" ? input.source.branchName : undefined,
+          sourceKind: input.source.kind,
+          sourceRef: input.source.kind === "branch" ? input.source.sourceRef : null,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt,
+        });
+      }
+      const snapshot = await waitForWorkspaceConversationSnapshot({
+        workspaceId,
+        threadId,
+        loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+      });
+      syncServerWorkspaceShellSnapshot(snapshot);
+      setProjectExpanded(project.id, true);
+      await navigate({ to: "/$threadId", params: { threadId } });
+    },
+    [appSettings.defaultProvider, navigate, setProjectExpanded, syncServerWorkspaceShellSnapshot],
+  );
+
+  const handleRenameWorktreeWorkspace = useCallback(
+    async (
+      workspace: OrchestrationWorktreeWorkspace,
+      input: { title: string; renameBranch: boolean },
+    ) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Synara is not connected to the local server.");
+      let branch = workspace.branch;
+      if (input.renameBranch) {
+        if (!workspace.path || !workspace.branch) {
+          throw new Error("This workspace does not have a branch that can be renamed.");
+        }
+        const renamed = await api.git.renameBranch({
+          cwd: workspace.path,
+          oldBranch: workspace.branch,
+          newBranch: branchNameFromWorkspaceTitle(input.title, workspace.branch),
+        });
+        branch = renamed.branch;
+      }
+      await api.orchestration.dispatchCommand({
+        type: "workspace.meta.update",
+        commandId: newCommandId(),
+        workspaceId: workspace.id,
+        title: input.title,
+        ...(branch !== workspace.branch && branch ? { branch } : {}),
+        updatedAt: new Date().toISOString(),
+      });
+      syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+    },
+    [syncServerWorkspaceShellSnapshot],
+  );
 
   const handleImportThread = useCallback(
     async (provider: ImportProviderKind, externalId: string) => {
@@ -4061,11 +4501,19 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
       });
+      recordRecentView({
+        kind: "thread",
+        threadId: ThreadId.makeUnsafe(nextLastThreadRoute.threadId),
+        ...(nextLastThreadRoute.splitViewId
+          ? { splitViewId: nextLastThreadRoute.splitViewId }
+          : {}),
+      });
     },
     [
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
+      recordRecentView,
       threadListExtraPagesByProjectCwd,
     ],
   );
@@ -4101,43 +4549,32 @@ export default function Sidebar() {
       const api = readNativeApi();
       const project = projectById.get(projectId);
       const runCommand = projectRunCommandByProjectIdRef.current.get(projectId);
-      if (!api || !project || !runCommand) {
-        return;
-      }
-      if (projectRunsByProjectId[projectId]) {
-        return;
-      }
-      // The dialog lets the user edit the default command before launching, so an
-      // explicit override wins over the resolved default while reusing its cwd.
-      const command = commandOverride?.trim() || runCommand.command;
-      // Dev servers run from the project root; mirror the env the terminal runner
-      // would otherwise inject so scripts resolve project paths identically.
-      const env = projectScriptRuntimeEnv({
-        project: { cwd: project.cwd },
-        worktreePath: null,
-      });
+      const target = { projectId, workspaceId: null };
+      if (!api || !project || !runCommand) return;
+      if (selectProjectRunForTarget(projectRunsByTargetKey, target) !== null) return;
 
-      // Optimistically reflect the pending launch so the sidebar dot lights up
-      // immediately; the server's authoritative snapshot replaces this on success.
-      storeUpsertProjectRun({
-        projectId,
+      const command = commandOverride?.trim() || runCommand.command;
+      const runInput = {
+        ...target,
         command,
         cwd: runCommand.cwd,
+        env: projectScriptRuntimeEnv({
+          project: { cwd: project.cwd },
+          worktreePath: null,
+        }),
+      };
+      storeUpsertProjectRun({
+        ...runInput,
         pid: null,
         startedAt: new Date().toISOString(),
         status: "starting",
       });
       try {
-        const { server } = await api.projects.runDevServer({
-          projectId,
-          command,
-          cwd: runCommand.cwd,
-          env,
-        });
+        const { server } = await api.projects.runDevServer(runInput);
         storeUpsertProjectRun(server);
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
       } catch (error) {
-        storeRemoveProjectRun(projectId);
+        storeRemoveProjectRun(target);
         toastManager.add({
           type: "error",
           title: `Failed to run "${project.name}"`,
@@ -4147,7 +4584,7 @@ export default function Sidebar() {
     },
     [
       projectById,
-      projectRunsByProjectId,
+      projectRunsByTargetKey,
       queryClient,
       storeRemoveProjectRun,
       storeUpsertProjectRun,
@@ -4156,36 +4593,27 @@ export default function Sidebar() {
 
   const handleStopProjectRun = useCallback(
     async (projectId: ProjectId) => {
+      const target = { projectId, workspaceId: null };
       const api = readNativeApi();
-      if (!api) {
-        storeRemoveProjectRun(projectId);
-        return;
-      }
-      // Optimistically clear the indicator; the server owns the process lifecycle
-      // and will broadcast a `removed` event that keeps every client consistent.
-      storeRemoveProjectRun(projectId);
-      const runStop = async (): Promise<void> => {
+      storeRemoveProjectRun(target);
+      if (!api) return;
+      try {
+        await api.projects.stopDevServer(target);
+      } catch (error) {
         try {
-          await api.projects.stopDevServer({ projectId });
-        } catch (error) {
-          // The optimistic removal may have been wrong (e.g. the stop failed), so
-          // resync from the authoritative server registry before surfacing the error.
-          try {
-            const { servers } = await api.projects.listDevServers();
-            useProjectRunStore.getState().replaceAll(servers);
-          } catch {
-            // Ignore resync failures; the dev-server event stream will reconcile.
-          }
-          toastManager.add({
-            type: "error",
-            title: "Failed to stop run",
-            description: error instanceof Error ? error.message : "Unable to stop the dev server.",
-          });
+          const { servers } = await api.projects.listDevServers();
+          useProjectRunStore.getState().replaceAll(servers);
+        } catch {
+          // The lifecycle event stream will reconcile when connectivity returns.
         }
-      };
-      await runStop().finally(() => {
+        toastManager.add({
+          type: "error",
+          title: "Failed to stop run",
+          description: error instanceof Error ? error.message : "Unable to stop the dev server.",
+        });
+      } finally {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
-      });
+      }
     },
     [queryClient, storeRemoveProjectRun],
   );
@@ -4194,9 +4622,7 @@ export default function Sidebar() {
     const api = readNativeApi();
     const server = projectRunServerByProjectIdRef.current.get(projectId);
     const url = server ? firstLocalServerUrl(server) : null;
-    if (!api || !server || !url) {
-      return;
-    }
+    if (!api || !server || !url) return;
     try {
       await api.shell.openExternal(url);
     } catch (error) {
@@ -4208,15 +4634,444 @@ export default function Sidebar() {
     }
   }, []);
 
+  const handleStartWorkspaceRun = useCallback(
+    async (
+      workspace: OrchestrationWorktreeWorkspace,
+      project: Project,
+      commandOverride?: string,
+    ) => {
+      const api = readNativeApi();
+      const runCommand = projectRunCommandByProjectIdRef.current.get(project.id);
+      if (!api || !workspace.path || !runCommand) return;
+      if (selectWorkspaceProjectRun(projectRunsByTargetKey, project.id, workspace.id) !== null) {
+        return;
+      }
+      const input = buildWorkspaceProjectRunInput({
+        project: { id: project.id, cwd: project.cwd },
+        workspace: { id: workspace.id, path: workspace.path },
+        runCommand,
+        ...(commandOverride ? { commandOverride } : {}),
+      });
+      storeUpsertProjectRun({
+        ...input,
+        pid: null,
+        startedAt: new Date().toISOString(),
+        status: "starting",
+      });
+      try {
+        const { server } = await api.projects.runDevServer(input);
+        storeUpsertProjectRun(server);
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+      } catch (error) {
+        storeRemoveProjectRun({ projectId: project.id, workspaceId: workspace.id });
+        toastManager.add({
+          type: "error",
+          title: `Failed to run "${getWorktreeWorkspaceSidebarLabel(workspace)}"`,
+          description: error instanceof Error ? error.message : "Unable to start the run command.",
+        });
+      }
+    },
+    [projectRunsByTargetKey, queryClient, storeRemoveProjectRun, storeUpsertProjectRun],
+  );
+
+  const handleStopWorkspaceRun = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const target = { projectId: workspace.projectId, workspaceId: workspace.id };
+      const api = readNativeApi();
+      storeRemoveProjectRun(target);
+      if (!api) return;
+      try {
+        await api.projects.stopDevServer(target);
+      } catch (error) {
+        try {
+          const { servers } = await api.projects.listDevServers();
+          useProjectRunStore.getState().replaceAll(servers);
+        } catch {
+          // The lifecycle event stream will reconcile when connectivity returns.
+        }
+        toastManager.add({
+          type: "error",
+          title: "Failed to stop dev server",
+          description: error instanceof Error ? error.message : "Unable to stop the dev server.",
+        });
+      } finally {
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.localServers() });
+      }
+    },
+    [queryClient, storeRemoveProjectRun],
+  );
+
+  const handleOpenWorkspaceRunServer = useCallback(async (workspaceId: WorktreeWorkspaceId) => {
+    const api = readNativeApi();
+    const server = workspaceRunServerByIdRef.current.get(workspaceId);
+    const url = server ? firstLocalServerUrl(server) : null;
+    if (!api || !server || !url) return;
+    try {
+      await api.shell.openExternal(url);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: `Unable to open ${localServerAddressLabel(server)}`,
+        description: error instanceof Error ? error.message : "Unable to open the local server.",
+      });
+    }
+  }, []);
+
+  const handleOpenWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace, project: Project) => {
+      const workspaceThreads = sidebarDisplayThreads.filter(
+        (thread) => thread.workspaceId === workspace.id,
+      );
+      const firstThread = workspaceThreads[0];
+      if (!firstThread) {
+        await handleCreateWorkspaceConversation(workspace.id, project);
+        return;
+      }
+      const rememberedThreadId = readEditorRailActiveChat(`workspace:${workspace.id}`);
+      const targetThread =
+        workspaceThreads.find((thread) => thread.id === rememberedThreadId) ?? firstThread;
+      await navigate({ to: "/$threadId", params: { threadId: targetThread.id } });
+    },
+    [handleCreateWorkspaceConversation, navigate, sidebarDisplayThreads],
+  );
+
+  const handleToggleWorkspacePin = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const api = readNativeApi();
+      if (!api) return;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.meta.update",
+          commandId: newCommandId(),
+          workspaceId: workspace.id,
+          isPinned: !workspace.isPinned,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: workspace.isPinned ? "Unable to unpin workspace" : "Unable to pin workspace",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      }
+    },
+    [],
+  );
+
+  const handleArchiveWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const result = await requestWorkspaceArchive({ api, workspace });
+      if (result === "cancelled") return;
+      syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      toastManager.add({
+        type: "success",
+        title:
+          workspace.kind === "external" ? "Removing external workspace" : "Archiving workspace",
+        description:
+          workspace.kind === "external"
+            ? "The folder and its files will remain on disk."
+            : "The branch, pull request, conversations, and history will be retained.",
+      });
+    },
+    [syncServerWorkspaceShellSnapshot],
+  );
+
+  const handleRestoreWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const api = readNativeApi();
+      if (!api) return;
+      await requestWorkspaceRestore({ api, workspace });
+      syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      toastManager.add({
+        type: "success",
+        title: "Restoring workspace",
+        description: "Synara will reopen the workspace when its local path is ready.",
+      });
+    },
+    [syncServerWorkspaceShellSnapshot],
+  );
+
+  const handleRestoreArchivedWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      setRestoringWorkspaceIds((current) => new Set(current).add(workspace.id));
+      setRestoreErrorsByWorkspaceId((current) => {
+        if (!current.has(workspace.id)) return current;
+        const next = new Map(current);
+        next.delete(workspace.id);
+        return next;
+      });
+      setRestoreWorkspaceIdToOpen(workspace.id);
+      try {
+        await handleRestoreWorkspace(workspace);
+      } catch (error) {
+        setRestoreWorkspaceIdToOpen((current) => (current === workspace.id ? null : current));
+        setRestoreErrorsByWorkspaceId((current) =>
+          new Map(current).set(
+            workspace.id,
+            error instanceof Error ? error.message : "Workspace restore failed.",
+          ),
+        );
+      } finally {
+        setRestoringWorkspaceIds((current) => {
+          const next = new Set(current);
+          next.delete(workspace.id);
+          return next;
+        });
+      }
+    },
+    [handleRestoreWorkspace],
+  );
+
+  useEffect(() => {
+    if (restoreWorkspaceIdToOpen === null) return;
+    const workspace = worktreeWorkspaces.find(
+      (candidate) => candidate.id === restoreWorkspaceIdToOpen,
+    );
+    if (!workspace) {
+      setRestoreWorkspaceIdToOpen(null);
+      return;
+    }
+    if (workspace.activeOperation === null && workspace.lastFailure?.kind === "restore") {
+      setRestoreWorkspaceIdToOpen(null);
+      return;
+    }
+    if (workspace.state !== "ready" || !workspace.path) return;
+    const project = projectById.get(workspace.projectId);
+    if (!project) return;
+    setRestoreWorkspaceIdToOpen(null);
+    setArchivedWorkspacesProjectId(null);
+    void handleOpenWorkspace(workspace, project).catch((error) => {
+      setRestoreErrorsByWorkspaceId((current) =>
+        new Map(current).set(
+          workspace.id,
+          error instanceof Error ? error.message : "The restored workspace could not be opened.",
+        ),
+      );
+    });
+  }, [handleOpenWorkspace, projectById, restoreWorkspaceIdToOpen, worktreeWorkspaces]);
+
+  const openWorkspacePullRequest = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const pr = workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
+      if (!pr) return;
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+      if (repository) {
+        await navigate({
+          to: "/pull-requests",
+          search: {
+            involvement: "all",
+            state: pr.state === "merged" ? "merged" : pr.state === "closed" ? "closed" : "open",
+            projectId: workspace.projectId,
+            selectedProjectId: workspace.projectId,
+            selectedRepo: repository,
+            number: pr.number,
+          },
+        });
+        return;
+      }
+      const api = readNativeApi();
+      if (api) await api.shell.openExternal(pr.url);
+    },
+    [navigate, workspaceGitPresentationById],
+  );
+
+  const runWorkspaceGitLifecycleAction = useCallback(
+    async (
+      workspace: OrchestrationWorktreeWorkspace,
+      project: Project,
+      action: "push" | "create_pr",
+    ) => {
+      const api = readNativeApi();
+      if (!api || !workspace.path) return;
+      try {
+        const result = await api.git.runStackedAction({
+          actionId: randomUUID(),
+          cwd: workspace.path,
+          action,
+          ...(project.githubAccount ? { account: project.githubAccount } : {}),
+          ...(action === "create_pr" ? { baseBranch: workspace.targetRef } : {}),
+        });
+        if (
+          action === "create_pr" &&
+          result.pr.url &&
+          result.pr.number &&
+          result.pr.baseBranch &&
+          result.pr.headBranch &&
+          result.pr.title
+        ) {
+          await api.orchestration.dispatchCommand({
+            type: "workspace.meta.update",
+            commandId: newCommandId(),
+            workspaceId: workspace.id,
+            lastKnownPr: {
+              number: result.pr.number,
+              title: result.pr.title,
+              url: result.pr.url,
+              baseBranch: result.pr.baseBranch,
+              headBranch: result.pr.headBranch,
+              state: "open",
+            },
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        await invalidateGitQueries(queryClient);
+        toastManager.add({
+          type: "success",
+          title: action === "push" ? "Branch published" : "Pull request ready",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: action === "push" ? "Unable to publish branch" : "Unable to create pull request",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      }
+    },
+    [queryClient],
+  );
+
+  const handleWorkspaceContextMenuAction = useCallback(
+    async (
+      actionId: WorktreeWorkspaceContextMenuActionId,
+      workspace: OrchestrationWorktreeWorkspace,
+      project: Project,
+    ) => {
+      const api = readNativeApi();
+      switch (actionId) {
+        case "new-conversation":
+          await handleCreateWorkspaceConversation(workspace.id, project);
+          return;
+        case "show-in-folder":
+          if (api && workspace.path) await api.shell.showInFolder(workspace.path);
+          return;
+        case "open-in-editor":
+          if (api && workspace.path) await openInPreferredEditor(api, workspace.path);
+          return;
+        case "open-terminal":
+          await handleCreateWorkspaceConversation(workspace.id, project, {
+            entryPoint: "terminal",
+          });
+          return;
+        case "copy-path":
+          if (workspace.path) copyPathToClipboard(workspace.path);
+          return;
+        case "start-dev":
+          await handleStartWorkspaceRun(workspace, project);
+          return;
+        case "stop-dev":
+          await handleStopWorkspaceRun(workspace);
+          return;
+        case "open-dev-server":
+          await handleOpenWorkspaceRunServer(workspace.id);
+          return;
+        case "rename-workspace":
+          setRenamingWorktreeWorkspaceId(workspace.id);
+          return;
+        case "toggle-pin":
+          await handleToggleWorkspacePin(workspace);
+          return;
+        case "publish-branch":
+          await runWorkspaceGitLifecycleAction(workspace, project, "push");
+          return;
+        case "create-pull-request":
+          await runWorkspaceGitLifecycleAction(workspace, project, "create_pr");
+          return;
+        case "view-pull-request":
+          await openWorkspacePullRequest(workspace);
+          return;
+        case "copy-branch-name":
+          if (workspace.branch) copyPathToClipboard(workspace.branch);
+          return;
+        case "open-branch-on-github": {
+          const url = workspaceBranchUrlById.get(workspace.id);
+          if (api && url) await api.shell.openExternal(url);
+          return;
+        }
+        case "archive-workspace":
+        case "remove-from-synara":
+          await handleArchiveWorkspace(workspace);
+          return;
+        case "fix-review-comments":
+        case "resolve-conflicts": {
+          const pullRequest =
+            workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
+          if (!pullRequest) throw new Error("The workspace pull request is unavailable.");
+          const detail = workspacePullRequestDetailById.get(workspace.id);
+          if (actionId === "fix-review-comments" && !detail) {
+            throw new Error(
+              "Open the pull request details, then try fixing review comments again.",
+            );
+          }
+          const result = await openPullRequestWorkspace({
+            api: ensureNativeApi(),
+            project,
+            defaultProvider: appSettings.defaultProvider,
+            intent: "new-conversation",
+            conversationTitle:
+              actionId === "fix-review-comments"
+                ? `Fix review comments on PR #${pullRequest.number}`
+                : `Resolve conflicts on PR #${pullRequest.number}`,
+            pullRequest,
+            onSnapshot: syncServerWorkspaceShellSnapshot,
+          });
+          const prompt =
+            actionId === "fix-review-comments" && detail
+              ? buildFixFindingsPrompt({
+                  prNumber: detail.number,
+                  prTitle: detail.title,
+                  prUrl: detail.url,
+                  headBranch: detail.headBranch,
+                  baseBranch: detail.baseBranch,
+                  comments: detail.comments,
+                  checks: detail.checks,
+                  commentsTruncated: detail.commentsTruncated,
+                  commentsIncomplete: detail.commentsIncomplete,
+                })
+              : buildResolveConflictsPrompt({
+                  prNumber: pullRequest.number,
+                  prUrl: pullRequest.url,
+                  headBranch: pullRequest.headBranch,
+                  baseBranch: pullRequest.baseBranch,
+                });
+          appendComposerPromptText(result.threadId, prompt);
+          await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+          return;
+        }
+      }
+    },
+    [
+      handleCreateWorkspaceConversation,
+      handleArchiveWorkspace,
+      handleOpenWorkspaceRunServer,
+      handleStartWorkspaceRun,
+      handleStopWorkspaceRun,
+      handleToggleWorkspacePin,
+      appSettings.defaultProvider,
+      copyPathToClipboard,
+      navigate,
+      openWorkspacePullRequest,
+      runWorkspaceGitLifecycleAction,
+      syncServerWorkspaceShellSnapshot,
+      workspaceBranchUrlById,
+      workspaceGitPresentationById,
+      workspacePullRequestDetailById,
+    ],
+  );
+
   const handleProjectContextMenuAction = useCallback(
-    async (projectId: ProjectId, clicked: ProjectContextMenuId) => {
-      setProjectContextMenuState(null);
+    async (projectId: ProjectId, clicked: ProjectContextMenuActionId) => {
       const api = readNativeApi();
       if (!api) return;
       const project = projectById.get(projectId);
       if (!project) return;
 
-      if (clicked === "open-in-finder") {
+      if (clicked === "new-workspace") {
+        setWorkspaceCreateProjectId(projectId);
+        return;
+      }
+      if (clicked === "show-in-folder") {
         try {
           await api.shell.showInFolder(project.cwd);
         } catch (error) {
@@ -4239,19 +5094,14 @@ export default function Sidebar() {
         copyPathToClipboard(project.cwd);
         return;
       }
-      if (clicked === "start-dev") {
-        setProjectRunDialogProjectId(projectId);
+      if (clicked === "open-repository-on-github") {
+        const repositoryUrl = projectGithubRepositoryUrlById.get(projectId);
+        if (repositoryUrl) {
+          await api.shell.openExternal(repositoryUrl);
+        }
         return;
       }
-      if (clicked === "stop-dev") {
-        await handleStopProjectRun(projectId);
-        return;
-      }
-      if (clicked === "open-dev-server") {
-        await handleOpenProjectRunServer(projectId);
-        return;
-      }
-      if (clicked === "rename") {
+      if (clicked === "edit-project") {
         setRenameProjectDialogId(projectId);
         return;
       }
@@ -4259,15 +5109,7 @@ export default function Sidebar() {
         toggleProjectPinned(projectId);
         return;
       }
-      if (clicked === "archive-threads") {
-        await archiveAllThreadsInProject(projectId);
-        return;
-      }
-      if (clicked === "delete-threads") {
-        await deleteAllThreadsInProject(projectId);
-        return;
-      }
-      if (clicked !== "delete") return;
+      if (clicked !== "remove-project") return;
 
       const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
       const confirmed = await api.dialogs.confirm(
@@ -4325,28 +5167,16 @@ export default function Sidebar() {
       }
     },
     [
-      archiveAllThreadsInProject,
       clearProjectDraftThreads,
       copyPathToClipboard,
       deleteProjectThreads,
-      deleteAllThreadsInProject,
-      handleOpenProjectRunServer,
-      handleStopProjectRun,
       navigate,
       projectById,
+      projectGithubRepositoryUrlById,
       removeDeletedProjectFromClientState,
       sidebarThreads,
       toggleProjectPinned,
     ],
-  );
-
-  const handleProjectContextMenu = useCallback(
-    (projectId: ProjectId, position: { x: number; y: number }) => {
-      if (!readNativeApi()) return;
-      if (!projectById.has(projectId)) return;
-      setProjectContextMenuState({ projectId, position });
-    },
-    [projectById],
   );
 
   const projectDnDSensors = useSensors(
@@ -4715,6 +5545,43 @@ export default function Sidebar() {
     projectRunDialogCommandDraft,
     projectRunDialogProjectId,
   ]);
+  const workspaceRunById = useMemo(() => {
+    const runs = new Map<WorktreeWorkspaceId, ProjectRunState>();
+    for (const workspace of worktreeWorkspaces) {
+      const run = selectWorkspaceProjectRun(
+        projectRunsByTargetKey,
+        workspace.projectId,
+        workspace.id,
+      );
+      if (run) runs.set(workspace.id, run);
+    }
+    return runs;
+  }, [projectRunsByTargetKey, worktreeWorkspaces]);
+  const workspaceRunServerById = useMemo(() => {
+    const servers = projectRunLocalServersQuery.data?.servers ?? [];
+    const serverByWorkspaceId = new Map<WorktreeWorkspaceId, ServerLocalServerProcess>();
+    for (const [workspaceId, run] of workspaceRunById) {
+      const server = findTrackedProjectRunServer(run, servers);
+      if (server) serverByWorkspaceId.set(workspaceId, server);
+    }
+    const workspacesWithPaths = orderWorktreeWorkspacesForSidebar(worktreeWorkspaces).filter(
+      (workspace): workspace is OrchestrationWorktreeWorkspace & { path: string } =>
+        workspace.path !== null,
+    );
+    for (const server of servers) {
+      if (!server.cwd) continue;
+      const workspace = findDeepestWorkspaceRootMatch(
+        workspacesWithPaths,
+        server.cwd,
+        (candidate) => candidate.path,
+      );
+      if (workspace && !serverByWorkspaceId.has(workspace.id)) {
+        serverByWorkspaceId.set(workspace.id, server);
+      }
+    }
+    return serverByWorkspaceId;
+  }, [projectRunLocalServersQuery.data?.servers, workspaceRunById, worktreeWorkspaces]);
+  workspaceRunServerByIdRef.current = workspaceRunServerById;
   const projectEmptyState = resolveProjectEmptyState({
     projectCount: standardProjects.length,
     shouldShowProjectPathEntry,
@@ -4783,6 +5650,20 @@ export default function Sidebar() {
   const allProjectsExpanded = useMemo(
     () => standardProjects.length > 0 && standardProjects.every((project) => project.expanded),
     [standardProjects],
+  );
+  const workspaceNavigationIds = useMemo(
+    () =>
+      standardProjects.flatMap((project) =>
+        worktreeWorkspaces
+          .filter(
+            (workspace) =>
+              workspace.projectId === project.id &&
+              workspace.deletedAt === null &&
+              sidebarDisplayThreads.some((thread) => thread.workspaceId === workspace.id),
+          )
+          .map((workspace) => workspace.id),
+      ),
+    [sidebarDisplayThreads, standardProjects, worktreeWorkspaces],
   );
 
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
@@ -5032,6 +5913,108 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  const activeSidebarThread = useMemo(
+    () => sidebarDisplayThreads.find((thread) => thread.id === activeSidebarThreadId) ?? null,
+    [activeSidebarThreadId, sidebarDisplayThreads],
+  );
+  const activeWorkspaceId = activeSidebarThread?.workspaceId
+    ? WorktreeWorkspaceId.makeUnsafe(activeSidebarThread.workspaceId)
+    : null;
+  const workspaceThreadsByWorkspaceId = useMemo(() => {
+    const threadsByWorkspaceId = new Map<WorktreeWorkspaceId, SidebarThreadSummary[]>();
+    for (const thread of sidebarDisplayThreads) {
+      if (!thread.workspaceId) continue;
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(thread.workspaceId);
+      const workspaceThreads = threadsByWorkspaceId.get(workspaceId) ?? [];
+      workspaceThreads.push(thread);
+      threadsByWorkspaceId.set(workspaceId, workspaceThreads);
+    }
+    for (const [workspaceId, workspaceThreads] of threadsByWorkspaceId) {
+      threadsByWorkspaceId.set(
+        workspaceId,
+        sortThreadsForSidebar(workspaceThreads, appSettings.sidebarThreadSortOrder),
+      );
+    }
+    return threadsByWorkspaceId;
+  }, [appSettings.sidebarThreadSortOrder, sidebarDisplayThreads]);
+  const resolveWorkspaceShortcutThreadId = useCallback(
+    (workspaceId: WorktreeWorkspaceId): ThreadId | null => {
+      const workspaceThreads = workspaceThreadsByWorkspaceId.get(workspaceId) ?? [];
+      const rememberedThreadId = readEditorRailActiveChat(`workspace:${workspaceId}`);
+      return (
+        workspaceThreads.find((thread) => thread.id === rememberedThreadId)?.id ??
+        workspaceThreads[0]?.id ??
+        null
+      );
+    },
+    [workspaceThreadsByWorkspaceId],
+  );
+  const workspaceConversationThreadIds = useMemo(
+    () =>
+      activeWorkspaceId
+        ? sortThreadsForConversationTabs(
+            workspaceThreadsByWorkspaceId.get(activeWorkspaceId) ?? [],
+          ).map((thread) => thread.id)
+        : [],
+    [activeWorkspaceId, workspaceThreadsByWorkspaceId],
+  );
+  const editorTabThreadIds = useMemo(() => {
+    if (settingsSectionSearch.view !== "editor" || !activeSidebarThread) {
+      return [];
+    }
+    const storedThreadIds = readEditorRailChatTabs(`project:${activeSidebarThread.projectId}`).map(
+      (tab) => tab.id,
+    );
+    return storedThreadIds.includes(activeSidebarThread.id)
+      ? storedThreadIds
+      : [...storedThreadIds, activeSidebarThread.id];
+  }, [activeSidebarThread, settingsSectionSearch.view]);
+  const conversationTabThreadIds = resolveConversationTabThreadIds({
+    workspaceScoped: activeWorkspaceId !== null,
+    workspaceThreadIds: workspaceConversationThreadIds,
+    editorScoped: settingsSectionSearch.view === "editor",
+    editorTabThreadIds,
+    visibleSidebarThreadIds,
+  });
+  const activeWorkspaceProjectId = activeWorkspaceId
+    ? (worktreeWorkspaces.find((workspace) => workspace.id === activeWorkspaceId)?.projectId ??
+      null)
+    : null;
+  const workspaceNavigationIdsForActiveProject = activeWorkspaceProjectId
+    ? workspaceNavigationIds.filter(
+        (workspaceId) =>
+          worktreeWorkspaces.find((workspace) => workspace.id === workspaceId)?.projectId ===
+          activeWorkspaceProjectId,
+      )
+    : workspaceNavigationIds;
+  const visibleWorkspaceShortcutTargets = useMemo(
+    () =>
+      standardProjects
+        .filter((project) => project.expanded)
+        .flatMap((project) =>
+          worktreeWorkspaces
+            .filter(
+              (workspace) =>
+                workspace.projectId === project.id &&
+                workspace.deletedAt === null &&
+                workspaceThreadsByWorkspaceId.has(workspace.id),
+            )
+            .flatMap((workspace) => {
+              const threadId = resolveWorkspaceShortcutThreadId(workspace.id);
+              return threadId ? [{ workspaceId: workspace.id, threadId }] : [];
+            }),
+        ),
+    [
+      resolveWorkspaceShortcutThreadId,
+      standardProjects,
+      workspaceThreadsByWorkspaceId,
+      worktreeWorkspaces,
+    ],
+  );
+  const sidebarJumpTargetThreadIds =
+    workspaceProtocolVersion === 2
+      ? visibleWorkspaceShortcutTargets.map((target) => target.threadId)
+      : visibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
     () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
     [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
@@ -5047,28 +6030,33 @@ export default function Sidebar() {
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
+        githubAccount: projectById.get(thread.projectId)?.githubAccount ?? undefined,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
           envMode: thread.envMode,
           worktreePath: thread.worktreePath,
         }),
       })),
-    [projectCwdById, visibleSidebarThreads],
+    [projectById, projectCwdById, visibleSidebarThreads],
   );
-  const threadGitStatusCwds = useMemo(
-    () => [
-      ...new Set(
-        threadGitTargets
-          .filter((target) => target.branch !== null)
-          .map((target) => target.cwd)
-          .filter((cwd): cwd is string => cwd !== null),
-      ),
-    ],
-    [threadGitTargets],
-  );
+  const threadGitStatusTargets = useMemo(() => {
+    const targetsByCwd = new Map<
+      string,
+      { cwd: string; githubAccount: GitHubAccountSelection | undefined }
+    >();
+    for (const target of threadGitTargets) {
+      if (target.branch !== null && target.cwd !== null && !targetsByCwd.has(target.cwd)) {
+        targetsByCwd.set(target.cwd, {
+          cwd: target.cwd,
+          githubAccount: target.githubAccount,
+        });
+      }
+    }
+    return [...targetsByCwd.values()];
+  }, [threadGitTargets]);
   const threadGitStatusQueries = useQueries({
-    queries: threadGitStatusCwds.map((cwd) => ({
-      ...gitStatusQueryOptions(cwd),
+    queries: threadGitStatusTargets.map((target) => ({
+      ...gitStatusQueryOptions(target.cwd, target.githubAccount),
       staleTime: 30_000,
       refetchInterval: 60_000,
     })),
@@ -5089,20 +6077,26 @@ export default function Sidebar() {
       ...gitResolvePullRequestQueryOptions({
         cwd: target.cwd,
         reference: target.lastKnownPr.url,
+        ...(target.githubAccount ? { account: target.githubAccount } : {}),
       }),
       staleTime: 30_000,
       refetchInterval: 60_000,
     })),
   });
   const prByThreadId = useMemo(() => {
-    const statusByCwd = new Map<string, GitStatusResult>();
-    for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
-      const cwd = threadGitStatusCwds[index];
-      if (!cwd) continue;
-      const status = threadGitStatusQueries[index]?.data;
-      if (status) {
-        statusByCwd.set(cwd, status);
-      }
+    const statusByCwd = new Map<
+      string,
+      { status: GitStatusResult | undefined; unavailable: boolean }
+    >();
+    for (let index = 0; index < threadGitStatusTargets.length; index += 1) {
+      const target = threadGitStatusTargets[index];
+      if (!target) continue;
+      const query = threadGitStatusQueries[index];
+      const status = query?.data;
+      statusByCwd.set(target.cwd, {
+        status,
+        unavailable: status === undefined || query?.error != null || status.prUnavailable === true,
+      });
     }
 
     const storedPrByThreadId = new Map<ThreadId, ThreadPr>();
@@ -5121,16 +6115,24 @@ export default function Sidebar() {
 
     const map = new Map<ThreadId, ThreadPr>();
     for (const target of threadGitTargets) {
-      const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
+      const statusResult = target.cwd ? statusByCwd.get(target.cwd) : undefined;
+      const status = statusResult?.status;
       const branchMatches =
         target.branch !== null && status?.branch !== null && status?.branch === target.branch;
       const livePr = branchMatches ? (status?.pr ?? null) : null;
-      map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
+      const associatedPullRequest = resolvePullRequestAssociation({
+        live: livePr,
+        persisted:
+          storedPrByThreadId.get(target.threadId) ??
+          (target.lastKnownPr ? toThreadPr(target.lastKnownPr) : null),
+        liveUnavailable: statusResult?.unavailable !== false || !branchMatches,
+      });
+      map.set(target.threadId, associatedPullRequest ? toThreadPr(associatedPullRequest) : null);
     }
     return map;
   }, [
-    threadGitStatusCwds,
     threadGitStatusQueries,
+    threadGitStatusTargets,
     threadGitTargets,
     threadStoredPrQueries,
     threadStoredPrTargets,
@@ -5138,7 +6140,9 @@ export default function Sidebar() {
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
-    for (const [visibleThreadIndex, threadId] of visibleSidebarThreadIds.entries()) {
+    for (const [visibleThreadIndex, threadId] of getThreadJumpTargetIds(
+      sidebarJumpTargetThreadIds,
+    ).entries()) {
       const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
       if (!jumpCommand) {
         break;
@@ -5147,11 +6151,21 @@ export default function Sidebar() {
     }
 
     return mapping;
-  }, [visibleSidebarThreadIds]);
+  }, [sidebarJumpTargetThreadIds]);
   const threadJumpThreadIds = useMemo(
     () => [...threadJumpCommandByThreadId.keys()],
     [threadJumpCommandByThreadId],
   );
+  const workspaceShortcutThreadIdById = useMemo(() => {
+    const numberedThreadIds = new Set(threadJumpThreadIds);
+    const mapping = new Map<WorktreeWorkspaceId, ThreadId>();
+    for (const target of visibleWorkspaceShortcutTargets) {
+      if (numberedThreadIds.has(target.threadId)) {
+        mapping.set(target.workspaceId, target.threadId);
+      }
+    }
+    return mapping;
+  }, [threadJumpThreadIds, visibleWorkspaceShortcutTargets]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
       terminalFocus: isTerminalFocused(),
@@ -5400,7 +6414,7 @@ export default function Sidebar() {
           chatCount={chatCount}
           path={abbreviateHomePath(project.cwd, homeDir)}
           onTogglePin={() => toggleProjectPinned(project.id)}
-          onEditProject={() => void handleProjectContextMenuAction(project.id, "rename")}
+          onEditProject={() => void handleProjectContextMenuAction(project.id, "edit-project")}
         />
       </PreviewCardPopup>
     );
@@ -5933,187 +6947,220 @@ export default function Sidebar() {
     // local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
-    // The "open dev server" affordance now lives in the project context menu, so
-    // the hover toolbar always reserves space for the three thread actions. The
-    // reserve lives on the *name* container (not the button) so only the truncating
-    // name yields to the overlay toolbar; the trailing run dot stays put and fades
-    // in place instead of sliding left. Focus is read from the group because the
-    // name container itself is not focusable — the row's button is.
+    // Project headers retain repository-owned shortcuts only. The reserve lives on
+    // the name container so the label yields to those actions without moving the
+    // aggregate run/status indicators.
     const projectToolbarReserveClassName =
-      "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
+      "group-hover/project-header:pr-[3.25rem] group-has-[:focus-visible]/project-header:pr-[3.25rem]";
+    const repositoryUrl = projectGithubRepositoryUrlById.get(project.id) ?? null;
+    const archivedWorkspaceCount = listArchivedWorkspaces(worktreeWorkspaces, project.id).length;
+    const projectContextMenuActions: ProjectContextMenuActions = {
+      "new-workspace": { label: "New workspace" },
+      "show-in-folder": {
+        label:
+          typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+            ? "Show repository in Finder"
+            : "Show repository in File Explorer",
+      },
+      "open-in-kanban": { label: "Open in Kanban" },
+      ...(repositoryUrl
+        ? { "open-repository-on-github": { label: "Open repository on GitHub" } }
+        : {}),
+      "copy-path": { label: "Copy repository path" },
+      "edit-project": { label: "Edit project" },
+      "toggle-pin": { label: isProjectPinned ? "Unpin project" : "Pin project" },
+      "remove-project": { label: "Remove project", destructive: true },
+    };
 
-    return (
-      <div className="group/collapsible">
-        <PreviewCard>
-          <PreviewCardTrigger
-            {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
-            render={
-              <div
-                className="group/project-header relative"
-                data-project-hover-anchor={project.id}
-              />
-            }
+    const projectHeader = (
+      <PreviewCard>
+        <PreviewCardTrigger
+          {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+          render={
+            <div className="group/project-header relative" data-project-hover-anchor={project.id} />
+          }
+        >
+          <SidebarMenuButton
+            ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+            size="sm"
+            className={cn(
+              SIDEBAR_HEADER_ROW_CLASS_NAME,
+              "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
+              isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+            )}
+            {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
+            {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
+            onPointerDownCapture={handleProjectTitlePointerDownCapture}
+            onClick={(event) => handleProjectTitleClick(event, project.id)}
+            onKeyDown={(event) => handleProjectTitleKeyDown(event, project.id)}
           >
-            <SidebarMenuButton
-              ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+            <SidebarLeadingIcon
               size="sm"
-              className={cn(
-                SIDEBAR_HEADER_ROW_CLASS_NAME,
-                "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
-                isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-              )}
-              {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
-              {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
-              onPointerDownCapture={handleProjectTitlePointerDownCapture}
-              onClick={(event) => handleProjectTitleClick(event, project.id)}
-              onKeyDown={(event) => handleProjectTitleKeyDown(event, project.id)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                void handleProjectContextMenu(project.id, {
-                  x: event.clientX,
-                  y: event.clientY,
-                });
-              }}
+              tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
+              className={projectFolderIconClassName}
             >
-              <SidebarLeadingIcon
-                size="sm"
-                tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
-                className={projectFolderIconClassName}
-              >
-                <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
-              </SidebarLeadingIcon>
-              <div
+              <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
+            </SidebarLeadingIcon>
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
+                projectToolbarReserveClassName,
+              )}
+            >
+              <span
                 className={cn(
-                  "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
-                  projectToolbarReserveClassName,
+                  "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 )}
               >
-                <span
-                  className={cn(
-                    "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
-                    SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                  )}
-                >
-                  {project.name}
-                </span>
-                {project.localName ? (
-                  <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
-                    {project.folderName}
-                  </span>
-                ) : null}
-              </div>
-              {/* Closed folders surface child-chat status on the project row; open
-                  folders leave that signal to their visible child thread rows. */}
-              {isProjectRunning || collapsedProjectStatus ? (
-                <span
-                  aria-label={
-                    collapsedProjectStatus
-                      ? `Project status: ${collapsedProjectStatus.label}`
-                      : undefined
-                  }
-                  title={collapsedProjectStatus?.label}
-                  className={cn(
-                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
-                    sidebarHoverRevealHideClassName("project-header"),
-                  )}
-                >
-                  {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
-                  {collapsedProjectStatus ? (
-                    <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
-                  ) : null}
+                {project.name}
+              </span>
+              {project.localName ? (
+                <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
+                  {project.folderName}
                 </span>
               ) : null}
-            </SidebarMenuButton>
-            <button
-              type="button"
-              aria-label={pinActionLabel(project.name, isProjectPinned)}
-              aria-pressed={isProjectPinned}
-              title={pinActionLabel(project.name, isProjectPinned)}
-              className={cn(
-                "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
-                SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                isProjectPinned
-                  ? "pointer-events-auto opacity-100"
-                  : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-              )}
-              onMouseDown={(event) => {
+            </div>
+            {/* Closed folders surface child-chat status on the project row; open
+                  folders leave that signal to their visible child thread rows. */}
+            {isProjectRunning || collapsedProjectStatus ? (
+              <span
+                aria-label={
+                  collapsedProjectStatus
+                    ? `Project status: ${collapsedProjectStatus.label}`
+                    : undefined
+                }
+                title={collapsedProjectStatus?.label}
+                className={cn(
+                  "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
+                  sidebarHoverRevealHideClassName("project-header"),
+                )}
+              >
+                {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
+                {collapsedProjectStatus ? (
+                  <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
+                ) : null}
+              </span>
+            ) : null}
+          </SidebarMenuButton>
+          <button
+            type="button"
+            aria-label={pinActionLabel(project.name, isProjectPinned)}
+            aria-pressed={isProjectPinned}
+            title={pinActionLabel(project.name, isProjectPinned)}
+            className={cn(
+              "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+              SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+              isProjectPinned
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleProjectPinned(project.id);
+            }}
+          >
+            <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
+          </button>
+          <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarIconButton
+              icon={IoIosGitCompare}
+              label={`View pull requests for ${project.name}`}
+              tooltip="Pull requests"
+              tooltipSide="top"
+              onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                // Opens the in-app pull requests view scoped to this project (selecting a
+                // row there opens the right-dock detail panel) instead of leaving for GitHub.
+                void navigate({
+                  to: "/pull-requests",
+                  search: { involvement: "all", state: "open", projectId: project.id },
+                });
+              }}
+            />
+            <SidebarIconButton
+              icon={TerminalIcon}
+              label={`Create new terminal thread in ${project.name}`}
+              tooltip={
+                newTerminalThreadShortcutLabel
+                  ? `New terminal thread (${newTerminalThreadShortcutLabel})`
+                  : "New terminal thread"
+              }
+              className={workspaceProtocolVersion === 2 ? "hidden" : undefined}
+              tooltipSide="top"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void handleNewThread(project.id, {
+                  envMode: resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
+                  }),
+                  entryPoint: "terminal",
+                });
+              }}
+            />
+            <SidebarIconButton
+              icon={NewThreadIcon}
+              label={`Create new thread in ${project.name}`}
+              tooltip={
+                newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
+              }
+              tooltipSide="top"
+              data-testid="new-thread-button"
+              onMouseEnter={() => {
+                if (workspaceProtocolVersion !== 2) {
+                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                }
+              }}
+              onFocus={() => {
+                if (workspaceProtocolVersion !== 2) {
+                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                }
               }}
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                toggleProjectPinned(project.id);
+                if (workspaceProtocolVersion === 2) {
+                  setWorkspaceCreateProjectId(project.id);
+                  return;
+                }
+                prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
+                void handleNewThread(project.id, {
+                  envMode: resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
+                  }),
+                });
               }}
-            >
-              <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
-            </button>
-            <SidebarSectionToolbar placement="overlay" revealOnHover>
-              <SidebarIconButton
-                icon={IoIosGitCompare}
-                label={`View pull requests for ${project.name}`}
-                tooltip="Pull requests"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  // Opens the in-app pull requests view scoped to this project (selecting a
-                  // row there opens the right-dock detail panel) instead of leaving for GitHub.
-                  void navigate({
-                    to: "/pull-requests",
-                    search: { involvement: "all", state: "open", projectId: project.id },
-                  });
-                }}
-              />
-              <SidebarIconButton
-                icon={TerminalIcon}
-                label={`Create new terminal thread in ${project.name}`}
-                tooltip={
-                  newTerminalThreadShortcutLabel
-                    ? `New terminal thread (${newTerminalThreadShortcutLabel})`
-                    : "New terminal thread"
-                }
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                    entryPoint: "terminal",
-                  });
-                }}
-              />
-              <SidebarIconButton
-                icon={NewThreadIcon}
-                label={`Create new thread in ${project.name}`}
-                tooltip={
-                  newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
-                }
-                tooltipSide="top"
-                data-testid="new-thread-button"
-                onMouseEnter={() => {
-                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
-                }}
-                onFocus={() => {
-                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                  });
-                }}
-              />
-            </SidebarSectionToolbar>
-          </PreviewCardTrigger>
-          {renderProjectHoverCardPopup(project, allProjectThreadCount)}
-        </PreviewCard>
+            />
+          </SidebarSectionToolbar>
+        </PreviewCardTrigger>
+        {renderProjectHoverCardPopup(project, allProjectThreadCount)}
+      </PreviewCard>
+    );
+
+    return (
+      <div className="group/collapsible">
+        <ProjectContextMenu
+          trigger={<div className="contents">{projectHeader}</div>}
+          target={{ projectId: project.id, projectPath: project.cwd }}
+          actions={projectContextMenuActions}
+          onAction={(actionId) =>
+            void handleProjectContextMenuAction(project.id, actionId).catch((error) => {
+              toastManager.add({
+                type: "error",
+                title: "Project action failed",
+                description:
+                  error instanceof Error ? error.message : "An unexpected error occurred.",
+              });
+            })
+          }
+        />
 
         <div
           className={cn(
@@ -6129,17 +7176,193 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
-              {visibleEntries.map((entry) =>
-                renderThreadRow(
-                  entry.thread,
-                  orderedProjectThreadIds,
-                  entry.depth,
-                  entry.childCount,
-                  entry.isExpanded,
-                ),
-              )}
+              {workspaceProtocolVersion === 2
+                ? orderWorktreeWorkspacesForSidebar(
+                    worktreeWorkspaces.filter((workspace) => workspace.projectId === project.id),
+                  ).map((workspace) => {
+                    const workspaceThreads = workspaceThreadsByWorkspaceId.get(workspace.id) ?? [];
+                    const isActiveWorkspace = workspaceThreads.some(
+                      (thread) => thread.id === visualActiveSidebarThreadId,
+                    );
+                    const workspaceStatus = resolveProjectStatusIndicator(
+                      workspaceThreads.map(resolveThreadStatusForSidebar),
+                    );
+                    const workspaceShortcutThreadId = workspaceShortcutThreadIdById.get(
+                      workspace.id,
+                    );
+                    const workspaceJumpLabel = workspaceShortcutThreadId
+                      ? (visibleThreadJumpLabelByThreadId.get(workspaceShortcutThreadId) ?? null)
+                      : null;
+                    const workspaceJumpLabelParts = workspaceShortcutThreadId
+                      ? (visibleThreadJumpLabelPartsByThreadId.get(workspaceShortcutThreadId) ??
+                        EMPTY_SHORTCUT_PARTS)
+                      : EMPTY_SHORTCUT_PARTS;
+                    const branchUrl = workspaceBranchUrlById.get(workspace.id) ?? null;
+                    const gitPresentation = workspaceGitPresentationById.get(workspace.id) ?? {
+                      state: "unavailable" as const,
+                      pr: workspace.lastKnownPr,
+                      status: null,
+                    };
+                    const workspaceRun = workspaceRunById.get(workspace.id) ?? null;
+                    const workspaceRunServer = workspaceRunServerById.get(workspace.id) ?? null;
+                    const devServerUrl = workspaceRunServer
+                      ? firstLocalServerUrl(workspaceRunServer)
+                      : null;
+                    const revealLabel =
+                      typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+                        ? "Show in Finder"
+                        : "Show in File Explorer";
+                    const publicationLabel =
+                      gitPresentation.pr !== null
+                        ? presentPullRequestState(gitPresentation.pr)
+                        : gitPresentation.state === "local-only"
+                          ? "Local only"
+                          : gitPresentation.state === "published"
+                            ? "Published"
+                            : null;
+                    const contextMenuActions = deriveWorktreeWorkspaceContextMenuActions(
+                      workspace,
+                      {
+                        gitPresentationState: gitPresentation.state,
+                        revealLabel,
+                        hasEditorIntegration: availableEditors.length > 0,
+                        devServerState: workspaceRun || workspaceRunServer ? "running" : "stopped",
+                        devServerUrl,
+                        verifiedBranchUrl: branchUrl,
+                        hasReviewComments:
+                          workspacePullRequestDetailById
+                            .get(workspace.id)
+                            ?.comments.some(
+                              (comment) =>
+                                (comment.kind === "review-comment" || comment.kind === "review") &&
+                                comment.body.trim().length > 0,
+                            ) === true,
+                        hasConflicts: gitPresentation.pr?.mergeability === "conflicting",
+                        archiveEnabled: workspace.kind === "managed" && workspace.state === "ready",
+                        removeExternalEnabled:
+                          workspace.kind === "external" && workspace.state === "ready",
+                      },
+                    );
+                    const trailing = workspaceJumpLabel ? (
+                      <KbdGroup>
+                        {workspaceJumpLabelParts.map((part) => (
+                          <Kbd key={part}>{part}</Kbd>
+                        ))}
+                      </KbdGroup>
+                    ) : workspaceRun || workspaceRunServer ? (
+                      <ProjectRunIndicatorDot />
+                    ) : workspace.state !== "ready" ? (
+                      <span
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          workspace.state === "provisioning"
+                            ? "animate-pulse bg-amber-400/80 motion-reduce:animate-none"
+                            : "bg-red-400/85",
+                        )}
+                        aria-label={`Workspace ${workspace.state}`}
+                      />
+                    ) : workspaceStatus ? (
+                      <SidebarStatusTrailingGlyph status={workspaceStatus} />
+                    ) : null;
+                    return (
+                      <SidebarMenuSubItem key={workspace.id} className="w-full">
+                        <WorktreeWorkspaceRow
+                          workspace={workspace}
+                          isActive={isActiveWorkspace}
+                          openConversationCount={workspaceThreads.length}
+                          contextMenuActions={contextMenuActions}
+                          hoverCard={{
+                            branch: workspace.branch,
+                            branchUrl,
+                            ...(workspace.branch
+                              ? {
+                                  branchPresentation: {
+                                    name: workspace.branch,
+                                    verifiedUrl: branchUrl,
+                                  },
+                                }
+                              : {}),
+                            path: workspace.path
+                              ? formatWorktreePathForDisplay(workspace.path)
+                              : null,
+                            ...(workspace.path
+                              ? {
+                                  pathPresentation: {
+                                    displayPath: formatWorktreePathForDisplay(workspace.path),
+                                    absolutePath: workspace.path,
+                                    revealLabel,
+                                  },
+                                }
+                              : {}),
+                            ...(publicationLabel ? { publicationLabel } : {}),
+                            pullRequest: gitPresentation.pr
+                              ? {
+                                  number: gitPresentation.pr.number,
+                                  stateLabel: presentPullRequestState(gitPresentation.pr),
+                                  actionLabel: `View pull request #${gitPresentation.pr.number}`,
+                                }
+                              : null,
+                            source: workspace.sourceRef ?? workspace.targetRef,
+                            status: gitPresentation.state,
+                            onOpenBranch: openWorkspaceBranchLink,
+                            onRevealPath: (path) => {
+                              const api = readNativeApi();
+                              if (api) void api.shell.showInFolder(path);
+                            },
+                            onOpenPullRequest: () => void openWorkspacePullRequest(workspace),
+                          }}
+                          trailing={trailing}
+                          onOpenWorkspace={() => void handleOpenWorkspace(workspace, project)}
+                          onRenameWorkspace={() => setRenamingWorktreeWorkspaceId(workspace.id)}
+                          onContextMenuAction={(actionId) =>
+                            void handleWorkspaceContextMenuAction(
+                              actionId,
+                              workspace,
+                              project,
+                            ).catch((error) => {
+                              toastManager.add({
+                                type: "error",
+                                title: "Workspace action failed",
+                                description:
+                                  error instanceof Error
+                                    ? error.message
+                                    : "An unexpected error occurred.",
+                              });
+                            })
+                          }
+                        />
+                      </SidebarMenuSubItem>
+                    );
+                  })
+                : visibleEntries.map((entry) =>
+                    renderThreadRow(
+                      entry.thread,
+                      orderedProjectThreadIds,
+                      entry.depth,
+                      entry.childCount,
+                      entry.isExpanded,
+                    ),
+                  )}
 
-              {(canShowMoreThreads || canShowLessThreads) && (
+              {workspaceProtocolVersion === 2 && archivedWorkspaceCount > 0 ? (
+                <SidebarMenuSubItem className="w-full">
+                  <SidebarMenuSubButton
+                    render={<button type="button" />}
+                    data-thread-selection-safe
+                    size="sm"
+                    className="h-7 translate-x-0 justify-start gap-2 rounded-lg px-2 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                    onClick={() => setArchivedWorkspacesProjectId(project.id)}
+                  >
+                    <HiOutlineArchiveBox className="size-3.5 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">Archived workspaces</span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground/55">
+                      {archivedWorkspaceCount}
+                    </span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              ) : null}
+
+              {workspaceProtocolVersion !== 2 && (canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
                   <div className="flex w-full items-center gap-1">
                     {canShowMoreThreads && (
@@ -6339,6 +7562,30 @@ export default function Sidebar() {
         }
         return;
       }
+      const chatTabJumpIndex = chatTabJumpIndexFromCommand(command ?? "");
+      if (chatTabJumpIndex !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        const targetThreadId = getThreadJumpTargetIds(conversationTabThreadIds)[chatTabJumpIndex];
+        if (targetThreadId) {
+          activateThreadFromSidebarIntent(targetThreadId);
+        }
+        return;
+      }
+      if (command === "workspace.visible.next" || command === "workspace.visible.previous") {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextWorkspaceId = getNextVisibleWorkspaceId({
+          visibleWorkspaceIds: workspaceNavigationIdsForActiveProject,
+          activeWorkspaceId,
+          direction: command === "workspace.visible.previous" ? "backward" : "forward",
+        });
+        if (!nextWorkspaceId || nextWorkspaceId === activeWorkspaceId) return;
+
+        const targetThreadId = resolveWorkspaceShortcutThreadId(nextWorkspaceId);
+        if (targetThreadId) activateThreadFromSidebarIntent(targetThreadId);
+        return;
+      }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
         return;
       }
@@ -6346,7 +7593,7 @@ export default function Sidebar() {
       event.preventDefault();
       event.stopPropagation();
       const nextThreadId = getNextVisibleSidebarThreadId({
-        visibleThreadIds: visibleSidebarThreadIds,
+        visibleThreadIds: conversationTabThreadIds,
         activeThreadId: activeSidebarThreadId ?? undefined,
         direction: command === "chat.visible.previous" ? "backward" : "forward",
       });
@@ -6393,14 +7640,17 @@ export default function Sidebar() {
   }, [
     activateThreadFromSidebarIntent,
     activeSidebarThreadId,
+    activeWorkspaceId,
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
     navigate,
+    resolveWorkspaceShortcutThreadId,
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
-    visibleSidebarThreadIds,
+    conversationTabThreadIds,
+    workspaceNavigationIdsForActiveProject,
   ]);
 
   useEffect(() => {
@@ -6821,38 +8071,9 @@ export default function Sidebar() {
   const renameProjectDialogProject = renameProjectDialogId
     ? (projectById.get(renameProjectDialogId) ?? null)
     : null;
-  const projectContextMenuProject = projectContextMenuState
-    ? (projectById.get(projectContextMenuState.projectId) ?? null)
+  const archivedWorkspacesProject = archivedWorkspacesProjectId
+    ? (projectById.get(archivedWorkspacesProjectId) ?? null)
     : null;
-  const projectContextMenuThreads = useMemo(
-    () =>
-      projectContextMenuState
-        ? sidebarThreads.filter((thread) => thread.projectId === projectContextMenuState.projectId)
-        : [],
-    [projectContextMenuState, sidebarThreads],
-  );
-  const projectContextMenuAnchor = useMemo(
-    () =>
-      projectContextMenuState
-        ? createClientPointMenuAnchor(projectContextMenuState.position)
-        : null,
-    [projectContextMenuState],
-  );
-  const projectContextMenuHasAnyThreads = projectContextMenuThreads.length > 0;
-  const projectContextMenuHasArchivableThreads = projectContextMenuThreads.some(
-    (thread) => thread.archivedAt == null,
-  );
-  const projectContextMenuIsPinned = projectContextMenuProject
-    ? pinnedProjectIdSet.has(projectContextMenuProject.id)
-    : false;
-  const projectContextMenuIsRunning = projectContextMenuProject
-    ? Boolean(projectRunsByProjectId[projectContextMenuProject.id])
-    : false;
-  const projectContextMenuServer = projectContextMenuProject
-    ? (projectRunServerByProjectId.get(projectContextMenuProject.id) ?? null)
-    : null;
-  const projectContextMenuHasOpenServer =
-    projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
 
   return (
     <>
@@ -7242,6 +8463,14 @@ export default function Sidebar() {
                             <SidebarGlyph icon={TbCursorText} variant="chrome" />
                             Type path
                           </button>
+                          <button
+                            type="button"
+                            className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+                            onClick={() => setGitHubProjectDialogOpen(true)}
+                          >
+                            <FiGithub className="size-3.5 shrink-0" />
+                            GitHub
+                          </button>
                         </div>
                       ) : (
                         <div className="relative">
@@ -7531,232 +8760,60 @@ export default function Sidebar() {
         </SidebarMenu>
       </SidebarFooter>
 
-      {projectContextMenuState && projectContextMenuProject && projectContextMenuAnchor ? (
-        <Menu
+      <GitHubProjectDialog
+        open={githubProjectDialogOpen}
+        onOpenChange={setGitHubProjectDialogOpen}
+        onClone={handleCloneGitHubProject}
+        onListAccounts={handleListGitHubAccounts}
+        onListRepositories={handleListGitHubRepositories}
+      />
+
+      {archivedWorkspacesProject ? (
+        <ArchivedWorkspacesDialog
           open
+          projectId={archivedWorkspacesProject.id}
+          projectName={archivedWorkspacesProject.name}
+          workspaces={worktreeWorkspaces}
+          pendingWorkspaceIds={restoringWorkspaceIds}
+          restoreErrorsByWorkspaceId={restoreErrorsByWorkspaceId}
           onOpenChange={(open) => {
-            if (!open) {
-              setProjectContextMenuState(null);
-            }
+            if (!open) setArchivedWorkspacesProjectId(null);
           }}
-        >
-          <ComposerPickerMenuPopup
-            anchor={projectContextMenuAnchor}
-            align="start"
-            side="bottom"
-            sideOffset={0}
-            className={PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME}
-          >
-            <MenuGroup>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "open-in-finder",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={FolderOpenIcon} />
-                <span>Open in Finder</span>
-              </MenuItem>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "open-in-kanban",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={KanbanIcon} />
-                <span>Open in Kanban</span>
-              </MenuItem>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "copy-path",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={CopyIcon} />
-                <span>Copy Path</span>
-              </MenuItem>
-              <MenuSeparator />
-              {projectContextMenuIsRunning ? (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "stop-dev",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={StopFilledIcon} />
-                  <span>Stop dev</span>
-                </MenuItem>
-              ) : (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "start-dev",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={PlayIcon} />
-                  <span>Start dev</span>
-                </MenuItem>
-              )}
-              {projectContextMenuHasOpenServer ? (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "open-dev-server",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={ExternalLinkIcon} />
-                  <span>Open dev server</span>
-                </MenuItem>
-              ) : null}
-              <MenuSeparator />
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "rename")
-                }
-              >
-                <ProjectContextMenuIcon icon={PencilIcon} />
-                <span>Edit name</span>
-              </MenuItem>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "toggle-pin",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={PinIcon} />
-                <span>{pinActionLabel("project", projectContextMenuIsPinned)}</span>
-              </MenuItem>
-              {projectContextMenuHasArchivableThreads || projectContextMenuHasAnyThreads ? (
-                <MenuSeparator />
-              ) : null}
-              {projectContextMenuHasArchivableThreads ? (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "archive-threads",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={ArchiveIcon} />
-                  <span>Archive threads</span>
-                </MenuItem>
-              ) : null}
-              {projectContextMenuHasAnyThreads ? (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "delete-threads",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={Trash2} />
-                  <span>Delete threads</span>
-                </MenuItem>
-              ) : null}
-              <MenuSeparator />
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "delete")
-                }
-              >
-                <ProjectContextMenuIcon icon={XIcon} />
-                <span>Remove</span>
-              </MenuItem>
-            </MenuGroup>
-          </ComposerPickerMenuPopup>
-        </Menu>
+          onRestore={handleRestoreArchivedWorkspace}
+        />
       ) : null}
 
-      <Dialog
-        open={projectRunDialogProjectId !== null}
+      <WorktreeWorkspaceCreateDialog
+        open={workspaceCreateProject !== null}
+        projectName={
+          workspaceCreateProject?.localName ?? workspaceCreateProject?.name ?? "this project"
+        }
+        projectCwd={workspaceCreateProject?.cwd ?? ""}
+        {...(workspaceCreateProject?.githubAccount
+          ? { githubAccount: workspaceCreateProject.githubAccount }
+          : {})}
+        defaultTargetRef={workspaceCreateProject?.defaultTargetRef ?? null}
         onOpenChange={(open) => {
-          if (!open) {
-            closeProjectRunDialog();
-          }
+          if (!open) setWorkspaceCreateProjectId(null);
         }}
-      >
-        <DialogPopup surface="solid" className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <PlayIcon className="size-4 text-emerald-500" />
-              Start dev
-            </DialogTitle>
-            <DialogDescription>
-              {projectRunDialogProject ? projectRunDialogProject.name : "Project"}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-2">
-            <label
-              htmlFor="project-run-command-input"
-              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium text-[var(--color-text-foreground-secondary)]"
-            >
-              Command
-            </label>
-            <Input
-              id="project-run-command-input"
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              placeholder="e.g. npm run dev"
-              value={projectRunDialogCommandDraft}
-              aria-invalid={projectRunDialogCommandIsValid ? undefined : true}
-              onChange={(event) => setProjectRunDialogCommandDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleConfirmProjectRun();
-                }
-              }}
-            />
-            {projectRunDialogCommandIsValid ? null : (
-              <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-destructive">
-                Enter a command to run.
-              </p>
-            )}
-          </DialogPanel>
-          <DialogFooter>
-            <Button variant="outline" onClick={closeProjectRunDialog}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleConfirmProjectRun}
-              disabled={!projectRunDialogCommandIsValid || Boolean(projectRunDialogExistingRun)}
-            >
-              <PlayIcon className="size-4" />
-              Run
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
+        onCreate={async (input) => {
+          if (!workspaceCreateProject) return;
+          await handleCreateManagedWorkspace(workspaceCreateProject, input);
+        }}
+      />
+
+      <WorktreeWorkspaceRenameDialog
+        open={renamingWorktreeWorkspace !== null}
+        workspace={renamingWorktreeWorkspace}
+        branchRenameAvailability={branchRenameAvailability}
+        onOpenChange={(open) => {
+          if (!open) setRenamingWorktreeWorkspaceId(null);
+        }}
+        onRename={async (input) => {
+          if (!renamingWorktreeWorkspace) return;
+          await handleRenameWorktreeWorkspace(renamingWorktreeWorkspace, input);
+        }}
+      />
 
       <RenameThreadDialog
         open={renameDialogThreadId !== null}

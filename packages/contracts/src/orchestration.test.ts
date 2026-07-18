@@ -13,6 +13,8 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
   OrchestrationReadModel,
+  OrchestrationShellSnapshot,
+  OrchestrationWorkspaceShellSnapshot,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -29,6 +31,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  WorkspaceLifecyclePreflightResult,
 } from "./orchestration";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
@@ -43,6 +46,9 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
+const decodeWorkspaceLifecyclePreflightResult = Schema.decodeUnknownEffect(
+  WorkspaceLifecyclePreflightResult,
+);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
@@ -83,6 +89,63 @@ it.effect("decodes last-known PRs persisted before draft/mergeability/diff field
     assert.equal(enriched.isDraft, true);
     assert.equal(enriched.mergeability, "conflicting");
     assert.equal(enriched.additions, 38);
+  }),
+);
+
+it.effect("decodes managed pull-request workspace creation and completion metadata", () =>
+  Effect.gen(function* () {
+    const pullRequest = {
+      number: 42,
+      title: "Review the workspace flow",
+      url: "https://github.com/acme/repo/pull/42",
+      baseBranch: "develop",
+      headBranch: "feature/review-flow",
+      state: "open" as const,
+    };
+    const created = yield* decodeOrchestrationCommand({
+      type: "workspace.create",
+      commandId: "command-pr-workspace",
+      workspaceId: "workspace-pr-42",
+      threadId: "thread-pr-42",
+      projectId: "project-pr",
+      operationId: "operation-pr-42",
+      title: "Review the workspace flow",
+      targetRef: "develop",
+      sourceKind: "pull-request",
+      sourceRef: pullRequest.url,
+      lastKnownPr: pullRequest,
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-07-16T00:00:00.000Z",
+    });
+    assert.equal(created.type, "workspace.create");
+    if (created.type === "workspace.create") {
+      assert.equal(created.sourceKind, "pull-request");
+      assert.equal(created.lastKnownPr?.number, 42);
+    }
+
+    const completed = yield* decodeOrchestrationCommand({
+      type: "workspace.provision.complete",
+      commandId: "command-pr-complete",
+      workspaceId: "workspace-pr-42",
+      operationId: "operation-pr-42",
+      generation: 1,
+      path: "/tmp/workspaces/workspace-pr-42",
+      branch: "feature/review-flow",
+      headRef: "abc123",
+      targetResolvedCommit: "def456",
+      createdFromCommit: "abc123",
+      targetRef: "develop",
+      lastKnownPr: pullRequest,
+      setupStatus: "skipped",
+      completedAt: "2026-07-16T00:00:01.000Z",
+    });
+    assert.equal(completed.type, "workspace.provision.complete");
+    if (completed.type === "workspace.provision.complete") {
+      assert.equal(completed.targetRef, "develop");
+      assert.equal(completed.lastKnownPr?.headBranch, "feature/review-flow");
+    }
   }),
 );
 
@@ -356,6 +419,7 @@ it.effect("decodes historical project.created payloads with a default provider",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
     assert.strictEqual(parsed.isPinned, false);
+    assert.strictEqual(parsed.githubAccount, null);
   }),
 );
 
@@ -555,6 +619,125 @@ it.effect("decodes thread archived and unarchived events", () =>
     assert.strictEqual(archived.payload.archivedAt, "2026-01-01T00:00:00.000Z");
     assert.strictEqual(unarchived.type, "thread.unarchived");
     assert.strictEqual(unarchived.payload.updatedAt, "2026-01-02T00:00:00.000Z");
+  }),
+);
+
+it.effect("decodes workspace pin metadata commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "workspace.meta.update",
+      commandId: "cmd-workspace-pin",
+      workspaceId: "workspace-1",
+      isPinned: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "workspace.meta.update");
+    assert.strictEqual(command.isPinned, true);
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-pin",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.meta-updated",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-pin",
+      causationEventId: null,
+      correlationId: "cmd-workspace-pin",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        isPinned: true,
+        mutationRevision: 1,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "workspace.meta-updated");
+    assert.strictEqual(event.payload.isPinned, true);
+  }),
+);
+
+it.effect("decodes generation-fenced workspace lifecycle contracts", () =>
+  Effect.gen(function* () {
+    const provisionCommand = yield* decodeClientOrchestrationCommand({
+      type: "workspace.provision.request",
+      commandId: "cmd-workspace-provision",
+      workspaceId: "workspace-1",
+      operationId: "operation-provision-2",
+      expectedGeneration: 1,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(provisionCommand.type, "workspace.provision.request");
+
+    const provisionEvent = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-provision",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.provision-requested",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-provision",
+      causationEventId: null,
+      correlationId: "cmd-workspace-provision",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        operationId: "operation-provision-2",
+        generation: 2,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(provisionEvent.type, "workspace.provision-requested");
+    assert.strictEqual(provisionEvent.payload.generation, 2);
+
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "workspace.archive.request",
+      commandId: "cmd-workspace-archive",
+      workspaceId: "workspace-1",
+      operationId: "operation-archive-1",
+      expectedGeneration: 4,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "workspace.archive.request");
+    assert.strictEqual(command.confirmedWarnings, false);
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-archive",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.archive-requested",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-archive",
+      causationEventId: null,
+      correlationId: "cmd-workspace-archive",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        operationId: "operation-archive-1",
+        generation: 5,
+        confirmedWarnings: true,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "workspace.archive-requested");
+    assert.strictEqual(event.payload.generation, 5);
+
+    const preflight = yield* decodeWorkspaceLifecyclePreflightResult({
+      workspaceId: "workspace-1",
+      action: "archive",
+      lifecycleGeneration: 4,
+      canStart: true,
+      requiresConfirmation: true,
+      blockers: [],
+      warnings: [
+        {
+          code: "local-only-commits",
+          message: "This branch is local only.",
+        },
+      ],
+    });
+    assert.strictEqual(preflight.warnings[0]?.code, "local-only-commits");
   }),
 );
 
@@ -962,5 +1145,108 @@ it.effect("preserves user-input answer values through the RPC JSON codec", () =>
         skipped: null,
       },
     );
+  }),
+);
+
+it.effect("keeps V1 shell payloads unchanged while V2 exposes workspace identity", () =>
+  Effect.gen(function* () {
+    const now = "2026-07-13T00:00:00.000Z";
+    const project = {
+      id: "project-1",
+      kind: "project",
+      title: "Project one",
+      workspaceRoot: "/tmp/project-1",
+      defaultModelSelection: null,
+      scripts: [],
+      isPinned: false,
+      repositoryIdentity: "repository-1",
+      defaultTargetRef: "main",
+      githubAccount: { host: "github.com", login: "octocat" },
+      createdAt: now,
+      updatedAt: now,
+    };
+    const thread = {
+      id: "thread-1",
+      projectId: "project-1",
+      workspaceId: "workspace-1",
+      title: "Conversation one",
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      envMode: "worktree",
+      branch: "synara/workspace-1",
+      worktreePath: "/tmp/workspace-1",
+      associatedWorktreePath: "/tmp/workspace-1",
+      associatedWorktreeBranch: "synara/workspace-1",
+      associatedWorktreeRef: "abc123",
+      createBranchFlowCompleted: true,
+      isPinned: false,
+      parentThreadId: null,
+      subagentAgentId: null,
+      subagentNickname: null,
+      subagentRole: null,
+      forkSourceThreadId: null,
+      sidechatSourceThreadId: null,
+      lastKnownPr: null,
+      latestTurn: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      handoff: null,
+      session: null,
+    };
+    const workspace = {
+      id: "workspace-1",
+      projectId: "project-1",
+      repositoryIdentity: "repository-1",
+      kind: "managed",
+      state: "ready",
+      title: "Workspace one",
+      path: "/tmp/workspace-1",
+      branch: "synara/workspace-1",
+      headRef: "abc123",
+      targetRef: "main",
+      targetResolvedCommit: "abc123",
+      createdFromCommit: "abc123",
+      sourceKind: "new-branch",
+      sourceRef: null,
+      setupStatus: "succeeded",
+      setupError: null,
+      setupLogId: null,
+      lastKnownPr: null,
+      isPinned: false,
+      lifecycleGeneration: 1,
+      activeOperation: null,
+      lastFailure: null,
+      mutationRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      deletedAt: null,
+    };
+
+    const v1 = yield* Schema.encodeUnknownEffect(OrchestrationShellSnapshot)({
+      snapshotSequence: 1,
+      projects: [project],
+      threads: [thread],
+      updatedAt: now,
+    });
+    const v2 = yield* Schema.encodeUnknownEffect(OrchestrationWorkspaceShellSnapshot)({
+      protocolVersion: 2,
+      snapshotSequence: 1,
+      projects: [project],
+      workspaces: [workspace],
+      threads: [thread],
+      updatedAt: now,
+    });
+
+    assert.equal("repositoryIdentity" in v1.projects[0]!, false);
+    assert.equal("defaultTargetRef" in v1.projects[0]!, false);
+    assert.equal("githubAccount" in v1.projects[0]!, false);
+    assert.equal("workspaceId" in v1.threads[0]!, false);
+    assert.equal(v2.projects[0]?.repositoryIdentity, "repository-1");
+    assert.deepEqual(v2.projects[0]?.githubAccount, { host: "github.com", login: "octocat" });
+    assert.equal(v2.threads[0]?.workspaceId, "workspace-1");
+    assert.equal(v2.workspaces[0]?.id, "workspace-1");
   }),
 );

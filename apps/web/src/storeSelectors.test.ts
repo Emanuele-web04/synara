@@ -6,6 +6,7 @@ import type { AppState } from "./store";
 import {
   createAllThreadsMessagelessSelector,
   createThreadExistsSelector,
+  createThreadGitHubAccountSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
@@ -118,6 +119,24 @@ describe("thread shell route selectors", () => {
 
     expect(createThreadExistsSelector(threadIdA)(state)).toBe(true);
     expect(createThreadProjectIdSelector(threadIdA)(state)).toBe(projectId);
+  });
+
+  it("resolves the selected GitHub account from the thread project", () => {
+    const state = makeState({
+      threadIds: [threadIdA],
+      threadShellById: { [threadIdA]: shellA },
+    });
+    state.projects = [
+      {
+        id: projectId,
+        githubAccount: { host: "github.com", login: "octocat" },
+      } as AppState["projects"][number],
+    ];
+
+    expect(createThreadGitHubAccountSelector(threadIdA)(state)).toEqual({
+      host: "github.com",
+      login: "octocat",
+    });
   });
 
   it("keeps workspace metadata stable while streaming messages change", () => {

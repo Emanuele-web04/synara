@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, WorktreeWorkspaceId, WorkspaceOperationId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -7,15 +7,18 @@ import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionStateRepositoryLive } from "./ProjectionState.ts";
+import { ProjectionWorktreeWorkspaceRepositoryLive } from "./ProjectionWorktreeWorkspaces.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 import { ProjectionStateRepository } from "../Services/ProjectionState.ts";
+import { ProjectionWorktreeWorkspaceRepository } from "../Services/ProjectionWorktreeWorkspaces.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionStateRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionWorktreeWorkspaceRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -44,8 +47,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly defaultModelSelection: string | null;
+        readonly githubAccount: string | null;
       }>`
-        SELECT default_model_selection_json AS "defaultModelSelection"
+        SELECT
+          default_model_selection_json AS "defaultModelSelection",
+          github_account_json AS "githubAccount"
         FROM projection_projects
         WHERE project_id = 'project-null-options'
       `;
@@ -61,6 +67,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "gpt-5.4",
         }),
       );
+      assert.strictEqual(row.githubAccount, null);
 
       const persisted = yield* projects.getById({
         projectId: ProjectId.makeUnsafe("project-null-options"),
@@ -159,6 +166,57 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         projector: "projection.hot",
         lastAppliedSequence: 20,
         updatedAt: "2026-07-09T00:00:20.000Z",
+      });
+    }),
+  );
+
+  it.effect("round-trips workspace lifecycle metadata", () =>
+    Effect.gen(function* () {
+      const workspaces = yield* ProjectionWorktreeWorkspaceRepository;
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-roundtrip");
+      yield* workspaces.upsert({
+        workspaceId,
+        projectId: ProjectId.makeUnsafe("project-null-options"),
+        repositoryIdentity: "repo:roundtrip",
+        kind: "managed",
+        state: "provisioning",
+        title: "Roundtrip workspace",
+        path: null,
+        branch: null,
+        headRef: null,
+        targetRef: "main",
+        targetResolvedCommit: null,
+        createdFromCommit: null,
+        sourceKind: "new-branch",
+        sourceRef: "main",
+        setupStatus: "pending",
+        setupError: null,
+        setupLogId: null,
+        lastKnownPr: null,
+        isPinned: false,
+        lifecycleGeneration: 1,
+        activeOperation: {
+          id: WorkspaceOperationId.makeUnsafe("operation-roundtrip"),
+          generation: 1,
+          kind: "provision",
+          stage: "intent-recorded",
+          startedAt: "2026-07-13T00:00:00.000Z",
+        },
+        lastFailure: null,
+        mutationRevision: 0,
+        createdAt: "2026-07-13T00:00:00.000Z",
+        updatedAt: "2026-07-13T00:00:00.000Z",
+        archivedAt: null,
+        deletedAt: null,
+      });
+
+      const persisted = yield* workspaces.getById({ workspaceId });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.activeOperation, {
+        id: WorkspaceOperationId.makeUnsafe("operation-roundtrip"),
+        generation: 1,
+        kind: "provision",
+        stage: "intent-recorded",
+        startedAt: "2026-07-13T00:00:00.000Z",
       });
     }),
   );
