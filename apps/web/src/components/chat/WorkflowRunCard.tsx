@@ -448,7 +448,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
           {showPhasePills ? (
             <div
               data-testid="workflow-phase-rail"
-              className="flex min-w-0 flex-wrap items-center gap-1 pb-1"
+              className="flex min-w-0 flex-wrap items-center gap-1 pb-1 pl-[10px]"
             >
               {phaseGroups!.map(({ phase }) => (
                 <button
