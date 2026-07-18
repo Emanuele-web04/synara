@@ -2587,6 +2587,12 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-revert-label-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe(
+                  "refs/synara/checkpoints/thread/revert-label/1",
+                ),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [{ path: "README.md", additions: 1, deletions: 0 }],
@@ -2600,6 +2606,7 @@ describe("MessagesTimeline", () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map([[userMessageId, 0]])}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2659,6 +2666,12 @@ describe("MessagesTimeline", () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-revert-disabled-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe(
+                  "refs/synara/checkpoints/thread/revert-disabled/1",
+                ),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [{ path: "README.md", additions: 1, deletions: 0 }],
@@ -2672,6 +2685,7 @@ describe("MessagesTimeline", () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map([[userMessageId, 0]])}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2829,7 +2843,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Edited 1 file");
-    expect(markup).toContain("Undo");
+    expect(markup).toContain("Revert turn");
+    expect(markup).not.toContain(">Undo<");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");
