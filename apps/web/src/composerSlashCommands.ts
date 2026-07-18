@@ -68,6 +68,15 @@ function expandProviderNativeSlashCommandNames(
   return [...expandedNames];
 }
 
+/**
+ * Providers where app-owned /review (target picker + structured prompt) must
+ * win over listing a native "review" command. OpenCode exposes /review in its
+ * command list but does not honor bare `/review` text turns (#218).
+ */
+export function providerUsesAppOwnedReviewSlashCommand(provider: ProviderKind): boolean {
+  return provider === "codex" || provider === "opencode";
+}
+
 function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
@@ -76,7 +85,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     command === "automation" ||
     command === "export" ||
     command === "feedback" ||
-    (provider === "codex" && command === "review")
+    (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
   );
 }
 
@@ -91,8 +100,25 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
     normalizedCommand === "automation" ||
     (normalizedCommand === "export" && appCommandIsAvailable) ||
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
-    (provider === "codex" && normalizedCommand === "review")
+    (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
   );
+}
+
+/**
+ * True when a discovered native "review" command should be sent as plain
+ * `/review` text. Codex/OpenCode use the app review UX instead (#218).
+ */
+export function providerSupportsTextNativeReviewCommand(
+  provider: ProviderKind,
+  nativeCommandNames: ReadonlyArray<{ readonly name: string } | string>,
+): boolean {
+  if (providerUsesAppOwnedReviewSlashCommand(provider)) {
+    return false;
+  }
+  return nativeCommandNames.some((command) => {
+    const name = typeof command === "string" ? command : command.name;
+    return name.trim().toLowerCase() === "review";
+  });
 }
 
 export function getProviderNativeSlashCommandSearchTerms(
