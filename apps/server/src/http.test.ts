@@ -20,6 +20,7 @@ import {
   isLegacyTokenAuthorized,
   makeHealthEffectRouteLayer,
   projectFaviconEffectRouteLayer,
+  resolvePairingBaseUrl,
   staticAndDevEffectRouteLayer,
 } from "./http";
 import {
@@ -158,6 +159,28 @@ async function withEffectServer(
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }
+
+describe("resolvePairingBaseUrl", () => {
+  it("prefers the configured public URL origin", () => {
+    const config = makeConfig({
+      publicUrl: new URL("https://synara.example.test/app"),
+      host: "192.168.1.50",
+    });
+    expect(resolvePairingBaseUrl(config)).toBe("https://synara.example.test");
+  });
+
+  it("uses a concrete non-loopback bind host", () => {
+    expect(resolvePairingBaseUrl(makeConfig({ host: "192.168.1.50", port: 3773 }))).toBe(
+      "http://192.168.1.50:3773",
+    );
+  });
+
+  it("returns undefined for loopback and wildcard binds", () => {
+    expect(resolvePairingBaseUrl(makeConfig({ host: "127.0.0.1" }))).toBeUndefined();
+    expect(resolvePairingBaseUrl(makeConfig({ host: "0.0.0.0" }))).toBeUndefined();
+    expect(resolvePairingBaseUrl(makeConfig({ host: undefined }))).toBeUndefined();
+  });
+});
 
 describe("production Effect HTTP routes", () => {
   it("preserves the loopback-only startup-token policy", () => {

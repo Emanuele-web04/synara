@@ -68,6 +68,12 @@ export const AuthPairingCredentialResult = Schema.Struct({
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
   expiresAt: Schema.DateTimeUtc,
+  /**
+   * Origin other devices should use to reach this server (public URL or
+   * non-loopback bind). Absent when the server only knows loopback addresses,
+   * in which case clients fall back to their own origin.
+   */
+  pairingBaseUrl: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
 

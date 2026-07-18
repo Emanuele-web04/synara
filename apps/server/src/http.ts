@@ -39,7 +39,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
-import { isLoopbackHost } from "./startupAccess";
+import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import {
   attachmentPrincipalForSession,
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -267,6 +267,23 @@ export function isLegacyTokenAuthorized(input: {
   return !input.config.authToken || legacyToken === input.config.authToken;
 }
 
+/**
+ * Origin other devices should use to reach this server, mirroring how startup
+ * builds its pairing link: the configured public URL wins, then a concrete
+ * non-loopback bind host. Wildcard and loopback binds return undefined because
+ * the server does not know a reachable address; clients fall back to their own
+ * origin, which is the address that demonstrably reached the server.
+ */
+export function resolvePairingBaseUrl(config: ServerConfigShape): string | undefined {
+  if (config.publicUrl) {
+    return config.publicUrl.origin;
+  }
+  if (config.host && !isWildcardHost(config.host) && !isLoopbackHost(config.host)) {
+    return `http://${formatHostForUrl(config.host)}:${config.port}`;
+  }
+  return undefined;
+}
+
 function encodeCookie(input: {
   readonly name: string;
   readonly value: string;
@@ -430,7 +447,9 @@ export const authEffectRouteLayer = HttpRouter.add(
               ),
             )
           : {};
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload));
+      const issued = yield* serverAuth.issuePairingCredential(payload);
+      const pairingBaseUrl = resolvePairingBaseUrl(config);
+      return HttpServerResponse.jsonUnsafe(pairingBaseUrl ? { ...issued, pairingBaseUrl } : issued);
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {
