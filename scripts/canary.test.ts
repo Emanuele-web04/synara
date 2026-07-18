@@ -54,8 +54,8 @@ describe("canary tooling", () => {
     ]);
   });
 
-  it("starts desktop directly so Canary isolation variables bypass Turbo filtering", () => {
-    expect(canaryStartArgs()).toEqual(["run", "--cwd", "apps/desktop", "start"]);
+  it("starts the desktop launcher directly so the persisted PID stays alive", () => {
+    expect(canaryStartArgs()).toEqual(["apps/desktop/scripts/start-electron.mjs"]);
   });
 
   it("keeps updating the selected stacked ref until explicitly moved to main", () => {

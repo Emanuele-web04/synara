@@ -91,10 +91,12 @@ export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArra
 }
 
 export function canaryStartArgs(): ReadonlyArray<string> {
-  // Starting through the root Turbo task filters undeclared environment
-  // variables before the desktop process is spawned. Canary's flavor, home,
-  // updater policy, and commit identity must reach Electron unchanged.
-  return ["run", "--cwd", "apps/desktop", "start"];
+  // Invoke the desktop launcher directly. `bun run --cwd apps/desktop start`
+  // adds a short-lived package-script process in front of the launcher, so the
+  // PID persisted by Canary goes stale while Electron is still running. The
+  // direct launcher remains alive for Electron's lifetime and also preserves
+  // Canary's flavor, home, updater policy, and commit identity.
+  return ["apps/desktop/scripts/start-electron.mjs"];
 }
 
 function run(command: string, args: ReadonlyArray<string>, cwd: string): void {
