@@ -123,7 +123,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
               <div
                 key={item.key}
                 data-testid="composer-subagent-parent-row"
-                className="flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+                className="-mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
               >
                 <button
                   type="button"
@@ -143,7 +143,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                 data-testid="composer-subagent-row"
                 data-viewed={item.isViewed || undefined}
                 className={cn(
-                  "group flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
+                  "group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
                   item.isViewed && "bg-[var(--color-background-button-secondary)]",
                 )}
               >
