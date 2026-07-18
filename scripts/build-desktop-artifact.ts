@@ -572,6 +572,72 @@ const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
   );
 });
 
+interface PatchFileExpectation {
+  readonly file: string;
+  readonly addedLines: ReadonlyArray<string>;
+}
+
+function parsePatchAddedLines(patchContents: string): PatchFileExpectation[] {
+  const expectations: Array<{ file: string; addedLines: string[] }> = [];
+  let current: { file: string; addedLines: string[] } | null = null;
+  for (const line of patchContents.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      const target = line.slice(4).trim();
+      if (target === "/dev/null") {
+        current = null;
+        continue;
+      }
+      current = { file: target.startsWith("b/") ? target.slice(2) : target, addedLines: [] };
+      expectations.push(current);
+      continue;
+    }
+    if (current && line.startsWith("+")) {
+      const added = line.slice(1).trim();
+      if (added.length > 0) {
+        current.addedLines.push(added);
+      }
+    }
+  }
+  return expectations.filter((expectation) => expectation.addedLines.length > 0);
+}
+
+// Package managers can silently skip tracked patches when the staged install
+// diverges from the repo setup (that shipped broken Windows provider updates
+// in v0.5.2–v0.5.5), so fail the build unless every patched line is present.
+const verifyStagedPatchedDependencies = Effect.fn("verifyStagedPatchedDependencies")(function* (
+  repoRoot: string,
+  stageAppDir: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  yield* Effect.log("[desktop-artifact] Verifying staged patched dependencies...");
+  for (const [dependency, patchRelativePath] of Object.entries(
+    rootPackageJson.patchedDependencies ?? {},
+  )) {
+    const packageName = dependency.slice(0, dependency.indexOf("@", 1));
+    const patchContents = yield* fs.readFileString(path.join(repoRoot, patchRelativePath));
+    for (const expectation of parsePatchAddedLines(patchContents)) {
+      const stagedFilePath = path.join(stageAppDir, "node_modules", packageName, expectation.file);
+      const stagedContents = yield* fs.readFileString(stagedFilePath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new BuildScriptError({
+              message: `Patched dependency file is missing from the stage: ${stagedFilePath} (expected by ${patchRelativePath}).`,
+              cause,
+            }),
+        ),
+      );
+      for (const addedLine of expectation.addedLines) {
+        if (!stagedContents.includes(addedLine)) {
+          return yield* new BuildScriptError({
+            message: `Staged dependency ${packageName} is missing patched content: ${expectation.file} does not contain "${addedLine}" from ${patchRelativePath}. The tracked patch was not applied by the staged install.`,
+          });
+        }
+      }
+    }
+  }
+});
+
 const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies")(function* (
   repoRoot: string,
   stageAppDir: string,
@@ -605,6 +671,8 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
       shell: process.platform === "win32",
     })`bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop`,
   );
+
+  yield* verifyStagedPatchedDependencies(repoRoot, stageAppDir);
 
   for (const relativePath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
     if (relativePath !== "package.json") {

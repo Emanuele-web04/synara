@@ -363,6 +363,45 @@ export function humanizeSubagentStatus(
   }
 }
 
+// Short form for agent rows: the "Claude " prefix is redundant next to a
+// model name ("Haiku 4.5" reads as well as "Claude Haiku 4.5" and halves the
+// label), and non-Claude names pass through unchanged.
 export function formatSubagentModelLabel(model: string | null | undefined): string | undefined {
-  return formatModelDisplayName(normalizeWhitespace(model));
+  const displayName = formatModelDisplayName(normalizeWhitespace(model));
+  return displayName?.startsWith("Claude ") ? displayName.slice("Claude ".length) : displayName;
+}
+
+// Status is the only hue in the agent panels: the dot always carries it, the
+// text echoes it only while live (running) or when something went wrong
+// (failed); terminal/neutral states read as plain muted text.
+export function subagentStatusTextToneClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "running":
+      return "text-sky-300/85";
+    case "failed":
+      return "text-rose-300/85";
+    default:
+      return "text-muted-foreground/55";
+  }
+}
+
+export function subagentStatusDotClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "running":
+      return "bg-sky-300/95";
+    case "completed":
+      return "bg-emerald-300/80";
+    case "failed":
+      return "bg-rose-300/90";
+    case "stopped":
+      return "bg-amber-300/85";
+    case "queued":
+      return "bg-violet-300/80";
+    default:
+      return "bg-muted-foreground/25";
+  }
 }

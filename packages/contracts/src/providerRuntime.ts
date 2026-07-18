@@ -496,6 +496,9 @@ const WorkflowAgentSnapshot = Schema.Struct({
   phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
   agentId: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Backfilled from the live runtime snapshots at settle when the progress
+  // file itself carries no effort.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
   state: Schema.optional(TrimmedNonEmptyStringSchema),
   tokens: Schema.optional(Schema.Int),
   toolCalls: Schema.optional(Schema.Int),
@@ -512,6 +515,8 @@ const WorkflowAgentRuntimeSnapshot = Schema.Struct({
   agentId: TrimmedNonEmptyStringSchema,
   label: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Top-level `effort` field on the transcript's assistant lines.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
   state: Schema.optional(Schema.Literals(["running", "completed"])),
   tokens: Schema.optional(Schema.Int),
   toolCalls: Schema.optional(Schema.Int),

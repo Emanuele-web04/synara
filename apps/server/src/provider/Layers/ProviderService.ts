@@ -794,6 +794,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const updateSessionBindingFromRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> => {
+      // Subagent-scoped events carry the parent thread id with the child
+      // identity in providerRefs. Their turn/session lifecycle belongs to the
+      // child thread and must not touch the parent binding — a stopped
+      // subagent would otherwise clear the parent's active turn and break
+      // main-thread interrupts for the rest of the turn.
+      if (event.providerRefs?.providerParentThreadId !== undefined) {
+        return Effect.void;
+      }
       switch (event.type) {
         case "session.started":
         case "session.state.changed":

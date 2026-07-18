@@ -1165,6 +1165,10 @@ describe("ProfileStatsArchive", () => {
               '{"threadId":"thread-retention","deletedAt":"2026-06-15T09:00:00.000Z"}', '{}'
             )
         `;
+        // The purge fence blocks while provider-intent events (thread.deleted
+        // included) are still unconsumed; a real sweep only runs after the
+        // reactor has acked them.
+        yield* acknowledgeProviderCommandJournal(sql);
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsBefore.activity.totalPromptsSent).toBe(2);

@@ -14,10 +14,24 @@ import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { memo, useState } from "react";
-import { PiArrowsInSimple, PiArrowsOutSimple, PiTreeStructure } from "react-icons/pi";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
-import { CheckIcon, CopyIcon, LoaderIcon, PauseIcon, PlayIcon, StopIcon, XIcon } from "~/lib/icons";
+import {
+  subagentStatusDotClassName,
+  subagentStatusTextToneClassName,
+} from "~/lib/subagentPresentation";
+import {
+  CheckIcon,
+  CopyIcon,
+  LoaderIcon,
+  PanelCollapseIcon,
+  PanelExpandIcon,
+  PauseIcon,
+  PlayIcon,
+  StopIcon,
+  WorkflowIcon,
+  XIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { formatClockDuration } from "../../session-logic";
@@ -25,10 +39,8 @@ import { Button } from "../ui/button";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import {
-  resolveWorkflowSelectedPhaseTitle,
   workflowElapsedMs,
   type WorkflowAgentRow,
-  type WorkflowPhaseSelection,
   type WorkflowRunState,
 } from "./WorkflowRunCard.logic";
 import {
@@ -54,23 +66,6 @@ interface WorkflowRunCardProps {
   onResume: () => void;
   onDismiss: () => void;
   attachedToPrevious?: boolean;
-}
-
-function workflowAgentStatusToneClassName(statusKind: WorkflowAgentRow["statusKind"]): string {
-  switch (statusKind) {
-    case "running":
-      return "text-sky-300/85";
-    case "completed":
-      return "text-emerald-300/75";
-    case "failed":
-      return "text-rose-300/85";
-    case "stopped":
-      return "text-amber-300/80";
-    case "queued":
-      return "text-violet-300/80";
-    default:
-      return "text-muted-foreground/55";
-  }
 }
 
 function settledWorkflowPresentation(workflowRun: WorkflowRunState): {
@@ -150,15 +145,10 @@ function WorkflowAgentDetail({
   return (
     <div
       data-testid="workflow-agent-detail"
-      className="mb-1 ml-3.5 space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
+      className="mb-1 ml-[14px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-[11px]",
-            workflowAgentStatusToneClassName(agent.statusKind),
-          )}
-        >
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70">
           {identityLine}
         </span>
         {threadId ? (
@@ -233,7 +223,7 @@ function WorkflowAgentRowView({
       <button
         type="button"
         data-testid="workflow-agent-row"
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+        className="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
         title={agent.description}
         aria-expanded={expanded}
         onClick={onToggle}
@@ -241,7 +231,7 @@ function WorkflowAgentRowView({
         <span
           className={cn(
             "size-1.5 shrink-0 rounded-full",
-            agent.statusKind === "running" ? "bg-sky-300/95" : "bg-muted-foreground/22",
+            subagentStatusDotClassName(agent.statusKind),
           )}
         />
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
@@ -263,14 +253,20 @@ function WorkflowAgentRowView({
           ) : null}
         </span>
         {meta ? (
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/45">{meta}</span>
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{meta}</span>
         ) : null}
         <span
-          className={cn("shrink-0 text-[11px]", workflowAgentStatusToneClassName(agent.statusKind))}
+          className={cn("shrink-0 text-[11px]", subagentStatusTextToneClassName(agent.statusKind))}
         >
           {agent.statusLabel}
         </span>
-        <DisclosureChevron open={expanded} className="shrink-0 text-muted-foreground/40" />
+        <DisclosureChevron
+          open={expanded}
+          className={cn(
+            "shrink-0 text-muted-foreground/40 transition-opacity",
+            !expanded && "opacity-0 group-focus-visible:opacity-100 group-hover:opacity-100",
+          )}
+        />
       </button>
       <DisclosureRegion open={expanded}>
         <WorkflowAgentDetail agent={agent} nowMs={nowMs} onOpenThread={onOpenThread} />
@@ -292,9 +288,9 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
   attachedToPrevious = false,
 }: WorkflowRunCardProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
-  // Rail auto-follows the current phase; a manual click sticks until the run
-  // advances to a new current phase or the user clicks the selection again.
-  const [manualPhase, setManualPhase] = useState<WorkflowPhaseSelection | null>(null);
+  // Default view lists every phase's agents (grouped); a pill click narrows to
+  // one phase, clicking it again returns to the full list.
+  const [filterPhaseTitle, setFilterPhaseTitle] = useState<string | null>(null);
   const [expandedAgentIds, setExpandedAgentIds] = useState<ReadonlySet<string>>(new Set());
   const toggleAgentExpanded = (taskId: string) => {
     setExpandedAgentIds((previous) => {
@@ -331,15 +327,24 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
     phase,
     agents: workflowRun.agents.filter((agent) => agent.phase === phase.title),
   }));
-  const currentPhaseTitle = workflowRun.phases?.find((phase) => phase.isCurrent)?.title ?? null;
-  const selectedPhaseTitle = resolveWorkflowSelectedPhaseTitle(workflowRun.phases, manualPhase);
-  const selectedGroup = phaseGroups?.find(({ phase }) => phase.title === selectedPhaseTitle);
+  // A single phase carries no navigation value: skip the pills and captions
+  // and list every agent flat. With several phases everything stays visible,
+  // grouped under small captions, and the pills act as optional filters.
+  const showPhasePills = (phaseGroups?.length ?? 0) > 1;
+  const selectedPhaseTitle =
+    filterPhaseTitle !== null && phaseGroups?.some(({ phase }) => phase.title === filterPhaseTitle)
+      ? filterPhaseTitle
+      : null;
+  const visibleGroups =
+    showPhasePills && phaseGroups
+      ? phaseGroups.filter(
+          ({ phase, agents }) =>
+            (selectedPhaseTitle === null || phase.title === selectedPhaseTitle) &&
+            agents.length > 0,
+        )
+      : null;
   const selectPhase = (title: string) => {
-    setManualPhase((previous) =>
-      previous !== null && title === selectedPhaseTitle
-        ? null
-        : { title, currentTitleAtSelect: currentPhaseTitle },
-    );
+    setFilterPhaseTitle((previous) => (previous === title ? null : title));
   };
 
   return (
@@ -353,7 +358,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
           {compact && workflowRun.runningCount > 0 ? (
             <LoaderIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "animate-spin")} />
           ) : (
-            <PiTreeStructure className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+            <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
           <ComposerStackedPanelRowLabel tone="meta">
             <span className="font-medium text-foreground/80">{workflowRun.name}</span>
@@ -430,9 +435,9 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
             title={compact ? "Expand workflow panel" : "Collapse workflow panel"}
           >
             {compact ? (
-              <PiArrowsOutSimple className="size-3" />
+              <PanelExpandIcon className="size-3" />
             ) : (
-              <PiArrowsInSimple className="size-3" />
+              <PanelCollapseIcon className="size-3" />
             )}
           </Button>
         </div>
@@ -440,75 +445,63 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
 
       <DisclosureRegion open={!compact && (workflowRun.agents.length > 0 || savedLine.length > 0)}>
         <div className={COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME}>
-          {phaseGroups ? (
-            <div className="flex min-w-0 gap-3">
-              <div
-                data-testid="workflow-phase-rail"
-                className="w-max max-w-[38%] shrink-0 space-y-0 border-r border-border/40 pr-3"
-              >
-                {phaseGroups.map(({ phase }) => (
-                  <button
-                    key={phase.title}
-                    type="button"
-                    data-testid="workflow-phase-rail-item"
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
-                      phase.title === selectedPhaseTitle &&
-                        "bg-[var(--color-background-button-secondary-hover)]",
-                    )}
-                    title={phase.detail ?? undefined}
-                    aria-pressed={phase.title === selectedPhaseTitle}
-                    onClick={() => selectPhase(phase.title)}
-                  >
-                    <span
-                      className={cn(
-                        "min-w-0 truncate text-[12px]",
-                        phase.isCurrent
-                          ? "font-medium text-foreground/85"
-                          : phase.title === selectedPhaseTitle
-                            ? "text-foreground/70"
-                            : "text-muted-foreground/55",
-                      )}
-                    >
-                      {phase.title}
+          {showPhasePills ? (
+            <div
+              data-testid="workflow-phase-rail"
+              className="-ml-2 flex min-w-0 flex-wrap items-center gap-1 pb-1"
+            >
+              {phaseGroups!.map(({ phase }) => (
+                <button
+                  key={phase.title}
+                  type="button"
+                  data-testid="workflow-phase-rail-item"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] transition-colors",
+                    phase.title === selectedPhaseTitle
+                      ? "bg-[var(--color-background-button-secondary)] text-foreground/85"
+                      : "text-muted-foreground/60 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/70",
+                  )}
+                  title={phase.detail ?? undefined}
+                  aria-pressed={phase.title === selectedPhaseTitle}
+                  onClick={() => selectPhase(phase.title)}
+                >
+                  <span className={cn("truncate", phase.isCurrent && "font-medium")}>
+                    {phase.title}
+                  </span>
+                  {phase.totalCount > 0 ? (
+                    <span className="tabular-nums opacity-60">
+                      {phase.doneCount}/{phase.totalCount}
                     </span>
-                    {phase.totalCount > 0 ? (
-                      <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/45">
-                        {phase.doneCount}/{phase.totalCount}
-                      </span>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-              <div className="min-w-0 flex-1 space-y-0" data-testid="workflow-phase-group">
-                {selectedGroup ? (
-                  <>
-                    <div className="px-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/45">
-                      {selectedGroup.phase.title}
-                    </div>
-                    {selectedGroup.agents.length > 0 ? (
-                      selectedGroup.agents.map((agent) => (
-                        <WorkflowAgentRowView
-                          key={agent.taskId}
-                          agent={agent}
-                          nowMs={nowMs}
-                          expanded={expandedAgentIds.has(agent.taskId)}
-                          onToggle={() => toggleAgentExpanded(agent.taskId)}
-                          onOpenThread={onOpenThread}
-                        />
-                      ))
-                    ) : (
-                      <div className="px-1 py-1 text-[11px] text-muted-foreground/45">
-                        No agents yet
-                      </div>
-                    )}
-                  </>
-                ) : null}
-              </div>
+                  ) : null}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div className="space-y-0">
-              {workflowRun.agents.map((agent) => (
+          ) : null}
+          <div className="space-y-0" data-testid="workflow-phase-group">
+            {visibleGroups ? (
+              visibleGroups.length > 0 ? (
+                visibleGroups.map(({ phase, agents }) => (
+                  <div key={phase.title}>
+                    <div className="pt-1 text-[10px] font-medium text-muted-foreground/50">
+                      {phase.title}
+                    </div>
+                    {agents.map((agent) => (
+                      <WorkflowAgentRowView
+                        key={agent.taskId}
+                        agent={agent}
+                        nowMs={nowMs}
+                        expanded={expandedAgentIds.has(agent.taskId)}
+                        onToggle={() => toggleAgentExpanded(agent.taskId)}
+                        onOpenThread={onOpenThread}
+                      />
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+              )
+            ) : workflowRun.agents.length > 0 ? (
+              workflowRun.agents.map((agent) => (
                 <WorkflowAgentRowView
                   key={agent.taskId}
                   agent={agent}
@@ -517,20 +510,22 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                   onToggle={() => toggleAgentExpanded(agent.taskId)}
                   onOpenThread={onOpenThread}
                 />
-              ))}
-            </div>
-          )}
+              ))
+            ) : (
+              <div className="py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+            )}
+          </div>
           {savedLine.length > 0 ? (
             <div
               data-testid="workflow-saved-line"
-              className="mt-1 flex min-w-0 items-center gap-1.5 border-t border-border/40 px-1 pt-1.5"
+              className="mt-0.5 flex min-w-0 items-center gap-1.5"
             >
-              <span className="shrink-0 text-[11px] text-muted-foreground/55">Saved</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground/50">Saved</span>
               <span
-                className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground/45"
+                className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/45"
                 title={savedLine}
               >
-                {savedLine}
+                {workflowRun.runId ?? workflowRun.scriptPath}
               </span>
               <Button
                 type="button"
@@ -539,7 +534,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                 className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
                 onClick={() => copyToClipboard(savedLine, undefined)}
                 aria-label="Copy script path and run id"
-                title="Copy script path and run id"
+                title={savedLine}
               >
                 {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
               </Button>

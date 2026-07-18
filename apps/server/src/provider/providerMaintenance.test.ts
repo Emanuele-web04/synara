@@ -2,6 +2,7 @@ import { describe, it, assert } from "@effect/vitest";
 
 import {
   createProviderVersionAdvisory,
+  deriveNpmGlobalPrefix,
   parseGenericCliVersion,
   resolvePackageManagedProviderMaintenance,
   type PackageManagedProviderMaintenanceDefinition,
@@ -47,11 +48,42 @@ describe("providerMaintenance", () => {
     });
 
     assert.deepStrictEqual(capabilities.update, {
-      command: "npm install -g @openai/codex@latest",
+      command: "npm install -g --prefix /Users/test/.npm-global @openai/codex@latest",
       executable: "npm",
-      args: ["install", "-g", "@openai/codex@latest"],
+      args: ["install", "-g", "--prefix", "/Users/test/.npm-global", "@openai/codex@latest"],
       lockKey: "npm-global",
     });
+  });
+
+  it("pins the npm global prefix that owns the detected binary", () => {
+    // npm's global prefix follows the node that runs it, so without --prefix a
+    // second node install (e.g. nvm) would receive the update while Synara
+    // keeps checking the copy it originally detected.
+    assert.strictEqual(
+      deriveNpmGlobalPrefix("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"),
+      "/opt/homebrew",
+    );
+    assert.strictEqual(
+      deriveNpmGlobalPrefix(
+        "C:\\Users\\Test User\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+      ),
+      "C:\\Users\\Test User\\AppData\\Roaming\\npm",
+    );
+    // Project-local node_modules paths are not global installs; no prefix.
+    assert.strictEqual(deriveNpmGlobalPrefix("/repo/node_modules/.bin/codex"), null);
+  });
+
+  it("quotes update command arguments containing spaces", () => {
+    const capabilities = resolvePackageManagedProviderMaintenance(CODEX_DEFINITION, {
+      binaryPath: "codex",
+      realCommandPath:
+        "C:\\Users\\Test User\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+    });
+
+    assert.strictEqual(
+      capabilities.update?.command,
+      'npm install -g --prefix "C:\\Users\\Test User\\AppData\\Roaming\\npm" @openai/codex@latest',
+    );
   });
 
   it("does not guess an update command for unclassified binaries", () => {

@@ -255,4 +255,10 @@ describe("formatSubagentModelLabel", () => {
   it("humanizes unknown GPT subagent models", () => {
     expect(formatSubagentModelLabel("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
   });
+
+  it("drops the redundant Claude prefix for agent rows", () => {
+    expect(formatSubagentModelLabel("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
+    expect(formatSubagentModelLabel("claude-sonnet-4-6")).toBe("Sonnet 4.6");
+    expect(formatSubagentModelLabel("haiku")).toBe("Haiku");
+  });
 });

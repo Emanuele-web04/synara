@@ -119,6 +119,7 @@ import {
   collectClaudeWorkflowRuntime,
   makeClaudeWorkflowRuntimeState,
   readClaudeWorkflowOutputText,
+  type ClaudeWorkflowRuntimeState,
 } from "../claudeWorkflowRuntime.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
@@ -314,6 +315,16 @@ interface ClaudeSessionContext {
   // Stop requests that arrived before task_started mapped the tool_use_id to an
   // SDK task id; fired via query.stopTask the moment the mapping lands.
   readonly pendingSubagentStops: Set<string>;
+  // Last background-task ids from background_tasks_changed (REPLACE
+  // semantics); diffed so only newly backgrounded work gets announced.
+  readonly knownBackgroundTaskIds: Set<string>;
+  // Final status per tool-use id whose task already settled (terminal
+  // task_updated or task_notification). Late messages still tagged with them
+  // must not resurrect a scoped run: the synthetic turn that would start on
+  // the settled child thread never completes and pins the strip row on
+  // "Running". The status also corrects the Task tool_result's error shape
+  // (a user stop returns an error result that would otherwise read "Failed").
+  readonly settledSubagentToolUseIds: Map<string, "completed" | "failed" | "stopped">;
   // Live workflow runs (task_type "local_workflow") by task id. The SDK carries no
   // parent-task linkage, so agent tasks that start while exactly one workflow is
   // live get tagged with it (recorded in workflowTaskIdByMemberTaskId); with
@@ -328,6 +339,9 @@ interface ClaudeSessionContext {
   // descriptions) that the poller zips against journal start order.
   readonly workflowRuntimePollers: Map<string, Fiber.Fiber<void>>;
   readonly workflowAgentLabels: Map<string, Array<string>>;
+  // Poller state per workflow task id, kept reachable so settle can backfill
+  // runtime-only fields (effort) into the final output-file snapshots.
+  readonly workflowRuntimeStates: Map<string, ClaudeWorkflowRuntimeState>;
   // Set on subagent-scoped contexts only: stamps providerThreadId (the Task
   // tool_use_id) + providerParentThreadId on every runtime event this context emits.
   readonly subagentRefs?: {
@@ -2606,6 +2620,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           streamFiber: undefined,
           startedAt: context.startedAt,
           basePermissionMode: context.basePermissionMode,
+          spawnPermissionMode: context.spawnPermissionMode,
+          // Subagent contexts only project events for an already-running CLI;
+          // they never dispatch the first prompt, so spawn state is not theirs
+          // to prove.
+          firstTurnSpawnModeAuthoritative: false,
           lastInteractionMode: undefined,
           currentApiModelId: undefined,
           resumeSessionId: undefined,
@@ -2636,11 +2655,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           subagentRuns: new Map(),
           pendingSubagentSteers: new Map(),
           pendingSubagentStops: new Set(),
+          knownBackgroundTaskIds: new Set(),
+          settledSubagentToolUseIds: new Map(),
           liveWorkflowTaskIds: new Set(),
           knownWorkflowTaskIds: new Set(),
           workflowTaskIdByMemberTaskId: new Map(),
           workflowRuntimePollers: new Map(),
           workflowAgentLabels: new Map(),
+          workflowRuntimeStates: new Map(),
           subagentRefs: {
             providerThreadId: toolUseId,
             providerParentThreadId: context.session.threadId,
@@ -2907,7 +2929,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           const [index, tool] = toolEntry;
           const itemStatus = toolResult.isError ? "failed" : "completed";
-          const toolData = toolLifecycleEventData(tool, { result: toolResult.block });
+          // A user-stopped task returns an error-shaped tool_result; the settled
+          // status stamps a per-agent state so the row reads "Stopped", not
+          // "Failed".
+          const settledStatus =
+            tool.toolName === "Task" || tool.toolName === "Agent"
+              ? context.settledSubagentToolUseIds.get(tool.itemId)
+              : undefined;
+          const toolData = toolLifecycleEventData(tool, {
+            result: toolResult.block,
+            ...(settledStatus === "stopped"
+              ? { agentStates: { [tool.itemId]: { status: "stopped" } } }
+              : {}),
+          });
 
           const updatedStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent(context, {
@@ -3337,6 +3371,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return;
       }
       const state = makeClaudeWorkflowRuntimeState();
+      context.workflowRuntimeStates.set(taskId, state);
       let lastEmitted = "";
       const loop = Effect.gen(function* () {
         while (!context.stopped && context.liveWorkflowTaskIds.has(taskId)) {
@@ -3389,6 +3424,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         context.workflowAgentLabels.delete(taskId);
+        // workflowRuntimeStates survives poller teardown: a terminal
+        // task_updated stops the poller before task_notification backfills
+        // effort into the final snapshots; the state is dropped there instead.
         const fiber = context.workflowRuntimePollers.get(taskId);
         if (!fiber) {
           return;
@@ -3488,6 +3526,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.subagentRuns.delete(run.toolUseId);
             context.pendingSubagentSteers.delete(run.toolUseId);
             context.pendingSubagentStops.delete(run.toolUseId);
+            context.settledSubagentToolUseIds.set(
+              run.toolUseId,
+              status === "completed" ? "completed" : status === "failed" ? "failed" : "stopped",
+            );
             if (run.context.turnState) {
               yield* completeTurn(
                 run.context,
@@ -3634,7 +3676,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (message.task_type === "local_workflow") {
               context.liveWorkflowTaskIds.add(message.task_id);
               context.knownWorkflowTaskIds.add(message.task_id);
-            } else if (context.liveWorkflowTaskIds.size === 1) {
+            } else if (
+              context.liveWorkflowTaskIds.size === 1 &&
+              // Ambient housekeeping tasks (each Bash call an agent makes
+              // surfaces as its own local_bash task) are not workflow members;
+              // tagging them floods the run panel with pseudo-agent rows.
+              message.task_type !== "local_bash" &&
+              message.skip_transcript !== true &&
+              // Task-tool subagent spawns already surface in the subagent
+              // strip via their collab item; tagging them too would list the
+              // same agent twice (strip row + workflow member row).
+              !(message.tool_use_id !== undefined && message.subagent_type !== undefined)
+            ) {
               const [workflowTaskId] = context.liveWorkflowTaskIds;
               context.workflowTaskIdByMemberTaskId.set(message.task_id, workflowTaskId!);
             }
@@ -3719,9 +3772,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               message.output_file.length > 0
                 ? yield* readClaudeWorkflowOutputText(fileSystem, message.output_file)
                 : undefined;
-            const workflowAgents = workflowOutputText
+            const parsedWorkflowAgents = workflowOutputText
               ? parseClaudeWorkflowProgressAgents(workflowOutputText)
               : undefined;
+            // The output file carries no reasoning effort; the live poller saw
+            // it on the transcripts, so carry it over by agent id at settle.
+            const runtimeEffortByAgentId = new Map(
+              Array.from(
+                context.workflowRuntimeStates.get(message.task_id)?.agents.values() ?? [],
+                (agent) => [agent.agentId, agent.effort] as const,
+              ).filter((entry): entry is [string, string] => entry[1] !== undefined),
+            );
+            const workflowAgents = parsedWorkflowAgents?.map((agent) => {
+              const effort = agent.agentId ? runtimeEffortByAgentId.get(agent.agentId) : undefined;
+              return agent.effort === undefined && effort !== undefined
+                ? Object.assign({}, agent, { effort })
+                : agent;
+            });
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "task.completed",
@@ -3739,12 +3806,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.liveWorkflowTaskIds.delete(message.task_id);
             context.knownWorkflowTaskIds.delete(message.task_id);
             context.workflowTaskIdByMemberTaskId.delete(message.task_id);
+            context.workflowRuntimeStates.delete(message.task_id);
             yield* stopWorkflowRuntimePoller(context, message.task_id);
             const run = subagentRunForTask(context, message.tool_use_id, message.task_id);
             if (run) {
               context.subagentRuns.delete(run.toolUseId);
               context.pendingSubagentSteers.delete(run.toolUseId);
               context.pendingSubagentStops.delete(run.toolUseId);
+              context.settledSubagentToolUseIds.set(run.toolUseId, message.status);
               if (run.context.turnState) {
                 yield* completeTurn(run.context, claudeTaskTurnStatus(message.status));
               }
@@ -3773,6 +3842,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
+          case "background_tasks_changed": {
+            // REPLACE semantics: the payload is the full live background set.
+            // Announce only newly backgrounded work with a one-line notice;
+            // removals settle through their own task lifecycle events.
+            const tasks = Array.isArray(message.tasks) ? message.tasks : [];
+            const added = tasks.filter((task) => !context.knownBackgroundTaskIds.has(task.task_id));
+            context.knownBackgroundTaskIds.clear();
+            for (const task of tasks) {
+              context.knownBackgroundTaskIds.add(task.task_id);
+            }
+            if (added.length === 0) {
+              return;
+            }
+            const labels = added.map((task) =>
+              task.description.trim().length > 0 ? task.description.trim() : task.task_type,
+            );
+            const notice =
+              added.length === 1
+                ? labels[0]!
+                : `${added.length} tasks: ${labels.join(", ")}`.slice(0, 200);
+            yield* emitRuntimeWarning(context, notice, message);
+            return;
+          }
           default:
             yield* warnUnhandledSdkKind(
               context,
@@ -3871,6 +3963,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // the parent's resume cursor.
         const subagentToolUseId = subagentParentToolUseId(message);
         if (subagentToolUseId !== undefined) {
+          // A settled task's zombie tail (messages already in flight when the
+          // stop landed) is dropped, not projected onto the settled child.
+          if (context.settledSubagentToolUseIds.has(subagentToolUseId)) {
+            return;
+          }
           const run = ensureSubagentRun(context, subagentToolUseId);
           yield* ensureSyntheticTurn(run.context);
           switch (message.type) {
@@ -4707,11 +4804,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             subagentRuns: new Map(),
             pendingSubagentSteers,
             pendingSubagentStops,
+            knownBackgroundTaskIds: new Set(),
+            settledSubagentToolUseIds: new Map(),
             liveWorkflowTaskIds: new Set(),
             knownWorkflowTaskIds: new Set(),
             workflowTaskIdByMemberTaskId: new Map(),
             workflowRuntimePollers: new Map(),
             workflowAgentLabels: new Map(),
+            workflowRuntimeStates: new Map(),
           };
           installationContext = context;
           yield* Effect.gen(function* () {
@@ -5044,6 +5144,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // use to a task id there is nothing to stop yet, so queue the request and
         // fire it the moment the mapping lands (backgrounding is not stopping).
         if (providerThreadId !== undefined) {
+          // Already settled: nothing to stop, and queueing would leak a stop
+          // that could fire on an unrelated future task.
+          if (context.settledSubagentToolUseIds.has(providerThreadId)) {
+            return;
+          }
           const taskId = context.subagentRuns.get(providerThreadId)?.taskId;
           if (taskId === undefined) {
             context.pendingSubagentStops.add(providerThreadId);

@@ -7,8 +7,7 @@
 // drive pause/resume on settled runs.
 // Layer: Chat composer logic
 // Exports: deriveWorkflowRunState, WorkflowRunState, WorkflowAgentRow,
-// resolveWorkflowSelectedPhaseTitle, workflowElapsedMs, and
-// buildWorkflowResumePrompt
+// workflowElapsedMs, and buildWorkflowResumePrompt
 
 import { ThreadId, type OrchestrationThreadActivity } from "@synara/contracts";
 
@@ -31,7 +30,8 @@ export interface WorkflowAgentRow {
   // Raw model id (live transcript > final snapshot > planned script opts).
   model: string | null;
   modelLabel: string | undefined;
-  // Planned effort from the script's agent() opts; runtime carries no effort.
+  // Reasoning effort, same precedence as model (live transcript > final
+  // snapshot > planned script opts).
   effortLabel: string | null;
   promptPreview: string | null;
   recentToolNames: string[];
@@ -71,6 +71,7 @@ export interface WorkflowRunState {
 export interface WorkflowSubagentThreadRef {
   threadId: string;
   model?: string | undefined;
+  effort?: string | undefined;
 }
 
 // One composer turn re-invokes the Workflow tool against the persisted script;
@@ -90,6 +91,7 @@ interface WorkflowFinalAgent {
   phaseIndex: number | null;
   phaseTitle: string | null;
   model: string | null;
+  effort: string | null;
   state: string | null;
   tokens: number | null;
   toolCalls: number | null;
@@ -103,6 +105,7 @@ interface WorkflowLiveAgent {
   agentId: string;
   label: string | null;
   model: string | null;
+  effort: string | null;
   state: "running" | "completed" | null;
   tokens: number | null;
   toolCalls: number | null;
@@ -224,6 +227,7 @@ function readFinalAgents(value: unknown): WorkflowFinalAgent[] | null {
         phaseIndex: typeof record.phaseIndex === "number" ? record.phaseIndex : null,
         phaseTitle: asString(record.phaseTitle),
         model: asString(record.model),
+        effort: asString(record.effort),
         state: asString(record.state),
         tokens: asFiniteNumber(record.tokens),
         toolCalls: asFiniteNumber(record.toolCalls),
@@ -252,6 +256,7 @@ function readLiveAgents(value: unknown): WorkflowLiveAgent[] | null {
         agentId,
         label: asString(record.label),
         model: asString(record.model),
+        effort: asString(record.effort),
         state: state === "running" || state === "completed" ? state : null,
         tokens: asFiniteNumber(record.tokens),
         toolCalls: asFiniteNumber(record.toolCalls),
@@ -447,33 +452,6 @@ export function workflowElapsedMs(
 
 const OTHER_PHASE_TITLE = "Other";
 
-// Phase-rail selection: the rail follows the run's current phase until the
-// user clicks one; the manual choice sticks while the current phase it was
-// made under is unchanged, then the rail snaps back to auto-follow.
-export interface WorkflowPhaseSelection {
-  title: string;
-  // Current phase title at the moment the user clicked (null when none).
-  currentTitleAtSelect: string | null;
-}
-
-export function resolveWorkflowSelectedPhaseTitle(
-  phases: ReadonlyArray<WorkflowPhaseSummary> | null,
-  manual: WorkflowPhaseSelection | null,
-): string | null {
-  if (!phases || phases.length === 0) {
-    return null;
-  }
-  const current = phases.find((phase) => phase.isCurrent)?.title ?? null;
-  if (
-    manual &&
-    manual.currentTitleAtSelect === current &&
-    phases.some((phase) => phase.title === manual.title)
-  ) {
-    return manual.title;
-  }
-  return current ?? phases[0]!.title;
-}
-
 export function deriveWorkflowRunState(input: {
   activities: ReadonlyArray<OrchestrationThreadActivity>;
   subagentThreadsByToolUseId?: ReadonlyMap<string, WorkflowSubagentThreadRef>;
@@ -548,8 +526,14 @@ export function deriveWorkflowRunState(input: {
 
   // Member-task rows: plain background tasks tagged onto the run. Workflow
   // agents themselves emit no task events, so these are usually empty.
+  // Ambient shell tasks (every Bash call surfaces as a local_bash task) are
+  // not agents, and Task-tool subagents already render in the subagent strip;
+  // drop both here too so already-persisted runs render clean.
   const memberSnapshots = [...snapshots.values()].filter(
-    (snapshot) => snapshot.workflowTaskId === workflow.taskId,
+    (snapshot) =>
+      snapshot.workflowTaskId === workflow.taskId &&
+      snapshot.taskType !== "local_bash" &&
+      !(snapshot.toolUseId !== null && snapshot.subagentType !== null),
   );
   let lastMatchedPhase: string | null = null;
   const memberRows = memberSnapshots.map((snapshot): WorkflowAgentRow => {
@@ -577,7 +561,7 @@ export function deriveWorkflowRunState(input: {
       threadId: threadRef ? ThreadId.makeUnsafe(threadRef.threadId) : null,
       model,
       modelLabel: formatSubagentModelLabel(model),
-      effortLabel: plan?.effort ?? null,
+      effortLabel: threadRef?.effort ?? plan?.effort ?? null,
       promptPreview: null,
       recentToolNames: [],
       lastToolName: null,
@@ -650,6 +634,7 @@ export function deriveWorkflowRunState(input: {
               : "completed";
       const { statusKind, statusLabel } = agentStatusPresentation(status);
       const model = live?.model ?? finalAgent?.model ?? plan?.model ?? null;
+      const effort = live?.effort ?? finalAgent?.effort ?? plan?.effort ?? null;
       return {
         taskId: `${workflow.taskId}:agent:${label}`,
         description: label,
@@ -664,7 +649,7 @@ export function deriveWorkflowRunState(input: {
         threadId: null,
         model,
         modelLabel: formatSubagentModelLabel(model),
-        effortLabel: plan?.effort ?? null,
+        effortLabel: effort,
         promptPreview: live?.promptPreview ?? finalAgent?.promptPreview ?? null,
         recentToolNames: live?.recentToolNames ?? [],
         lastToolName: finalAgent?.lastToolName ?? live?.recentToolNames.at(-1) ?? null,
@@ -699,7 +684,7 @@ export function deriveWorkflowRunState(input: {
             threadId: null,
             model,
             modelLabel: formatSubagentModelLabel(model),
-            effortLabel: plan?.effort ?? null,
+            effortLabel: agent.effort ?? plan?.effort ?? null,
             promptPreview: agent.promptPreview,
             recentToolNames: [],
             lastToolName: agent.lastToolName,
@@ -739,7 +724,7 @@ export function deriveWorkflowRunState(input: {
             threadId: null,
             model,
             modelLabel: formatSubagentModelLabel(model),
-            effortLabel: plan?.effort ?? null,
+            effortLabel: agent.effort ?? plan?.effort ?? null,
             promptPreview: agent.promptPreview,
             recentToolNames: agent.recentToolNames,
             lastToolName: agent.recentToolNames.at(-1) ?? null,
