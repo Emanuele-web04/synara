@@ -25,6 +25,7 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ThreadApprovalResponseRequestedPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
@@ -1092,6 +1093,34 @@ export function projectEvent(
                       completedAt: latestCheckpoint.completedAt,
                       assistantMessageId: latestCheckpoint.assistantMessageId,
                     },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.approval-response-requested":
+      return decodeForEvent(
+        ThreadApprovalResponseRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const responded = thread.respondedApprovalRequestIds ?? [];
+          if (responded.includes(payload.requestId)) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              respondedApprovalRequestIds: [...responded, payload.requestId],
               updatedAt: event.occurredAt,
             }),
           };

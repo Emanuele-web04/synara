@@ -681,6 +681,7 @@ export const OrchestrationThread = Schema.Struct({
   hasPendingApprovals: Schema.optional(Schema.Boolean),
   hasPendingUserInput: Schema.optional(Schema.Boolean),
   hasActionableProposedPlan: Schema.optional(Schema.Boolean),
+  respondedApprovalRequestIds: Schema.optional(Schema.Array(ApprovalRequestId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(

@@ -28,6 +28,7 @@ import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import {
   listActiveProjectsByWorkspaceRoot,
   listThreadsByProjectId,
+  requireApprovalNotResponded,
   requireProject,
   requireProjectAbsent,
   requireProjectHasNoThreads,
@@ -1331,6 +1332,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         readModel,
         command,
         threadId: command.threadId,
+      });
+      yield* requireApprovalNotResponded({
+        readModel,
+        command,
+        threadId: command.threadId,
+        requestId: command.requestId,
       });
       return {
         ...withEventBase({
