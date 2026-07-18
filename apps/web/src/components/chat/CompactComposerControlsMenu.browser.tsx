@@ -103,7 +103,7 @@ describe("CompactComposerControlsMenu", () => {
     });
   });
 
-  it("shows fast mode controls for Opus", async () => {
+  it("shows the fast mode toggle in the Effort header for Opus", async () => {
     await using _ = await mountMenu({
       modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
     });
@@ -111,10 +111,9 @@ describe("CompactComposerControlsMenu", () => {
     await page.getByLabelText("More composer controls").click();
 
     await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Speed");
-      expect(text).toContain("Default");
-      expect(text).toContain("Fast");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
+      expect(document.body.querySelector('[aria-label="Fast mode"]')).not.toBeNull();
     });
   });
 
@@ -126,7 +125,8 @@ describe("CompactComposerControlsMenu", () => {
     await page.getByLabelText("More composer controls").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Speed");
+      expect(document.body.textContent ?? "").toContain("Effort");
+      expect(document.body.querySelector('[aria-label="Fast mode"]')).toBeNull();
     });
   });
 
