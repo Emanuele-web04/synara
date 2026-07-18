@@ -180,6 +180,7 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
+import { SynaraLogo } from "./SynaraLogo";
 import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
@@ -6791,12 +6792,13 @@ export default function Sidebar() {
         <>
           <SidebarHeader
             className={cn(
-              "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              "drag-region flex-row items-center gap-2 py-0 ps-4 pe-3 font-system-ui",
               CHAT_SURFACE_HEADER_HEIGHT_CLASS,
               isMacDesktop && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
             )}
           >
             {titlebarControls}
+            <SynaraLogo aria-label="Synara" className="pointer-events-none ml-auto size-7" />
           </SidebarHeader>
         </>
       ) : (
@@ -7171,16 +7173,19 @@ export default function Sidebar() {
                           </button>
                         </div>
                       ) : (
-                        <div
-                          className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
-                            addProjectError
-                              ? "border-red-500/70 focus-within:border-red-500"
-                              : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
-                          }`}
-                        >
-                          <input
+                        <div className="relative">
+                          <Input
                             ref={addProjectInputRef}
-                            className="min-w-0 flex-1 bg-transparent pl-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                            nativeInput
+                            size="sm"
+                            variant="soft"
+                            autoFocus
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            aria-invalid={addProjectError ? true : undefined}
+                            aria-label="Project path"
+                            className="[&>[data-slot=input]]:pe-9"
                             placeholder="/path/to/project"
                             value={newCwd}
                             onChange={(event) => {
@@ -7194,11 +7199,10 @@ export default function Sidebar() {
                                 setAddProjectError(null);
                               }
                             }}
-                            autoFocus
                           />
                           <button
                             type="button"
-                            className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
+                            className="-translate-y-1/2 absolute end-1.5 top-1/2 rounded-md px-1.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
                             onClick={handleAddProject}
                             disabled={!canAddProject}
                             aria-label="Add project"
