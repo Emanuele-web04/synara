@@ -22,6 +22,19 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 export const AuthSessionRole = Schema.Literals(["owner", "client"]);
 export type AuthSessionRole = typeof AuthSessionRole.Type;
 
+/**
+ * Limits which server surface an authenticated session may enter.
+ *
+ * `full` is the decoding default so sessions and pairing links persisted before
+ * Companion Protocol v1 retain their existing desktop behavior.
+ */
+export const AuthAccessProfile = Schema.Literals(["full", "companion"]);
+export type AuthAccessProfile = typeof AuthAccessProfile.Type;
+
+const LegacyCompatibleAuthAccessProfile = Schema.optional(AuthAccessProfile).pipe(
+  Schema.withDecodingDefault(() => "full"),
+);
+
 export const ServerAuthDescriptor = Schema.Struct({
   policy: ServerAuthPolicy,
   bootstrapMethods: Schema.Array(ServerAuthBootstrapMethod),
@@ -32,12 +45,14 @@ export type ServerAuthDescriptor = typeof ServerAuthDescriptor.Type;
 
 export const AuthBootstrapInput = Schema.Struct({
   credential: TrimmedNonEmptyString,
+  deviceLabel: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(80))),
 });
 export type AuthBootstrapInput = typeof AuthBootstrapInput.Type;
 
 export const AuthBootstrapResult = Schema.Struct({
   authenticated: Schema.Literal(true),
   role: AuthSessionRole,
+  accessProfile: LegacyCompatibleAuthAccessProfile,
   sessionMethod: ServerAuthSessionMethod,
   expiresAt: Schema.DateTimeUtc,
 });
@@ -46,6 +61,7 @@ export type AuthBootstrapResult = typeof AuthBootstrapResult.Type;
 export const AuthBearerBootstrapResult = Schema.Struct({
   authenticated: Schema.Literal(true),
   role: AuthSessionRole,
+  accessProfile: LegacyCompatibleAuthAccessProfile,
   sessionMethod: Schema.Literal("bearer-session-token"),
   expiresAt: Schema.DateTimeUtc,
   sessionToken: TrimmedNonEmptyString,
@@ -58,15 +74,11 @@ export const AuthWebSocketTokenResult = Schema.Struct({
 });
 export type AuthWebSocketTokenResult = typeof AuthWebSocketTokenResult.Type;
 
-export const AuthLogoutResult = Schema.Struct({
-  revoked: Schema.Boolean,
-});
-export type AuthLogoutResult = typeof AuthLogoutResult.Type;
-
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
+  accessProfile: LegacyCompatibleAuthAccessProfile,
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
@@ -75,6 +87,7 @@ export const AuthPairingLink = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
   role: AuthSessionRole,
+  accessProfile: LegacyCompatibleAuthAccessProfile,
   subject: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
   createdAt: Schema.DateTimeUtc,
@@ -105,6 +118,7 @@ export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
   subject: TrimmedNonEmptyString,
   role: AuthSessionRole,
+  accessProfile: LegacyCompatibleAuthAccessProfile,
   method: ServerAuthSessionMethod,
   client: AuthClientMetadata,
   issuedAt: Schema.DateTimeUtc,
@@ -133,6 +147,7 @@ export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.T
 
 export const AuthCreatePairingCredentialInput = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
+  accessProfile: Schema.optionalKey(AuthAccessProfile),
 });
 export type AuthCreatePairingCredentialInput = typeof AuthCreatePairingCredentialInput.Type;
 
@@ -140,7 +155,13 @@ export const AuthSessionState = Schema.Struct({
   authenticated: Schema.Boolean,
   auth: ServerAuthDescriptor,
   role: Schema.optionalKey(AuthSessionRole),
+  accessProfile: Schema.optionalKey(AuthAccessProfile),
   sessionMethod: Schema.optionalKey(ServerAuthSessionMethod),
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
+
+export const AuthLogoutResult = Schema.Struct({
+  revoked: Schema.Boolean,
+});
+export type AuthLogoutResult = typeof AuthLogoutResult.Type;

@@ -48,6 +48,7 @@ describe("AuthControlPlaneLive", () => {
         const listedAfterRevoke = yield* authControlPlane.listPairingLinks({ role: "client" });
 
         expect(created.role).toBe("client");
+        expect(created.accessProfile).toBe("full");
         expect(created.credential.length).toBeGreaterThan(0);
         expect(listedBeforeRevoke).toHaveLength(1);
         expect(listedBeforeRevoke[0]?.id).toBe(created.id);
@@ -72,6 +73,7 @@ describe("AuthControlPlaneLive", () => {
 
         expect(issued.method).toBe("bearer-session-token");
         expect(issued.role).toBe("owner");
+        expect(issued.accessProfile).toBe("full");
         expect(issued.client.deviceType).toBe("bot");
         expect(issued.client.label).toBe("deploy-bot");
         expect(verified.sessionId).toBe(issued.sessionId);

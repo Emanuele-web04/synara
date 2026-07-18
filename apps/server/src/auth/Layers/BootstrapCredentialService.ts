@@ -1,4 +1,4 @@
-import type { AuthPairingLink } from "@synara/contracts";
+import type { AuthAccessProfile, AuthPairingLink } from "@synara/contracts";
 import * as Crypto from "node:crypto";
 import { DateTime, Duration, Effect, Layer, Option, PubSub, Ref, Stream } from "effect";
 
@@ -37,6 +37,7 @@ const toPairingLink = (row: {
   readonly id: string;
   readonly credential: string;
   readonly role: "owner" | "client";
+  readonly accessProfile: AuthAccessProfile;
   readonly subject: string;
   readonly label: string | null;
   readonly createdAt: DateTime.Utc;
@@ -45,6 +46,7 @@ const toPairingLink = (row: {
   id: row.id,
   credential: row.credential,
   role: row.role,
+  accessProfile: row.accessProfile,
   subject: row.subject,
   ...(row.label ? { label: row.label } : {}),
   createdAt: row.createdAt,
@@ -99,6 +101,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
       const ttl = input?.ttl ?? DEFAULT_ONE_TIME_TOKEN_TTL;
       const expiresAt = DateTime.addDuration(now, ttl);
       const role = input?.role ?? "client";
+      const accessProfile = input?.accessProfile ?? "full";
       const subject = input?.subject ?? "one-time-token";
       const label = input?.label;
 
@@ -107,6 +110,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         credential,
         method: "one-time-token",
         role,
+        accessProfile,
         subject,
         label: label ?? null,
         createdAt: now,
@@ -117,6 +121,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         id,
         credential,
         role,
+        accessProfile,
         subject,
         label: label ?? null,
         createdAt: now,
@@ -175,6 +180,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         return {
           method: seeded.method,
           role: seeded.role,
+          accessProfile: seeded.accessProfile,
           subject: seeded.subject,
           ...(seeded.label ? { label: seeded.label } : {}),
           expiresAt: seeded.expiresAt,
@@ -192,6 +198,7 @@ export const makeBootstrapCredentialService = Effect.gen(function* () {
         return {
           method: consumed.value.method,
           role: consumed.value.role,
+          accessProfile: consumed.value.accessProfile,
           subject: consumed.value.subject,
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           expiresAt: consumed.value.expiresAt,

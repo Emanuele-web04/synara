@@ -8,6 +8,7 @@ export const SETTINGS_SECTION_IDS = [
   "profile",
   "appearance",
   "notifications",
+  "remote-access",
   "behavior",
   "appsnap",
   "shortcuts",
@@ -87,6 +88,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "In-app toasts and desktop alerts.",
     icon: "bell",
     eyebrow: "Alerts",
+  },
+  {
+    id: "remote-access",
+    group: "app",
+    label: "Remote Access",
+    description: "Mobile Companion, private Tailscale access, pairing, and devices.",
+    icon: "devices",
+    eyebrow: "Mobile companion",
   },
   {
     id: "behavior",

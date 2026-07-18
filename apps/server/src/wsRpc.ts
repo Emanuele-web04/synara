@@ -1542,6 +1542,13 @@ export function makeWebsocketRpcRouteLayer<R>(
             serverAuth,
           });
 
+          if (authenticatedSession?.accessProfile === "companion") {
+            return HttpServerResponse.text("Forbidden", {
+              status: 403,
+              headers: { "Cache-Control": "no-store" },
+            });
+          }
+
           if (!authenticatedSession) {
             return yield* rpcWebSocketHttpEffect.pipe(
               Effect.provideService(

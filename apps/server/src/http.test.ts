@@ -95,6 +95,8 @@ const serverAuth = {
       subject: "test-owner",
       method: "browser-session-cookie" as const,
       role: "owner" as const,
+      accessProfile: "full" as const,
+      client: { label: "Test desktop", deviceType: "desktop" as const },
       credentialSource: "cookie" as const,
     }),
 } as unknown as ServerAuthShape;
@@ -207,8 +209,17 @@ describe("production Effect HTTP routes", () => {
 
     const staticDir = makeTempDir("synara-effect-static-");
     mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    mkdirSync(path.join(staticDir, "mobile", "assets"), { recursive: true });
     writeFileSync(path.join(staticDir, "index.html"), "<main>Synara shell</main>");
     writeFileSync(path.join(staticDir, "assets", "app.js"), "globalThis.synara = true;");
+    writeFileSync(
+      path.join(staticDir, "mobile", "index.html"),
+      "<main>Synara Companion shell</main>",
+    );
+    writeFileSync(
+      path.join(staticDir, "mobile", "assets", "app-abcdef12.js"),
+      "globalThis.companion = true;",
+    );
     await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
       const asset = await fetch(`${origin}/assets/app.js`);
       expect(asset.status).toBe(200);
@@ -218,6 +229,18 @@ describe("production Effect HTTP routes", () => {
       expect(fallback.status).toBe(200);
       expect(fallback.headers.get("content-type")).toContain("text/html");
       await expect(fallback.text()).resolves.toContain("Synara shell");
+
+      const mobileFallback = await fetch(`${origin}/mobile/threads/thread-id`);
+      expect(mobileFallback.status).toBe(200);
+      expect(mobileFallback.headers.get("cache-control")).toBe("no-store");
+      await expect(mobileFallback.text()).resolves.toContain("Synara Companion shell");
+
+      const mobileAsset = await fetch(`${origin}/mobile/assets/app-abcdef12.js`);
+      expect(mobileAsset.status).toBe(200);
+      expect(mobileAsset.headers.get("cache-control")).toBe(
+        "public, max-age=31536000, immutable",
+      );
+      await expect(mobileAsset.text()).resolves.toContain("globalThis.companion");
     });
   });
 

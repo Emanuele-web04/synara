@@ -42,6 +42,20 @@ export const DESKTOP_IPC_CHANNELS = {
     error: "desktop:appsnap-error",
     state: "desktop:appsnap-state",
   },
+  remoteAccess: {
+    getStatus: "desktop:remote-access-get-status",
+    updateSettings: "desktop:remote-access-update-settings",
+    refreshDiagnostics: "desktop:remote-access-refresh-diagnostics",
+    copyMobileUrl: "desktop:remote-access-copy-mobile-url",
+    copyServeCommand: "desktop:remote-access-copy-serve-command",
+    copyServeResetCommand: "desktop:remote-access-copy-serve-reset-command",
+    testConnection: "desktop:remote-access-test-connection",
+    createPairingLink: "desktop:remote-access-create-pairing-link",
+    listDevices: "desktop:remote-access-list-devices",
+    revokeDevice: "desktop:remote-access-revoke-device",
+    revokeAllDevices: "desktop:remote-access-revoke-all-devices",
+    state: "desktop:remote-access-state",
+  },
   browser: {
     state: "desktop:browser-state",
     open: "desktop:browser-open",
@@ -70,6 +84,7 @@ export const DESKTOP_IPC_CHANNELS = {
 
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
+export const REMOTE_ACCESS_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.remoteAccess;
 export const STORAGE_MIGRATION_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.storageMigration;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

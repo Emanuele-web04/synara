@@ -63,6 +63,8 @@ describe("SessionCredentialServiceLive", () => {
         expect(verified.method).toBe("browser-session-cookie");
         expect(verified.subject).toBe("desktop-bootstrap");
         expect(verified.role).toBe("owner");
+        expect(issued.accessProfile).toBe("full");
+        expect(verified.accessProfile).toBe("full");
         expect(verified.client.label).toBe("Desktop app");
         expect(verified.client.browser).toBe("Electron");
       }),
@@ -90,6 +92,7 @@ describe("SessionCredentialServiceLive", () => {
 
         expect(verified.sessionId).toBe(issued.sessionId);
         expect(verified.method).toBe("bearer-session-token");
+        expect(verified.accessProfile).toBe("full");
       }),
     );
   });
@@ -254,6 +257,36 @@ describe("SessionCredentialServiceLive", () => {
 
         expect(error).toBeInstanceOf(Error);
         expect((error as SessionCredentialError).message).toContain("revoked");
+      }),
+    );
+  });
+
+  it("persists companion access and updates only an active session label", async () => {
+    await runSessionTest(
+      Effect.gen(function* () {
+        const sessions = yield* SessionCredentialService;
+        const issued = yield* sessions.issue({
+          subject: "companion",
+          accessProfile: "companion",
+          client: { label: "Old phone", deviceType: "mobile" },
+        });
+
+        const updated = yield* sessions.updateClientLabel(issued.sessionId, "Khush's iPhone");
+        const verified = yield* sessions.verify(issued.token);
+        const websocket = yield* sessions.issueWebSocketToken(issued.sessionId);
+        const websocketSession = yield* sessions.verifyWebSocketToken(websocket.token);
+
+        expect(updated.client.label).toBe("Khush's iPhone");
+        expect(updated.accessProfile).toBe("companion");
+        expect(verified.client.label).toBe("Khush's iPhone");
+        expect(verified.accessProfile).toBe("companion");
+        expect(websocketSession.accessProfile).toBe("companion");
+
+        expect(yield* sessions.revoke(issued.sessionId)).toBe(true);
+        const error = yield* Effect.flip(
+          sessions.updateClientLabel(issued.sessionId, "Revoked phone"),
+        );
+        expect(error.message).toContain("no longer active");
       }),
     );
   });

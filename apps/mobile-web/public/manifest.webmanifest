@@ -1,0 +1,39 @@
+{
+  "name": "Synara Companion",
+  "short_name": "Synara",
+  "description": "A private mobile companion for your local Synara coding agents.",
+  "id": "/mobile/",
+  "start_url": "/mobile/",
+  "scope": "/mobile/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#101113",
+  "theme_color": "#101113",
+  "categories": ["developer tools", "productivity"],
+  "icons": [
+    {
+      "src": "/mobile/icons/synara-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/mobile/icons/synara-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/mobile/icons/synara-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/mobile/icons/synara-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

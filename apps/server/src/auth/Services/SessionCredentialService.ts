@@ -1,4 +1,5 @@
 import type {
+  AuthAccessProfile,
   AuthClientMetadata,
   AuthClientSession,
   AuthSessionId,
@@ -16,6 +17,7 @@ export interface IssuedSession {
   readonly client: AuthClientMetadata;
   readonly expiresAt: DateTime.DateTime;
   readonly role: SessionRole;
+  readonly accessProfile: AuthAccessProfile;
 }
 
 export interface VerifiedSession {
@@ -26,6 +28,7 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly role: SessionRole;
+  readonly accessProfile: AuthAccessProfile;
 }
 
 export type SessionCredentialChange =
@@ -58,6 +61,7 @@ export interface SessionCredentialServiceShape {
     readonly subject?: string;
     readonly method?: ServerAuthSessionMethod;
     readonly role?: SessionRole;
+    readonly accessProfile?: AuthAccessProfile;
     readonly client?: AuthClientMetadata;
   }) => Effect.Effect<IssuedSession, SessionCredentialError>;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
@@ -80,6 +84,10 @@ export interface SessionCredentialServiceShape {
   readonly revokeAllExcept: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<number, SessionCredentialError>;
+  readonly updateClientLabel: (
+    sessionId: AuthSessionId,
+    clientLabel: string,
+  ) => Effect.Effect<AuthClientSession, SessionCredentialError>;
   readonly runAuthenticatedConnection: <A, E, R>(
     sessionId: AuthSessionId,
     effect: Effect.Effect<A, E, R>,

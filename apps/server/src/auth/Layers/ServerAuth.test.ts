@@ -81,6 +81,25 @@ describe("ServerAuthLive", () => {
     expect(error.message).toBe("Failed to validate bootstrap credential.");
   });
 
+  it("rate-limits repeated bootstrap failures", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const error = yield* serverAuth
+            .exchangeBootstrapCredential("INVALIDTOKEN", requestMetadata)
+            .pipe(Effect.flip, Effect.orDie);
+          expect(error.status).toBe(401);
+        }
+
+        const limited = yield* serverAuth
+          .exchangeBootstrapCredential("INVALIDTOKEN", requestMetadata)
+          .pipe(Effect.flip, Effect.orDie);
+        expect(limited.status).toBe(429);
+      }),
+    );
+  });
+
   it("issues client pairing credentials by default", async () => {
     await runServerAuthTest(
       Effect.gen(function* () {
@@ -97,6 +116,9 @@ describe("ServerAuthLive", () => {
 
         expect(verified.sessionId.length).toBeGreaterThan(0);
         expect(verified.role).toBe("client");
+        expect(pairingCredential.accessProfile).toBe("full");
+        expect(exchanged.response.accessProfile).toBe("full");
+        expect(verified.accessProfile).toBe("full");
         expect(verified.subject).toBe("one-time-token");
       }),
     );
@@ -125,6 +147,7 @@ describe("ServerAuthLive", () => {
         );
 
         expect(verified.role).toBe("owner");
+        expect(verified.accessProfile).toBe("full");
         expect(verified.subject).toBe("owner-bootstrap");
       }),
     );
@@ -199,6 +222,128 @@ describe("ServerAuthLive", () => {
 
         expect(upgraded.sessionId).toBe(session.sessionId);
         expect(upgraded.role).toBe("owner");
+      }),
+    );
+  });
+
+  it("issues Companion access only when explicitly requested", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const pairingCredential = yield* serverAuth.issuePairingCredential({
+          accessProfile: "companion",
+          label: "CI phone",
+        });
+        const exchanged = yield* serverAuth.exchangeBootstrapCredential(
+          pairingCredential.credential,
+          { ...requestMetadata, deviceType: "mobile" },
+        );
+        const session = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(exchanged.sessionToken),
+        );
+
+        expect(pairingCredential.accessProfile).toBe("companion");
+        expect(exchanged.response.accessProfile).toBe("companion");
+        expect(session.accessProfile).toBe("companion");
+      }),
+    );
+  });
+
+  it("revokes only Companion sessions from the device-management bulk action", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+
+        const ownerUrl = yield* serverAuth.issueStartupPairingUrl("http://127.0.0.1:3773");
+        const ownerCredential =
+          new URLSearchParams(new URL(ownerUrl).hash.slice(1)).get("token") ?? "";
+        const ownerExchange = yield* serverAuth.exchangeBootstrapCredential(
+          ownerCredential,
+          requestMetadata,
+        );
+        const ownerSession = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(ownerExchange.sessionToken),
+        );
+
+        const fullCredential = yield* serverAuth.issuePairingCredential();
+        const fullExchange = yield* serverAuth.exchangeBootstrapCredential(
+          fullCredential.credential,
+          requestMetadata,
+        );
+        const companionCredential = yield* serverAuth.issuePairingCredential({
+          accessProfile: "companion",
+          label: "Phone",
+        });
+        const companionExchange = yield* serverAuth.exchangeBootstrapCredential(
+          companionCredential.credential,
+          { ...requestMetadata, deviceType: "mobile" },
+        );
+
+        expect(yield* serverAuth.revokeCompanionClientSessions(ownerSession.sessionId)).toBe(1);
+        expect(
+          (
+            yield* serverAuth.authenticateHttpRequest(
+              makeCookieRequest(fullExchange.sessionToken),
+            )
+          ).accessProfile,
+        ).toBe("full");
+        expect(
+          (yield* Effect.flip(
+            serverAuth.authenticateHttpRequest(
+              makeCookieRequest(companionExchange.sessionToken),
+            ),
+          ).pipe(Effect.orDie)).status,
+        ).toBe(401);
+      }),
+    );
+  });
+
+  it("uses a single websocket subprotocol credential for Companion upgrades", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const pairingCredential = yield* serverAuth.issuePairingCredential({
+          accessProfile: "companion",
+        });
+        const exchanged = yield* serverAuth.exchangeBootstrapCredential(
+          pairingCredential.credential,
+          { ...requestMetadata, deviceType: "mobile" },
+        );
+        const session = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(exchanged.sessionToken),
+        );
+        const websocketToken = yield* serverAuth.issueWebSocketToken(session);
+        const url = new URL("ws://127.0.0.1:3773/api/companion/v1/ws");
+
+        const upgraded = yield* serverAuth.authenticateCompanionWebSocketUpgrade({
+          headers: {
+            "sec-websocket-protocol": `synara.companion.v1, synara.auth.${websocketToken.token}`,
+          },
+          cookies: { synara_session: exchanged.sessionToken },
+          url,
+        });
+        expect(upgraded.sessionId).toBe(session.sessionId);
+        expect(upgraded.accessProfile).toBe("companion");
+
+        const desktopToken = yield* serverAuth.issueWebSocketToken(session);
+        const desktopError = yield* serverAuth
+          .authenticateWebSocketUpgrade({
+            headers: {},
+            cookies: {},
+            url: new URL(`ws://127.0.0.1:3773/ws?wsToken=${desktopToken.token}`),
+          })
+          .pipe(Effect.flip, Effect.orDie);
+        expect(desktopError.status).toBe(403);
+
+        const queryToken = yield* serverAuth.issueWebSocketToken(session);
+        const queryError = yield* serverAuth
+          .authenticateCompanionWebSocketUpgrade({
+            headers: {},
+            cookies: {},
+            url: new URL(`${url.toString()}?wsToken=${queryToken.token}`),
+          })
+          .pipe(Effect.flip, Effect.orDie);
+        expect(queryError.status).toBe(401);
       }),
     );
   });

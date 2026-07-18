@@ -1,4 +1,5 @@
 export * from "./auth";
+export * from "./companion";
 export * from "./automation";
 export * from "./baseSchemas";
 export * from "./ipc";

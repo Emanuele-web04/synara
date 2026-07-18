@@ -211,7 +211,14 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
 const requireAuthenticatedRequest = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+  const session = yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
+  if (session.accessProfile !== "full") {
+    return yield* new AuthError({
+      message: "This endpoint requires a full desktop session.",
+      status: 403,
+    });
+  }
+  return session;
 });
 
 const requireAuthenticatedMutationRequest = Effect.gen(function* () {
@@ -272,12 +279,17 @@ function encodeCookie(input: {
   readonly value: string;
   readonly expiresAt: DateTime.DateTime;
   readonly secure: boolean;
+  readonly sameSite: "Lax" | "Strict";
 }) {
-  return `${encodeURIComponent(input.name)}=${encodeURIComponent(input.value)}; Expires=${DateTime.toDate(input.expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
+  return `${encodeURIComponent(input.name)}=${encodeURIComponent(input.value)}; Expires=${DateTime.toDate(input.expiresAt).toUTCString()}; HttpOnly; Path=/; SameSite=${input.sameSite}${input.secure ? "; Secure" : ""}`;
 }
 
-function encodeExpiredCookie(input: { readonly name: string; readonly secure: boolean }) {
-  return `${encodeURIComponent(input.name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Path=/; SameSite=Lax${input.secure ? "; Secure" : ""}`;
+function encodeExpiredCookie(input: {
+  readonly name: string;
+  readonly secure: boolean;
+  readonly sameSite: "Lax" | "Strict";
+}) {
+  return `${encodeURIComponent(input.name)}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Path=/; SameSite=${input.sameSite}${input.secure ? "; Secure" : ""}`;
 }
 
 function isBodyCapacityError(cause: unknown): boolean {
@@ -386,7 +398,8 @@ export const authEffectRouteLayer = HttpRouter.add(
             name: sessions.cookieName,
             value: result.sessionToken,
             expiresAt: result.response.expiresAt,
-            secure: config.publicUrl !== undefined,
+            secure: result.response.accessProfile === "companion" || config.publicUrl !== undefined,
+            sameSite: result.response.accessProfile === "companion" ? "Strict" : "Lax",
           }),
         },
       });
@@ -441,7 +454,8 @@ export const authEffectRouteLayer = HttpRouter.add(
           headers: {
             "Set-Cookie": encodeExpiredCookie({
               name: sessions.cookieName,
-              secure: config.publicUrl !== undefined,
+              secure: session.accessProfile === "companion" || config.publicUrl !== undefined,
+              sameSite: session.accessProfile === "companion" ? "Strict" : "Lax",
             }),
           },
         },
@@ -506,6 +520,13 @@ export const authEffectRouteLayer = HttpRouter.add(
       const session = yield* ownerMutationSession;
       return HttpServerResponse.jsonUnsafe({
         revokedCount: yield* serverAuth.revokeOtherClientSessions(session.sessionId),
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/clients/revoke-companion") {
+      const session = yield* ownerMutationSession;
+      return HttpServerResponse.jsonUnsafe({
+        revokedCount: yield* serverAuth.revokeCompanionClientSessions(session.sessionId),
       });
     }
 
@@ -1110,7 +1131,11 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       .stat(filePath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
+      const isMobilePath = url.pathname === "/mobile" || url.pathname.startsWith("/mobile/");
+      const indexPath = path.resolve(
+        staticRoot,
+        isMobilePath ? "mobile/index.html" : "index.html",
+      );
       const indexData = yield* fileSystem
         .readFile(indexPath)
         .pipe(Effect.catch(() => Effect.succeed(null)));
@@ -1118,6 +1143,7 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.uint8Array(indexData, {
         status: 200,
         contentType: "text/html; charset=utf-8",
+        headers: isMobilePath ? { "Cache-Control": "no-store" } : undefined,
       });
     }
 
@@ -1128,6 +1154,14 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType: Mime.getType(filePath) ?? "application/octet-stream",
+      headers:
+        url.pathname === "/mobile" ||
+        url.pathname === "/mobile/" ||
+        filePath.endsWith(`${path.sep}index.html`)
+          ? { "Cache-Control": "no-store" }
+          : url.pathname.startsWith("/mobile/assets/")
+            ? { "Cache-Control": "public, max-age=31536000, immutable" }
+            : undefined,
     });
   }),
 );

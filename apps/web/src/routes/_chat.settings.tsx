@@ -100,6 +100,7 @@ import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsage
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
+import { RemoteAccessSettingsPanel } from "../components/settings/RemoteAccessSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -3676,6 +3677,8 @@ function SettingsRouteView() {
         return renderAppearancePanel();
       case "notifications":
         return renderNotificationsPanel();
+      case "remote-access":
+        return <RemoteAccessSettingsPanel />;
       case "behavior":
         return renderBehaviorPanel();
       case "appsnap":

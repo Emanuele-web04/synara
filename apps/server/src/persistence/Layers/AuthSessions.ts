@@ -17,6 +17,7 @@ import {
   ListActiveAuthSessionsInput,
   RevokeAuthSessionInput,
   RevokeOtherAuthSessionsInput,
+  SetAuthSessionClientLabelInput,
   SetAuthSessionLastConnectedAtInput,
 } from "../Services/AuthSessions";
 
@@ -24,6 +25,7 @@ const AuthSessionDbRow = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
   role: Schema.Literals(["owner", "client"]),
+  accessProfile: Schema.Literals(["full", "companion"]),
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
   clientLabel: Schema.NullOr(Schema.String),
   clientIpAddress: Schema.NullOr(Schema.String),
@@ -42,6 +44,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): typeof AuthSess
     sessionId: row.sessionId,
     subject: row.subject,
     role: row.role,
+    accessProfile: row.accessProfile,
     method: row.method,
     client: {
       label: row.clientLabel,
@@ -81,6 +84,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         session_id,
         subject,
         role,
+        access_profile,
         method,
         client_label,
         client_ip_address,
@@ -96,6 +100,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         ${input.sessionId},
         ${input.subject},
         ${input.role},
+        ${input.accessProfile},
         ${input.method},
         ${input.client.label},
         ${input.client.ipAddress},
@@ -118,6 +123,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         session_id AS "sessionId",
         subject AS "subject",
         role AS "role",
+        access_profile AS "accessProfile",
         method AS "method",
         client_label AS "clientLabel",
         client_ip_address AS "clientIpAddress",
@@ -142,6 +148,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
         session_id AS "sessionId",
         subject AS "subject",
         role AS "role",
+        access_profile AS "accessProfile",
         method AS "method",
         client_label AS "clientLabel",
         client_ip_address AS "clientIpAddress",
@@ -167,6 +174,18 @@ const makeAuthSessionRepository = Effect.gen(function* () {
       SET last_connected_at = ${toIsoDateTime(lastConnectedAt)}
       WHERE session_id = ${sessionId}
         AND revoked_at IS NULL
+    `,
+  });
+
+  const setClientLabelRows = SqlSchema.findAll({
+    Request: SetAuthSessionClientLabelInput,
+    Result: Schema.Struct({ sessionId: AuthSessionId }),
+    execute: ({ sessionId, clientLabel }) => sql`
+      UPDATE auth_sessions
+      SET client_label = ${clientLabel}
+      WHERE session_id = ${sessionId}
+        AND revoked_at IS NULL
+      RETURNING session_id AS "sessionId"
     `,
   });
 
@@ -258,7 +277,26 @@ const makeAuthSessionRepository = Effect.gen(function* () {
       ),
     );
 
-  return { create, getById, listActive, revoke, revokeAllExcept, setLastConnectedAt };
+  const setClientLabel: AuthSessionRepositoryShape["setClientLabel"] = (input) =>
+    setClientLabelRows(input as unknown as Parameters<typeof setClientLabelRows>[0]).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "AuthSessionRepository.setClientLabel:query",
+          "AuthSessionRepository.setClientLabel:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.length > 0),
+    );
+
+  return {
+    create,
+    getById,
+    listActive,
+    revoke,
+    revokeAllExcept,
+    setLastConnectedAt,
+    setClientLabel,
+  };
 });
 
 export const AuthSessionRepositoryLive = Layer.effect(

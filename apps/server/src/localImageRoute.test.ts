@@ -64,7 +64,7 @@ function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerCon
   } as ServerConfigShape;
 }
 
-function makeFakeServerAuth(): ServerAuthShape {
+function makeFakeServerAuth(accessProfile: "full" | "companion" = "full"): ServerAuthShape {
   const expiresAt = Effect.runSync(DateTime.now);
   const descriptor = {
     policy: "loopback-browser" as const,
@@ -77,6 +77,8 @@ function makeFakeServerAuth(): ServerAuthShape {
     subject: "owner",
     method: "browser-session-cookie" as const,
     role: "owner" as const,
+    accessProfile,
+    client: { label: "Test device", deviceType: "desktop" as const },
     expiresAt,
   };
   return {
@@ -87,6 +89,7 @@ function makeFakeServerAuth(): ServerAuthShape {
         response: {
           authenticated: true,
           role: "client" as const,
+          accessProfile,
           sessionMethod: "browser-session-cookie" as const,
           expiresAt,
         },
@@ -96,20 +99,28 @@ function makeFakeServerAuth(): ServerAuthShape {
       Effect.succeed({
         authenticated: true,
         role: "client" as const,
+        accessProfile,
         sessionMethod: "bearer-session-token" as const,
         expiresAt,
         sessionToken: "bearer-session-token",
       }),
     issuePairingCredential: () =>
-      Effect.succeed({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
+      Effect.succeed({
+        id: "pairing-id",
+        credential: "PAIRINGTOKEN",
+        accessProfile,
+        expiresAt,
+      }),
     listPairingLinks: () => Effect.succeed([]),
     revokePairingLink: () => Effect.succeed(true),
     listClientSessions: () => Effect.succeed([]),
     revokeClientSession: () => Effect.succeed(true),
     revokeOtherClientSessions: () => Effect.succeed(1),
+    revokeCompanionClientSessions: () => Effect.succeed(1),
     logoutSession: () => Effect.succeed(true),
     authenticateHttpRequest: () => Effect.succeed({ ...session, credentialSource: "cookie" }),
     authenticateWebSocketUpgrade: () => Effect.succeed(session),
+    authenticateCompanionWebSocketUpgrade: () => Effect.succeed(session),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () => Effect.succeed("http://127.0.0.1:3773/pair#token=PAIRINGTOKEN"),
   } satisfies ServerAuthShape;
@@ -119,6 +130,7 @@ async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
+  serverAuth: ServerAuthShape = makeFakeServerAuth(),
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
@@ -141,7 +153,7 @@ async function withEffectServer(
           Effect.provide(
             Layer.mergeAll(
               Layer.succeed(ServerConfig, config),
-              Layer.succeed(ServerAuth, makeFakeServerAuth()),
+              Layer.succeed(ServerAuth, serverAuth),
               ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
               NodeHttpServer.layerHttpServices,
             ),
@@ -299,6 +311,25 @@ describe("localImageEffectRouteLayer", () => {
       const response = await fetch(`${origin}/api/local-image?${params}`);
       expect(response.status).toBe(404);
     });
+  });
+
+  it("rejects companion sessions from the legacy local-file endpoint", async () => {
+    const workspace = makeTempDir("synara-effect-companion-blocked-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const imagePath = path.join(workspace, "private.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const config = makeServerConfig({ cwd: workspace, authToken: "desktop-secret" });
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+        const response = await fetch(`${origin}/api/local-image?${params}`);
+        expect(response.status).toBe(403);
+      },
+      makeFakeServerAuth("companion"),
+    );
   });
 });
 

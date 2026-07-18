@@ -34,9 +34,11 @@ export const makeAuthControlPlane = Effect.gen(function* () {
     Effect.gen(function* () {
       const createdAt = yield* DateTime.now;
       const role = input?.role ?? "client";
+      const accessProfile = input?.accessProfile ?? "full";
       const subject = input?.subject ?? "one-time-token";
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
         role,
+        accessProfile,
         subject,
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
@@ -45,6 +47,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
         id: issued.id,
         credential: issued.credential,
         role,
+        accessProfile,
         subject,
         ...(issued.label ? { label: issued.label } : {}),
         createdAt: DateTime.toUtc(createdAt),
@@ -57,6 +60,9 @@ export const makeAuthControlPlane = Effect.gen(function* () {
       Effect.map((pairingLinks) =>
         pairingLinks
           .filter((pairingLink) => (input?.role ? pairingLink.role === input.role : true))
+          .filter((pairingLink) =>
+            input?.accessProfile ? pairingLink.accessProfile === input.accessProfile : true,
+          )
           .filter((pairingLink) => !input?.excludeSubjects?.includes(pairingLink.subject))
           .map((pairingLink) =>
             pairingLink.label
@@ -65,6 +71,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
                   id: pairingLink.id,
                   credential: pairingLink.credential,
                   role: pairingLink.role,
+                  accessProfile: pairingLink.accessProfile,
                   subject: pairingLink.subject,
                   createdAt: pairingLink.createdAt,
                   expiresAt: pairingLink.expiresAt,
@@ -89,6 +96,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
         subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
         method: "bearer-session-token",
         role: input?.role ?? "owner",
+        accessProfile: input?.accessProfile ?? "full",
         client: {
           ...(input?.label ? { label: input.label } : {}),
           deviceType: "bot",
@@ -103,6 +111,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
                 token: issued.token,
                 method: "bearer-session-token" as const,
                 role: issued.role,
+                accessProfile: issued.accessProfile,
                 subject: input?.subject ?? DEFAULT_SESSION_SUBJECT,
                 client: issued.client,
                 expiresAt: DateTime.toUtc(issued.expiresAt),

@@ -1,4 +1,4 @@
-import { AuthClientMetadataDeviceType, AuthSessionId } from "@synara/contracts";
+import { AuthAccessProfile, AuthClientMetadataDeviceType, AuthSessionId } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -18,6 +18,7 @@ export const AuthSessionRecord = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
   role: Schema.Literals(["owner", "client"]),
+  accessProfile: AuthAccessProfile,
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
@@ -31,6 +32,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
   role: Schema.Literals(["owner", "client"]),
+  accessProfile: AuthAccessProfile,
   method: Schema.Literals(["browser-session-cookie", "bearer-session-token"]),
   client: AuthSessionClientMetadataRecord,
   issuedAt: Schema.DateTimeUtcFromString,
@@ -66,6 +68,12 @@ export const SetAuthSessionLastConnectedAtInput = Schema.Struct({
 });
 export type SetAuthSessionLastConnectedAtInput = typeof SetAuthSessionLastConnectedAtInput.Type;
 
+export const SetAuthSessionClientLabelInput = Schema.Struct({
+  sessionId: AuthSessionId,
+  clientLabel: Schema.String,
+});
+export type SetAuthSessionClientLabelInput = typeof SetAuthSessionClientLabelInput.Type;
+
 export interface AuthSessionRepositoryShape {
   readonly create: (
     input: CreateAuthSessionInput,
@@ -85,6 +93,9 @@ export interface AuthSessionRepositoryShape {
   readonly setLastConnectedAt: (
     input: SetAuthSessionLastConnectedAtInput,
   ) => Effect.Effect<void, AuthSessionRepositoryError>;
+  readonly setClientLabel: (
+    input: SetAuthSessionClientLabelInput,
+  ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
 }
 
 export class AuthSessionRepository extends ServiceMap.Service<

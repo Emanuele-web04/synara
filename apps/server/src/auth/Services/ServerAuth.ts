@@ -1,4 +1,5 @@
 import type {
+  AuthAccessProfile,
   AuthBearerBootstrapResult,
   AuthBootstrapResult,
   AuthClientMetadata,
@@ -28,6 +29,8 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
+  readonly accessProfile: AuthAccessProfile;
+  readonly client: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -61,6 +64,7 @@ export interface ServerAuthShape {
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;
+      readonly accessProfile?: AuthAccessProfile;
     },
   ) => Effect.Effect<AuthPairingCredentialResult, AuthError>;
   readonly listPairingLinks: () => Effect.Effect<ReadonlyArray<AuthPairingLink>, AuthError>;
@@ -75,11 +79,21 @@ export interface ServerAuthShape {
   readonly revokeOtherClientSessions: (
     currentSessionId: AuthSessionId,
   ) => Effect.Effect<number, AuthError>;
+  readonly revokeCompanionClientSessions: (
+    currentSessionId: AuthSessionId,
+  ) => Effect.Effect<number, AuthError>;
   readonly logoutSession: (sessionId: AuthSessionId) => Effect.Effect<boolean, AuthError>;
   readonly authenticateHttpRequest: (
     request: AuthRequest,
   ) => Effect.Effect<AuthenticatedHttpSession, AuthError>;
   readonly authenticateWebSocketUpgrade: (
+    request: AuthRequest,
+  ) => Effect.Effect<AuthenticatedSession, AuthError>;
+  /**
+   * Authenticates the restricted Companion socket exclusively with a
+   * short-lived credential carried in the dedicated websocket subprotocol.
+   */
+  readonly authenticateCompanionWebSocketUpgrade: (
     request: AuthRequest,
   ) => Effect.Effect<AuthenticatedSession, AuthError>;
   readonly issueWebSocketToken: (

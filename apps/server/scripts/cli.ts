@@ -143,6 +143,7 @@ const buildCmd = Command.make(
       );
 
       const webDist = path.join(repoRoot, "apps/web/dist");
+      const mobileWebDist = path.join(repoRoot, "apps/mobile-web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 
       if (yield* fs.exists(webDist)) {
@@ -151,6 +152,16 @@ const buildCmd = Command.make(
         yield* Effect.log("[cli] Bundled web app into dist/client");
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
+      }
+
+      if (yield* fs.exists(mobileWebDist)) {
+        const mobileTarget = path.join(clientTarget, "mobile");
+        yield* fs.copy(mobileWebDist, mobileTarget);
+        yield* Effect.log("[cli] Bundled Companion PWA into dist/client/mobile");
+      } else {
+        yield* Effect.logWarning(
+          "[cli] Companion PWA dist not found - skipping mobile client bundle.",
+        );
       }
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));

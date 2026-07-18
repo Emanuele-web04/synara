@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Synara">
+  <rect width="512" height="512" rx="112" fill="#15171a"/>
+  <path d="M116 318c0-46 37-83 83-83h114c18 0 33-15 33-33s-15-33-33-33H174" fill="none" stroke="#f5f6f7" stroke-width="50" stroke-linecap="round"/>
+  <path d="M396 194c0 46-37 83-83 83H199c-18 0-33 15-33 33s15 33 33 33h139" fill="none" stroke="#a6f77b" stroke-width="50" stroke-linecap="round"/>
+</svg>

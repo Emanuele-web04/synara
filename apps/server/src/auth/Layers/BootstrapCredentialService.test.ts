@@ -21,10 +21,12 @@ describe("BootstrapCredentialServiceLive", () => {
 
       expect(active.map((link) => link.id)).toEqual([issued.id]);
       expect(active[0]?.label).toBe("Test device");
+      expect(active[0]?.accessProfile).toBe("full");
 
       const grant = yield* service.consume(issued.credential);
       expect(grant.method).toBe("one-time-token");
       expect(grant.role).toBe("client");
+      expect(grant.accessProfile).toBe("full");
 
       const afterConsume = yield* service.listActive();
       expect(afterConsume).toEqual([]);
@@ -65,6 +67,7 @@ describe("BootstrapCredentialServiceLive", () => {
         credential: "EXPIREDTOKEN",
         method: "one-time-token",
         role: "client",
+        accessProfile: "companion",
         subject: "test",
         label: null,
         createdAt: now,

@@ -75,6 +75,7 @@ export interface RecentViewAvailability {
 const SETTINGS_LABELS: Readonly<Record<string, string>> = {
   general: "General",
   appearance: "Appearance",
+  "remote-access": "Remote Access",
   providers: "Providers",
   keybindings: "Keybindings",
 };

@@ -29,12 +29,21 @@ function canonicalizeJson(value: unknown): unknown {
 function commandIntent(command: Command): Record<string, unknown> {
   const decoded = Schema.decodeUnknownSync(OrchestrationCommand)(command);
   const { commandId: _commandId, ...intent } = decoded;
+  const stableIntent: Record<string, unknown> = { ...intent };
+  if (decoded.commandId.startsWith("companion:")) {
+    // Companion Protocol v1 carries an idempotency key, not a client timestamp.
+    // The server assigns createdAt on each attempt, so it cannot be part of the
+    // durable receipt identity for these commands. Every user-controlled field
+    // remains fingerprinted and a reused requestId with changed intent still
+    // fails as a command identity collision.
+    delete stableIntent.createdAt;
+  }
   if (intent.type !== "thread.turn.start") {
-    return intent;
+    return stableIntent;
   }
 
   return {
-    ...intent,
+    ...stableIntent,
     message: {
       ...intent.message,
       attachments: intent.message.attachments.map((attachment) => {
