@@ -2606,6 +2606,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           streamFiber: undefined,
           startedAt: context.startedAt,
           basePermissionMode: context.basePermissionMode,
+          spawnPermissionMode: context.spawnPermissionMode,
+          // Subagent contexts only project events for an already-running CLI;
+          // they never dispatch the first prompt, so spawn state is not theirs
+          // to prove.
+          firstTurnSpawnModeAuthoritative: false,
           lastInteractionMode: undefined,
           currentApiModelId: undefined,
           resumeSessionId: undefined,

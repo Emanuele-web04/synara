@@ -278,9 +278,16 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
 
       assert.deepStrictEqual(capabilities.update, {
-        command: "npm install -g @kilocode/cli@latest",
+        command:
+          "npm install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
         executable: "npm",
-        args: ["install", "-g", "@kilocode/cli@latest"],
+        args: [
+          "install",
+          "-g",
+          "--prefix",
+          "/Users/test/.nvm/versions/node/v24.13.0",
+          "@kilocode/cli@latest",
+        ],
         lockKey: "npm-global",
         pathPrepend: "/Users/test/.nvm/versions/node/v24.13.0/bin",
       });
@@ -328,7 +335,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             hangingSpawnerLayer({
               onKill: () => (killed = true),
               shouldHang: (args, command) =>
-                command === "npm" && args.join(" ") === "install -g @kilocode/cli@latest",
+                command === "npm" &&
+                args.join(" ") ===
+                  "install -g --prefix /Users/test/.nvm/versions/node/v24.13.0 @kilocode/cli@latest",
             }),
           ),
         );
