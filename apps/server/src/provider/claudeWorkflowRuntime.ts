@@ -1,9 +1,9 @@
 // Live per-agent runtime state for Claude dynamic workflows, polled from the
 // run's transcript directory while it is running. `journal.jsonl` records each
 // agent's start/result ({type, key, agentId} lines); `agent-<id>.jsonl` is the
-// agent's transcript whose assistant lines carry `message.model` and
-// `message.usage` (latest usage line = current context footprint) plus
-// tool_use blocks. Everything here is incremental (byte offsets at line
+// agent's transcript whose assistant lines carry `message.model`, a top-level
+// `effort`, and `message.usage` (latest usage line = current context
+// footprint) plus tool_use blocks. Everything here is incremental (byte offsets at line
 // boundaries) and best-effort: parse failures and fs errors degrade to "no
 // update", never to a thrown error.
 
@@ -22,6 +22,7 @@ export interface ClaudeWorkflowAgentAccum {
   readonly agentId: string;
   state: "running" | "completed";
   model: string | undefined;
+  effort: string | undefined;
   tokens: number | undefined;
   toolCalls: number;
   recentToolNames: Array<string>;
@@ -67,6 +68,7 @@ function makeAgentAccum(agentId: string): ClaudeWorkflowAgentAccum {
     agentId,
     state: "running",
     model: undefined,
+    effort: undefined,
     tokens: undefined,
     toolCalls: 0,
     recentToolNames: [],
@@ -150,6 +152,14 @@ export function applyClaudeWorkflowAgentTranscriptLines(
         changed = true;
       }
     }
+    // Reasoning effort rides on the transcript line itself (sibling of
+    // `message`), not inside the API message payload.
+    if (typeof record.effort === "string" && record.effort.length > 0) {
+      if (agent.effort !== record.effort) {
+        agent.effort = record.effort;
+        changed = true;
+      }
+    }
     const usage = asRecord(message.usage);
     if (usage) {
       const total =
@@ -206,6 +216,7 @@ export function claudeWorkflowRuntimeSnapshots(
       agentId: agent.agentId,
       ...(label ? { label } : {}),
       ...(agent.model ? { model: agent.model } : {}),
+      ...(agent.effort ? { effort: agent.effort } : {}),
       state: agent.state,
       ...(agent.tokens !== undefined ? { tokens: agent.tokens } : {}),
       ...(agent.toolCalls > 0 ? { toolCalls: agent.toolCalls } : {}),

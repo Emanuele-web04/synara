@@ -40,9 +40,9 @@ export interface NewThreadTarget {
   readonly inheritContext: boolean;
 }
 
-// Single rule for which project a "new thread" chord targets: the focused project when
-// one is usable, otherwise the most recently used project. Shared by every create chord
-// (new thread, new terminal, provider-specific) so they never disagree on the fallback.
+// Single rule for which project a global "new thread" action targets: the focused project
+// when one is usable, otherwise the most recently used project. Shared by click, palette,
+// and keyboard entry points so they never disagree on the fallback.
 export function resolveNewThreadTarget(input: {
   currentProjectId: ProjectId | null;
   latestUsableProjectId: ProjectId | null;

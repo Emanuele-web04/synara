@@ -2915,6 +2915,7 @@ export default function ChatView({
         refs.set(subagent.providerThreadId, {
           threadId: subagent.resolvedThreadId ?? subagent.threadId,
           model: subagent.model,
+          effort: subagent.effort,
         });
       }
     }

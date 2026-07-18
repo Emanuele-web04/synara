@@ -1938,7 +1938,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ORCHESTRATION_PROJECTOR_NAMES.hot,
     ).pipe(
       Effect.catchTag("SqlError", (sqlError) =>
-        Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectHotEventInOwnTransaction:query")(sqlError)),
+        Effect.fail(
+          toPersistenceSqlError("ProjectionPipeline.projectHotEventInOwnTransaction:query")(
+            sqlError,
+          ),
+        ),
       ),
     );
 

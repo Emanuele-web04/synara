@@ -80,6 +80,9 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
+  // Provider-native event type carried through the activity payload (e.g.
+  // "background_tasks_changed") so the timeline can pick a specific icon.
+  nativeEventType?: string;
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -1068,6 +1071,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
   if (collabTaskOutputDetail) {
     entry.detail = collabTaskOutputDetail;
+  }
+  const nativeEventType =
+    payload && typeof payload.nativeEventType === "string" && payload.nativeEventType.length > 0
+      ? payload.nativeEventType
+      : undefined;
+  if (nativeEventType) {
+    entry.nativeEventType = nativeEventType;
   }
   const runtimeWarningMessage =
     activity.kind === "runtime.warning" &&

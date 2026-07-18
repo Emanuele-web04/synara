@@ -2096,11 +2096,32 @@ const make = Effect.gen(function* () {
     // exact generation-scoped provider turn and rejects a stale mismatch.
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const turnId = input.turnId ?? thread.session?.activeTurnId ?? undefined;
-    yield* providerService.interruptTurn({
-      threadId: providerThread.id,
-      ...(turnId ? { turnId } : {}),
-      ...(providerThreadId ? { providerThreadId } : {}),
-    });
+    const exit = yield* Effect.exit(
+      providerService.interruptTurn({
+        threadId: providerThread.id,
+        ...(turnId ? { turnId } : {}),
+        ...(providerThreadId ? { providerThreadId } : {}),
+      }),
+    );
+    if (Exit.isSuccess(exit)) {
+      return;
+    }
+    // Terminal rejections (validation and friends) would otherwise vanish
+    // silently and leave the stop button looking dead; surface them on the
+    // thread. Retryable/uncertain failures keep propagating so the durable
+    // delivery machinery can quarantine and retry them.
+    const outcome = classifyProviderAttemptOutcome(exit);
+    if (outcome._tag === "rejected") {
+      return yield* appendProviderFailureActivity({
+        threadId: input.threadId,
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        detail: outcome.detail,
+        turnId: input.turnId ?? null,
+        createdAt: input.createdAt,
+      });
+    }
+    return yield* Effect.failCause(exit.cause);
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (

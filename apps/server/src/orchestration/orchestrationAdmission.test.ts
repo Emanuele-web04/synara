@@ -28,6 +28,13 @@ describe("orchestration command admission", () => {
           reason: "overloaded",
         });
 
+        // Task stop/background share the interrupt reserve: draining one slot
+        // shows they are admitted past the normal-command limit.
+        yield* Queue.take(queue);
+        expect(admit("task-stop", "thread.task.stop")).toEqual({ accepted: true });
+        yield* Queue.take(queue);
+        expect(admit("task-background", "thread.task.background")).toEqual({ accepted: true });
+
         yield* Queue.shutdown(queue);
         expect(admit("after-stop", "thread.turn.interrupt")).toEqual({
           accepted: false,

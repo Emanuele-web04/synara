@@ -57,10 +57,6 @@ import {
   IconMoon,
   IconPalette,
   IconPaperclip,
-  IconPlayerPause,
-  IconPlayerPlay,
-  IconPlayerStop,
-  IconPlayerStopFilled,
   IconPlus,
   IconRefresh,
   IconRocket,
@@ -112,6 +108,12 @@ export const AppsIcon: LucideIcon = (props) => (
   <RiApps2Line className={props.className} style={props.style} />
 );
 export const QueueArrow: LucideIcon = centralIconWrapper("reading-list");
+// Composer stacked-panel glyphs (subagent strip / workflow run card).
+export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
+export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
+export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
+export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
+export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
 export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
 export const HandoffIcon: LucideIcon = centralIconWrapper("arrow-left-right");
@@ -245,8 +247,8 @@ export const PinIcon: LucideIcon = centralIconWrapper("pin");
 // Solid pin from the fill set — used wherever a pin reflects "pinned" status
 // (project + thread rows and their hover cards) rather than a neutral action.
 export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
-export const PauseIcon = adaptIcon(IconPlayerPause);
-export const PlayIcon = adaptIcon(IconPlayerPlay);
+export const PauseIcon: LucideIcon = centralIconWrapper("pause", "fill");
+export const PlayIcon: LucideIcon = centralIconWrapper("play", "fill");
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
 export const RefreshCwIcon = adaptIcon(IconRefresh);
@@ -260,8 +262,8 @@ export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
-export const StopIcon = adaptIcon(IconPlayerStop);
-export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);
+export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
+export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />
 );
