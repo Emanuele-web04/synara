@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCanaryArgs, resolveCanaryPaths, resolveCanaryRef } from "./canary";
+import {
+  canaryCloneArgs,
+  canaryStartArgs,
+  parseCanaryArgs,
+  resolveCanaryPaths,
+  resolveCanaryRef,
+} from "./canary";
 
 describe("canary tooling", () => {
   it("keeps managed source and Canary data separate from Stable", () => {
@@ -37,6 +43,19 @@ describe("canary tooling", () => {
       command: "setup",
       ref: "codex/synara-canary",
     });
+  });
+
+  it("checks out the managed source during clone so the cleanliness guard starts clean", () => {
+    expect(canaryCloneArgs("git@example.com:synara.git", "/tmp/canary-source")).toEqual([
+      "clone",
+      "--",
+      "git@example.com:synara.git",
+      "/tmp/canary-source",
+    ]);
+  });
+
+  it("starts desktop directly so Canary isolation variables bypass Turbo filtering", () => {
+    expect(canaryStartArgs()).toEqual(["run", "--cwd", "apps/desktop", "start"]);
   });
 
   it("keeps updating the selected stacked ref until explicitly moved to main", () => {

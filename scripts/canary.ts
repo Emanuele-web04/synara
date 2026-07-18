@@ -83,6 +83,20 @@ export function resolveCanaryRef(input: ParsedCanaryArgs, trackedRef: string | n
   return input.ref ?? (input.command === "update" ? trackedRef : null) ?? DEFAULT_REF;
 }
 
+export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArray<string> {
+  // The cleanliness guard runs immediately after cloning. A --no-checkout clone
+  // reports every tracked file as deleted, so it is indistinguishable from a
+  // user-modified managed checkout at that point.
+  return ["clone", "--", originUrl, source];
+}
+
+export function canaryStartArgs(): ReadonlyArray<string> {
+  // Starting through the root Turbo task filters undeclared environment
+  // variables before the desktop process is spawned. Canary's flavor, home,
+  // updater policy, and commit identity must reach Electron unchanged.
+  return ["run", "--cwd", "apps/desktop", "start"];
+}
+
 function run(command: string, args: ReadonlyArray<string>, cwd: string): void {
   const result = spawnSync(command, [...args], {
     cwd,
@@ -187,7 +201,7 @@ function ensureManagedSource(paths: CanaryPaths): void {
     }
   }
   FS.mkdirSync(Path.dirname(paths.source), { recursive: true });
-  run("git", ["clone", "--no-checkout", resolveOriginUrl(), paths.source], REPO_ROOT);
+  run("git", canaryCloneArgs(resolveOriginUrl(), paths.source), REPO_ROOT);
 }
 
 function assertManagedSourceIsClean(paths: CanaryPaths): void {
@@ -253,7 +267,7 @@ function startCanary(paths: CanaryPaths): void {
   const logDescriptor = FS.openSync(paths.log, "a", 0o600);
   try {
     FS.writeSync(logDescriptor, `\n[${new Date().toISOString()}] Starting ${commit}\n`);
-    const child = spawn("bun", ["run", "start:desktop"], {
+    const child = spawn("bun", [...canaryStartArgs()], {
       cwd: paths.source,
       env,
       detached: true,
