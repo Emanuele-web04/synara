@@ -115,6 +115,47 @@ async function appendApprovalResponse(
   );
 }
 
+async function appendApprovalRespondFailure(
+  readModel: OrchestrationReadModel,
+  input: {
+    readonly sequence: number;
+    readonly requestId: ApprovalRequestId;
+    readonly occurredAt: string;
+    readonly settlementStatus: "retryable" | "uncertain";
+  },
+): Promise<OrchestrationReadModel> {
+  return Effect.runPromise(
+    projectEvent(readModel, {
+      sequence: input.sequence,
+      eventId: asEventId(`evt-approval-respond-failed-${input.sequence}`),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      type: "thread.activity-appended",
+      occurredAt: input.occurredAt,
+      commandId: CommandId.makeUnsafe(`cmd-approval-respond-failed-${input.sequence}`),
+      causationEventId: null,
+      correlationId: CommandId.makeUnsafe(`cmd-approval-respond-failed-${input.sequence}`),
+      metadata: {},
+      payload: {
+        threadId: THREAD_ID,
+        activity: {
+          id: asEventId(`activity-approval-respond-failed-${input.sequence}`),
+          tone: "error",
+          kind: "provider.approval.respond.failed",
+          summary: "Provider approval response failed",
+          payload: {
+            detail: "No active provider session is bound to this thread.",
+            requestId: input.requestId,
+            settlementStatus: input.settlementStatus,
+          },
+          turnId: null,
+          createdAt: input.occurredAt,
+        },
+      },
+    }),
+  );
+}
+
 describe("decider approval idempotency", () => {
   it("emits thread.approval-response-requested for a first response", async () => {
     const now = new Date().toISOString();
@@ -190,5 +231,70 @@ describe("decider approval idempotency", () => {
 
     const event = Array.isArray(result) ? result[0] : result;
     expect(event.type).toBe("thread.approval-response-requested");
+  });
+
+  it("accepts a retry after a retryable provider delivery failure", async () => {
+    const now = new Date().toISOString();
+    const withThread = await createThreadReadModel(now);
+    const withResponse = await appendApprovalResponse(withThread, {
+      sequence: 3,
+      requestId: REQUEST_ID,
+      occurredAt: now,
+    });
+    const readModel = await appendApprovalRespondFailure(withResponse, {
+      sequence: 4,
+      requestId: REQUEST_ID,
+      occurredAt: now,
+      settlementStatus: "retryable",
+    });
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.approval.respond",
+          commandId: CommandId.makeUnsafe("cmd-approval-respond-retry"),
+          threadId: THREAD_ID,
+          requestId: REQUEST_ID,
+          decision: "accept",
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event.type).toBe("thread.approval-response-requested");
+  });
+
+  it("keeps rejecting retries after an uncertain provider delivery failure", async () => {
+    const now = new Date().toISOString();
+    const withThread = await createThreadReadModel(now);
+    const withResponse = await appendApprovalResponse(withThread, {
+      sequence: 3,
+      requestId: REQUEST_ID,
+      occurredAt: now,
+    });
+    const readModel = await appendApprovalRespondFailure(withResponse, {
+      sequence: 4,
+      requestId: REQUEST_ID,
+      occurredAt: now,
+      settlementStatus: "uncertain",
+    });
+
+    const failure = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.approval.respond",
+          commandId: CommandId.makeUnsafe("cmd-approval-respond-after-uncertain"),
+          threadId: THREAD_ID,
+          requestId: REQUEST_ID,
+          decision: "accept",
+          createdAt: now,
+        },
+        readModel,
+      }).pipe(Effect.flip),
+    );
+
+    expect(failure._tag).toBe("OrchestrationCommandInvariantError");
   });
 });
