@@ -62,7 +62,11 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const { command: childCmd, args: childArgs, shell: childShell } = prepareWindowsSafeProcess("codex", ["mcp", "get-auth"], { cwd });
+    const {
+      command: childCmd,
+      args: childArgs,
+      shell: childShell,
+    } = prepareWindowsSafeProcess("codex", ["mcp", "get-auth"], { cwd });
     const child = ChildProcess.spawn(childCmd, childArgs, {
       cwd,
       stdio: ["pipe", "pipe", "inherit"],
