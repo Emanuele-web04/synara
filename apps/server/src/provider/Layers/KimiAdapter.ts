@@ -8,6 +8,7 @@ import * as nodePath from "node:path";
 import {
   ApprovalRequestId,
   EventId,
+  type KimiModelOptions,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -33,9 +34,7 @@ import {
   PubSub,
   Random,
   Scope,
-  Semaphore,
   Stream,
-  SynchronizedRef,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -55,6 +54,7 @@ import {
   selectAcpFullAccessPermissionOptionId,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
+import { makeAcpThreadLock } from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import type { AcpSessionRuntimeOptions } from "../acp/AcpSessionRuntime.ts";
 import {
@@ -423,9 +423,7 @@ function applyRequestedSessionConfiguration<E>(input: {
   readonly modelSelection:
     | {
         readonly model: string;
-        readonly options?: {
-          readonly thinking?: boolean;
-        };
+        readonly options?: KimiModelOptions | null | undefined;
       }
     | undefined;
   readonly mapError: (context: {
@@ -495,7 +493,7 @@ export function makeKimiAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, KimiSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const withThreadLock = yield* makeAcpThreadLock();
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -504,27 +502,6 @@ export function makeKimiAdapter(
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {

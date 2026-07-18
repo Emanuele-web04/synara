@@ -2216,6 +2216,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.grok.binaryPath;
           case "droid":
             return settings.providers.droid.binaryPath;
+          case "kimi":
+            return settings.providers.kimi.binaryPath;
           case "kilo":
             return settings.providers.kilo.binaryPath;
           case "opencode":

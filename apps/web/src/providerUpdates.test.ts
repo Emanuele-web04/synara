@@ -63,6 +63,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
+      kimi: { ...provider, binaryPath: "kimi" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPasswordConfigured: false },
       opencode: {
         ...provider,
