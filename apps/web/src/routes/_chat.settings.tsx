@@ -145,6 +145,7 @@ import { cn, isMacPlatform } from "../lib/utils";
 import { unarchiveThreadFromClient } from "../lib/threadArchive";
 import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import { requestRepairState } from "../shellRefreshCoordinator";
 import {
   buildNotificationSettingsSupportText,
   readBrowserNotificationPermissionState,
@@ -382,7 +383,7 @@ function SortableProviderVisibilityRow(props: {
       </div>
       <Switch
         checked={!props.isHidden}
-        onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
+        onCheckedChange={(checked) => props.onHiddenChange(!checked)}
         aria-label={`Show ${props.option.title} in the provider picker`}
       />
     </div>
@@ -699,7 +700,6 @@ function SettingsRouteView() {
   const removeDeletedThreadFromClientState = useStore(
     (store) => store.removeDeletedThreadFromClientState,
   );
-  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   // Shell-level subscription on purpose: the full-thread selector invalidates on every
   // streaming message/activity tick, which would re-render this whole route while a
@@ -1461,7 +1461,7 @@ function SettingsRouteView() {
 
     setIsRepairingLocalState(true);
     try {
-      const snapshot = await api.orchestration.repairState();
+      const snapshot = await requestRepairState(api);
       syncServerReadModel(snapshot);
       toastManager.add({
         type: "success",

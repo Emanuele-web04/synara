@@ -9,7 +9,12 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { hasLiveThreadsWithMissingProjects } from "./desktopProjectRecovery";
+import {
+  classifyDesktopHydrationRecovery,
+  hasClientLiveThreadEvidence,
+  hasLiveThreadsWithMissingProjects,
+  resolveRepairedShellApplication,
+} from "./desktopProjectRecovery";
 
 function makeProject(
   overrides: Partial<OrchestrationReadModel["projects"][number]> = {},
@@ -179,5 +184,210 @@ describe("desktopProjectRecovery", () => {
   it("accepts shell snapshots that do not carry deleted markers", () => {
     expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot())).toBe(false);
     expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot({ projects: [] }))).toBe(true);
+  });
+});
+
+describe("hasClientLiveThreadEvidence", () => {
+  it("returns true for legacy threads", () => {
+    expect(
+      hasClientLiveThreadEvidence({
+        threads: [{ projectId: ProjectId.makeUnsafe("project-1") } as const],
+        threadIds: [],
+        threadShellById: {},
+        threadSessionById: {},
+        threadTurnStateById: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for normalized threadIds", () => {
+    expect(
+      hasClientLiveThreadEvidence({
+        threads: [],
+        threadIds: [ThreadId.makeUnsafe("thread-1")],
+        threadShellById: {},
+        threadSessionById: {},
+        threadTurnStateById: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for normalized shell/session/turn state", () => {
+    expect(
+      hasClientLiveThreadEvidence({
+        threads: [],
+        threadIds: [],
+        threadShellById: {
+          [ThreadId.makeUnsafe("thread-1")]: {
+            projectId: ProjectId.makeUnsafe("project-1"),
+          } as const,
+        },
+        threadSessionById: {},
+        threadTurnStateById: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when no thread evidence exists", () => {
+    expect(
+      hasClientLiveThreadEvidence({
+        threads: [],
+        threadIds: [],
+        threadShellById: {},
+        threadSessionById: {},
+        threadTurnStateById: {},
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("classifyDesktopHydrationRecovery", () => {
+  it("returns none before threads are hydrated", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: false,
+        projects: [{ id: "project-1" }],
+        threads: [],
+      }),
+    ).toBe("none");
+  });
+
+  it("returns missing-threads when projects exist without threads", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [],
+      }),
+    ).toBe("missing-threads");
+  });
+
+  it("returns repair-projects for a fully empty hydrated shell", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [],
+        threads: [],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns repair-projects when threads exist without projects", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [],
+        threads: [{ projectId: "project-1" }],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns repair-projects when a thread references a missing project", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [{ projectId: "project-missing" }],
+      }),
+    ).toBe("repair-projects");
+  });
+
+  it("returns none when projects and threads are consistent", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [{ projectId: "project-1" }],
+      }),
+    ).toBe("none");
+  });
+
+  it("does not classify as missing-threads when normalized thread state exists", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [{ id: "project-1" }],
+        threads: [],
+        threadShellById: {
+          [ThreadId.makeUnsafe("thread-1")]: { projectId: ProjectId.makeUnsafe("project-1") },
+        },
+      }),
+    ).toBe("none");
+  });
+
+  it("classifies repair-projects when normalized thread state references a missing project", () => {
+    expect(
+      classifyDesktopHydrationRecovery({
+        threadsHydrated: true,
+        projects: [],
+        threads: [],
+        threadShellById: {
+          [ThreadId.makeUnsafe("thread-1")]: { projectId: ProjectId.makeUnsafe("project-1") },
+        },
+      }),
+    ).toBe("repair-projects");
+  });
+});
+
+describe("resolveRepairedShellApplication", () => {
+  it("returns confirmed-empty for a fully empty repair result without live evidence", () => {
+    expect(
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
+          projects: [],
+          threads: [],
+        }),
+        observedLiveThreadEvidence: false,
+      }),
+    ).toEqual({ action: "confirmed-empty" });
+  });
+
+  it("returns inconsistent-empty when empty repair contradicts observed live evidence", () => {
+    expect(
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
+          projects: [],
+          threads: [],
+        }),
+        observedLiveThreadEvidence: true,
+      }),
+    ).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
+  });
+
+  it("rejects incomplete repairs without producing an apply shell", () => {
+    expect(
+      resolveRepairedShellApplication({
+        repaired: makeSnapshot({
+          projects: [],
+          threads: [makeThread()],
+        }),
+        observedLiveThreadEvidence: true,
+      }),
+    ).toEqual({ action: "reject-incomplete", shellThreadCount: 1 });
+  });
+
+  it("returns inconsistent-empty when repair restores projects but zero live threads after live evidence", () => {
+    const decision = resolveRepairedShellApplication({
+      repaired: makeSnapshot({
+        projects: [makeProject()],
+        threads: [],
+      }),
+      observedLiveThreadEvidence: true,
+    });
+    expect(decision).toEqual({ action: "inconsistent-empty", shellThreadCount: 0 });
+  });
+
+  it("returns an apply shell when repair restores consistent live rows", () => {
+    const snapshot = makeSnapshot();
+    const decision = resolveRepairedShellApplication({
+      repaired: snapshot,
+      observedLiveThreadEvidence: true,
+    });
+    expect(decision.action).toBe("apply");
+    if (decision.action === "apply") {
+      expect(decision.shell.projects).toHaveLength(1);
+      expect(decision.shell.threads).toHaveLength(1);
+      expect(decision.shell.snapshotSequence).toBe(snapshot.snapshotSequence);
+    }
   });
 });

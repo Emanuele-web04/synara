@@ -25,9 +25,9 @@ import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
-import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import remarkBreaks from "remark-breaks";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
@@ -161,6 +161,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
 // newlines and skip math entirely (the composer chip plugin is appended per
 // render because it closes over the message's mention references).
 const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
+
 const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
 // `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used

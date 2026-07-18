@@ -9,6 +9,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThread,
   type ServerConfig,
@@ -24,6 +25,7 @@ import { render } from "vitest-browser-react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
+import { useTerminalStateStore } from "../terminalStateStore";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -34,6 +36,7 @@ import {
 } from "../test/effectRpcWebSocketMock";
 import { createBrowserTestServerConfig, createFullscreenTestHost } from "../test/browserHarness";
 import { getThreadFromState } from "../threadDerivation";
+import { bumpRecoveryMutationLease } from "../shellRefreshCoordinator";
 import { useWorkspaceStore } from "../workspaceStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 
@@ -44,6 +47,7 @@ const NOW_ISO = "2026-03-04T12:00:00.000Z";
 
 interface TestFixture {
   snapshot: OrchestrationReadModel;
+  repairStateResult: OrchestrationReadModel;
   serverConfig: ServerConfig;
   welcome: WsWelcomePayload;
 }
@@ -55,10 +59,23 @@ const threadStreamRequestIdByThreadId = new Map<ThreadId, string>();
 const threadStreamClientByThreadId = new Map<ThreadId, EffectRpcWebSocketClient>();
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
+let getShellSnapshotRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
+let repairStateCallCount = 0;
+let repairStateDeferred = false;
+let repairStatePending: { client: EffectRpcWebSocketClient; requestId: string } | null = null;
+
+function resolveRepairState(value: OrchestrationReadModel): void {
+  repairStateDeferred = false;
+  const pending = repairStatePending;
+  repairStatePending = null;
+  if (pending) {
+    sendEffectRpcExit(pending.client, pending.requestId, value);
+  }
+}
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -138,6 +155,12 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
 function buildFixture(): TestFixture {
   return {
     snapshot: createSnapshot(),
+    repairStateResult: {
+      snapshotSequence: 1,
+      updatedAt: NOW_ISO,
+      projects: [],
+      threads: [],
+    },
     serverConfig: createBaseServerConfig(),
     welcome: {
       cwd: "/repo/project",
@@ -162,10 +185,18 @@ function findThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationT
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    getShellSnapshotRequestCount += 1;
     return createShellSnapshotFromReadModel(fixture.snapshot);
   }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === ORCHESTRATION_WS_METHODS.repairState) {
+    repairStateCallCount += 1;
+    if (repairStateDeferred) {
+      return "deferred";
+    }
+    return fixture.repairStateResult;
   }
   if (tag === ORCHESTRATION_WS_METHODS.replayEvents) {
     const request = body as { readonly fromSequenceExclusive?: unknown } | null;
@@ -252,6 +283,15 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents
       ) {
+        return;
+      }
+      if (method === ORCHESTRATION_WS_METHODS.repairState) {
+        const value = resolveWsRpc(method, requestBody);
+        if (value === "deferred") {
+          repairStatePending = { client, requestId: request.id };
+          return;
+        }
+        sendEffectRpcExit(client, request.id, value);
         return;
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in requestBody) {
@@ -347,7 +387,11 @@ function sendThreadEventPush(event: OrchestrationEvent) {
   });
 }
 
-function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
+function sendThreadSnapshotPush(
+  threadId: ThreadId,
+  snapshotSequence: number,
+  thread?: OrchestrationThread,
+) {
   const requestId = threadStreamRequestIdByThreadId.get(threadId);
   const client = threadStreamClientByThreadId.get(threadId);
   if (!requestId || !client) {
@@ -357,7 +401,7 @@ function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
     kind: "snapshot",
     snapshot: {
       snapshotSequence,
-      thread: getThreadDetailFromFixtureSnapshot(threadId),
+      thread: thread ?? getThreadDetailFromFixtureSnapshot(threadId),
     },
   });
 }
@@ -367,6 +411,13 @@ function sendShellEventPush(event: OrchestrationShellStreamEvent) {
     throw new Error("Shell stream is not connected");
   }
   sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, event);
+}
+
+function sendShellSnapshotPush(snapshot: OrchestrationShellSnapshot) {
+  if (!shellStreamRequestId || !shellStreamClient) {
+    throw new Error("Shell stream is not connected");
+  }
+  sendEffectRpcChunk(shellStreamClient, shellStreamRequestId, { kind: "snapshot", snapshot });
 }
 
 describe("EventRouter scoped orchestration sync", () => {
@@ -393,6 +444,7 @@ describe("EventRouter scoped orchestration sync", () => {
     threadStreamRequestIdByThreadId.clear();
     threadStreamClientByThreadId.clear();
     delayNextThreadSnapshot = false;
+    getShellSnapshotRequestCount = 0;
     localStorage.clear();
     useComposerDraftStore.setState({
       draftsByThreadId: {},
@@ -433,6 +485,9 @@ describe("EventRouter scoped orchestration sync", () => {
     subscribeThreadRequests = [];
     replayEvents = [];
     replayRequestCursors = [];
+    repairStateCallCount = 0;
+    repairStateDeferred = false;
+    repairStatePending = null;
   });
 
   afterEach(() => {
@@ -876,16 +931,16 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforePromotion = subscribeThreadRequestCountById.get(recoveryThreadId)!;
       sendThreadEventPush(bufferedEvent);
-      await vi.waitFor(
-        () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
-        },
-        { timeout: 4_000, interval: 16 },
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+        subscribeCountBeforePromotion,
       );
 
       const baseThread = fixture.snapshot.threads[0]!;
@@ -918,7 +973,9 @@ describe("EventRouter scoped orchestration sync", () => {
       let thread;
       await vi.waitFor(
         () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(3);
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
+            subscribeCountBeforePromotion + 1,
+          );
           thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
@@ -974,12 +1031,14 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
+          expect(getShellSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
           ).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
+      const subscribeCountBeforePromotion = subscribeThreadRequestCountById.get(draftThreadId)!;
 
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
@@ -1036,10 +1095,12 @@ describe("EventRouter scoped orchestration sync", () => {
       await vi.waitFor(
         () => {
           expect(useStore.getState().threadIds?.includes(draftThreadId)).toBe(true);
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(
+            subscribeCountBeforePromotion + 1,
+          );
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(2);
+          ).toBe(subscribeCountBeforePromotion + 1);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },
@@ -1151,5 +1212,397 @@ describe("EventRouter scoped orchestration sync", () => {
     } finally {
       await mounted.cleanup();
     }
+  });
+
+  describe("DesktopProjectBootstrap recovery", () => {
+    const emptyReadModel = (): OrchestrationReadModel => ({
+      snapshotSequence: 2,
+      updatedAt: NOW_ISO,
+      projects: [],
+      threads: [],
+    });
+
+    const fullReadModel = (): OrchestrationReadModel => createSnapshot();
+
+    it("rejects a zero-thread repair when a live thread exists without a project", async () => {
+      const base = createSnapshot();
+      fixture.snapshot = { ...base, projects: [], threads: [base.threads[0]!] };
+      fixture.repairStateResult = emptyReadModel();
+
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(repairStateCallCount).toBeGreaterThan(0);
+            const state = useStore.getState();
+            expect(state.threadIds?.length).toBe(1);
+            expect(state.threadIds).toContain(THREAD_ID);
+            expect(state.projects.length).toBe(0);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("rejects a zero-thread repair after a hot-path thread detail snapshot arrives first", async () => {
+      fixture.snapshot = emptyReadModel();
+      fixture.repairStateResult = emptyReadModel();
+      repairStateDeferred = true;
+      delayNextThreadSnapshot = true;
+
+      const thread = createSnapshot().threads[0]!;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(repairStateCallCount).toBe(2);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, thread);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        resolveRepairState(emptyReadModel());
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
+            expect(state.threadIds).toContain(THREAD_ID);
+            expect(state.threadIds?.length).toBe(1);
+            expect(state.projects.length).toBe(0);
+          },
+          { timeout: 15_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("does not apply a repair that returns after the recovery lease is bumped", async () => {
+      fixture.snapshot = emptyReadModel();
+      fixture.repairStateResult = emptyReadModel();
+      repairStateDeferred = true;
+
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(repairStateCallCount).toBe(2);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        bumpRecoveryMutationLease();
+        resolveRepairState(fullReadModel());
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
+            expect(state.threadIds?.length).toBe(0);
+            expect(state.projects.length).toBe(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("preserves a newer thread detail when an older shell snapshot arrives", async () => {
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadsHydrated).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendShellSnapshotPush({
+          snapshotSequence: 10,
+          projects: [],
+          threads: [],
+          updatedAt: NOW_ISO,
+        });
+
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+        const state = useStore.getState();
+        expect(state.threadIds).toContain(THREAD_ID);
+        expect(state.threadIds?.length).toBe(1);
+        expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("rejects a stale detail snapshot after a newer detail fence is established", async () => {
+      const thread = createSnapshot().threads[0]!;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, thread);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 10, {
+          ...thread,
+          title: "stale regression",
+          messages: [],
+        });
+
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+        const state = useStore.getState();
+        expect(state.threadIds).toContain(THREAD_ID);
+        expect(getThreadFromState(state, THREAD_ID)?.title).toBe("Root test thread");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("does not restart the thread stream for a duplicate subscription request", async () => {
+      delayNextThreadSnapshot = true;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
+
+        sendShellEventPush({
+          kind: "thread-upserted",
+          sequence: 2,
+          thread: createShellSnapshotFromReadModel(fixture.snapshot).threads[0]!,
+        });
+
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+        expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("replays detail events emitted while the first thread snapshot is pending", async () => {
+      delayNextThreadSnapshot = true;
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadEventPush({
+          sequence: 2,
+          eventId: EventId.makeUnsafe("event-pending-replay"),
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          occurredAt: "2026-03-04T12:00:05.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId: THREAD_ID,
+            messageId: MessageId.makeUnsafe("msg-pending-replay"),
+            role: "assistant",
+            text: "pending replay rendered",
+            turnId: TurnId.makeUnsafe("turn-pending-replay"),
+            source: "native",
+            streaming: false,
+            createdAt: "2026-03-04T12:00:05.000Z",
+            updatedAt: "2026-03-04T12:00:05.000Z",
+          },
+        } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>);
+
+        sendThreadSnapshotPush(THREAD_ID, 1, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            const thread = getThreadFromState(state, THREAD_ID);
+            expect(
+              thread?.messages.some((message) => message.text === "pending replay rendered"),
+            ).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("applies an explicit thread removal at the same sequence as the detail fence", async () => {
+      const mounted = await mountApp();
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds?.includes(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendShellEventPush({
+          kind: "thread-removed",
+          sequence: 12,
+          threadId: THREAD_ID,
+        });
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).not.toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("retains terminal state for a thread preserved by a newer detail fence", async () => {
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(threadStreamRequestIdByThreadId.has(THREAD_ID)).toBe(true);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        sendThreadSnapshotPush(THREAD_ID, 12, createSnapshot().threads[0]!);
+
+        await vi.waitFor(
+          () => {
+            expect(useStore.getState().threadIds).toContain(THREAD_ID);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+
+        sendShellSnapshotPush({
+          snapshotSequence: 10,
+          projects: [],
+          threads: [],
+          updatedAt: NOW_ISO,
+        });
+
+        await vi.waitFor(
+          () => {
+            const state = useStore.getState();
+            expect(state.threadIds?.length).toBe(1);
+            expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+
+        expect(useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]).toBeDefined();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("does not apply a repair with incomplete threads", async () => {
+      const base = createSnapshot();
+      fixture.snapshot = { ...base, projects: [], threads: [base.threads[0]!] };
+      fixture.repairStateResult = {
+        snapshotSequence: 2,
+        updatedAt: NOW_ISO,
+        projects: [base.projects[0]!],
+        threads: [
+          {
+            ...base.threads[0]!,
+            projectId: "unknown-project" as ProjectId,
+          },
+        ],
+      };
+
+      const mounted = await mountApp({ waitForThreadId: null });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(repairStateCallCount).toBeGreaterThan(0);
+            const state = useStore.getState();
+            expect(state.threadIds?.length).toBe(1);
+            expect(state.projects.length).toBe(0);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
   });
 });
