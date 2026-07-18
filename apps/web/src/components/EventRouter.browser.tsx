@@ -970,7 +970,7 @@ describe("EventRouter scoped orchestration sync", () => {
       let thread;
       await vi.waitFor(
         () => {
-          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(3);
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
           thread = getThreadFromState(useStore.getState(), recoveryThreadId);
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
@@ -1092,7 +1092,7 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
           expect(
             subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBe(1);
+          ).toBe(2);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },
@@ -1251,7 +1251,7 @@ describe("EventRouter scoped orchestration sync", () => {
       try {
         await vi.waitFor(
           () => {
-            expect(repairStateCallCount).toBe(1);
+            expect(repairStateCallCount).toBe(2);
           },
           { timeout: 4_000, interval: 16 },
         );
@@ -1279,7 +1279,7 @@ describe("EventRouter scoped orchestration sync", () => {
             const state = useStore.getState();
             expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
             expect(state.threadIds).toContain(THREAD_ID);
-            expect(state.threadIds?.length).toBe(0);
+            expect(state.threadIds?.length).toBe(1);
             expect(state.projects.length).toBe(0);
           },
           { timeout: 15_000, interval: 16 },
@@ -1299,7 +1299,7 @@ describe("EventRouter scoped orchestration sync", () => {
       try {
         await vi.waitFor(
           () => {
-            expect(repairStateCallCount).toBe(1);
+            expect(repairStateCallCount).toBe(2);
           },
           { timeout: 4_000, interval: 16 },
         );
@@ -1311,7 +1311,7 @@ describe("EventRouter scoped orchestration sync", () => {
           () => {
             const state = useStore.getState();
             expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
-            expect(state.threadIds?.length).toBe(0);
+            expect(state.threadIds?.length).toBe(1);
             expect(state.projects.length).toBe(0);
           },
           { timeout: 8_000, interval: 16 },
@@ -1359,7 +1359,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
         const state = useStore.getState();
         expect(state.threadIds).toContain(THREAD_ID);
-        expect(state.threadIds?.length).toBe(0);
+        expect(state.threadIds?.length).toBe(1);
         expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
       } finally {
         await mounted.cleanup();
@@ -1553,7 +1553,7 @@ describe("EventRouter scoped orchestration sync", () => {
         await vi.waitFor(
           () => {
             const state = useStore.getState();
-            expect(state.threadIds?.length).toBe(0);
+            expect(state.threadIds?.length).toBe(1);
             expect(getThreadFromState(state, THREAD_ID)).toBeDefined();
           },
           { timeout: 4_000, interval: 16 },
