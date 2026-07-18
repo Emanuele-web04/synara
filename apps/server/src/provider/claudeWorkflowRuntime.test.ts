@@ -20,7 +20,8 @@ import {
 // Line shapes mirror a real run's transcript directory
 // (~/.claude/projects/<session>/subagents/workflows/wf_*/): journal.jsonl
 // records {type, key, agentId}; agent-<id>.jsonl is the session-jsonl shape
-// whose assistant lines carry message.model/usage and tool_use blocks.
+// whose assistant lines carry message.model/usage and tool_use blocks plus a
+// top-level `effort` field (sibling of `message`).
 const JOURNAL_STARTED = JSON.stringify({
   type: "started",
   key: "v2:e6b51252c782edf079b5f85ce071ce87afc52b300b3ae35c607f3b0569d47868",
@@ -61,6 +62,7 @@ const AGENT_THINKING_LINE = JSON.stringify({
 });
 const AGENT_TOOL_USE_LINE = JSON.stringify({
   type: "assistant",
+  effort: "high",
   message: {
     id: "msg_011",
     role: "assistant",
@@ -132,6 +134,7 @@ describe("applyClaudeWorkflowAgentTranscriptLines", () => {
     expect(changed).toBe(true);
     expect(agent.promptPreview).toBe("Decompose this research question into angles.\n\nDetails.");
     expect(agent.model).toBe("claude-sonnet-4-6");
+    expect(agent.effort).toBe("high");
     // Latest usage line wins: 1 + 946 + 20318 + 34.
     expect(agent.tokens).toBe(21_299);
     // tool_use blocks dedupe by id across streamed line repeats.
@@ -167,6 +170,17 @@ describe("applyClaudeWorkflowAgentTranscriptLines", () => {
 });
 
 describe("claudeWorkflowRuntimeSnapshots", () => {
+  it("emits effort accumulated from transcript lines", () => {
+    const state = makeClaudeWorkflowRuntimeState();
+    applyClaudeWorkflowJournalLines(state, [JOURNAL_STARTED]);
+    applyClaudeWorkflowAgentTranscriptLines(state.agents.get("a423ae8cef86a1ed4")!, [
+      AGENT_TOOL_USE_LINE,
+    ]);
+    const [snapshot] = claudeWorkflowRuntimeSnapshots(state, []);
+    expect(snapshot?.model).toBe("claude-sonnet-4-6");
+    expect(snapshot?.effort).toBe("high");
+  });
+
   it("zips first-seen labels onto journal start order", () => {
     const state = makeClaudeWorkflowRuntimeState();
     applyClaudeWorkflowJournalLines(state, [

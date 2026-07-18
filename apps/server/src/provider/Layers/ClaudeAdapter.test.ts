@@ -1824,6 +1824,290 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("announces newly backgrounded tasks once with a background notice", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning"),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "bg-1", task_type: "local_bash", description: "sleep 120" }],
+        session_id: "sdk-session-bg",
+        uuid: "bg-change-1",
+      } as unknown as SDKMessage);
+      // Same task again plus one addition: only the addition is announced.
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          { task_id: "bg-1", task_type: "local_bash", description: "sleep 120" },
+          { task_id: "bg-2", task_type: "subagent", description: "beta" },
+        ],
+        session_id: "sdk-session-bg",
+        uuid: "bg-change-2",
+      } as unknown as SDKMessage);
+      // Removal-only change announces nothing.
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "bg-2", task_type: "subagent", description: "beta" }],
+        session_id: "sdk-session-bg",
+        uuid: "bg-change-3",
+      } as unknown as SDKMessage);
+      // Sentinel unknown subtype closes the collection window; its warning
+      // arriving third proves the removal produced no notice.
+      harness.query.emit({
+        type: "system",
+        subtype: "totally_unknown_subtype",
+        session_id: "sdk-session-bg",
+        uuid: "bg-sentinel",
+      } as unknown as SDKMessage);
+
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        ["sleep 120", "beta", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+      );
+      const firstNotice = warnings[0];
+      assert.equal(firstNotice?.type, "runtime.warning");
+      if (firstNotice?.type === "runtime.warning") {
+        // The SDK message rides on detail so ingestion can tell background
+        // notices apart from plain runtime warnings.
+        const detail = firstNotice.payload.detail as Record<string, unknown>;
+        assert.equal(detail.subtype, "background_tasks_changed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drops zombie-tagged messages after a subagent task settles", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-zombie",
+        uuid: "stream-zombie-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-task-zombie",
+            name: "Task",
+            input: {
+              description: "Sleep repeatedly",
+              prompt: "Sleep in a loop",
+              subagent_type: "worker-low",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-zombie",
+        tool_use_id: "tool-task-zombie",
+        subagent_type: "worker-low",
+        description: "Sleep repeatedly",
+        session_id: "sdk-session-zombie",
+        uuid: "task-started-zombie",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-zombie",
+        uuid: "assistant-zombie-1",
+        parent_tool_use_id: "tool-task-zombie",
+        message: {
+          id: "assistant-message-zombie-1",
+          content: [{ type: "text", text: "Sleeping now." }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      } as unknown as SDKMessage);
+      // The user stopped the task; the SDK settles it — in the real stream a
+      // terminal task_updated patch lands first (retiring the run), then the
+      // task_notification follows.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-zombie",
+        patch: { status: "killed" },
+        session_id: "sdk-session-zombie",
+        uuid: "task-updated-zombie",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-zombie",
+        tool_use_id: "tool-task-zombie",
+        status: "stopped",
+        output_file: "/tmp/task-zombie-output.md",
+        summary: "Stopped.",
+        session_id: "sdk-session-zombie",
+        uuid: "task-notification-zombie",
+      } as unknown as SDKMessage);
+      // ...but a message already in flight arrives with the same tag. It must
+      // not resurrect the settled child (a new synthetic turn would pin the
+      // strip row on "Running" forever).
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-zombie",
+        uuid: "assistant-zombie-2",
+        parent_tool_use_id: "tool-task-zombie",
+        message: {
+          id: "assistant-message-zombie-2",
+          content: [{ type: "text", text: "Still going." }],
+          usage: { input_tokens: 4, output_tokens: 2 },
+        },
+      } as unknown as SDKMessage);
+      // The Task tool_result for a stopped task arrives error-shaped; the
+      // settled status must stamp a "stopped" agent state onto the item.
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-zombie",
+        uuid: "tool-result-zombie",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-task-zombie",
+              content: "Task was aborted",
+              is_error: true,
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // Second subagent settles via task_notification alone (no terminal
+      // task_updated) — the other real-world settle order.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-zombie2",
+        tool_use_id: "tool-task-zombie2",
+        subagent_type: "worker-low",
+        description: "Sleep repeatedly too",
+        session_id: "sdk-session-zombie",
+        uuid: "task-started-zombie2",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-zombie",
+        uuid: "assistant-zombie2-1",
+        parent_tool_use_id: "tool-task-zombie2",
+        message: {
+          id: "assistant-message-zombie2-1",
+          content: [{ type: "text", text: "Napping." }],
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-zombie2",
+        tool_use_id: "tool-task-zombie2",
+        status: "stopped",
+        output_file: "/tmp/task-zombie2-output.md",
+        summary: "Stopped.",
+        session_id: "sdk-session-zombie",
+        uuid: "task-notification-zombie2",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-zombie",
+        uuid: "assistant-zombie2-2",
+        parent_tool_use_id: "tool-task-zombie2",
+        message: {
+          id: "assistant-message-zombie2-2",
+          content: [{ type: "text", text: "Napping again." }],
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-zombie",
+        uuid: "result-zombie-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      for (const toolUseId of ["tool-task-zombie", "tool-task-zombie2"]) {
+        const childEvents = runtimeEvents.filter(
+          (event) => event.providerRefs?.providerThreadId === toolUseId,
+        );
+        // Exactly one child turn: started once, completed once at settle, and
+        // the zombie tail neither streams text nor reopens a turn.
+        assert.equal(childEvents.filter((event) => event.type === "turn.started").length, 1);
+        assert.equal(childEvents.filter((event) => event.type === "turn.completed").length, 1);
+        const lastChildEvent = childEvents.at(-1);
+        assert.equal(lastChildEvent?.type, "turn.completed");
+      }
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            event.type === "content.delta" &&
+            (event.payload.delta.includes("Still going") ||
+              event.payload.delta.includes("Napping again")),
+        ),
+        false,
+      );
+      const stoppedItemCompleted = runtimeEvents.find(
+        (event) =>
+          event.type === "item.completed" &&
+          event.providerRefs?.providerItemId === "tool-task-zombie",
+      );
+      assert.equal(stoppedItemCompleted?.type, "item.completed");
+      if (stoppedItemCompleted?.type === "item.completed") {
+        const data = stoppedItemCompleted.payload.data as Record<string, unknown>;
+        assert.deepEqual(data.agentStates, {
+          "tool-task-zombie": { status: "stopped" },
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("stops a targeted subagent task instead of interrupting the whole turn", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2299,6 +2583,32 @@ describe("ClaudeAdapterLive", () => {
         uuid: "workflow-agent-notification-1",
       } as unknown as SDKMessage);
 
+      // Ambient shell tasks (each Bash call an agent makes) are not workflow
+      // members even while exactly one workflow is live.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "ambient-bash-1",
+        tool_use_id: "toolu-ambient-bash-1",
+        task_type: "local_bash",
+        description: "Sleep call 3 of 40",
+        session_id: "sdk-session-workflow",
+        uuid: "ambient-bash-started-1",
+      } as unknown as SDKMessage);
+
+      // Task-tool subagent spawns (tool_use_id + subagent_type) belong to the
+      // subagent strip; they must not double as workflow member rows.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "strip-subagent-1",
+        tool_use_id: "toolu-strip-subagent-1",
+        subagent_type: "worker-low",
+        description: "phi",
+        session_id: "sdk-session-workflow",
+        uuid: "strip-subagent-started-1",
+      } as unknown as SDKMessage);
+
       // A second concurrent workflow makes membership ambiguous: later agent
       // tasks must stay untagged instead of guessing.
       harness.query.emit({
@@ -2380,6 +2690,22 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(ambiguousAgentStarted?.type, "task.started");
       if (ambiguousAgentStarted?.type === "task.started") {
         assert.equal(ambiguousAgentStarted.payload.workflowTaskId, undefined);
+      }
+
+      const ambientBashStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "ambient-bash-1",
+      );
+      assert.equal(ambientBashStarted?.type, "task.started");
+      if (ambientBashStarted?.type === "task.started") {
+        assert.equal(ambientBashStarted.payload.workflowTaskId, undefined);
+      }
+
+      const stripSubagentStarted = runtimeEvents.find(
+        (event) => event.type === "task.started" && event.payload.taskId === "strip-subagent-1",
+      );
+      assert.equal(stripSubagentStarted?.type, "task.started");
+      if (stripSubagentStarted?.type === "task.started") {
+        assert.equal(stripSubagentStarted.payload.workflowTaskId, undefined);
       }
 
       yield* adapter.stopTask(session.threadId, "wf-1");
@@ -2814,6 +3140,174 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             promptPreview: "Research prior art in depth.",
             startedAt: "2026-07-14T22:48:58.400Z",
             lastActivityAt: "2026-07-14T22:49:14.490Z",
+          },
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("backfills live-observed effort into the settled workflow snapshots", () => {
+    const transcriptDir = mkdtempSync(path.join(os.tmpdir(), "claude-workflow-effort-"));
+    const harness = makeHarness({ workflowRuntimePollIntervalMs: 25 });
+    return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => rmSync(transcriptDir, { recursive: true, force: true })),
+      );
+      writeFileSync(
+        path.join(transcriptDir, "journal.jsonl"),
+        `${JSON.stringify({ type: "started", key: "v2:abc", agentId: "agent-live-1" })}\n`,
+      );
+      // The transcript is the only place effort appears: assistant lines carry
+      // it as a top-level field next to `message`.
+      writeFileSync(
+        path.join(transcriptDir, "agent-agent-live-1.jsonl"),
+        `${JSON.stringify({
+          type: "assistant",
+          effort: "xhigh",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "tool_use", id: "toolu_1", name: "WebSearch", input: {} }],
+          },
+          timestamp: "2026-07-14T22:49:14.490Z",
+        })}\n`,
+      );
+      // The settled output file carries model/state but no effort.
+      const outputFile = path.join(transcriptDir, "workflow-output.json");
+      writeFileSync(
+        outputFile,
+        JSON.stringify({
+          workflowProgress: [
+            {
+              type: "workflow_agent",
+              label: "gamma-agent",
+              agentId: "agent-live-1",
+              model: "claude-sonnet-4-6",
+              state: "done",
+            },
+          ],
+        }),
+      );
+
+      const adapter = yield* ClaudeAdapter;
+      const seen: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.tap((event) => Effect.sync(() => seen.push(event))),
+        Stream.takeUntil((event) => event.type === "task.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-workflow-effort",
+        uuid: "stream-workflow-effort-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-workflow-effort",
+            name: "Workflow",
+            input: { script: "export const meta = { name: 'spec' };" },
+          },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "wf-effort-1",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        tool_use_id: "tool-workflow-effort",
+        description: "Draft the feature spec",
+        session_id: "sdk-session-workflow-effort",
+        uuid: "workflow-effort-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-workflow-effort",
+        uuid: "workflow-effort-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-workflow-effort",
+              content: "Workflow running in background",
+            },
+          ],
+        },
+        tool_use_result: {
+          status: "async_launched",
+          taskId: "wf-effort-1",
+          taskType: "local_workflow",
+          workflowName: "spec",
+          runId: "wf_effort123",
+          summary: "Launched",
+          transcriptDir,
+          scriptPath: "/sessions/abc/workflow-spec.ts",
+        },
+      } as unknown as SDKMessage);
+
+      // Wait for the poller to fold the transcript (and its effort) into the
+      // runtime state before the run settles. Real-time wait: the poller runs
+      // on the live runtime, while this test body is on the test clock.
+      while (
+        !seen.some(
+          (event) => event.type === "task.progress" && event.payload.workflowAgents !== undefined,
+        )
+      ) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 10)));
+      }
+
+      // Regression: a terminal task_updated tears the poller down first; the
+      // later task_notification must still see the runtime state to backfill.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "wf-effort-1",
+        patch: { status: "completed" },
+        session_id: "sdk-session-workflow-effort",
+        uuid: "workflow-effort-updated",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "wf-effort-1",
+        tool_use_id: "tool-workflow-effort",
+        status: "completed",
+        output_file: outputFile,
+        summary: "Workflow finished.",
+        session_id: "sdk-session-workflow-effort",
+        uuid: "workflow-effort-notification",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const workflowCompleted = runtimeEvents.find(
+        (event) => event.type === "task.completed" && event.payload.taskId === "wf-effort-1",
+      );
+      assert.equal(workflowCompleted?.type, "task.completed");
+      if (workflowCompleted?.type === "task.completed") {
+        assert.deepEqual(workflowCompleted.payload.workflowAgents, [
+          {
+            label: "gamma-agent",
+            agentId: "agent-live-1",
+            model: "claude-sonnet-4-6",
+            effort: "xhigh",
+            state: "done",
           },
         ]);
       }

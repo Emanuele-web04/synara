@@ -977,6 +977,11 @@ function runtimeEventToActivities(
     case "runtime.warning": {
       const raw = asObject((event as { raw?: unknown }).raw);
       const nativeType = asString(asObject(raw?.payload)?.type);
+      // Claude backgrounding notices arrive as warnings whose detail is the
+      // SDK background_tasks_changed message; they present as a plain info
+      // line ("Moved to background: <work>"), not as a runtime warning.
+      const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
+      const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const message = truncateDetail(event.payload.message);
       return [
         {
@@ -984,9 +989,10 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary:
-            (event.provider === "opencode" || event.provider === "kilo") &&
-            (nativeType === "session.next.retried" || nativeType === "session.status")
+          summary: isBackgroundMove
+            ? "Moved to background"
+            : (event.provider === "opencode" || event.provider === "kilo") &&
+                (nativeType === "session.next.retried" || nativeType === "session.status")
               ? event.provider === "opencode"
                 ? "OpenCode retrying"
                 : "Kilo retrying"
@@ -995,7 +1001,11 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             message,
             detail: message,
-            ...(nativeType ? { nativeEventType: nativeType } : {}),
+            ...(isBackgroundMove
+              ? { nativeEventType: detailSubtype }
+              : nativeType
+                ? { nativeEventType: nativeType }
+                : {}),
             ...activityDataField(event.payload.detail),
           }),
           turnId: toTurnId(event.turnId) ?? null,

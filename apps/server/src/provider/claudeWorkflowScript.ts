@@ -402,6 +402,7 @@ export function parseClaudeWorkflowProgressAgents(
     const phaseTitle = readString(record.phaseTitle);
     const agentId = readString(record.agentId);
     const model = readString(record.model);
+    const effort = readString(record.effort);
     const state = readString(record.state);
     const tokens = readInt(record.tokens);
     const toolCalls = readInt(record.toolCalls);
@@ -415,6 +416,7 @@ export function parseClaudeWorkflowProgressAgents(
         ...(phaseTitle ? { phaseTitle } : {}),
         ...(agentId ? { agentId } : {}),
         ...(model ? { model } : {}),
+        ...(effort ? { effort } : {}),
         ...(state ? { state } : {}),
         ...(tokens !== undefined ? { tokens } : {}),
         ...(toolCalls !== undefined ? { toolCalls } : {}),

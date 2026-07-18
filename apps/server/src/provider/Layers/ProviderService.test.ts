@@ -1787,6 +1787,59 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("ignores subagent-scoped runtime events for the parent binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-subagent-scoped-events");
+      const turnId = asTurnId("turn-parent-live");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn.mockImplementationOnce((input) =>
+        Effect.succeed({ threadId: input.threadId, turnId }),
+      );
+      yield* provider.sendTurn({ threadId, input: "spawn a subagent", attachments: [] });
+      yield* routing.codex.waitForRuntimeSubscribers();
+
+      // A stopped subagent completes its child turn and flips its child session
+      // to ready — both events ride the parent thread id with the child
+      // identity in providerRefs. Neither may clear the parent's active turn.
+      const subagentRefs = {
+        providerThreadId: "toolu_subagent_1",
+        providerParentThreadId: String(threadId),
+      };
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-subagent-turn-completed"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:05:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-subagent-child"),
+        payload: { state: "interrupted" },
+        providerRefs: subagentRefs,
+      });
+      routing.codex.emit({
+        type: "session.state.changed",
+        eventId: asEventId("runtime-subagent-session-ready"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:05:00.100Z",
+        threadId,
+        payload: { state: "ready", reason: "task:killed" },
+        providerRefs: subagentRefs,
+      });
+      yield* sleep(50);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload = asRuntimePayloadRecord(binding?.runtimePayload);
+      assert.equal(binding?.status, "running");
+      assert.equal(runtimePayload.activeTurnId, turnId);
+    }),
+  );
+
   it.effect("persists steer turn lifecycle, cursor, and model metadata", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

@@ -4971,6 +4971,48 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("labels Claude background moves as a background notice, not a runtime warning", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-background-move-notice"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-background"),
+      payload: {
+        message: "sleep 120",
+        detail: {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "bg-1", task_type: "local_bash", description: "sleep 120" }],
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-background-move-notice",
+      ),
+    );
+
+    const notice = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-background-move-notice",
+    );
+    expect(notice).toMatchObject({
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      tone: "info",
+    });
+    expect(notice?.payload).toMatchObject({
+      message: "sleep 120",
+      detail: "sleep 120",
+      nativeEventType: "background_tasks_changed",
+    });
+  });
+
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
