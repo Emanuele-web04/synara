@@ -31,11 +31,10 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 
-const MIN_DETAIL_BOTTOM_INSET_PX = 64;
+const DETAIL_BOTTOM_INSET_PX = 64;
 
 interface AgentActivityDetailViewProps {
   detail: AgentActivityDetail;
-  bottomContentInsetPx?: number | undefined;
   chatFontSizePx: number;
   contentInsetRightPx?: number | undefined;
   markdownCwd: string | undefined;
@@ -47,7 +46,6 @@ interface AgentActivityDetailViewProps {
 
 export const AgentActivityDetailView = memo(function AgentActivityDetailView({
   detail,
-  bottomContentInsetPx,
   chatFontSizePx,
   contentInsetRightPx,
   markdownCwd,
@@ -67,9 +65,9 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
   const scrollStyle = useMemo<CSSProperties>(
     () => ({
       ...(contentInsetRightPx ? { paddingRight: contentInsetRightPx } : {}),
-      paddingBottom: Math.max(bottomContentInsetPx ?? 0, MIN_DETAIL_BOTTOM_INSET_PX),
+      paddingBottom: DETAIL_BOTTOM_INSET_PX,
     }),
-    [bottomContentInsetPx, contentInsetRightPx],
+    [contentInsetRightPx],
   );
   const prompt = findPrompt(detail.entries);
   const result = findResult(detail.entries);

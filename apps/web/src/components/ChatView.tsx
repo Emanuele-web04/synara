@@ -116,6 +116,7 @@ import {
   saveConfirmedCustomBinaryPaths,
 } from "../confirmedCustomBinaryPathStore";
 import { isElectron } from "../env";
+import { isScrollContainerNearBottom } from "../chat-scroll";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
@@ -2822,13 +2823,6 @@ export default function ChatView({
   const planSidebarLabel = sidebarProposedPlan ? "Plan details" : "Tasks";
   const planSidebarToggleLabel = planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel;
   const planSidebarToggleTitle = `${planSidebarOpen ? "Hide" : "Show"} ${planSidebarLabel.toLowerCase()} sidebar`;
-  // Measured height of the whole stack of panels rendered above the composer input
-  // (live file changes, active task list, queued follow-ups). The composer overlaps the
-  // scrolling transcript, so the transcript reserves matching bottom space to keep its
-  // last rows clear of this chrome instead of letting them slide underneath and clip.
-  const [composerStackedChromeHeight, setComposerStackedChromeHeight] = useState(0);
-  const composerStackedChromeObserverRef = useRef<ResizeObserver | null>(null);
-  const previousComposerStackedChromeHeightRef = useRef(0);
   const activeTaskList = useMemo((): ActiveTaskListState | null => {
     if (showDebugTaskBanner) {
       return {
@@ -2956,33 +2950,6 @@ export default function ChatView({
     ],
   );
   const workflowNowMs = useNowMs(workflowRunState !== null && !workflowRunState.settled);
-  // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
-  // the composer mounts/unmounts, and the observer catches every panel appearing,
-  // resizing, or collapsing. Measuring the wrapper (rather than each panel) keeps one
-  // source of truth as panels are added or removed.
-  const measureComposerStackedChrome = useCallback((element: HTMLDivElement | null) => {
-    composerStackedChromeObserverRef.current?.disconnect();
-    composerStackedChromeObserverRef.current = null;
-    if (!element) {
-      setComposerStackedChromeHeight(0);
-      return;
-    }
-
-    const updateHeight = () => {
-      setComposerStackedChromeHeight(Math.ceil(element.getBoundingClientRect().height));
-    };
-
-    updateHeight();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(element);
-    composerStackedChromeObserverRef.current = observer;
-    // React invokes this callback ref with null on unmount (and re-attaches if the node
-    // changes), so the disconnect at the top of this function is the single teardown path.
-  }, []);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -5200,30 +5167,6 @@ export default function ChatView({
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
   }, []);
-  useLayoutEffect(() => {
-    const previousHeight = previousComposerStackedChromeHeightRef.current;
-    previousComposerStackedChromeHeightRef.current = composerStackedChromeHeight;
-
-    if (previousHeight <= 0 || composerStackedChromeHeight <= 0) {
-      return;
-    }
-
-    const delta = composerStackedChromeHeight - previousHeight;
-    if (delta <= 0.5) {
-      return;
-    }
-    if (!isAtEndRef.current) {
-      return;
-    }
-
-    const scrollContainer = legendListRef.current?.getScrollableNode?.();
-    if (!(scrollContainer instanceof HTMLElement)) {
-      return;
-    }
-
-    programmaticScrollUntilRef.current = performance.now() + 200;
-    scrollContainer.scrollTop += delta;
-  }, [composerStackedChromeHeight]);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -5520,7 +5463,6 @@ export default function ChatView({
       syncComposerFooterLayout();
 
       const nextHeight = entry.contentRect.height;
-      const previousHeight = composerFormHeightRef.current;
       composerFormHeightRef.current = nextHeight;
       const roundedNextHeight = Math.ceil(nextHeight);
       if (roundedNextHeight > 0) {
@@ -5528,22 +5470,66 @@ export default function ChatView({
           current === roundedNextHeight ? current : roundedNextHeight,
         );
       }
-      if (previousHeight > 0 && Math.abs(nextHeight - previousHeight) < 0.5) {
-        return;
-      }
-      if (!isAtEndRef.current) {
-        return;
-      }
-      window.requestAnimationFrame(() => {
-        scrollToEnd(false);
-      });
     });
 
     observer.observe(composerForm);
     return () => {
       observer.disconnect();
     };
-  }, [activeThread?.id, composerFooterHasWideActions, isInactiveSplitPane, scrollToEnd]);
+  }, [activeThread?.id, composerFooterHasWideActions, isInactiveSplitPane]);
+
+  useLayoutEffect(() => {
+    if (isInactiveSplitPane || typeof ResizeObserver === "undefined") return;
+    const composerForm = composerFormRef.current;
+    if (!composerForm) return;
+
+    let previousHeight = composerForm.getBoundingClientRect().height;
+    let pendingScrollTimeout: number | null = null;
+    const observer = new ResizeObserver((entries) => {
+      const [entry] = entries;
+      if (!entry) return;
+
+      const nextHeight = entry.contentRect.height;
+      const heightDelta = nextHeight - previousHeight;
+      previousHeight = nextHeight;
+      if (Math.abs(heightDelta) < 0.5) return;
+
+      const scrollContainer = legendListRef.current?.getScrollableNode?.();
+      // A composer resize can make LegendList report `isAtEnd: false` after the viewport
+      // has already changed. Reconstruct the pre-resize viewport so only an existing
+      // tail stick is preserved; a user who was already scrolled away stays there.
+      const wasNearEndBeforeResize =
+        scrollContainer instanceof HTMLElement &&
+        isScrollContainerNearBottom({
+          scrollTop: scrollContainer.scrollTop,
+          clientHeight: scrollContainer.clientHeight + heightDelta,
+          scrollHeight: scrollContainer.scrollHeight,
+        });
+      if (!wasNearEndBeforeResize) return;
+
+      if (pendingScrollTimeout !== null) {
+        window.clearTimeout(pendingScrollTimeout);
+      }
+      pendingScrollTimeout = window.setTimeout(() => {
+        pendingScrollTimeout = null;
+        scrollToEnd(false);
+      }, 0);
+    });
+
+    observer.observe(composerForm);
+    return () => {
+      observer.disconnect();
+      if (pendingScrollTimeout !== null) {
+        window.clearTimeout(pendingScrollTimeout);
+      }
+    };
+  }, [
+    activeThread?.id,
+    isInactiveSplitPane,
+    scrollToEnd,
+    secondaryChromeReady,
+    shouldRenderChatPaneContent,
+  ]);
 
   useEffect(() => {
     setPullRequestDialogState(null);
@@ -10829,11 +10815,9 @@ export default function ChatView({
           data-chat-pane-scope={paneScopeId}
         >
           <ComposerColumnFrame>
-            {/* Single measured wrapper around every panel stacked above the composer input.
-                Its height drives the transcript bottom inset and scroll compensation so the
-                last rows stay clear of this chrome (see measureComposerStackedChrome). A bare
-                div keeps the panels' -mb-px seam onto the input shell via margin collapse. */}
-            <div ref={measureComposerStackedChrome}>
+            {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
+                via margin collapse. */}
+            <div>
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -11637,9 +11621,6 @@ export default function ChatView({
                     onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
-                    bottomContentInsetPx={
-                      composerStackedChromeHeight > 0 ? composerStackedChromeHeight + 8 : undefined
-                    }
                     contentInsetRightPx={
                       environmentAppliesContentInset
                         ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX

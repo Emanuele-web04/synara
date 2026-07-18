@@ -5,6 +5,7 @@ import {
   AutomationId,
   type AutomationCreateInput,
   type AutomationDefinition,
+  CheckpointRef,
   EventId,
   MessageId,
   ORCHESTRATION_WS_METHODS,
@@ -761,6 +762,46 @@ function createSnapshotWithActiveInlinePlan(): OrchestrationReadModel {
                 }
               : null,
             updatedAt: isoAt(1_003),
+          }
+        : thread,
+    ),
+  };
+}
+
+function createSnapshotWithTallComposerStack(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithActiveInlinePlan();
+  const activeTurnId = TurnId.makeUnsafe("turn-inline-plan");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            checkpoints: [
+              {
+                turnId: activeTurnId,
+                checkpointTurnCount: 1,
+                checkpointRef: CheckpointRef.makeUnsafe("checkpoint-inline-plan"),
+                status: "ready",
+                files: [
+                  {
+                    path: "apps/web/src/components/ChatView.tsx",
+                    kind: "modified",
+                    additions: 12,
+                    deletions: 4,
+                  },
+                  {
+                    path: "apps/web/src/components/ChatView.browser.tsx",
+                    kind: "modified",
+                    additions: 36,
+                    deletions: 0,
+                  },
+                ],
+                assistantMessageId: null,
+                completedAt: isoAt(1_004),
+              },
+            ],
           }
         : thread,
     ),
@@ -5127,6 +5168,164 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await expect.element(page.getByText("Expand plan")).toBeInTheDocument();
       expect(document.querySelector('[aria-label="Close plan sidebar"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the final transcript row clear of a tall composer panel stack", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithTallComposerStack(),
+    });
+
+    const maxFixedClearancePx = 128;
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("2 files changed");
+          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const readStackLayout = () => {
+        const renderedRows = Array.from(
+          document.querySelectorAll<HTMLElement>("[data-timeline-row-kind]"),
+        );
+        const finalTranscriptRow = renderedRows.reduce<HTMLElement | null>((latest, row) => {
+          if (!latest) return row;
+          return row.getBoundingClientRect().bottom > latest.getBoundingClientRect().bottom
+            ? row
+            : latest;
+        }, null);
+        const taskListCard = document.querySelector<HTMLElement>(
+          '[data-testid="active-task-list-card"]',
+        );
+        const stackedPanels = taskListCard?.parentElement ?? null;
+
+        expect(
+          finalTranscriptRow,
+          "Unable to find the final rendered transcript row.",
+        ).toBeTruthy();
+        expect(taskListCard, "Unable to find the active task-list card.").toBeTruthy();
+        expect(stackedPanels, "Unable to find the stacked composer-panel wrapper.").toBeTruthy();
+
+        const finalRowRect = finalTranscriptRow!.getBoundingClientRect();
+        const taskCardRect = taskListCard!.getBoundingClientRect();
+        const stackRect = stackedPanels!.getBoundingClientRect();
+        return {
+          gapPx: stackRect.top - finalRowRect.bottom,
+          stackHeightPx: stackRect.height,
+          taskCardHeightPx: taskCardRect.height,
+          distanceFromBottomPx: getScrollContainerDistanceFromBottom(scrollContainer),
+        };
+      };
+
+      const waitForBoundedGap = async (phase: string) => {
+        let measured = readStackLayout();
+        await vi.waitFor(
+          () => {
+            measured = readStackLayout();
+            expect(
+              measured.distanceFromBottomPx,
+              `${phase}: transcript must stay at the end`,
+            ).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+            expect(
+              measured.gapPx,
+              `${phase}: final row must not be obscured`,
+            ).toBeGreaterThanOrEqual(-1);
+            expect(
+              measured.gapPx,
+              `${phase}: gap must stay within fixed clearance`,
+            ).toBeLessThanOrEqual(maxFixedClearancePx);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+        return measured;
+      };
+
+      const expanded = await waitForBoundedGap("expanded");
+      expect(expanded.stackHeightPx).toBeGreaterThan(maxFixedClearancePx);
+
+      const collapseButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        "Unable to find the task-banner collapse button.",
+      );
+      collapseButton.click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        ).not.toBeNull();
+      });
+      const collapsed = await waitForBoundedGap("collapsed");
+      expect(collapsed.taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
+      expect(Math.abs(collapsed.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+
+      const expandButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        "Unable to find the task-banner expand button.",
+      );
+      expandButton.click();
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        ).not.toBeNull();
+      });
+      const reexpanded = await waitForBoundedGap("re-expanded");
+      expect(reexpanded.taskCardHeightPx).toBeGreaterThan(collapsed.taskCardHeightPx + 20);
+      expect(Math.abs(reexpanded.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
+
+      const finalCollapseButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        "Unable to find the task-banner collapse button before the away-from-end check.",
+      );
+      finalCollapseButton.click();
+      const finalExpandButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand task banner"]'),
+        "Unable to find the task-banner expand button before the away-from-end check.",
+      );
+      await vi.waitFor(() => {
+        expect(readStackLayout().taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
+      });
+
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await vi.waitFor(() => {
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+          AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+        );
+      });
+      const scrollTopBeforeExpansion = scrollContainer.scrollTop;
+
+      finalExpandButton.click();
+      await vi.waitFor(
+        () => {
+          const awayFromEnd = readStackLayout();
+          expect(awayFromEnd.taskCardHeightPx).toBeGreaterThan(expanded.taskCardHeightPx - 2);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      await waitForLayout();
+      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+      await waitForLayout();
+      expect(readStackLayout().distanceFromBottomPx).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+      expect(Math.abs(scrollContainer.scrollTop - scrollTopBeforeExpansion)).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }
