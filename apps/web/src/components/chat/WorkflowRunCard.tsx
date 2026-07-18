@@ -145,7 +145,7 @@ function WorkflowAgentDetail({
   return (
     <div
       data-testid="workflow-agent-detail"
-      className="mb-1 ml-3.5 space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
+      className="mb-1 ml-[18px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5"
     >
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/70">
@@ -448,7 +448,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
           {showPhasePills ? (
             <div
               data-testid="workflow-phase-rail"
-              className="flex min-w-0 flex-wrap items-center gap-1 px-1 pb-1"
+              className="flex min-w-0 flex-wrap items-center gap-1 pb-1"
             >
               {phaseGroups!.map(({ phase }) => (
                 <button
@@ -482,7 +482,7 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
               visibleGroups.length > 0 ? (
                 visibleGroups.map(({ phase, agents }) => (
                   <div key={phase.title}>
-                    <div className="px-1 pt-1 text-[10px] font-medium text-muted-foreground/50">
+                    <div className="pl-[18px] pt-1 text-[10px] font-medium text-muted-foreground/50">
                       {phase.title}
                     </div>
                     {agents.map((agent) => (
@@ -498,7 +498,9 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                   </div>
                 ))
               ) : (
-                <div className="px-1 py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+                <div className="pl-[18px] py-1 text-[11px] text-muted-foreground/45">
+                  No agents yet
+                </div>
               )
             ) : workflowRun.agents.length > 0 ? (
               workflowRun.agents.map((agent) => (
@@ -512,13 +514,15 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
                 />
               ))
             ) : (
-              <div className="px-1 py-1 text-[11px] text-muted-foreground/45">No agents yet</div>
+              <div className="pl-[18px] py-1 text-[11px] text-muted-foreground/45">
+                No agents yet
+              </div>
             )}
           </div>
           {savedLine.length > 0 ? (
             <div
               data-testid="workflow-saved-line"
-              className="mt-0.5 flex min-w-0 items-center gap-1.5 px-1"
+              className="mt-0.5 flex min-w-0 items-center gap-1.5 pl-[18px]"
             >
               <span className="shrink-0 text-[11px] text-muted-foreground/50">Saved</span>
               <span
