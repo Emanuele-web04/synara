@@ -260,6 +260,10 @@ export const ServerVoiceTranscriptionInput = Schema.Struct({
   audioBase64: TrimmedNonEmptyString.check(
     Schema.isMaxLength(SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS),
   ),
+  // Local whisper.cpp sidecar config (non-Codex providers only).
+  // Codex provider ignores these and uses the ChatGPT transcription endpoint.
+  voiceDictationModel: Schema.optional(TrimmedNonEmptyString),
+  voiceDictionary: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerVoiceTranscriptionInput = typeof ServerVoiceTranscriptionInput.Type;
 

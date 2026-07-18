@@ -35,6 +35,8 @@ import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
+import { DynamicIsland } from "../components/dynamicIsland/DynamicIsland";
+import { VoiceDictationPopup } from "../components/VoiceDictationPopup";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useFeatureFlags } from "../featureFlags";
@@ -234,6 +236,8 @@ function RootRouteView() {
           <Outlet />
         </AnchoredToastProvider>
       </ToastProvider>
+      <DynamicIsland />
+      <VoiceDictationPopup />
       {desktopWindowControls}
     </>
   );

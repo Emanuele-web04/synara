@@ -3911,9 +3911,12 @@ export default function ChatView({
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
   );
-  const canRenderVoiceNotes = voiceProviderStatus?.authStatus !== "unauthenticated";
+  const localVoiceDictationEnabled =
+    selectedProvider !== "codex" ? settings.voiceDictationEnabled : false;
+  const canRenderVoiceNotes =
+    localVoiceDictationEnabled || voiceProviderStatus?.authStatus !== "unauthenticated";
   const canStartVoiceNotes =
-    voiceProviderStatus?.authStatus !== "unauthenticated" &&
+    (localVoiceDictationEnabled || voiceProviderStatus?.authStatus !== "unauthenticated") &&
     voiceProviderStatus?.voiceTranscriptionAvailable !== false;
   const showVoiceNotesControl = canRenderVoiceNotes || isVoiceRecording || isVoiceTranscribing;
   const activeProjectCwd = activeProject?.cwd ?? null;
@@ -6551,9 +6554,17 @@ export default function ChatView({
         return;
       }
       const result = await api.server.transcribeVoice({
-        provider: "codex",
+        provider: selectedProvider,
         cwd: activeProject.cwd,
         ...(activeThread ? { threadId: activeThread.id } : {}),
+        ...(selectedProvider !== "codex"
+          ? {
+              voiceDictationModel: settings.voiceDictationModel,
+              ...(settings.voiceDictionary.length > 0
+                ? { voiceDictionary: settings.voiceDictionary }
+                : {}),
+            }
+          : {}),
         ...payload,
       });
       if (!isCurrentVoiceRequest()) {

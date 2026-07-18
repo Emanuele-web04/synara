@@ -47,6 +47,9 @@ import {
   CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS,
   DEFAULT_UI_DENSITY,
   type UiDensity,
+  type LoaderStyle,
+  type LoaderColorPreset,
+  type VoiceDictationModel,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
@@ -201,6 +204,62 @@ const UI_DENSITY_OPTIONS = [
   },
 ] as const satisfies ReadonlyArray<{
   value: UiDensity;
+  label: string;
+  description: string;
+}>;
+
+const LOADER_STYLE_OPTIONS = [
+  {
+    value: "spinner",
+    label: "Spinner",
+    description: "Classic CSS spinner.",
+  },
+  {
+    value: "dotmatrix",
+    label: "Dotmatrix",
+    description: "Animated dot-matrix loaders (Echo Ring).",
+  },
+] as const satisfies ReadonlyArray<{
+  value: LoaderStyle;
+  label: string;
+  description: string;
+}>;
+
+const LOADER_COLOR_PRESET_OPTIONS = [
+  {
+    value: "synara",
+    label: "Synara",
+    description: "Default accent-based palette.",
+  },
+  {
+    value: "spectrum",
+    label: "Spectrum",
+    description: "Distinct hue per action state.",
+  },
+  {
+    value: "mono",
+    label: "Mono",
+    description: "Single foreground color.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: LoaderColorPreset;
+  label: string;
+  description: string;
+}>;
+
+const VOICE_DICTATION_MODEL_OPTIONS = [
+  {
+    value: "base-q5_1",
+    label: "Base (multilingual)",
+    description: "Multilingual model, ~75MB. Auto-detects spoken language.",
+  },
+  {
+    value: "base.en-q5_1",
+    label: "Base (English)",
+    description: "English-only model, ~75MB. Slightly better accuracy for English.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: VoiceDictationModel;
   label: string;
   description: string;
 }>;
@@ -689,6 +748,9 @@ function SettingsRouteView() {
     setSystemUiFont,
   } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const [voiceDictionaryInput, setVoiceDictionaryInput] = useState(
+    settings.voiceDictionary.join(", "),
+  );
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -2267,6 +2329,67 @@ function SettingsRouteView() {
           }
         />
       </SettingsSection>
+
+      <SettingsSection title="Activity indicators">
+        <SettingsRow
+          title="Loader style"
+          description="Choose the activity indicator shown in the sidebar and dynamic island."
+          resetAction={
+            settings.loaderStyle !== defaults.loaderStyle ? (
+              <SettingResetButton
+                label="loader style"
+                onClick={() => updateSettings({ loaderStyle: defaults.loaderStyle })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.loaderStyle}
+              onValueChange={(value) => {
+                if (value === "spinner" || value === "dotmatrix") {
+                  updateSettings({ loaderStyle: value });
+                }
+              }}
+              ariaLabel="Loader style"
+              options={LOADER_STYLE_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Loader color preset"
+          description="Color palette for dotmatrix action states (thinking, reading, editing, running)."
+          resetAction={
+            settings.loaderColorPreset !== defaults.loaderColorPreset ? (
+              <SettingResetButton
+                label="loader colors"
+                onClick={() => updateSettings({ loaderColorPreset: defaults.loaderColorPreset })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.loaderColorPreset}
+              onValueChange={(value) => {
+                if (value === "synara" || value === "spectrum" || value === "mono") {
+                  updateSettings({ loaderColorPreset: value });
+                }
+              }}
+              ariaLabel="Loader color preset"
+              options={LOADER_COLOR_PRESET_OPTIONS}
+            />
+          }
+        />
+
+        {renderBooleanSettingRow({
+          settingKey: "dynamicIslandEnabled",
+          title: "Dynamic island",
+          description:
+            "Show a compact pill below the top bar with the active thread's status. Auto-expands on approvals and user input.",
+          resetLabel: "dynamic island",
+          ariaLabel: "Dynamic island overlay",
+        })}
+      </SettingsSection>
     </div>
   );
 
@@ -2498,6 +2621,76 @@ function SettingsRouteView() {
           resetLabel: "terminal close confirmation",
           ariaLabel: "Confirm terminal tab close",
         })}
+      </SettingsSection>
+
+      <SettingsSection title="Voice dictation">
+        {renderBooleanSettingRow({
+          settingKey: "voiceDictationEnabled",
+          title: "Voice dictation",
+          description:
+            "Enable offline voice transcription via local whisper.cpp for non-Codex providers. Hold right-Option anywhere to open the dictation popup. Codex continues to use ChatGPT transcription.",
+          resetLabel: "voice dictation",
+          ariaLabel: "Enable voice dictation",
+        })}
+
+        <SettingsRow
+          title="Whisper model"
+          description="Local model for non-Codex voice transcription. Downloaded on first use (~75MB) and verified via SHA256."
+          resetAction={
+            settings.voiceDictationModel !== defaults.voiceDictationModel ? (
+              <SettingResetButton
+                label="whisper model"
+                onClick={() =>
+                  updateSettings({ voiceDictationModel: defaults.voiceDictationModel })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.voiceDictationModel}
+              onValueChange={(value) => {
+                if (value === "base-q5_1" || value === "base.en-q5_1") {
+                  updateSettings({ voiceDictationModel: value });
+                }
+              }}
+              ariaLabel="Whisper model"
+              options={VOICE_DICTATION_MODEL_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Custom dictionary"
+          description="Comma-separated words to bias the whisper model toward your project's terminology (file names, API names, etc)."
+          resetAction={
+            settings.voiceDictionary.length > 0 ? (
+              <SettingResetButton
+                label="dictionary"
+                onClick={() => updateSettings({ voiceDictionary: [] })}
+              />
+            ) : null
+          }
+          control={
+            <Input
+              type="text"
+              size="sm"
+              variant="soft"
+              className="w-full sm:w-64"
+              placeholder="synara, codex, claude, worktree"
+              value={voiceDictionaryInput}
+              onChange={(event) => setVoiceDictionaryInput(event.target.value)}
+              onBlur={() => {
+                const words = voiceDictionaryInput
+                  .split(",")
+                  .map((w) => w.trim())
+                  .filter((w) => w.length > 0);
+                updateSettings({ voiceDictionary: words });
+              }}
+              aria-label="Custom voice dictionary words"
+            />
+          }
+        />
       </SettingsSection>
     </div>
   );

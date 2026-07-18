@@ -22,6 +22,7 @@ import {
 } from "@synara/shared/outboundHttp";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
+import { transcribeViaWhisper } from "./whisperTranscription";
 
 const MAX_VOICE_DURATION_MS = 120_000;
 
@@ -36,15 +37,27 @@ function isLikelyVoiceBase64(value: string): boolean {
   return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
-function isLikelyWavBuffer(buffer: Buffer): boolean {
+function isValidVoiceWavBuffer(buffer: Buffer): boolean {
   return (
-    buffer.length >= 12 &&
+    buffer.length >= 44 &&
     buffer.toString("ascii", 0, 4) === "RIFF" &&
-    buffer.toString("ascii", 8, 12) === "WAVE"
+    buffer.readUInt32LE(4) === buffer.length - 8 &&
+    buffer.toString("ascii", 8, 12) === "WAVE" &&
+    buffer.toString("ascii", 12, 16) === "fmt " &&
+    buffer.readUInt32LE(16) === 16 &&
+    buffer.readUInt16LE(20) === 1 &&
+    buffer.readUInt16LE(22) === 1 &&
+    buffer.readUInt32LE(24) === 24_000 &&
+    buffer.readUInt32LE(28) === 48_000 &&
+    buffer.readUInt16LE(32) === 2 &&
+    buffer.readUInt16LE(34) === 16 &&
+    buffer.toString("ascii", 36, 40) === "data" &&
+    buffer.readUInt32LE(40) === buffer.length - 44 &&
+    (buffer.length - 44) % 2 === 0
   );
 }
 
-function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
+export function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   if (input.mimeType !== "audio/wav") {
     throw new Error("Only WAV audio is supported for voice transcription.");
   }
@@ -59,8 +72,18 @@ function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   }
 
   const normalizedBase64 = normalizeVoiceBase64(input.audioBase64);
-  if (!normalizedBase64 || !isLikelyVoiceBase64(normalizedBase64)) {
+  if (
+    !normalizedBase64 ||
+    !isLikelyVoiceBase64(normalizedBase64) ||
+    normalizedBase64.length % 4 !== 0
+  ) {
     throw new Error("The recorded audio could not be decoded.");
+  }
+
+  const paddingBytes = normalizedBase64.endsWith("==") ? 2 : normalizedBase64.endsWith("=") ? 1 : 0;
+  const decodedByteLength = (normalizedBase64.length / 4) * 3 - paddingBytes;
+  if (decodedByteLength > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
+    throw new Error("Voice messages are limited to 10 MB.");
   }
 
   const audioBuffer = Buffer.from(normalizedBase64, "base64");
@@ -70,8 +93,12 @@ function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   if (audioBuffer.length > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
     throw new Error("Voice messages are limited to 10 MB.");
   }
-  if (!isLikelyWavBuffer(audioBuffer)) {
+  if (!isValidVoiceWavBuffer(audioBuffer)) {
     throw new Error("The recorded audio is not a valid WAV file.");
+  }
+  const audioDurationMs = (audioBuffer.readUInt32LE(40) / 48_000) * 1_000;
+  if (audioDurationMs > MAX_VOICE_DURATION_MS) {
+    throw new Error("Voice messages are limited to 120 seconds.");
   }
 
   return audioBuffer;
@@ -272,10 +299,34 @@ async function transcribeVoiceViaDesktopBridge(
   return { text };
 }
 
+// Provider routing: Codex uses the existing ChatGPT transcription endpoint
+// (requires ChatGPT-authenticated Codex session). All other providers route
+// through the local whisper.cpp sidecar (offline, no auth needed). The web app
+// passes voiceDictationModel and voiceDictionary in the input — no desktop-side
+// settings store needed.
+async function transcribeVoiceWithRouting(
+  input: ServerVoiceTranscriptionInput,
+): Promise<ServerVoiceTranscriptionResult> {
+  // Codex provider: existing ChatGPT path (unchanged).
+  if (input.provider === "codex") {
+    return transcribeVoiceViaDesktopBridge(input);
+  }
+
+  // Non-Codex providers: local whisper.cpp sidecar.
+  const audioBuffer = decodeDesktopVoiceAudio(input);
+  const text = await transcribeViaWhisper({
+    audioBuffer,
+    modelName: input.voiceDictationModel ?? "base-q5_1",
+    dictionary: input.voiceDictionary ?? [],
+  });
+
+  return { text };
+}
+
 export function registerDesktopVoiceTranscriptionHandler(): void {
   ipcMain.removeHandler(SERVER_TRANSCRIBE_VOICE_CHANNEL);
   ipcMain.handle(
     SERVER_TRANSCRIBE_VOICE_CHANNEL,
-    async (_event, input: ServerVoiceTranscriptionInput) => transcribeVoiceViaDesktopBridge(input),
+    async (_event, input: ServerVoiceTranscriptionInput) => transcribeVoiceWithRouting(input),
   );
 }

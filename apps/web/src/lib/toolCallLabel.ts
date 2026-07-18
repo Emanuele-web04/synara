@@ -345,7 +345,8 @@ function collectDescriptorCandidates(
 // Read-only inspection commands surfaced with the search/magnifying-glass icon in
 // the timeline (reads, searches, finds, listings), as opposed to commands that
 // mutate or execute, which keep the terminal icon. These sets are the single
-// source of truth for both the command labels below and the icon decision.
+// source of truth for both the command labels below, the icon decision, and the
+// action-state classification (inspect → "reading").
 const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
 const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
 const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);

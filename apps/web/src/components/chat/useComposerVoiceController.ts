@@ -6,6 +6,7 @@
 import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import type { Project } from "../../types";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../../lib/voiceRecorder";
 import { readNativeApi } from "../../nativeApi";
@@ -67,6 +68,7 @@ export function useComposerVoiceController(
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
+  const { settings: appSettings } = useAppSettings();
 
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
@@ -79,12 +81,17 @@ export function useComposerVoiceController(
         voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
         isRecording: isVoiceRecording,
         isTranscribing: isVoiceTranscribing,
+        ...(selectedProvider !== "codex" && appSettings.voiceDictationEnabled
+          ? { localVoiceDictationEnabled: true }
+          : {}),
       }),
     [
       activeProviderStatus?.authStatus,
       activeProviderStatus?.voiceTranscriptionAvailable,
       isVoiceRecording,
       isVoiceTranscribing,
+      selectedProvider,
+      appSettings.voiceDictationEnabled,
     ],
   );
 
@@ -184,9 +191,17 @@ export function useComposerVoiceController(
         return;
       }
       const result = await api.server.transcribeVoice({
-        provider: "codex",
+        provider: selectedProvider,
         cwd: activeProject.cwd,
         ...(activeThreadId ? { threadId: activeThreadId } : {}),
+        ...(selectedProvider !== "codex"
+          ? {
+              voiceDictationModel: appSettings.voiceDictationModel,
+              ...(appSettings.voiceDictionary.length > 0
+                ? { voiceDictionary: appSettings.voiceDictionary }
+                : {}),
+            }
+          : {}),
         ...payload,
       });
       if (!isCurrentVoiceRequest()) {

@@ -296,6 +296,7 @@ describe("isInspectCommand", () => {
     expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
     expect(isInspectCommand("ls -la src")).toBe(true);
     expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+    expect(isInspectCommand(`/bin/bash -c "rg pattern ."`)).toBe(true);
   });
 
   it("does not treat mutating or executing commands as inspections", () => {

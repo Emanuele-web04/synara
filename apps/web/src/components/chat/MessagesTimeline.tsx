@@ -40,6 +40,7 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
+import { isFileReadToolEntry } from "~/lib/workEntryClassification";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -2700,13 +2701,7 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
   return null;
 }
 
-// Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the search icon
-// instead of the generic tool/wrench fallback.
-function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
-  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
-  return name === "read" || name === "readfile" || name === "viewfile";
-}
+// isFileReadToolEntry is imported from ~/lib/workEntryClassification (shared with actionStates).
 
 // Command rows reuse toolCallLabel's wrapper-aware classifier so wrapped git/gh
 // commands get the GitHub mark while ordinary commands keep the terminal icon.

@@ -685,6 +685,54 @@ describe("voice helpers", () => {
       showVoiceNotesControl: true,
     });
   });
+
+  it("shows mic for unauthenticated provider when localVoiceDictationEnabled is true", () => {
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "unauthenticated",
+        voiceTranscriptionAvailable: undefined,
+        isRecording: false,
+        isTranscribing: false,
+        localVoiceDictationEnabled: true,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
+      canStartVoiceNotes: true,
+      showVoiceNotesControl: true,
+    });
+  });
+
+  it("localVoiceDictationEnabled does not override auth when false", () => {
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "unauthenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+        localVoiceDictationEnabled: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+  });
+
+  it("localVoiceDictationEnabled with voiceTranscriptionAvailable false still allows rendering", () => {
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: false,
+        isRecording: false,
+        isTranscribing: false,
+        localVoiceDictationEnabled: true,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: true,
+    });
+  });
 });
 
 describe("environment panel visibility", () => {

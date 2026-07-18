@@ -82,6 +82,18 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+export const LoaderStyle = Schema.Literals(["spinner", "dotmatrix"]);
+export type LoaderStyle = typeof LoaderStyle.Type;
+export const DEFAULT_LOADER_STYLE: LoaderStyle = "spinner";
+
+export const LoaderColorPreset = Schema.Literals(["synara", "spectrum", "mono"]);
+export type LoaderColorPreset = typeof LoaderColorPreset.Type;
+export const DEFAULT_LOADER_COLOR_PRESET: LoaderColorPreset = "synara";
+
+export const VoiceDictationModel = Schema.Literals(["base-q5_1", "base.en-q5_1"]);
+export type VoiceDictationModel = typeof VoiceDictationModel.Type;
+export const DEFAULT_VOICE_DICTATION_MODEL: VoiceDictationModel = "base-q5_1";
+
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
@@ -219,6 +231,17 @@ export const AppSettingsSchema = Schema.Struct({
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Activity indicator style: classic CSS spinner or dotmatrix loaders.
+  loaderStyle: LoaderStyle.pipe(withDefaults(() => DEFAULT_LOADER_STYLE)),
+  // Color preset for dotmatrix action states (synara/spectrum/mono).
+  loaderColorPreset: LoaderColorPreset.pipe(withDefaults(() => DEFAULT_LOADER_COLOR_PRESET)),
+  // Dynamic island overlay below the top bar showing active thread status.
+  dynamicIslandEnabled: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Offline voice dictation via local whisper.cpp sidecar (desktop only).
+  voiceDictationEnabled: Schema.Boolean.pipe(withDefaults(() => false)),
+  voiceDictationModel: VoiceDictationModel.pipe(withDefaults(() => DEFAULT_VOICE_DICTATION_MODEL)),
+  // Custom dictionary words prepended to whisper prompt for accuracy biasing.
+  voiceDictionary: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.

@@ -668,13 +668,19 @@ export function deriveComposerVoiceState(input: {
   voiceTranscriptionAvailable: boolean | undefined;
   isRecording: boolean;
   isTranscribing: boolean;
+  // Non-Codex providers use local whisper.cpp — no auth required, just needs
+  // voiceDictationEnabled setting. When true, the mic shows regardless of authStatus.
+  localVoiceDictationEnabled?: boolean;
 }): {
   canRenderVoiceNotes: boolean;
   canStartVoiceNotes: boolean;
   showVoiceNotesControl: boolean;
 } {
-  const canRenderVoiceNotes = input.authStatus !== "unauthenticated";
-  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable !== false;
+  const localEnabled = input.localVoiceDictationEnabled === true;
+  const canRenderVoiceNotes = localEnabled || input.authStatus !== "unauthenticated";
+  const canStartVoiceNotes =
+    (localEnabled || input.authStatus !== "unauthenticated") &&
+    input.voiceTranscriptionAvailable !== false;
 
   return {
     canRenderVoiceNotes,
