@@ -600,9 +600,7 @@ async function resolveCodexLaunch(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): Promise<{ readonly binaryPath: string; readonly env: NodeJS.ProcessEnv }> {
-  const env = await buildCodexProcessEnv({
-    ...(input.homePath ? { homePath: input.homePath } : {}),
-  });
+  const env = await buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
   return {
     binaryPath: resolveCodexCliExecutable(input.binaryPath, { cwd: input.cwd, env }),
     env,

@@ -9,7 +9,7 @@ import {
   resolveWindowsCommandCandidates,
   resolveWindowsCommandPath,
   type WindowsSafeProcessInput,
-} from "./windowsProcess.ts";
+} from "./windowsProcess";
 
 interface FileStatLike {
   isFile(): boolean;
@@ -24,8 +24,7 @@ export interface CodexCliExecutableInput extends WindowsSafeProcessInput {
 const DEFAULT_CODEX_COMMAND = "codex";
 const WINDOWS_NATIVE_EXECUTABLE_PATTERN = /\.(?:exe|com)$/i;
 const WINDOWS_BATCH_EXECUTABLE_PATTERN = /\.(?:cmd|bat)$/i;
-const WINDOWS_FULLY_QUALIFIED_PATH_PATTERN =
-  /^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/i;
+const WINDOWS_FULLY_QUALIFIED_PATH_PATTERN = /^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/i;
 
 function readEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const exact = env[name];
@@ -48,10 +47,7 @@ function nonEmptyEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string 
 }
 
 function isAbsoluteRegularFile(candidate: string, readStat: StatSyncLike): boolean {
-  if (
-    !Path.win32.isAbsolute(candidate) ||
-    !WINDOWS_FULLY_QUALIFIED_PATH_PATTERN.test(candidate)
-  ) {
+  if (!Path.win32.isAbsolute(candidate) || !WINDOWS_FULLY_QUALIFIED_PATH_PATTERN.test(candidate)) {
     return false;
   }
 
@@ -116,10 +112,7 @@ export function resolveCodexCliExecutable(
 
   return (
     firstValidCandidate(whereCandidates, WINDOWS_NATIVE_EXECUTABLE_PATTERN, readStat) ??
-    validCodexExecutableInDirectory(
-      nonEmptyEnvironmentValue(env, "CODEX_INSTALL_DIR"),
-      readStat,
-    ) ??
+    validCodexExecutableInDirectory(nonEmptyEnvironmentValue(env, "CODEX_INSTALL_DIR"), readStat) ??
     validCodexExecutableInDirectory(standaloneInstallDirectory, readStat) ??
     firstValidCandidate(whereCandidates, WINDOWS_BATCH_EXECUTABLE_PATTERN, readStat) ??
     validNpmCodexShim(nonEmptyEnvironmentValue(env, "APPDATA"), readStat) ??

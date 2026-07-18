@@ -4,7 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resolveCodexCliExecutable } from "./codexCliExecutable.ts";
+import { resolveCodexCliExecutable } from "./codexCliExecutable";
 
 function whereOutput(...candidates: string[]) {
   return vi.fn(() => ({ stdout: candidates.join("\r\n"), status: 0 }));
@@ -107,8 +107,7 @@ describe("resolveCodexCliExecutable", () => {
   it("prefers a valid native PATH executable over batch and documented fallbacks", () => {
     const extensionless = "C:\\Users\\Test User\\AppData\\Roaming\\npm\\codex";
     const batch = "C:\\Users\\Test User\\AppData\\Roaming\\npm\\codex.cmd";
-    const native =
-      "C:\\Users\\Test User\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+    const native = "C:\\Users\\Test User\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
     const installDirNative = "D:\\Codex\\codex.exe";
     const spawnSync = whereOutput(extensionless, batch, native);
     const readStat = regularFiles(batch, native, installDirNative);
@@ -156,8 +155,7 @@ describe("resolveCodexCliExecutable", () => {
 
   it("uses the documented standalone install before a PATH batch shim", () => {
     const batch = "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd";
-    const native =
-      "C:\\Users\\Test User\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+    const native = "C:\\Users\\Test User\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
 
     expect(
       resolveCodexCliExecutable("codex", {
