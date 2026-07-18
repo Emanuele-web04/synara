@@ -3731,7 +3731,7 @@ describe("store read model sync", () => {
       }),
     );
 
-    expect(getThreadsFromState(hotPathState)).toHaveLength(0);
+    expect(getThreadsFromState(hotPathState)).toHaveLength(1);
     expect(hotPathState.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
     expect(hotPathState.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
 
@@ -3807,7 +3807,7 @@ describe("store read model sync", () => {
       }),
     );
 
-    expect(getThreadsFromState(hotPathState)).toHaveLength(0);
+    expect(getThreadsFromState(hotPathState)).toHaveLength(1);
     expect(hasClientLiveThreadEvidence(hotPathState)).toBe(true);
 
     const decision = resolveRepairedShellApplication({
@@ -3884,7 +3884,7 @@ describe("store read model sync", () => {
     expect(next.threadShellById?.[threadId]?.title).toBe("Live title");
     expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("running");
     expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("running");
-    expect(threadsOf(next).find((thread) => thread.id === threadId)).toBeUndefined();
+    expect(threadsOf(next).find((thread) => thread.id === threadId)).toBeDefined();
     expect(getThreadFromState(next, threadId)?.title).toBe("Live title");
   });
 

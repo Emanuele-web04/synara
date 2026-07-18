@@ -27,6 +27,7 @@ import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import remarkBreaks from "remark-breaks";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
@@ -159,7 +160,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
 // render because it closes over the message's mention references).
-const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm];
+const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
 
 const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
