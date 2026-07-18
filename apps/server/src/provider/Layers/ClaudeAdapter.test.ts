@@ -774,6 +774,146 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("skips a redundant setPermissionMode on the first full-access turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "First turn",
+        attachments: [],
+      });
+
+      // The CLI already spawned in bypassPermissions (full-access). Re-sending the
+      // identical mode would block the first turn on the CLI init handshake, so the
+      // control request must be skipped entirely.
+      assert.deepEqual(harness.query.setPermissionModeCalls, []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("re-sends setPermissionMode on a second turn with the same desired mode", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // First full-access turn: desired mode equals the spawn mode, so the
+      // redundant control request is skipped (provable first-turn state).
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "First turn",
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, []);
+
+      // Second turn wants the SAME desired mode, but the CLI's mode is no longer
+      // provable once a prompt has run, so the request is sent unconditionally
+      // (the pre-optimization behavior, with no equality skip against a tracked
+      // mode).
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Second turn",
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, ["bypassPermissions"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("sends setPermissionMode on each turn of a plan then default sequence", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // Plan differs from the spawn mode (bypassPermissions) -> request is sent
+      // even though this is the first turn.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Plan this",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, ["plan"]);
+
+      // A following default turn auto-closes the stale plan turn and restores the
+      // base bypassPermissions mode -> request is sent again.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Now build it",
+        attachments: [],
+        interactionMode: "default",
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "bypassPermissions"]);
+
+      // The first-turn skip window has closed, so a third identical default turn
+      // re-sends unconditionally rather than skipping.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Keep going",
+        attachments: [],
+        interactionMode: "default",
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, [
+        "plan",
+        "bypassPermissions",
+        "bypassPermissions",
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("skips the redundant setPermissionMode on the first turn after resume", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        resumeCursor: {
+          threadId: "resume-thread-1",
+          resume: "550e8400-e29b-41d4-a716-446655440000",
+          turnCount: 3,
+        },
+        runtimeMode: "full-access",
+      });
+
+      // Resume also spawns a fresh CLI in bypassPermissions, so the tracked mode is
+      // initialized correctly and the first turn after resume skips the redundant
+      // control request instead of blocking on the init handshake.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Continue",
+        attachments: [],
+      });
+      assert.deepEqual(harness.query.setPermissionModeCalls, []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("embeds image attachments in Claude user messages", () => {
     const baseDir = mkdtempSync(path.join(os.tmpdir(), "claude-attachments-"));
     const harness = makeHarness({
@@ -4950,7 +5090,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("restores base permission mode when interactionMode is absent", () => {
+  it.effect("skips restoring the base permission mode when it matches the spawn mode", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -4966,7 +5106,9 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setPermissionModeCalls, ["bypassPermissions"]);
+      // The base (bypassPermissions) already matches the mode the CLI spawned in,
+      // so no redundant control request is issued on the first turn.
+      assert.deepEqual(harness.query.setPermissionModeCalls, []);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

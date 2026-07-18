@@ -231,6 +231,19 @@ interface ClaudeSessionContext {
   streamFiber: Fiber.Fiber<void, Error> | undefined;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
+  // The mode the CLI provably spawned in (from queryOptions, or the SDK's
+  // "default" when omitted). This is the ONLY permission mode we can prove the
+  // running CLI is in: `canUseTool` is shadowed under bypassPermissions, so once
+  // any prompt has run the CLI's mode is opaque (a future SDK adding a
+  // mode-changing tool like EnterPlanMode would silently diverge from anything
+  // we tracked). We therefore only skip the redundant first-turn
+  // `setPermissionMode` while this spawn state is still authoritative.
+  readonly spawnPermissionMode: PermissionMode;
+  // True until the first prompt of the session has been dispatched. While true,
+  // the CLI is provably still in `spawnPermissionMode`; once cleared we can no
+  // longer prove the CLI's mode, so every turn re-sends `setPermissionMode`
+  // unconditionally.
+  firstTurnSpawnModeAuthoritative: boolean;
   lastInteractionMode: "default" | "plan" | undefined;
   currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
@@ -3893,6 +3906,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             streamFiber: undefined,
             startedAt,
             basePermissionMode: permissionMode,
+            // A fresh CLI starts in `permissionMode` when queryOptions provides
+            // one, otherwise the SDK's "default" mode (queryOptions omits it).
+            spawnPermissionMode: permissionMode ?? "default",
+            firstTurnSpawnModeAuthoritative: true,
             lastInteractionMode: undefined,
             currentApiModelId: apiModelId,
             resumeSessionId: sessionId,
@@ -4102,18 +4119,28 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // Apply interaction mode on every turn so sticky SDK permission state
         // cannot leak plan mode across service/recovery paths that omit it.
+        // The desired mode is computed exactly as before. We skip the control
+        // request in exactly one provable case: the first turn of a session
+        // whose desired mode equals the mode the CLI spawned in — sending it
+        // there would be redundant AND would block that first turn on the CLI's
+        // init handshake. In every other case we send unconditionally, because
+        // once any prompt has run the CLI's mode is opaque (`canUseTool` is
+        // shadowed under bypassPermissions, so a future mode-changing tool could
+        // diverge from anything we tracked); only the pre-first-prompt state is
+        // provable.
         const effectiveInteractionMode = input.interactionMode ?? "default";
-        if (effectiveInteractionMode === "plan") {
+        const desiredPermissionMode: PermissionMode | undefined =
+          effectiveInteractionMode === "plan"
+            ? "plan"
+            : context.basePermissionMode !== undefined || context.lastInteractionMode === "plan"
+              ? (context.basePermissionMode ?? "default")
+              : undefined;
+        const canSkipRedundantSpawnModeRequest =
+          context.firstTurnSpawnModeAuthoritative &&
+          desiredPermissionMode === context.spawnPermissionMode;
+        if (desiredPermissionMode !== undefined && !canSkipRedundantSpawnModeRequest) {
           yield* Effect.tryPromise({
-            try: () => context.query.setPermissionMode("plan"),
-            catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
-          });
-        } else if (
-          context.basePermissionMode !== undefined ||
-          context.lastInteractionMode === "plan"
-        ) {
-          yield* Effect.tryPromise({
-            try: () => context.query.setPermissionMode(context.basePermissionMode ?? "default"),
+            try: () => context.query.setPermissionMode(desiredPermissionMode),
             catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
           });
         }
@@ -4174,6 +4201,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           type: "message",
           message,
         }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
+
+        // The first prompt has been dispatched; the CLI's spawn mode is no longer
+        // provably its current mode, so subsequent turns re-send unconditionally.
+        context.firstTurnSpawnModeAuthoritative = false;
 
         return {
           threadId: context.session.threadId,
