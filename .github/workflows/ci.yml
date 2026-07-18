@@ -123,6 +123,9 @@ jobs:
       - name: Test Effect Windows process spawn
         run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
 
+      - name: Test Windows migration backup and recovery
+        run: bun run --cwd apps/server test src/persistence/MigrationBackup.test.ts
+
   release_smoke:
     name: Release Smoke
     runs-on: ubuntu-24.04

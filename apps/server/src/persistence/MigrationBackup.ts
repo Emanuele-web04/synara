@@ -48,6 +48,10 @@ type MigrationBackupPlan = {
   readonly targetVersion: number;
 };
 
+export type MigrationBackupFileOperations = {
+  readonly open?: typeof fs.open;
+};
+
 export type MigrationBackupResult = MigrationBackupPlan & {
   readonly backupPath: string;
 };
@@ -263,7 +267,11 @@ export const pruneMigrationBackups = (dbPath: string, retention = MIGRATION_BACK
     );
   });
 
-export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan) =>
+export const createMigrationBackup = (
+  dbPath: string,
+  plan: MigrationBackupPlan,
+  fileOperations: MigrationBackupFileOperations = {},
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const backupDirectory = migrationBackupDirectory(dbPath);
@@ -284,19 +292,24 @@ export const createMigrationBackup = (dbPath: string, plan: MigrationBackupPlan)
       Effect.tapError(() => attemptPromise(() => fs.unlink(temporaryPath)).pipe(Effect.ignore)),
     );
     yield* attemptPromise(async () => {
-      await ensurePrivateRegularFile(temporaryPath);
-      const flags =
-        process.platform === "win32"
-          ? fsConstants.O_RDONLY
-          : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
-      const handle = await fs.open(temporaryPath, flags);
       try {
-        await handle.sync();
-      } finally {
-        await handle.close();
+        await ensurePrivateRegularFile(temporaryPath);
+        const flags =
+          process.platform === "win32"
+            ? fsConstants.O_RDWR
+            : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+        const handle = await (fileOperations.open ?? fs.open)(temporaryPath, flags);
+        try {
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await fs.rename(temporaryPath, backupPath);
+        await syncDirectory(backupDirectory);
+      } catch (cause) {
+        await fs.unlink(temporaryPath).catch(() => undefined);
+        throw cause;
       }
-      await fs.rename(temporaryPath, backupPath);
-      await syncDirectory(backupDirectory);
     });
     yield* pruneMigrationBackups(dbPath);
     return { ...plan, backupPath } satisfies MigrationBackupResult;
@@ -325,7 +338,7 @@ const writeRecoveryMarker = (dbPath: string, backup: MigrationBackupResult) =>
       await ensurePrivateRegularFile(temporaryPath);
       const markerFlags =
         process.platform === "win32"
-          ? fsConstants.O_RDONLY
+          ? fsConstants.O_RDWR
           : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
       const handle = await fs.open(temporaryPath, markerFlags);
       try {
@@ -389,7 +402,7 @@ const restoreSqliteMigrationBackup = (input: {
     await ensurePrivateRegularFile(restoredTemporaryPath);
     const restoredFlags =
       process.platform === "win32"
-        ? fsConstants.O_RDONLY
+        ? fsConstants.O_RDWR
         : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
     const restoredHandle = await fs.open(restoredTemporaryPath, restoredFlags);
     try {
