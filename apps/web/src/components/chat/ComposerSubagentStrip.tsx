@@ -8,14 +8,20 @@
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { memo } from "react";
-import {
-  PiArrowBendUpLeft,
-  PiArrowsInSimple,
-  PiArrowsOutSimple,
-  PiTrayArrowDown,
-} from "react-icons/pi";
 
-import { BotIcon, LoaderIcon, StopIcon } from "~/lib/icons";
+import {
+  BackgroundTrayIcon,
+  BackToParentIcon,
+  BotIcon,
+  LoaderIcon,
+  PanelCollapseIcon,
+  PanelExpandIcon,
+  StopIcon,
+} from "~/lib/icons";
+import {
+  subagentStatusDotClassName,
+  subagentStatusTextToneClassName,
+} from "~/lib/subagentPresentation";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -44,23 +50,6 @@ interface ComposerSubagentStripProps {
   onStopItem?: (item: ComposerSubagentStripItem) => void;
   onStopAll?: () => void;
   attachedToPrevious?: boolean;
-}
-
-function subagentStatusToneClassName(statusKind: ComposerSubagentStripItem["statusKind"]): string {
-  switch (statusKind) {
-    case "running":
-      return "text-sky-300/85";
-    case "completed":
-      return "text-emerald-300/75";
-    case "failed":
-      return "text-rose-300/85";
-    case "stopped":
-      return "text-amber-300/80";
-    case "queued":
-      return "text-violet-300/80";
-    default:
-      return "text-muted-foreground/55";
-  }
 }
 
 export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
@@ -120,9 +109,9 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
           title={compact ? "Expand subagent strip" : "Collapse subagent strip"}
         >
           {compact ? (
-            <PiArrowsOutSimple className="size-3" />
+            <PanelExpandIcon className="size-3" />
           ) : (
-            <PiArrowsInSimple className="size-3" />
+            <PanelCollapseIcon className="size-3" />
           )}
         </Button>
       </ComposerStackedPanelHeaderRow>
@@ -142,7 +131,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                   title={item.label}
                   onClick={() => onOpenThread(item.threadId)}
                 >
-                  <PiArrowBendUpLeft className="size-3 shrink-0 text-muted-foreground/55" />
+                  <BackToParentIcon className="size-3 shrink-0 text-muted-foreground/55" />
                   <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
                     {item.label}
                   </span>
@@ -154,7 +143,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                 data-testid="composer-subagent-row"
                 data-viewed={item.isViewed || undefined}
                 className={cn(
-                  "flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
+                  "group flex w-full min-w-0 items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
                   item.isViewed && "bg-[var(--color-background-button-secondary)]",
                 )}
               >
@@ -167,11 +156,11 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                   <span
                     className={cn(
                       "size-1.5 shrink-0 rounded-full",
-                      item.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
+                      subagentStatusDotClassName(item.statusKind),
                     )}
                   />
                   <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
-                    <span style={{ color: item.accentColor }}>{item.primaryLabel}</span>
+                    <span>{item.primaryLabel}</span>
                     {item.role ? (
                       <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
                         ({item.role})
@@ -192,7 +181,7 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                     <span
                       className={cn(
                         "shrink-0 text-[11px]",
-                        subagentStatusToneClassName(item.statusKind),
+                        subagentStatusTextToneClassName(item.statusKind),
                       )}
                     >
                       {item.statusLabel}
@@ -204,12 +193,15 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                    className={cn(
+                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
+                      COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
+                    )}
                     onClick={() => onBackgroundItem(item)}
                     aria-label="Run in background (ctrl+b)"
                     title="Run in background (ctrl+b)"
                   >
-                    <PiTrayArrowDown className="size-3" />
+                    <BackgroundTrayIcon className="size-3" />
                   </Button>
                 ) : null}
                 {item.isActive && onStopItem ? (
@@ -217,7 +209,10 @@ export const ComposerSubagentStrip = memo(function ComposerSubagentStrip({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    className={cn("shrink-0", COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME)}
+                    className={cn(
+                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
+                      COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
+                    )}
                     onClick={() => onStopItem(item)}
                     aria-label="Stop subagent"
                     title="Stop subagent"

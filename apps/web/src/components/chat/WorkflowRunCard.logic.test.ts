@@ -98,6 +98,7 @@ function agentStarted(overrides?: {
   taskId?: string;
   toolUseId?: string;
   workflowTaskId?: string | null;
+  subagentType?: string | null;
 }): OrchestrationThreadActivity {
   return activity({
     id: `${overrides?.taskId ?? "agent-1"}-started`,
@@ -105,7 +106,9 @@ function agentStarted(overrides?: {
     kind: "task.started",
     payload: {
       taskId: overrides?.taskId ?? "agent-1",
-      subagentType: "researcher",
+      ...(overrides?.subagentType === null
+        ? {}
+        : { subagentType: overrides?.subagentType ?? "researcher" }),
       detail: "Research prior art",
       ...(overrides?.workflowTaskId === null
         ? {}
@@ -236,7 +239,7 @@ describe("deriveWorkflowRunState", () => {
 
   it("links rows to subagent child threads by tool use id", () => {
     const state = deriveWorkflowRunState({
-      activities: [workflowStarted(), agentStarted({ toolUseId: "tool-1" })],
+      activities: [workflowStarted(), agentStarted({ toolUseId: "tool-1", subagentType: null })],
       subagentThreadsByToolUseId: new Map([
         ["tool-1", { threadId: "subagent:thread-1:tool-1", model: "custom-fast-model" }],
       ]),
@@ -244,6 +247,14 @@ describe("deriveWorkflowRunState", () => {
 
     expect(state?.agents[0]?.threadId).toBe("subagent:thread-1:tool-1");
     expect(state?.agents[0]?.modelLabel).toBe("Custom Fast Model");
+  });
+
+  it("drops Task-tool subagent members that already render in the strip", () => {
+    const state = deriveWorkflowRunState({
+      activities: [workflowStarted(), agentStarted({ toolUseId: "tool-1" })],
+    });
+
+    expect(state?.agents).toEqual([]);
   });
 
   it("retires once the workflow run settles", () => {
@@ -436,7 +447,13 @@ describe("deriveWorkflowRunState", () => {
             status: "completed",
             workflowAgents: [
               { label: "gamma-agent", phaseIndex: 1, state: "failed" },
-              { label: "epsilon-agent", phaseIndex: 2, model: "haiku", state: "completed" },
+              {
+                label: "epsilon-agent",
+                phaseIndex: 2,
+                model: "haiku",
+                effort: "low",
+                state: "completed",
+              },
             ],
           },
         }),
@@ -449,10 +466,11 @@ describe("deriveWorkflowRunState", () => {
         agent.phase,
         agent.statusKind,
         agent.modelLabel,
+        agent.effortLabel,
       ]),
     ).toEqual([
-      ["gamma-agent", "One", "failed", undefined],
-      ["epsilon-agent", "Two", "completed", "Haiku"],
+      ["gamma-agent", "One", "failed", undefined, null],
+      ["epsilon-agent", "Two", "completed", "Haiku", "low"],
     ]);
     // Everything settled: the last phase with agents is the current one.
     expect(state?.phases?.map((phase) => [phase.title, phase.isCurrent])).toEqual([
@@ -488,6 +506,7 @@ describe("deriveWorkflowRunState", () => {
               agentId: "agent-live-1",
               label: "gamma-agent",
               model: "claude-sonnet-4-6",
+              effort: "high",
               state: "completed",
               tokens: 17_325,
               toolCalls: 3,
@@ -511,9 +530,9 @@ describe("deriveWorkflowRunState", () => {
     });
 
     const gamma = state?.agents.find((agent) => agent.description === "gamma-agent");
-    // Live model beats the planned script model; planned effort still shows.
+    // Live model and effort beat the planned script opts.
     expect(gamma?.model).toBe("claude-sonnet-4-6");
-    expect(gamma?.effortLabel).toBe("low");
+    expect(gamma?.effortLabel).toBe("high");
     expect(gamma?.totalTokens).toBe(17_325);
     expect(gamma?.toolCalls).toBe(3);
     expect(gamma?.statusKind).toBe("completed");
@@ -524,6 +543,8 @@ describe("deriveWorkflowRunState", () => {
 
     const beta = state?.agents.find((agent) => agent.description === "beta-agent");
     expect(beta?.statusKind).toBe("running");
+    // No live/planned effort for beta: the label stays empty.
+    expect(beta?.effortLabel).toBeNull();
     expect(beta?.totalTokens).toBe(2_000);
     // The synthetic snapshot event must not create a bogus "Workflow agents" row.
     expect(state?.agents.map((agent) => agent.description)).toEqual(["gamma-agent", "beta-agent"]);

@@ -44,6 +44,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
   ArrowUpCircleIcon,
+  BackgroundTrayIcon,
   BotIcon,
   CheckIcon,
   ChangesIcon,
@@ -2727,6 +2728,8 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   // (answer submitted) rather than the generic "info" checkmark.
   if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
   if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
+  // "Moved to background" notices read as a tray drop, not a warning check.
+  if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
 
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
