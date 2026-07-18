@@ -189,6 +189,7 @@ import {
 import {
   createRelevantWorkLogThreadsSelector,
   createThreadLineageSelector,
+  localSubagentThreadId,
 } from "./ChatView.selectors";
 import {
   clampCollapsedComposerCursor,
@@ -208,6 +209,7 @@ import {
   createProjectSelector,
   createThreadSelector,
 } from "../storeSelectors";
+import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import {
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
@@ -329,6 +331,7 @@ import {
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isEditableEventTarget } from "../lib/editableEventTarget";
 import { compareProvidersByOrder } from "../providerOrdering";
 import {
   type ComposerFileAttachment,
@@ -347,6 +350,7 @@ import {
 } from "../composerDraftStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
+import { useWorkflowRunUiStore, useWorkflowRunUiThreadState } from "../workflowRunUiStore";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import {
   appendOriginalComposerPromptBlocks,
@@ -421,6 +425,7 @@ import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
+import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -469,6 +474,23 @@ import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
+import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import {
+  collectForegroundRunningSubagentStripItems,
+  collectRunningSubagentStripItems,
+  deriveComposerSubagentStripItems,
+  type ComposerSubagentStripItem,
+} from "./chat/ComposerSubagentStrip.logic";
+import {
+  deriveSubagentToolTraceByThreadId,
+  type SubagentToolTrace,
+} from "./chat/subagentToolTrace.logic";
+import { WorkflowRunCard } from "./chat/WorkflowRunCard";
+import {
+  buildWorkflowResumePrompt,
+  deriveWorkflowRunState,
+  type WorkflowSubagentThreadRef,
+} from "./chat/WorkflowRunCard.logic";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { resolveTranscriptMarkerRange } from "./chat/chatSelectionActions";
@@ -571,6 +593,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+const EMPTY_SUBAGENT_TOOL_TRACES: ReadonlyMap<string, SubagentToolTrace> = new Map();
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -1254,6 +1277,8 @@ export default function ChatView({
   );
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
+  const markWorkflowRunPaused = useWorkflowRunUiStore((store) => store.markPaused);
+  const markWorkflowRunDismissed = useWorkflowRunUiStore((store) => store.markDismissed);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -1292,6 +1317,8 @@ export default function ChatView({
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
+  const [subagentStripCompact, setSubagentStripCompact] = useState(false);
+  const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
   // model name, traits label). Inputs live in a ref so the resize observer
@@ -2550,6 +2577,131 @@ export default function ChatView({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
+  // Native-CLI-style nested trace: transcript subagent rows show the child thread's
+  // recent tool calls. Retain child detail subscriptions only while a subagent runs
+  // so its activities stream in live; settled traces stay frozen from whatever the
+  // store already holds.
+  const liveSubagentThreadIdsKey = useMemo(() => {
+    if (!hasWorkLogSubagents) {
+      return "";
+    }
+    const threadIds = new Set<string>();
+    for (const entry of workLogEntries) {
+      for (const subagent of entry.subagents ?? []) {
+        if (subagent.isActive && subagent.resolvedThreadId) {
+          threadIds.add(subagent.resolvedThreadId);
+        }
+      }
+    }
+    return [...threadIds].toSorted().join("\n");
+  }, [hasWorkLogSubagents, workLogEntries]);
+  useEffect(() => {
+    if (!liveSubagentThreadIdsKey) {
+      return;
+    }
+    const releases = liveSubagentThreadIdsKey
+      .split("\n")
+      .map((threadId) => retainThreadDetailSubscription(ThreadId.makeUnsafe(threadId)));
+    return () => {
+      for (const release of releases) {
+        release();
+      }
+    };
+  }, [liveSubagentThreadIdsKey]);
+  const subagentToolTraceByThreadId = useMemo(
+    () =>
+      hasWorkLogSubagents
+        ? deriveSubagentToolTraceByThreadId({
+            workEntries: workLogEntries,
+            threads: relevantWorkLogThreads,
+          })
+        : EMPTY_SUBAGENT_TOOL_TRACES,
+    [hasWorkLogSubagents, relevantWorkLogThreads, workLogEntries],
+  );
+  // Native-CLI parity: while a subagent thread is open, the strip derives from the
+  // PARENT thread's activities so all sibling subagents (plus a way back to the
+  // main thread) stay visible, with the open subagent marked as viewed.
+  const stripParentThreadId = activeThread?.parentThreadId ?? null;
+  const stripParentThread = useStore(
+    useMemo(() => createThreadSelector(stripParentThreadId), [stripParentThreadId]),
+  );
+  // Deep links can land on a subagent thread before the parent has a detail
+  // subscription; retain one so the parent's activities hydrate for the strip.
+  useEffect(() => {
+    if (!stripParentThreadId) {
+      return;
+    }
+    return retainThreadDetailSubscription(stripParentThreadId);
+  }, [stripParentThreadId]);
+  const stripSourceThreadId = stripParentThread?.id ?? activeThread?.id ?? null;
+  const stripSourceActivities = stripParentThread?.activities ?? threadActivities;
+  const stripSourceLatestTurnId = stripParentThread
+    ? (stripParentThread.latestTurn?.turnId ?? null)
+    : (activeLatestTurn?.turnId ?? null);
+  const stripVisibleTurnIds = useMemo(() => {
+    if (!stripParentThread) {
+      return workLogVisibleTurnIds;
+    }
+    const turnIds = new Set<TurnId>();
+    for (const message of stripParentThread.messages) {
+      if (message.turnId) {
+        turnIds.add(message.turnId);
+      }
+    }
+    if (stripParentThread.latestTurn?.turnId) {
+      turnIds.add(stripParentThread.latestTurn.turnId);
+    }
+    return turnIds;
+  }, [stripParentThread, workLogVisibleTurnIds]);
+  const stripLiveTurnId = stripParentThread
+    ? isLatestTurnSettled(stripParentThread.latestTurn, stripParentThread.session ?? null)
+      ? null
+      : (stripParentThread.latestTurn?.turnId ?? null)
+    : latestTurnSettled
+      ? null
+      : (activeLatestTurn?.turnId ?? null);
+  // Composer-strip source: routed subagent activities are omitted from the timeline
+  // entries above (they render as nested threads), so the strip derives from an
+  // unfiltered pass or it would structurally never see routed subagents.
+  const stripRawWorkLogEntries = useMemo(
+    () =>
+      deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
+        visibleTurnIds: stripVisibleTurnIds,
+        includeRoutedSubagentActivities: true,
+      }),
+    [stripSourceActivities, stripSourceLatestTurnId, stripVisibleTurnIds],
+  );
+  const hasStripWorkLogSubagents = useMemo(
+    () => stripRawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
+    [stripRawWorkLogEntries],
+  );
+  const stripRelevantWorkLogThreads = useStore(
+    useMemo(
+      () =>
+        createRelevantWorkLogThreadsSelector({
+          workEntries: stripRawWorkLogEntries,
+          parentThreadId: stripSourceThreadId,
+          enabled: hasStripWorkLogSubagents,
+        }),
+      [stripSourceThreadId, hasStripWorkLogSubagents, stripRawWorkLogEntries],
+    ),
+  );
+  const stripWorkLogEntries = useMemo(
+    () =>
+      hasStripWorkLogSubagents
+        ? enrichSubagentWorkEntries(
+            stripRawWorkLogEntries,
+            stripRelevantWorkLogThreads,
+            stripSourceThreadId,
+          )
+        : stripRawWorkLogEntries,
+    [
+      stripSourceThreadId,
+      hasStripWorkLogSubagents,
+      stripRawWorkLogEntries,
+      stripRelevantWorkLogThreads,
+    ],
+  );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -2714,6 +2866,95 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
+  // Task tool_use_ids the provider confirmed as backgrounded via task_updated
+  // patches (last patch wins, so re-foregrounded tasks drop back out).
+  const backgroundedSubagentToolUseIds = useMemo(() => {
+    const toolUseIds = new Set<string>();
+    for (const activity of stripSourceActivities) {
+      if (activity.kind !== "task.updated") {
+        continue;
+      }
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as Record<string, unknown>)
+          : null;
+      const toolUseId = typeof payload?.toolUseId === "string" ? payload.toolUseId : null;
+      if (!toolUseId || typeof payload?.isBackgrounded !== "boolean") {
+        continue;
+      }
+      if (payload.isBackgrounded) {
+        toolUseIds.add(toolUseId);
+      } else {
+        toolUseIds.delete(toolUseId);
+      }
+    }
+    return toolUseIds;
+  }, [stripSourceActivities]);
+  const composerSubagentStripItems = useMemo(
+    () =>
+      deriveComposerSubagentStripItems({
+        workEntries: stripWorkLogEntries,
+        liveTurnId: stripLiveTurnId,
+        backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+        viewedThreadId: stripParentThread ? (activeThread?.id ?? null) : null,
+        parentRow: stripParentThread
+          ? { threadId: stripParentThread.id, label: stripParentThread.title ?? null }
+          : null,
+      }),
+    [
+      activeThread?.id,
+      backgroundedSubagentToolUseIds,
+      stripLiveTurnId,
+      stripParentThread,
+      stripWorkLogEntries,
+    ],
+  );
+  // Links workflow agent rows to their subagent child threads (and models) when the
+  // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
+  const workflowSubagentThreadsByToolUseId = useMemo(() => {
+    const refs = new Map<string, WorkflowSubagentThreadRef>();
+    for (const entry of workLogEntries) {
+      for (const subagent of entry.subagents ?? []) {
+        if (!subagent.providerThreadId) {
+          continue;
+        }
+        refs.set(subagent.providerThreadId, {
+          threadId: subagent.resolvedThreadId ?? subagent.threadId,
+          model: subagent.model,
+        });
+      }
+    }
+    return refs;
+  }, [workLogEntries]);
+  // Persisted (per-thread) workflow run flags: pausedByUser tells the settled
+  // card apart from a plain stop; dismissed retires a settled card the run's
+  // activities would otherwise keep visible. Survive reloads via
+  // workflowRunUiStore instead of living in component state.
+  const workflowRunUiThreadState = useWorkflowRunUiThreadState(activeThreadId);
+  const pausedWorkflowTaskIds = useMemo(
+    () => new Set(workflowRunUiThreadState.pausedByUser),
+    [workflowRunUiThreadState.pausedByUser],
+  );
+  const dismissedWorkflowTaskIds = useMemo(
+    () => new Set(workflowRunUiThreadState.dismissed),
+    [workflowRunUiThreadState.dismissed],
+  );
+  const workflowRunState = useMemo(
+    () =>
+      deriveWorkflowRunState({
+        activities: threadActivities,
+        subagentThreadsByToolUseId: workflowSubagentThreadsByToolUseId,
+        pausedByUserTaskIds: pausedWorkflowTaskIds,
+        dismissedTaskIds: dismissedWorkflowTaskIds,
+      }),
+    [
+      threadActivities,
+      workflowSubagentThreadsByToolUseId,
+      pausedWorkflowTaskIds,
+      dismissedWorkflowTaskIds,
+    ],
+  );
+  const workflowNowMs = useNowMs(workflowRunState !== null && !workflowRunState.settled);
   // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
   // the composer mounts/unmounts, and the observer catches every panel appearing,
   // resizing, or collapsing. Measuring the wrapper (rather than each panel) keeps one
@@ -5822,6 +6063,83 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  const onStopWorkflowRun = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread || !workflowRunState) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.task.stop",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      taskId: workflowRunState.workflowTaskId,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread, workflowRunState]);
+
+  const onBackgroundSubagentStripItem = useCallback(
+    async (item: ComposerSubagentStripItem) => {
+      const api = readNativeApi();
+      // The Task tool_use lives on the strip source thread (the parent while a
+      // subagent thread is open), so route the command there.
+      if (!api || !stripSourceThreadId) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.task.background",
+        commandId: newCommandId(),
+        threadId: stripSourceThreadId,
+        toolUseId: item.providerThreadId,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [stripSourceThreadId],
+  );
+
+  // Stop goes through the interrupt seam: on a subagent thread the reactor
+  // resolves the tool_use_id and stops that task instead of the whole turn.
+  // Target the canonical child id derived from the strip source thread —
+  // item.threadId can still be the raw tool_use_id while client-side thread
+  // resolution lags, which the server would reject as an unknown thread.
+  const onStopSubagentStripItem = useCallback(
+    async (item: ComposerSubagentStripItem) => {
+      const api = readNativeApi();
+      if (!api || !stripSourceThreadId) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.interrupt",
+        commandId: newCommandId(),
+        threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [stripSourceThreadId],
+  );
+
+  // Stop-all fans out through the same per-row stop so both paths share one seam.
+  const onStopAllSubagentStripItems = useCallback(async () => {
+    const running = collectRunningSubagentStripItems(composerSubagentStripItems);
+    await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
+  }, [composerSubagentStripItems, onStopSubagentStripItem]);
+
+  // Ctrl+B parity with the native CLI: send every foreground running subagent to
+  // the background at once, fanning through the same per-row background dispatch.
+  const onBackgroundAllForegroundSubagentStripItems = useCallback(async () => {
+    const foreground = collectForegroundRunningSubagentStripItems(composerSubagentStripItems);
+    await Promise.all(foreground.map((item) => onBackgroundSubagentStripItem(item)));
+  }, [composerSubagentStripItems, onBackgroundSubagentStripItem]);
+
+  // Pause is the same stop command; the persisted flag makes the settled card
+  // read as paused (with a resume affordance) instead of plain stopped, across
+  // reloads too.
+  const onPauseWorkflowRun = useCallback(async () => {
+    if (!workflowRunState || !activeThreadId) return;
+    const { workflowTaskId } = workflowRunState;
+    markWorkflowRunPaused(activeThreadId, workflowTaskId);
+    await onStopWorkflowRun();
+  }, [activeThreadId, markWorkflowRunPaused, onStopWorkflowRun, workflowRunState]);
+
+  const onDismissWorkflowRun = useCallback(() => {
+    if (!workflowRunState || !activeThreadId) return;
+    const { workflowTaskId } = workflowRunState;
+    markWorkflowRunDismissed(activeThreadId, workflowTaskId);
+  }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
+
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: ModelSlug) => {
       if (!activeThread) return;
@@ -5879,6 +6197,27 @@ export default function ChatView({
         event.preventDefault();
         event.stopPropagation();
         void onInterrupt();
+        return;
+      }
+      // Ctrl+B mirrors the native CLI: background all foreground running
+      // subagents. Literal Ctrl on every platform, but stays out of the
+      // terminal, where Ctrl+B is real shell input (readline cursor-back,
+      // tmux prefix), and out of text-editing surfaces, where Ctrl+B is the
+      // native macOS "move cursor back" binding. Silent no-op (event
+      // untouched) when nothing qualifies.
+      if (
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "b" &&
+        !isTerminalFocused() &&
+        !isEditableEventTarget(event) &&
+        collectForegroundRunningSubagentStripItems(composerSubagentStripItems).length > 0
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void onBackgroundAllForegroundSubagentStripItems();
         return;
       }
       const composerPickerShortcutActive =
@@ -6094,6 +6433,8 @@ export default function ChatView({
     onToggleDiff,
     onInterrupt,
     onSplitSurface,
+    composerSubagentStripItems,
+    onBackgroundAllForegroundSubagentStripItems,
     isFocusedPane,
     hasLiveTurn,
     handleModelPickerOpenChange,
@@ -8552,6 +8893,54 @@ export default function ChatView({
     [],
   );
 
+  // Resuming a workflow is a normal composer turn instructing the agent to
+  // re-invoke the Workflow tool against the persisted script; completed agent()
+  // calls replay from cache, so a paused run picks up where it stopped. Sent as
+  // a pre-built chat turn so it takes the exact send path a queued turn does.
+  const onResumeWorkflowRun = useCallback(async () => {
+    if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
+    const { workflowTaskId } = workflowRunState;
+    const prompt = buildWorkflowResumePrompt(workflowRunState.scriptPath, workflowRunState.runId);
+    const sent = await onSendRef.current(undefined, "queue", {
+      id: randomUUID(),
+      kind: "chat",
+      createdAt: new Date().toISOString(),
+      previewText: prompt,
+      prompt,
+      images: [],
+      files: [],
+      assistantSelections: [],
+      terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      skills: [],
+      mentions: [],
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      modelSelection: selectedModelSelection,
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+      runtimeMode,
+      interactionMode,
+      envMode,
+    });
+    if (sent && activeThreadId) {
+      markWorkflowRunDismissed(activeThreadId, workflowTaskId);
+    }
+  }, [
+    activeThreadId,
+    envMode,
+    interactionMode,
+    markWorkflowRunDismissed,
+    providerOptionsForDispatch,
+    runtimeMode,
+    selectedModel,
+    selectedModelSelection,
+    selectedPromptEffort,
+    selectedProvider,
+    workflowRunState,
+  ]);
+
   const onSteerQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn) => {
       const previousQueue = queuedComposerTurnsRef.current;
@@ -10402,6 +10791,14 @@ export default function ChatView({
 
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
+  const showComposerWorkflowRunCard = workflowRunState !== null;
+  const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
+  // The workflow card already lists its run and member agents, so the generic
+  // "N background agents" footer only counts tasks outside the workflow.
+  const composerBackgroundTaskCount = workflowRunState
+    ? (activeBackgroundTasks?.taskIds.filter((taskId) => !workflowRunState.taskIds.includes(taskId))
+        .length ?? 0)
+    : (activeBackgroundTasks?.activeCount ?? 0);
 
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
@@ -10409,7 +10806,7 @@ export default function ChatView({
     activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
         activeTaskList={activeTaskList}
-        backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+        backgroundTaskCount={composerBackgroundTaskCount}
         compact={activeTaskListCompact}
         onCompactChange={setActiveTaskListCompact}
         onOpenSidebar={() => setPlanSidebarOpen(true)}
@@ -10447,13 +10844,50 @@ export default function ChatView({
                 />
               ) : null}
               {renderActiveTaskListCard(showComposerLiveChangesHeader)}
+              {workflowRunState ? (
+                <WorkflowRunCard
+                  workflowRun={workflowRunState}
+                  nowMs={workflowNowMs}
+                  compact={workflowRunCardCompact}
+                  onCompactChange={setWorkflowRunCardCompact}
+                  onOpenThread={onNavigateToThread}
+                  onStop={onStopWorkflowRun}
+                  onPause={onPauseWorkflowRun}
+                  onResume={onResumeWorkflowRun}
+                  onDismiss={onDismissWorkflowRun}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader || showComposerActiveTaskListCard
+                  }
+                />
+              ) : null}
+              {showComposerSubagentStrip ? (
+                <ComposerSubagentStrip
+                  items={composerSubagentStripItems}
+                  compact={subagentStripCompact}
+                  onCompactChange={setSubagentStripCompact}
+                  onOpenThread={onNavigateToThread}
+                  onBackgroundItem={onBackgroundSubagentStripItem}
+                  onStopItem={onStopSubagentStripItem}
+                  onStopAll={onStopAllSubagentStripItems}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard
+                  }
+                />
+              ) : null}
               <ComposerQueuedHeader
                 queuedTurns={queuedComposerTurns}
                 onSteer={onSteerQueuedComposerTurn}
                 onRemove={removeQueuedComposerTurn}
                 onEdit={onEditQueuedComposerTurn}
                 cwd={threadWorkspaceCwd ?? undefined}
-                attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
+                attachedToPrevious={
+                  showComposerLiveChangesHeader ||
+                  showComposerActiveTaskListCard ||
+                  showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip
+                }
               />
               {/* Pending approvals and AskUserQuestion prompts both render as a detached
                   card floating just above the composer (padding gives the measured gap),
@@ -10615,11 +11049,13 @@ export default function ChatView({
                             : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
-                            : hasLiveTurn
-                              ? "Ask for follow-up changes"
-                              : phase === "disconnected"
-                                ? "Ask for follow-up changes or attach images"
-                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                            : activeThread?.parentThreadId
+                              ? "Message this subagent while it works"
+                              : hasLiveTurn
+                                ? "Ask for follow-up changes"
+                                : phase === "disconnected"
+                                  ? "Ask for follow-up changes or attach images"
+                                  : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -11169,6 +11605,7 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    subagentToolTraceByThreadId={subagentToolTraceByThreadId}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}

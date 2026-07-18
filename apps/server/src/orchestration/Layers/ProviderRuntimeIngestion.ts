@@ -1084,6 +1084,21 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
+            ...(event.payload.subagentType ? { subagentType: event.payload.subagentType } : {}),
+            ...(event.payload.workflowName ? { workflowName: event.payload.workflowName } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowPhases
+              ? { workflowPhases: event.payload.workflowPhases }
+              : {}),
+            ...(event.payload.workflowAgentPhases
+              ? { workflowAgentPhases: event.payload.workflowAgentPhases }
+              : {}),
+            ...(event.payload.workflowAgentPlans
+              ? { workflowAgentPlans: event.payload.workflowAgentPlans }
+              : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
@@ -1105,9 +1120,18 @@ function runtimeEventToActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
+            // Kept verbatim next to detail: workflow progress encodes
+            // "<phase>: <agent label>" here and the panel parses it back out.
+            description: truncateDetail(event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1133,6 +1157,66 @@ function runtimeEventToActivities(
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowAgents
+              ? { workflowAgents: event.payload.workflowAgents }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "task.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.status === "failed" ? "error" : "info",
+          kind: "task.updated",
+          summary:
+            event.payload.status === "paused"
+              ? "Task paused"
+              : event.payload.status === "killed"
+                ? "Task killed"
+                : event.payload.isBackgrounded === true
+                  ? "Task moved to background"
+                  : "Task updated",
+          payload: toActivityPayload({
+            taskId: event.payload.taskId,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
+            ...(event.payload.workflowTaskId
+              ? { workflowTaskId: event.payload.workflowTaskId }
+              : {}),
+            ...(event.payload.workflowRunId ? { workflowRunId: event.payload.workflowRunId } : {}),
+            ...(event.payload.workflowScriptPath
+              ? { workflowScriptPath: event.payload.workflowScriptPath }
+              : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "turn.steered": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.steered",
+          summary: "User message delivered",
+          payload: toActivityPayload({
+            detail: truncateDetail(event.payload.message),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

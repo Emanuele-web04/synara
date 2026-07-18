@@ -82,6 +82,9 @@ interface ChatTranscriptPaneProps {
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   scrollButtonVisible: boolean;
+  subagentToolTraceByThreadId?: ComponentProps<
+    typeof MessagesTimeline
+  >["subagentToolTraceByThreadId"];
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   timestampFormat: TimestampFormat;
@@ -139,6 +142,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   resolvedTheme,
   revertTurnCountByUserMessageId,
   scrollButtonVisible,
+  subagentToolTraceByThreadId,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
   timestampFormat,
@@ -214,6 +218,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(subagentToolTraceByThreadId ? { subagentToolTraceByThreadId } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
