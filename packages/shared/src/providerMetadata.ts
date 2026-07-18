@@ -49,6 +49,15 @@ export const PROVIDER_DESCRIPTORS = [
   },
   { kind: "grok", displayName: PROVIDER_DISPLAY_NAMES.grok, available: true, usage: null },
   { kind: "droid", displayName: PROVIDER_DISPLAY_NAMES.droid, available: true, usage: null },
+  {
+    kind: "kimi",
+    displayName: PROVIDER_DISPLAY_NAMES.kimi,
+    available: true,
+    usage: {
+      signInCommand: "kimi login",
+      learnMoreHref: "https://www.kimi.com/code/console",
+    },
+  },
   { kind: "kilo", displayName: PROVIDER_DISPLAY_NAMES.kilo, available: true, usage: null },
   {
     kind: "opencode",

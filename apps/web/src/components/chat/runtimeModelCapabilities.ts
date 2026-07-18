@@ -99,6 +99,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "antigravity" &&
       input.provider !== "grok" &&
       input.provider !== "droid" &&
+      input.provider !== "kimi" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&
       input.provider !== "pi") ||

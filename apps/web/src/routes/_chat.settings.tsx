@@ -288,6 +288,7 @@ type InstallBinarySettingsKey =
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
+  | "kimiBinaryPath"
   | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath";
@@ -491,6 +492,27 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to use <code>droid</code> from your PATH.
+      </>
+    ),
+  },
+  {
+    provider: "kimi",
+    title: "Kimi Code",
+    docs: [
+      {
+        label: "Install",
+        href: "https://moonshotai.github.io/kimi-code/en/guides/getting-started.html",
+      },
+      {
+        label: "ACP",
+        href: "https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html",
+      },
+    ],
+    binaryPathKey: "kimiBinaryPath",
+    binaryPlaceholder: "kimi",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>kimi</code> from your PATH.
       </>
     ),
   },
@@ -735,6 +757,7 @@ function SettingsRouteView() {
     antigravity: Boolean(settings.antigravityBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
     droid: Boolean(settings.droidBinaryPath),
+    kimi: Boolean(settings.kimiBinaryPath),
     kilo: Boolean(
       settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPasswordConfigured,
     ),
@@ -760,6 +783,7 @@ function SettingsRouteView() {
     antigravity: "",
     grok: "",
     droid: "",
+    kimi: "",
     kilo: "",
     opencode: "",
     pi: "",
@@ -839,6 +863,7 @@ function SettingsRouteView() {
   const antigravityBinaryPath = settings.antigravityBinaryPath;
   const grokBinaryPath = settings.grokBinaryPath;
   const droidBinaryPath = settings.droidBinaryPath;
+  const kimiBinaryPath = settings.kimiBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
   const kiloServerUrl = settings.kiloServerUrl;
   const kiloServerPasswordConfigured = settings.kiloServerPasswordConfigured;
@@ -1032,6 +1057,7 @@ function SettingsRouteView() {
     settings.antigravityBinaryPath !== defaults.antigravityBinaryPath ||
     settings.grokBinaryPath !== defaults.grokBinaryPath ||
     settings.droidBinaryPath !== defaults.droidBinaryPath ||
+    settings.kimiBinaryPath !== defaults.kimiBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
     settings.kiloServerUrl !== defaults.kiloServerUrl ||
     settings.kiloServerPasswordConfigured !== defaults.kiloServerPasswordConfigured ||
@@ -1100,6 +1126,7 @@ function SettingsRouteView() {
     settings.customAntigravityModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
     settings.customDroidModels.length > 0 ||
+    settings.customKimiModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
@@ -1290,6 +1317,7 @@ function SettingsRouteView() {
       antigravity: false,
       grok: false,
       droid: false,
+      kimi: false,
       kilo: false,
       opencode: false,
       pi: false,
@@ -1302,6 +1330,7 @@ function SettingsRouteView() {
       antigravity: "",
       grok: "",
       droid: "",
+      kimi: "",
       kilo: "",
       opencode: "",
       pi: "",
@@ -2786,6 +2815,7 @@ function SettingsRouteView() {
                     customCursorModels: defaults.customCursorModels,
                     customAntigravityModels: defaults.customAntigravityModels,
                     customGrokModels: defaults.customGrokModels,
+                    customKimiModels: defaults.customKimiModels,
                     customKiloModels: defaults.customKiloModels,
                     customOpenCodeModels: defaults.customOpenCodeModels,
                     customPiModels: defaults.customPiModels,
@@ -2809,6 +2839,7 @@ function SettingsRouteView() {
                     value !== "antigravity" &&
                     value !== "grok" &&
                     value !== "droid" &&
+                    value !== "kimi" &&
                     value !== "kilo" &&
                     value !== "opencode" &&
                     value !== "pi"
@@ -3091,6 +3122,7 @@ function SettingsRouteView() {
                     antigravityBinaryPath: defaults.antigravityBinaryPath,
                     grokBinaryPath: defaults.grokBinaryPath,
                     droidBinaryPath: defaults.droidBinaryPath,
+                    kimiBinaryPath: defaults.kimiBinaryPath,
                     kiloBinaryPath: defaults.kiloBinaryPath,
                     kiloServerUrl: defaults.kiloServerUrl,
                     kiloServerPassword: defaults.kiloServerPassword,
@@ -3108,6 +3140,7 @@ function SettingsRouteView() {
                     antigravity: false,
                     grok: false,
                     droid: false,
+                    kimi: false,
                     kilo: false,
                     opencode: false,
                     pi: false,
@@ -3136,20 +3169,22 @@ function SettingsRouteView() {
                             ? settings.grokBinaryPath !== defaults.grokBinaryPath
                             : providerSettings.provider === "droid"
                               ? settings.droidBinaryPath !== defaults.droidBinaryPath
-                              : providerSettings.provider === "kilo"
-                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                  settings.kiloServerPasswordConfigured !==
-                                    defaults.kiloServerPasswordConfigured
-                                : providerSettings.provider === "pi"
-                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                    settings.piAgentDir !== defaults.piAgentDir
-                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                    settings.openCodeExperimentalWebSockets !==
-                                      defaults.openCodeExperimentalWebSockets ||
-                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                    settings.openCodeServerPasswordConfigured !==
-                                      defaults.openCodeServerPasswordConfigured;
+                              : providerSettings.provider === "kimi"
+                                ? settings.kimiBinaryPath !== defaults.kimiBinaryPath
+                                : providerSettings.provider === "kilo"
+                                  ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                    settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                    settings.kiloServerPasswordConfigured !==
+                                      defaults.kiloServerPasswordConfigured
+                                  : providerSettings.provider === "pi"
+                                    ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                      settings.piAgentDir !== defaults.piAgentDir
+                                    : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                      settings.openCodeExperimentalWebSockets !==
+                                        defaults.openCodeExperimentalWebSockets ||
+                                      settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                      settings.openCodeServerPasswordConfigured !==
+                                        defaults.openCodeServerPasswordConfigured;
                 const binaryPathValue =
                   providerSettings.binaryPathKey === "claudeBinaryPath"
                     ? claudeBinaryPath
@@ -3161,13 +3196,15 @@ function SettingsRouteView() {
                           ? grokBinaryPath
                           : providerSettings.binaryPathKey === "droidBinaryPath"
                             ? droidBinaryPath
-                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                              ? kiloBinaryPath
-                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                                ? openCodeBinaryPath
-                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                  ? piBinaryPath
-                                  : codexBinaryPath;
+                            : providerSettings.binaryPathKey === "kimiBinaryPath"
+                              ? kimiBinaryPath
+                              : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                ? kiloBinaryPath
+                                : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                  ? openCodeBinaryPath
+                                  : providerSettings.binaryPathKey === "piBinaryPath"
+                                    ? piBinaryPath
+                                    : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
                 const showProviderUpdateStatus = providerStatus
                   ? shouldShowProviderUpdateStatus({
@@ -3322,15 +3359,18 @@ function SettingsRouteView() {
                                             ? { grokBinaryPath: nextValue }
                                             : providerSettings.binaryPathKey === "droidBinaryPath"
                                               ? { droidBinaryPath: nextValue }
-                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                                ? { kiloBinaryPath: nextValue }
+                                              : providerSettings.binaryPathKey === "kimiBinaryPath"
+                                                ? { kimiBinaryPath: nextValue }
                                                 : providerSettings.binaryPathKey ===
-                                                    "openCodeBinaryPath"
-                                                  ? { openCodeBinaryPath: nextValue }
+                                                    "kiloBinaryPath"
+                                                  ? { kiloBinaryPath: nextValue }
                                                   : providerSettings.binaryPathKey ===
-                                                      "piBinaryPath"
-                                                    ? { piBinaryPath: nextValue }
-                                                    : { codexBinaryPath: nextValue },
+                                                      "openCodeBinaryPath"
+                                                    ? { openCodeBinaryPath: nextValue }
+                                                    : providerSettings.binaryPathKey ===
+                                                        "piBinaryPath"
+                                                      ? { piBinaryPath: nextValue }
+                                                      : { codexBinaryPath: nextValue },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}

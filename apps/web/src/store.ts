@@ -2029,6 +2029,7 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "antigravity" ||
     providerName === "grok" ||
     providerName === "droid" ||
+    providerName === "kimi" ||
     providerName === "kilo" ||
     providerName === "opencode" ||
     providerName === "pi"

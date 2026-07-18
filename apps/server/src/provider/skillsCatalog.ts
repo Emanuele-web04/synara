@@ -326,6 +326,7 @@ const HOME_ORIGIN_ORDER = [
   "cursor",
   "grok",
   "factory",
+  "kimi",
   "kilo",
   "opencode",
   "pi",
@@ -409,6 +410,10 @@ const SKILL_ORIGIN_ROOTS = {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".factory", "skills")],
     projectRootNames: [".factory"],
   },
+  kimi: {
+    homeRoots: (input) => [nodePath.join(input.homeDir, ".kimi-code", "skills")],
+    projectRootNames: [".kimi-code"],
+  },
   kilo: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".kilo", "skills")],
     projectRootNames: [".kilo"],
@@ -434,6 +439,7 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   antigravity: ["agents"],
   grok: ["grok", "claude", "agents"],
   droid: ["factory", "agents", "claude", "codex"],
+  kimi: ["kimi", "agents", "claude", "codex"],
   kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],

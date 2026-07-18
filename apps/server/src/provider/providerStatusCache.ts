@@ -17,6 +17,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "antigravity",
   "grok",
   "droid",
+  "kimi",
   "kilo",
   "opencode",
   "pi",

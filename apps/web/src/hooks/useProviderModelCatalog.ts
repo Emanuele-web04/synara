@@ -99,6 +99,13 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "droid",
     }),
   );
+  const kimiDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "kimi",
+      binaryPath: settings.kimiBinaryPath || null,
+      enabled: selectedProvider === "kimi" || discoveryEnabled,
+    }),
+  );
   const openCodeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "opencode",
@@ -174,6 +181,15 @@ export function useProviderModelCatalog(input: {
     droidModelDiscoveryEnabled &&
     !hasResolvedDroidModelDiscovery &&
     isInitialModelDiscoveryPending(droidDynamicModelsQuery);
+  const kimiModelDiscoveryEnabled = selectedProvider === "kimi" || discoveryEnabled;
+  const hasResolvedKimiModelDiscovery =
+    (kimiDynamicModelsQuery.data?.source === "kimi.acp" ||
+      kimiDynamicModelsQuery.data?.source === "kimi-builtin") &&
+    (kimiDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const kimiModelDiscoveryPending =
+    kimiModelDiscoveryEnabled &&
+    !hasResolvedKimiModelDiscovery &&
+    isInitialModelDiscoveryPending(kimiDynamicModelsQuery);
   const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
@@ -226,6 +242,7 @@ export function useProviderModelCatalog(input: {
       ),
       grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
       droid: getAppModelOptions("droid", customModelsByProvider.droid, modelHintByProvider?.droid),
+      kimi: getAppModelOptions("kimi", customModelsByProvider.kimi, modelHintByProvider?.kimi),
       kilo: getAppModelOptions("kilo", customModelsByProvider.kilo, modelHintByProvider?.kilo),
       opencode: getAppModelOptions(
         "opencode",
@@ -249,6 +266,7 @@ export function useProviderModelCatalog(input: {
       antigravity: antigravityModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       droid: droidDynamicModelsQuery.data,
+      kimi: kimiDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -261,6 +279,7 @@ export function useProviderModelCatalog(input: {
       "antigravity",
       "grok",
       "droid",
+      "kimi",
       "kilo",
       "opencode",
       "pi",
@@ -285,6 +304,7 @@ export function useProviderModelCatalog(input: {
     customModelsByProvider,
     droidDynamicModelsQuery.data,
     grokDynamicModelsQuery.data,
+    kimiDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
     modelHintByProvider,
     openCodeDynamicModelsQuery.data,
@@ -296,6 +316,7 @@ export function useProviderModelCatalog(input: {
       antigravity: antigravityModelDiscoveryPending,
       cursor: cursorModelDiscoveryPending,
       droid: droidModelDiscoveryPending,
+      kimi: kimiModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
@@ -304,6 +325,7 @@ export function useProviderModelCatalog(input: {
       antigravityModelDiscoveryPending,
       cursorModelDiscoveryPending,
       droidModelDiscoveryPending,
+      kimiModelDiscoveryPending,
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
@@ -320,6 +342,7 @@ export function useProviderModelCatalog(input: {
       antigravity: antigravityModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       droid: droidDynamicModelsQuery.data?.models ?? [],
+      kimi: kimiDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -331,6 +354,7 @@ export function useProviderModelCatalog(input: {
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
+      kimiDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
       piDynamicModelsQuery.data?.models,

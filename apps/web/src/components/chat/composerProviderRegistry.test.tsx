@@ -107,6 +107,35 @@ const GROK_RUNTIME_4_5_WITH_REASONING: ProviderModelDescriptor = {
 };
 
 describe("getComposerProviderState", () => {
+  it("dispatches Kimi's ACP thinking toggle only when the runtime model supports it", () => {
+    expect(
+      getComposerProviderState({
+        provider: "kimi",
+        model: "kimi-for-coding",
+        runtimeModel: {
+          slug: "kimi-for-coding",
+          name: "Kimi for Coding",
+          supportsThinkingToggle: true,
+        },
+        prompt: "",
+        modelOptions: { kimi: { thinking: true } },
+      }),
+    ).toEqual({
+      provider: "kimi",
+      promptEffort: null,
+      modelOptionsForDispatch: { thinking: true },
+    });
+
+    expect(
+      getComposerProviderState({
+        provider: "kimi",
+        model: "kimi-for-coding",
+        prompt: "",
+        modelOptions: { kimi: { thinking: true } },
+      }).modelOptionsForDispatch,
+    ).toBeUndefined();
+  });
+
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
       provider: "antigravity",

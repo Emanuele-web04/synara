@@ -265,6 +265,24 @@ export const GrokIcon: Icon = (props) => (
   </svg>
 );
 
+// Kimi Code — official currentColor mark from MoonshotAI/kimi-code's VS Code extension.
+export const KimiIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <rect
+      x="3"
+      y="4.5"
+      width="18"
+      height="13"
+      rx="2.2"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+    />
+    <rect x="9.6" y="8" width="1.4" height="2.6" rx="0.45" fill="currentColor" />
+    <rect x="15.6" y="8" width="1.4" height="2.6" rx="0.45" fill="currentColor" />
+  </svg>
+);
+
 export const PiIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 800 800" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

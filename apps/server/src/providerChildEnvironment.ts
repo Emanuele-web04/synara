@@ -10,6 +10,7 @@ export type ProviderChildKind =
   | "cursor"
   | "droid"
   | "grok"
+  | "kimi"
   | "kilo"
   | "opencode"
   | "pi";
@@ -47,6 +48,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   // These profiles deliberately support arbitrary upstream model providers.
   acp: "all",
   codex: "all",
+  kimi: "all",
   kilo: "all",
   opencode: "all",
   pi: "all",

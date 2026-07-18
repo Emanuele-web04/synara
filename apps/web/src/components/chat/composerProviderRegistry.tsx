@@ -210,6 +210,15 @@ function getProviderStateFromCapabilities(
       normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;
       break;
     }
+    case "kimi": {
+      const providerOptions = modelOptions?.kimi;
+      const thinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      normalizedOptions = thinking !== undefined ? { thinking } : undefined;
+      break;
+    }
     case "kilo":
     case "opencode": {
       const providerOptions = provider === "kilo" ? modelOptions?.kilo : modelOptions?.opencode;
@@ -303,6 +312,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("droid", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("droid", input),
+  },
+  kimi: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kimi", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("kimi", input),
   },
   kilo: {
     getState: (input) => getProviderStateFromCapabilities(input),

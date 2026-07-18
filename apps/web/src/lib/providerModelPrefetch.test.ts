@@ -30,6 +30,7 @@ function makeSettings(
     antigravityBinaryPath: "",
     grokBinaryPath: "",
     droidBinaryPath: "",
+    kimiBinaryPath: "",
     kiloBinaryPath: "",
     openCodeBinaryPath: "",
     piBinaryPath: "",

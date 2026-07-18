@@ -32,6 +32,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     },
     { slug: "custom:GPT-5.6-Luna-0", name: "Custom GPT-5.6 Luna" },
   ],
+  kimi: [{ slug: "kimi-for-coding", name: "Kimi for Coding" }],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",

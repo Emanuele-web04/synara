@@ -930,7 +930,9 @@ const make = Effect.gen(function* () {
               previousModelSelection ?? thread.modelSelection,
               requestedModelSelection,
             )
-          : (currentProvider === "droid" || currentProvider === "grok") &&
+          : (currentProvider === "droid" ||
+              currentProvider === "grok" ||
+              currentProvider === "kimi") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
 
       if (

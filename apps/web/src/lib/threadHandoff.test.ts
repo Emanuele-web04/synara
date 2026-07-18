@@ -15,6 +15,7 @@ describe("threadHandoff", () => {
       "antigravity",
       "grok",
       "droid",
+      "kimi",
       "kilo",
       "opencode",
       "pi",

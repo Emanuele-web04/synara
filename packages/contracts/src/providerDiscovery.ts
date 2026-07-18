@@ -14,6 +14,7 @@ const ProviderDiscoveryKind = Schema.Literals([
   "antigravity",
   "grok",
   "droid",
+  "kimi",
   "kilo",
   "opencode",
   "pi",

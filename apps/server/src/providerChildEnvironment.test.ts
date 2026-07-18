@@ -84,7 +84,7 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["codex", "kilo", "opencode", "pi"] as const)(
+  it.each(["codex", "kimi", "kilo", "opencode", "pi"] as const)(
     "preserves upstream credential discovery for multi-provider %s",
     (provider) => {
       const env = buildProviderChildEnvironment({

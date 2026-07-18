@@ -392,6 +392,7 @@ export function PluginLibrary() {
   );
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
+  const kimiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kimi"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -422,6 +423,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
       },
+      kimi: {
+        plugins: supportsPluginDiscovery(kimiCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(kimiCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -442,6 +447,7 @@ export function PluginLibrary() {
       antigravityCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
       droidCapabilitiesQuery.data,
+      kimiCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,
