@@ -33,6 +33,7 @@ import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
 } from "../chat-scroll";
+import { useLatestProjectStore } from "../latestProjectStore";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -586,6 +587,16 @@ function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationRea
         deletedAt: null,
       },
     ],
+  };
+}
+
+function withActiveHomeChatThread(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  const snapshotWithHomeProject = withHomeChatProject(snapshot);
+  return {
+    ...snapshotWithHomeProject,
+    threads: snapshotWithHomeProject.threads.map((thread) =>
+      thread.id === THREAD_ID ? { ...thread, projectId: HOME_PROJECT_ID } : thread,
+    ),
   };
 }
 
@@ -1769,6 +1780,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
     localStorage.clear();
+    useLatestProjectStore.setState({ latestProjectId: null });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     useComposerDraftStore.setState({
@@ -3562,6 +3574,139 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       // The empty thread view and composer should still be visible.
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses the latest ordinary project from Home when the global New thread button is clicked", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-global-new-thread-latest-project" as MessageId,
+          targetText: "global new thread latest project",
+        }),
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Global New thread should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+      await expect.element(page.getByText("Type path", { exact: true })).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("uses the latest ordinary project from Home for the command-palette New thread action", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-palette-new-thread-latest-project" as MessageId,
+          targetText: "palette new thread latest project",
+        }),
+      ),
+    });
+
+    try {
+      const searchButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+            button.textContent?.trim().startsWith("Search"),
+          ) ?? null,
+        "Unable to find the global Search button.",
+      );
+      searchButton.click();
+      const paletteNewThreadAction = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="command-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("New thread"),
+          ) ?? null,
+        "Unable to find the command-palette New thread action.",
+      );
+      paletteNewThreadAction.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Command-palette New thread should create a draft in the latest ordinary project.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+        PROJECT_ID,
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens Add project when the global New thread action has no usable project target", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const snapshot = withActiveHomeChatThread(
+      createSnapshotForTargetUser({
+        targetMessageId: "msg-user-global-new-thread-no-project" as MessageId,
+        targetText: "global new thread no project",
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        projects: snapshot.projects.filter((project) => project.kind !== "project"),
+      },
+    });
+
+    try {
+      const initialPath = mounted.router.state.location.pathname;
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      await expect.element(page.getByText("Type path", { exact: true })).toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe(initialPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not open Add project before project hydration completes", async () => {
+    useLatestProjectStore.setState({ latestProjectId: PROJECT_ID });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-global-new-thread-before-hydration" as MessageId,
+          targetText: "global new thread before hydration",
+        }),
+      ),
+    });
+
+    try {
+      useStore.setState({ projects: [], threadsHydrated: false });
+      await waitForLayout();
+      const initialPath = mounted.router.state.location.pathname;
+      const newThreadButton = page.getByRole("button", { name: "New thread", exact: true });
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+      await waitForLayout();
+
+      await expect.element(page.getByText("Type path", { exact: true })).not.toBeInTheDocument();
+      expect(mounted.router.state.location.pathname).toBe(initialPath);
     } finally {
       await mounted.cleanup();
     }
