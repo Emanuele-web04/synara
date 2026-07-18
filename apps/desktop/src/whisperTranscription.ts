@@ -163,9 +163,43 @@ async function downloadModel(
   });
 }
 
-// Shared download promise: concurrent voice requests before model is downloaded
-// both wait on the same download.
-let activeDownload: Promise<void> | null = null;
+// Downloads are single-flight per model. Different models must not share a
+// promise: a base.en request resolving behind a base download would otherwise
+// proceed with a model file that was never created.
+const activeDownloads = new Map<string, Promise<void>>();
+
+export async function ensureModelDownloadSingleFlight(
+  modelName: string,
+  isVerified: () => boolean,
+  download: () => Promise<void>,
+): Promise<void> {
+  if (isVerified()) {
+    return;
+  }
+
+  const existingDownload = activeDownloads.get(modelName);
+  if (existingDownload) {
+    await existingDownload;
+    if (!isVerified()) {
+      throw new Error(`Whisper model '${modelName}' is unavailable after download.`);
+    }
+    return;
+  }
+
+  const modelDownload = download();
+  activeDownloads.set(modelName, modelDownload);
+  try {
+    await modelDownload;
+  } finally {
+    if (activeDownloads.get(modelName) === modelDownload) {
+      activeDownloads.delete(modelName);
+    }
+  }
+
+  if (!isVerified()) {
+    throw new Error(`Whisper model '${modelName}' is unavailable after download.`);
+  }
+}
 
 export async function ensureWhisperModel(
   modelName: string,
@@ -175,35 +209,44 @@ export async function ensureWhisperModel(
   const expectedHash = MODEL_SHA256[modelName];
   if (!expectedHash) throw new Error(`Unknown whisper model: ${modelName}`);
 
-  // Already downloaded and verified.
-  if (Fs.existsSync(dest) && verifyModelSha256(dest, expectedHash)) {
-    return;
-  }
-
-  // Dedupe concurrent downloads.
-  if (activeDownload) {
-    await activeDownload;
-    return;
-  }
-
-  activeDownload = downloadModel(modelName, onProgress).finally(() => {
-    activeDownload = null;
-  });
-  await activeDownload;
+  const isVerified = () => Fs.existsSync(dest) && verifyModelSha256(dest, expectedHash);
+  await ensureModelDownloadSingleFlight(modelName, isVerified, () =>
+    downloadModel(modelName, onProgress),
+  );
 }
 
 // Resample 24kHz 16-bit mono WAV to 16kHz 16-bit mono WAV.
 // Linear interpolation. ~30 lines. Recorder stays at 24kHz for both paths
 // (ChatGPT requires 24kHz, whisper requires 16kHz).
 export function resampleWav24kTo16k(inputBuffer: Buffer): Buffer {
-  // Parse WAV header to find data start.
   if (inputBuffer.length < 44) throw new Error("Invalid WAV: too short");
+  if (
+    inputBuffer.toString("ascii", 0, 4) !== "RIFF" ||
+    inputBuffer.readUInt32LE(4) !== inputBuffer.length - 8 ||
+    inputBuffer.toString("ascii", 8, 12) !== "WAVE" ||
+    inputBuffer.toString("ascii", 12, 16) !== "fmt "
+  ) {
+    throw new Error("Invalid WAV: malformed header");
+  }
+  if (
+    inputBuffer.readUInt32LE(16) !== 16 ||
+    inputBuffer.readUInt16LE(20) !== 1 ||
+    inputBuffer.readUInt16LE(22) !== 1 ||
+    inputBuffer.readUInt32LE(28) !== 48_000 ||
+    inputBuffer.readUInt16LE(32) !== 2 ||
+    inputBuffer.readUInt16LE(34) !== 16
+  ) {
+    throw new Error("Invalid WAV: expected 16-bit mono PCM");
+  }
   const sampleRate = inputBuffer.readUInt32LE(24);
   if (sampleRate !== 24_000) throw new Error(`Expected 24kHz WAV, got ${sampleRate}Hz`);
   const dataChunkId = inputBuffer.toString("ascii", 36, 40);
   if (dataChunkId !== "data") throw new Error("Invalid WAV: expected data chunk");
 
   const dataSize = inputBuffer.readUInt32LE(40);
+  if (dataSize !== inputBuffer.length - 44 || dataSize % 2 !== 0) {
+    throw new Error("Invalid WAV: data size does not match payload");
+  }
   const dataStart = 44;
   const samplesIn = Math.floor(dataSize / 2); // 16-bit = 2 bytes per sample
   const samplesOut = Math.floor((samplesIn * 16_000) / 24_000);

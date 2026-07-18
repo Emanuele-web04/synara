@@ -4,22 +4,26 @@
 // Depends on: Codex auth discovery, Electron net uploads, and the shared server voice contract.
 
 import * as ChildProcess from "node:child_process";
-import * as Crypto from "node:crypto";
 
 import { app, ipcMain } from "electron";
 import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "@synara/contracts";
-import { encodeOutboundMultipart, outboundHttp } from "@synara/shared/outboundHttp";
-import type { OutboundHttpResponse } from "@synara/shared/outboundHttp";
+import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
+import {
+  CHATGPT_VOICE_TRANSCRIPTION_URL,
+  requestChatGptVoiceTranscription,
+} from "@synara/shared/chatGptVoiceTranscription";
+import {
+  decodeOutboundJson,
+  decodeOutboundText,
+  type OutboundHttpResponse,
+} from "@synara/shared/outboundHttp";
 import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
 import { transcribeViaWhisper } from "./whisperTranscription";
 
-export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
-
-const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
-const MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_DURATION_MS = 120_000;
 
 // --- Input validation ------------------------------------------------------
@@ -33,27 +37,76 @@ function isLikelyVoiceBase64(value: string): boolean {
   return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
-function isLikelyWavBuffer(buffer: Buffer): boolean {
-  return buffer.length > 44 && buffer.toString("ascii", 0, 4) === "RIFF";
+function isValidVoiceWavBuffer(buffer: Buffer): boolean {
+  return (
+    buffer.length >= 44 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.readUInt32LE(4) === buffer.length - 8 &&
+    buffer.toString("ascii", 8, 12) === "WAVE" &&
+    buffer.toString("ascii", 12, 16) === "fmt " &&
+    buffer.readUInt32LE(16) === 16 &&
+    buffer.readUInt16LE(20) === 1 &&
+    buffer.readUInt16LE(22) === 1 &&
+    buffer.readUInt32LE(24) === 24_000 &&
+    buffer.readUInt32LE(28) === 48_000 &&
+    buffer.readUInt16LE(32) === 2 &&
+    buffer.readUInt16LE(34) === 16 &&
+    buffer.toString("ascii", 36, 40) === "data" &&
+    buffer.readUInt32LE(40) === buffer.length - 44 &&
+    (buffer.length - 44) % 2 === 0
+  );
 }
 
-function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
-  const base64 = normalizeVoiceBase64(input.audioBase64);
-  if (!base64) {
-    throw new Error("No voice audio was provided.");
+export function decodeDesktopVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
+  if (input.mimeType !== "audio/wav") {
+    throw new Error("Only WAV audio is supported for voice transcription.");
   }
-  if (!isLikelyVoiceBase64(base64)) {
-    throw new Error("Voice audio is not valid base64.");
+  if (input.sampleRateHz !== 24_000) {
+    throw new Error("Voice transcription requires 24 kHz mono WAV audio.");
   }
-  const buffer = Buffer.from(base64, "base64");
-  if (!isLikelyWavBuffer(buffer)) {
-    throw new Error("Decoded voice audio does not appear to be a WAV file.");
+  if (input.durationMs <= 0) {
+    throw new Error("Voice messages must include a positive duration.");
   }
-  return buffer;
+  if (input.durationMs > MAX_VOICE_DURATION_MS) {
+    throw new Error("Voice messages are limited to 120 seconds.");
+  }
+
+  const normalizedBase64 = normalizeVoiceBase64(input.audioBase64);
+  if (
+    !normalizedBase64 ||
+    !isLikelyVoiceBase64(normalizedBase64) ||
+    normalizedBase64.length % 4 !== 0
+  ) {
+    throw new Error("The recorded audio could not be decoded.");
+  }
+
+  const paddingBytes = normalizedBase64.endsWith("==") ? 2 : normalizedBase64.endsWith("=") ? 1 : 0;
+  const decodedByteLength = (normalizedBase64.length / 4) * 3 - paddingBytes;
+  if (decodedByteLength > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
+    throw new Error("Voice messages are limited to 10 MB.");
+  }
+
+  const audioBuffer = Buffer.from(normalizedBase64, "base64");
+  if (!audioBuffer.length || audioBuffer.toString("base64") !== normalizedBase64) {
+    throw new Error("The recorded audio could not be decoded.");
+  }
+  if (audioBuffer.length > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
+    throw new Error("Voice messages are limited to 10 MB.");
+  }
+  if (!isValidVoiceWavBuffer(audioBuffer)) {
+    throw new Error("The recorded audio is not a valid WAV file.");
+  }
+  const audioDurationMs = (audioBuffer.readUInt32LE(40) / 48_000) * 1_000;
+  if (audioDurationMs > MAX_VOICE_DURATION_MS) {
+    throw new Error("Voice messages are limited to 120 seconds.");
+  }
+
+  return audioBuffer;
 }
 
 function readNonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized.length > 0 ? normalized : null;
 }
 
 // --- Auth discovery --------------------------------------------------------
@@ -62,66 +115,74 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const {
-      command: childCmd,
-      args: childArgs,
-      shell: childShell,
-    } = prepareWindowsSafeProcess("codex", ["mcp", "get-auth"], { cwd });
-    const child = ChildProcess.spawn(childCmd, childArgs, {
+    const prepared = prepareWindowsSafeProcess("codex", ["app-server"], {
       cwd,
-      stdio: ["pipe", "pipe", "inherit"],
-      shell: childShell,
+      env: process.env,
     });
-    let stdout = "";
-    let resolved = false;
-    let rejected = false;
-    const resolveOnce = (value: { token: string; transcriptionUrl: string }) => {
-      if (!resolved) {
-        resolved = true;
-        resolve(value);
-        destroy();
-      }
-    };
+    const child = ChildProcess.spawn(prepared.command, prepared.args, {
+      cwd,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: prepared.shell,
+      windowsHide: prepared.windowsHide,
+      windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+    });
+
+    let settled = false;
+    let stdoutBuffer = "";
     const rejectOnce = (error: Error) => {
-      if (!rejected) {
-        rejected = true;
-        reject(error);
-        destroy();
+      if (settled) {
+        return;
       }
-    };
-    const destroy = () => {
-      child.stdout?.removeAllListeners("data");
-      child.removeAllListeners("close");
+      settled = true;
       child.kill();
+      reject(error);
+    };
+    const resolveOnce = (value: { token: string; transcriptionUrl: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.kill();
+      resolve(value);
+    };
+    const send = (payload: Record<string, unknown>) => {
+      child.stdin.write(`${JSON.stringify(payload)}\n`);
     };
 
-    child.on("close", (exitCode) => {
-      if (!resolved && !rejected) {
-        rejectOnce(
-          new Error(
-            exitCode === 0
-              ? "Codex MCP auth command exited without returning auth data."
-              : `Codex MCP auth command exited with code ${String(exitCode)}.`,
-          ),
-        );
-      }
+    child.once("error", (error) => {
+      rejectOnce(new Error(`Could not start Codex auth discovery: ${error.message}`));
     });
-
+    child.stderr.on("data", () => {
+      // Ignore stderr noise from the discovery process; the JSON-RPC result is authoritative.
+    });
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-      const lines = stdout.split("\n");
-      stdout = lines.pop() ?? "";
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\n/);
+      stdoutBuffer = lines.pop() ?? "";
       for (const line of lines) {
-        let message: Record<string, unknown> | null = null;
+        let message: Record<string, unknown>;
         try {
           message = JSON.parse(line) as Record<string, unknown>;
         } catch {
           continue;
         }
-        if (message?.jsonrpc !== "2.0") continue;
-        if (typeof message?.id !== "number") continue;
-        if (message?.id !== 1) continue;
-        if (!("result" in message)) continue;
+
+        if (message.id === 1) {
+          send({ jsonrpc: "2.0", method: "initialized", params: {} });
+          send({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "getAuthStatus",
+            params: { includeToken: true, refreshToken: true },
+          });
+          continue;
+        }
+
+        if (message.id !== 2) {
+          continue;
+        }
+
         const result =
           typeof message.result === "object" && message.result !== null
             ? (message.result as Record<string, unknown>)
@@ -144,27 +205,25 @@ async function resolveDesktopVoiceAuth(
         resolveOnce({
           token,
           transcriptionUrl:
-            readNonEmptyString(result?.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL,
+            readNonEmptyString(result?.transcriptionUrl) ?? CHATGPT_VOICE_TRANSCRIPTION_URL,
         });
       }
     });
 
     setTimeout(() => {
-      child.stdin?.end(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            clientInfo: {
-              name: "synara-desktop",
-              title: "Synara Desktop",
-              version: app.getVersion(),
-            },
-            capabilities: { experimentalApi: true },
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "synara-desktop",
+            title: "Synara Desktop",
+            version: app.getVersion(),
           },
-        }) + "\n",
-      );
+          capabilities: { experimentalApi: true },
+        },
+      });
     }, 100);
 
     setTimeout(() => {
@@ -181,51 +240,34 @@ export async function requestDesktopVoiceTranscription(input: {
   readonly token: string;
   readonly transcriptionUrl: string;
 }): Promise<OutboundHttpResponse> {
-  const multipart = encodeOutboundMultipart(
-    [
-      {
-        name: "file",
-        filename: "voice.wav",
-        contentType: input.mimeType,
-        body: new Uint8Array(input.audioBuffer),
-      },
-    ],
-    { maxBytes: MAX_VOICE_AUDIO_BYTES + 64 * 1024 },
-  );
-
-  const response = await outboundHttp.request({
-    policy: {
-      service: "chatgpt-voice-transcription",
-      allowedOrigins: [new URL(CHATGPT_TRANSCRIPTIONS_URL).origin],
-      timeoutMs: 30_000,
-      maxRequestBytes: MAX_VOICE_AUDIO_BYTES + 64 * 1024,
-      maxResponseBytes: 1024 * 1024,
-      maxRedirects: 0,
-      maxConcurrent: 2,
-      maxQueued: 4,
-      requirePublicAddress: true,
-    },
-    url: input.transcriptionUrl.trim() || CHATGPT_TRANSCRIPTIONS_URL,
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.token}`,
-      "Content-Type": multipart.contentType,
-    },
-    body: multipart.body,
+  return requestChatGptVoiceTranscription({
+    audio: input.audioBuffer,
+    mimeType: input.mimeType,
+    token: input.token,
+    transcriptionUrl: input.transcriptionUrl,
   });
-
-  return response;
 }
 
 function readVoiceResponseErrorMessage(statusCode: number, body: string): string {
   try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    if (typeof parsed.error === "string") return parsed.error;
-    if (typeof parsed.message === "string") return parsed.message;
+    const payload = JSON.parse(body) as { error?: { message?: unknown }; message?: unknown };
+    const providerMessage =
+      readNonEmptyString(payload.error?.message) ?? readNonEmptyString(payload.message);
+    if (providerMessage) {
+      return providerMessage;
+    }
   } catch {
-    // fall through
+    // Fall back to a status-based message when the upstream body is not JSON.
   }
-  return `Voice transcription failed with status ${String(statusCode)}.`;
+
+  if (statusCode === 401) {
+    return "Your ChatGPT login has expired. Sign in again.";
+  }
+  if (statusCode === 403) {
+    return "ChatGPT rejected the transcription request. Your Codex login is present, but this desktop upload was forbidden.";
+  }
+
+  return `Transcription failed with status ${statusCode}.`;
 }
 
 // --- IPC entrypoint --------------------------------------------------------
@@ -241,12 +283,14 @@ async function transcribeVoiceViaDesktopBridge(
     token: auth.token,
     transcriptionUrl: auth.transcriptionUrl,
   });
-  const body = new TextDecoder().decode(response.body);
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(readVoiceResponseErrorMessage(response.status, body));
+    throw new Error(readVoiceResponseErrorMessage(response.status, decodeOutboundText(response)));
   }
 
-  const payload = JSON.parse(body) as { text?: unknown; transcript?: unknown };
+  const payload = decodeOutboundJson(response, { maxDepth: 16, maxNodes: 1_000 }) as {
+    text?: unknown;
+    transcript?: unknown;
+  };
   const text = readNonEmptyString(payload.text) ?? readNonEmptyString(payload.transcript);
   if (!text) {
     throw new Error("The transcription response did not include any text.");

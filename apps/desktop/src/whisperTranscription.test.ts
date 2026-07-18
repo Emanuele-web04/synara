@@ -9,7 +9,12 @@ vi.mock("electron", () => ({
   net: { request: () => ({}) },
 }));
 
-import { resampleWav24kTo16k, verifyModelSha256, ensureWhisperModel } from "./whisperTranscription";
+import {
+  ensureModelDownloadSingleFlight,
+  ensureWhisperModel,
+  resampleWav24kTo16k,
+  verifyModelSha256,
+} from "./whisperTranscription";
 
 // Build a 24kHz 16-bit mono WAV with the given PCM samples.
 function makeWav24k(samples: number[]): Buffer {
@@ -95,21 +100,21 @@ describe("resampleWav24kTo16k", () => {
   });
 
   it("throws on wrong sample rate", () => {
-    const header = Buffer.alloc(44);
-    header.write("RIFF", 0, "ascii");
-    header.write("WAVE", 8, "ascii");
-    header.write("data", 36, "ascii");
-    header.writeUInt32LE(44_100, 24); // 44.1kHz, not 24kHz
-    expect(() => resampleWav24kTo16k(header)).toThrow("Expected 24kHz WAV");
+    const wav = makeWav24k([0, 1]);
+    wav.writeUInt32LE(44_100, 24);
+    expect(() => resampleWav24kTo16k(wav)).toThrow("Expected 24kHz WAV");
   });
 
   it("throws on missing data chunk id", () => {
-    const header = Buffer.alloc(44);
-    header.write("RIFF", 0, "ascii");
-    header.write("WAVE", 8, "ascii");
-    header.writeUInt32LE(24_000, 24);
-    header.write("xxxx", 36, "ascii"); // not "data"
-    expect(() => resampleWav24kTo16k(header)).toThrow("expected data chunk");
+    const wav = makeWav24k([0, 1]);
+    wav.write("xxxx", 36, "ascii");
+    expect(() => resampleWav24kTo16k(wav)).toThrow("expected data chunk");
+  });
+
+  it("rejects a declared data size larger than the actual payload", () => {
+    const wav = makeWav24k([0, 1]);
+    wav.writeUInt32LE(0xffff_ffff, 40);
+    expect(() => resampleWav24kTo16k(wav)).toThrow("data size does not match payload");
   });
 });
 
@@ -140,6 +145,77 @@ describe("verifyModelSha256", () => {
 
   it("returns false when file does not exist", () => {
     expect(verifyModelSha256(Path.join(tmpDir, "nonexistent.bin"), "0".repeat(64))).toBe(false);
+  });
+});
+
+describe("model download concurrency", () => {
+  it("starts independent first-use downloads for different models", async () => {
+    let firstVerified = false;
+    let secondVerified = false;
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    const downloadFirst = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = () => {
+            firstVerified = true;
+            resolve();
+          };
+        }),
+    );
+    const downloadSecond = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSecond = () => {
+            secondVerified = true;
+            resolve();
+          };
+        }),
+    );
+
+    const first = ensureModelDownloadSingleFlight("test-base", () => firstVerified, downloadFirst);
+    const second = ensureModelDownloadSingleFlight(
+      "test-base-en",
+      () => secondVerified,
+      downloadSecond,
+    );
+
+    expect(downloadFirst).toHaveBeenCalledTimes(1);
+    expect(downloadSecond).toHaveBeenCalledTimes(1);
+    resolveFirst();
+    resolveSecond();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it("deduplicates the same model and rechecks availability for every waiter", async () => {
+    let verified = false;
+    let resolveDownload!: () => void;
+    const download = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDownload = () => {
+            verified = true;
+            resolve();
+          };
+        }),
+    );
+
+    const first = ensureModelDownloadSingleFlight("test-shared", () => verified, download);
+    const second = ensureModelDownloadSingleFlight("test-shared", () => verified, download);
+
+    expect(download).toHaveBeenCalledTimes(1);
+    resolveDownload();
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it("rejects when a completed download did not produce a verified model", async () => {
+    await expect(
+      ensureModelDownloadSingleFlight(
+        "test-missing",
+        () => false,
+        async () => undefined,
+      ),
+    ).rejects.toThrow("unavailable after download");
   });
 });
 
