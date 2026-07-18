@@ -1294,6 +1294,142 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("cancels queued promotions when its thread is deleted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-deleted-thread-queued");
+    const commandId = CommandId.makeUnsafe("cmd-deleted-thread-queued");
+    // Insert a real turn-queued source event WITHOUT live publication: a running
+    // reactor never observes it (so it cannot drain the promotion), but it gives
+    // the promotion row a valid FK target to reference.
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: asEventId("evt-deleted-thread-turn-queued"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[0]!;
+    await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.enqueue({
+        queuedEventSequence: queuedEvent.sequence,
+        threadId,
+        messageId,
+        dispatchMode: "queue",
+        createdAt: now,
+      }),
+    );
+
+    // Deleting the thread must cancel its pending promotion so a stray drain can
+    // never dispatch a turn for a thread that no longer exists.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-delete-thread-queued"),
+        threadId,
+      }),
+    );
+
+    await waitFor(async () => {
+      const promotion = await Effect.runPromise(
+        harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+      );
+      return promotion.pipe(Option.getOrThrow).state === "cancelled";
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
+  it("cancels promotions of a soft-deleted thread during startup recovery", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const now = new Date().toISOString();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = asMessageId("message-recovery-soft-deleted");
+    const commandId = CommandId.makeUnsafe("cmd-recovery-soft-deleted");
+    const persisted = await harness.persistWithoutLivePublication([
+      {
+        eventId: asEventId("evt-recovery-soft-deleted-turn-queued"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId,
+        causationEventId: null,
+        correlationId: commandId,
+        metadata: {},
+        type: "thread.turn-queued",
+        payload: {
+          threadId,
+          messageId,
+          dispatchMode: "queue",
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        },
+      },
+    ]);
+    const queuedEvent = persisted[0]!;
+    await Effect.runPromise(
+      harness.queuedTurnPromotionRepository.enqueue({
+        queuedEventSequence: queuedEvent.sequence,
+        threadId,
+        messageId,
+        dispatchMode: "queue",
+        createdAt: now,
+      }),
+    );
+
+    // Soft-delete the thread while the reactor is down (this projects deleted_at
+    // on the thread row so it resolves to undefined).
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.makeUnsafe("cmd-recovery-delete-thread"),
+        threadId,
+      }),
+    );
+
+    // Advance the delivery cursor past every event so live replay drains nothing
+    // on start: only startup recovery acts on the leftover promotion.
+    const allEvents = await Effect.runPromise(
+      Stream.runCollect(harness.engine.readEvents(0)).pipe(
+        Effect.map((events) => Array.from(events)),
+      ),
+    );
+    for (const event of allEvents) {
+      await Effect.runPromise(
+        harness.deliveryRepository.advanceCursor({
+          consumerName: "provider-command-reactor.v1",
+          eventSequence: event.sequence,
+          updatedAt: now,
+        }),
+      );
+    }
+
+    await harness.startReactor();
+
+    await waitFor(async () => {
+      const promotion = await Effect.runPromise(
+        harness.queuedTurnPromotionRepository.getBySequence(queuedEvent.sequence),
+      );
+      return promotion.pipe(Option.getOrThrow).state === "cancelled";
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

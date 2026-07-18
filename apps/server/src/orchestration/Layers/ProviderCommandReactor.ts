@@ -393,6 +393,7 @@ const make = Effect.gen(function* () {
     });
   });
   const editResendTurnStartKeys = new Set<string>();
+  const quarantinedThreads = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
   const queuedTurnPromotionOwner = `provider-queued-turn:${crypto.randomUUID()}`;
   const sidechatContextBootstrapThreadIds = new Set<string>();
@@ -637,6 +638,25 @@ const make = Effect.gen(function* () {
           editResendTurnStartKeys.delete(key);
         }
       }
+    });
+
+  const clearThreadRuntimeCaches = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      threadProviderOptions.delete(threadId);
+      threadSessionModelSelections.delete(threadId);
+      const editResendPrefix = `${threadId}:`;
+      for (const key of editResendTurnStartKeys) {
+        if (key.startsWith(editResendPrefix)) {
+          editResendTurnStartKeys.delete(key);
+        }
+      }
+      quarantinedThreads.delete(threadId);
+      // NOTE: `drainingQueuedTurns` is intentionally NOT cleared here. It is a
+      // turn-scoped in-flight guard that each drain self-clears when it settles;
+      // deleting it here would let a concurrent second drain start for the same
+      // thread while the first is still running.
+      suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+      clearPendingContextBootstraps(threadId);
     });
 
   const clearStaleProviderResumeState = Effect.fnUntraced(function* (input: {
@@ -1908,12 +1928,27 @@ const make = Effect.gen(function* () {
   });
 
   const recoverQueuedTurnPromotions = Effect.gen(function* () {
-    yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (threadId) =>
-      hasLiveProviderTurn(ThreadId.makeUnsafe(threadId)).pipe(
-        Effect.flatMap((isRunning) =>
-          isRunning ? Effect.void : drainQueuedTurnsForThread(ThreadId.makeUnsafe(threadId)),
-        ),
-      ),
+    yield* Effect.forEach(yield* queuedTurnPromotions.listPendingThreadIds, (rawThreadId) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe(rawThreadId);
+        // Resolve the projected thread first. `resolveThread` filters
+        // `deleted_at IS NULL`, so a soft-deleted (or fully missing) thread
+        // returns undefined; either way there is nothing to drain into, and the
+        // pending promotions must be cancelled rather than promoted (otherwise a
+        // deletion that raced startup would leave orphan turns to dispatch).
+        const thread = yield* resolveThread(threadId);
+        if (!thread || thread.deletedAt !== null) {
+          yield* queuedTurnPromotions.cancelThread({
+            threadId: rawThreadId,
+            updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
+        if (yield* hasLiveProviderTurn(threadId)) {
+          return;
+        }
+        yield* drainQueuedTurnsForThread(threadId);
+      }),
     );
   });
 
@@ -2435,6 +2470,16 @@ const make = Effect.gen(function* () {
         case "thread.created":
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
+        case "thread.deleted":
+          // Cancel any queued/promoting turns for the deleted thread BEFORE
+          // clearing runtime caches so a concurrent drain cannot resurrect them
+          // (see cancelThread). Best-effort: the event stays unclaimed either way.
+          yield* queuedTurnPromotions.cancelThread({
+            threadId: event.payload.threadId,
+            updatedAt: event.payload.deletedAt,
+          });
+          yield* clearThreadRuntimeCaches(event.payload.threadId);
+          return;
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -2557,8 +2602,6 @@ const make = Effect.gen(function* () {
 
     const processOwner = `provider-command-reactor:${crypto.randomUUID()}`;
     let cursor = consumerState.value.lastAckedSequence;
-    const quarantinedThreads = new Set<string>();
-
     const refreshCursor = Effect.gen(function* () {
       const state = yield* deliveryRepository.getConsumerState(PROVIDER_COMMAND_REACTOR_CONSUMER);
       if (Option.isSome(state)) cursor = state.value.lastAckedSequence;

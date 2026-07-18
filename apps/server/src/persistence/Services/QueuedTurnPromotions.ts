@@ -45,6 +45,12 @@ export interface QueuedTurnPromotionRepositoryShape {
     readonly messageId: string;
     readonly updatedAt: string;
   }) => Effect.Effect<boolean, PersistenceSqlError>;
+  /**
+   * Cancel all in-flight promotions for a thread. Matches both 'queued' and
+   * 'promoting' rows so that a cancellation racing an in-flight drain cannot be
+   * resurrected: a cancelled 'promoting' row no longer matches `releaseClaim`
+   * (WHERE state='promoting'), so the drain's error path leaves it dead.
+   */
   readonly cancelThread: (input: {
     readonly threadId: string;
     readonly updatedAt: string;

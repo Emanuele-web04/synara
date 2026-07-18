@@ -5,6 +5,7 @@ export type ProviderIntentEvent = Extract<
   {
     type:
       | "thread.created"
+      | "thread.deleted"
       | "thread.meta-updated"
       | "thread.session-set"
       | "thread.runtime-mode-set"
@@ -21,6 +22,7 @@ export type ProviderIntentEvent = Extract<
 
 const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.created",
+  "thread.deleted",
   "thread.meta-updated",
   "thread.session-set",
   "thread.runtime-mode-set",
@@ -47,6 +49,7 @@ export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): b
 
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
   event.type !== "thread.created" &&
+  event.type !== "thread.deleted" &&
   event.type !== "thread.session-set" &&
   event.type !== "thread.turn-queued";
 
