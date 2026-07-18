@@ -11,7 +11,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkflowResumePrompt,
   deriveWorkflowRunState,
-  resolveWorkflowSelectedPhaseTitle,
   workflowElapsedMs,
 } from "./WorkflowRunCard.logic";
 
@@ -648,47 +647,6 @@ describe("buildWorkflowResumePrompt", () => {
     expect(buildWorkflowResumePrompt("/sessions/abc/workflow-spec.ts", "wf_abc123")).toBe(
       'Resume the workflow by invoking the Workflow tool with {"scriptPath": "/sessions/abc/workflow-spec.ts", "resumeFromRunId": "wf_abc123"}. Do not modify the script.',
     );
-  });
-});
-
-const phases = (current: string | null) =>
-  ["One", "Two", "Three"].map((title) => ({
-    title,
-    detail: null,
-    doneCount: 0,
-    totalCount: 1,
-    isCurrent: title === current,
-  }));
-
-describe("resolveWorkflowSelectedPhaseTitle", () => {
-  it("auto-follows the current phase without a manual selection", () => {
-    expect(resolveWorkflowSelectedPhaseTitle(phases("Two"), null)).toBe("Two");
-    expect(resolveWorkflowSelectedPhaseTitle(null, null)).toBeNull();
-    expect(resolveWorkflowSelectedPhaseTitle(phases(null), null)).toBe("One");
-  });
-
-  it("honors a manual selection while the current phase is unchanged", () => {
-    expect(
-      resolveWorkflowSelectedPhaseTitle(phases("Two"), {
-        title: "One",
-        currentTitleAtSelect: "Two",
-      }),
-    ).toBe("One");
-  });
-
-  it("snaps back to auto-follow when the run advances or the phase disappears", () => {
-    expect(
-      resolveWorkflowSelectedPhaseTitle(phases("Three"), {
-        title: "One",
-        currentTitleAtSelect: "Two",
-      }),
-    ).toBe("Three");
-    expect(
-      resolveWorkflowSelectedPhaseTitle(phases("Two"), {
-        title: "Gone",
-        currentTitleAtSelect: "Two",
-      }),
-    ).toBe("Two");
   });
 });
 
