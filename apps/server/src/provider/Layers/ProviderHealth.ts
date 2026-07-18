@@ -835,7 +835,7 @@ const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") 
 
 // ── Health check ────────────────────────────────────────────────────
 
-function makeCodexProbeEnv(homePath?: string): NodeJS.ProcessEnv {
+async function makeCodexProbeEnv(homePath?: string): Promise<NodeJS.ProcessEnv> {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
   return buildCodexProcessEnv({
     ...(normalizedHomePath ? { homePath: normalizedHomePath } : {}),
@@ -876,7 +876,7 @@ export const makeCheckCodexProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
-    const probeEnv = makeCodexProbeEnv(homePath);
+    const probeEnv = yield* Effect.promise(() => makeCodexProbeEnv(homePath));
 
     // Probe 1: `codex --version` — is the CLI reachable?
     const versionProbe = yield* runCodexCommand(["--version"], executable, probeEnv).pipe(

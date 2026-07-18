@@ -3,13 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { linkOrCopyCodexOverlayEntry, prioritizeCodexOverlayEntries } from "./codexProcessEnv";
 
 describe("linkOrCopyCodexOverlayEntry", () => {
-  it("copies auth.json when symlink creation is unavailable", () => {
-    const symlink = vi.fn(() => {
+  it("copies auth.json when symlink creation is unavailable", async () => {
+    const symlink = vi.fn(async () => {
       throw new Error("symlinks unavailable");
     });
-    const copyFile = vi.fn();
+    const copyFile = vi.fn(async () => undefined);
 
-    linkOrCopyCodexOverlayEntry(
+    await linkOrCopyCodexOverlayEntry(
       {
         entryName: "auth.json",
         sourcePath: "C:\\Users\\test\\.codex\\auth.json",
@@ -30,12 +30,12 @@ describe("linkOrCopyCodexOverlayEntry", () => {
     );
   });
 
-  it("keeps symlink failures visible for other overlay entries", () => {
-    const symlink = vi.fn(() => {
+  it("keeps symlink failures visible for other overlay entries", async () => {
+    const symlink = vi.fn(async () => {
       throw new Error("symlinks unavailable");
     });
 
-    expect(() =>
+    await expect(
       linkOrCopyCodexOverlayEntry(
         {
           entryName: "sessions",
@@ -43,9 +43,9 @@ describe("linkOrCopyCodexOverlayEntry", () => {
           targetPath: "C:\\Users\\test\\.synara\\codex-home-overlay\\sessions",
           type: "dir",
         },
-        { symlink, copyFile: vi.fn() },
+        { symlink, copyFile: vi.fn(async () => undefined) },
       ),
-    ).toThrow("symlinks unavailable");
+    ).rejects.toThrow("symlinks unavailable");
   });
 });
 
