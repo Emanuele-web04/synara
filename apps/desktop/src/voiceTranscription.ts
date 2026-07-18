@@ -15,12 +15,13 @@ import {
   CHATGPT_VOICE_TRANSCRIPTION_URL,
   requestChatGptVoiceTranscription,
 } from "@synara/shared/chatGptVoiceTranscription";
+import { resolveCodexCliExecutable } from "@synara/shared/codexCliExecutable";
 import {
   decodeOutboundJson,
   decodeOutboundText,
   type OutboundHttpResponse,
 } from "@synara/shared/outboundHttp";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { prepareResolvedWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
 
 const MAX_VOICE_DURATION_MS = 120_000;
@@ -88,13 +89,15 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const prepared = prepareWindowsSafeProcess("codex", ["app-server"], {
+    const env = process.env;
+    const executable = resolveCodexCliExecutable("codex", { cwd, env });
+    const prepared = prepareResolvedWindowsSafeProcess(executable, ["app-server"], {
       cwd,
-      env: process.env,
+      env,
     });
     const child = ChildProcess.spawn(prepared.command, prepared.args, {
       cwd,
-      env: process.env,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: prepared.shell,
       windowsHide: prepared.windowsHide,

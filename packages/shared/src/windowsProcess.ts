@@ -111,28 +111,21 @@ function isWindowsSpawnSafeResolvedCommand(command: string): boolean {
   return WINDOWS_SPAWN_SAFE_EXTENSION_PATTERN.test(command);
 }
 
-function selectWindowsCommandCandidate(
-  candidates: ReadonlyArray<string>,
-  cwd: string | undefined,
-  pathLikeCommand: boolean,
-): string | undefined {
-  const allowedCandidates = pathLikeCommand
-    ? candidates
-    : candidates.filter((candidate) => !isFromCurrentDirectory(candidate, cwd));
-  return allowedCandidates.find(isWindowsSpawnSafeResolvedCommand) ?? allowedCandidates[0];
+function selectWindowsCommandCandidate(candidates: ReadonlyArray<string>): string | undefined {
+  return candidates.find(isWindowsSpawnSafeResolvedCommand) ?? candidates[0];
 }
 
-// Resolve PATH/PATHEXT commands through where.exe so `.cmd` shims can be wrapped
-// explicitly. Prefer candidates that native spawn can execute or that we can
-// wrap, and skip current-directory hits for PATH commands to avoid restoring
-// shell-style CWD command hijacking.
-export function resolveWindowsCommandPath(
+// Return every where.exe result in PATH order after applying the same
+// current-directory protection used by resolveWindowsCommandPath. Consumers
+// with command-specific precedence rules can inspect the full list without
+// changing the generic launcher selection behavior.
+export function resolveWindowsCommandCandidates(
   command: string,
   input: WindowsSafeProcessInput = {},
-): string {
+): string[] {
   const pathLikeCommand = isPathLikeCommand(command);
   if (pathLikeCommand && hasWindowsExecutableExtension(command)) {
-    return command;
+    return [command];
   }
 
   const env = input.env ?? process.env;
@@ -147,7 +140,7 @@ export function resolveWindowsCommandPath(
     windowsHide: true,
   });
   if (result.error || result.status !== 0) {
-    return command;
+    return [];
   }
 
   const stdout = typeof result.stdout === "string" ? result.stdout : "";
@@ -155,7 +148,24 @@ export function resolveWindowsCommandPath(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  return selectWindowsCommandCandidate(candidates, cwd, pathLikeCommand) ?? command;
+  return pathLikeCommand
+    ? candidates
+    : candidates.filter((candidate) => !isFromCurrentDirectory(candidate, cwd));
+}
+
+// Resolve PATH/PATHEXT commands through where.exe so `.cmd` shims can be wrapped
+// explicitly. Prefer candidates that native spawn can execute or that we can
+// wrap, and skip current-directory hits for PATH commands to avoid restoring
+// shell-style CWD command hijacking.
+export function resolveWindowsCommandPath(
+  command: string,
+  input: WindowsSafeProcessInput = {},
+): string {
+  const pathLikeCommand = isPathLikeCommand(command);
+  if (pathLikeCommand && hasWindowsExecutableExtension(command)) {
+    return command;
+  }
+  return selectWindowsCommandCandidate(resolveWindowsCommandCandidates(command, input)) ?? command;
 }
 
 export function prepareWindowsSafeProcess(
@@ -168,11 +178,26 @@ export function prepareWindowsSafeProcess(
     return { command, args: [...args], shell: false };
   }
 
+  return prepareResolvedWindowsSafeProcess(resolveWindowsCommandPath(command, input), args, input);
+}
+
+// Prepare a command whose PATH/PATHEXT resolution has already been finalized.
+// This keeps batch wrapping separate from command discovery so callers can
+// prove that validation and launch use the same executable.
+export function prepareResolvedWindowsSafeProcess(
+  command: string,
+  args: ReadonlyArray<string>,
+  input: WindowsSafeProcessInput = {},
+): WindowsSafeProcessCommand {
+  const platform = input.platform ?? process.platform;
+  if (platform !== "win32") {
+    return { command, args: [...args], shell: false };
+  }
+
   const env = input.env ?? process.env;
-  const resolvedCommand = resolveWindowsCommandPath(command, input);
-  if (!isWindowsBatchCommand(resolvedCommand)) {
+  if (!isWindowsBatchCommand(command)) {
     return {
-      command: resolvedCommand,
+      command,
       args: [...args],
       shell: false,
       windowsHide: true,
@@ -181,7 +206,7 @@ export function prepareWindowsSafeProcess(
 
   return {
     command: resolveWindowsComSpec(env),
-    args: buildWindowsBatchCommandArgs(resolvedCommand, args),
+    args: buildWindowsBatchCommandArgs(command, args),
     shell: false,
     windowsHide: true,
     windowsVerbatimArguments: true,
