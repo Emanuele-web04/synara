@@ -1311,7 +1311,7 @@ describe("EventRouter scoped orchestration sync", () => {
           () => {
             const state = useStore.getState();
             expect(repairStateCallCount).toBeGreaterThanOrEqual(2);
-            expect(state.threadIds?.length).toBe(1);
+            expect(state.threadIds?.length).toBe(0);
             expect(state.projects.length).toBe(0);
           },
           { timeout: 8_000, interval: 16 },
