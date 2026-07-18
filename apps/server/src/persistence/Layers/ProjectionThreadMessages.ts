@@ -92,51 +92,11 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${row.turnId},
           ${row.role},
           ${row.text},
-          COALESCE(
-            ${nextAttachmentsJson},
-            (
-              SELECT attachments_json
-              FROM projection_thread_messages
-              WHERE thread_id = ${row.threadId}
-                AND message_id = ${row.messageId}
-            )
-          ),
-          COALESCE(
-            ${nextSkillsJson},
-            (
-              SELECT skills_json
-              FROM projection_thread_messages
-              WHERE thread_id = ${row.threadId}
-                AND message_id = ${row.messageId}
-            )
-          ),
-          COALESCE(
-            ${nextMentionsJson},
-            (
-              SELECT mentions_json
-              FROM projection_thread_messages
-              WHERE thread_id = ${row.threadId}
-                AND message_id = ${row.messageId}
-            )
-          ),
-          COALESCE(
-            ${row.dispatchMode ?? null},
-            (
-              SELECT dispatch_mode
-              FROM projection_thread_messages
-              WHERE thread_id = ${row.threadId}
-                AND message_id = ${row.messageId}
-            )
-          ),
-          COALESCE(
-            ${row.dispatchOrigin ?? null},
-            (
-              SELECT dispatch_origin
-              FROM projection_thread_messages
-              WHERE thread_id = ${row.threadId}
-                AND message_id = ${row.messageId}
-            )
-          ),
+          ${nextAttachmentsJson},
+          ${nextSkillsJson},
+          ${nextMentionsJson},
+          ${row.dispatchMode ?? null},
+          ${row.dispatchOrigin ?? null},
           ${row.isStreaming ? 1 : 0},
           ${row.source},
           ${row.sequence ?? null},
