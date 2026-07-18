@@ -3626,16 +3626,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       const searchButton = await waitForElement(
         () =>
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-            (button) => button.textContent?.trim().startsWith("Search"),
+          Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+            button.textContent?.trim().startsWith("Search"),
           ) ?? null,
         "Unable to find the global Search button.",
       );
       searchButton.click();
       const paletteNewThreadAction = await waitForElement(
         () =>
-          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="command-item"]'))
-            .find((item) => item.textContent?.trim().startsWith("New thread")) ?? null,
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="command-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("New thread"),
+          ) ?? null,
         "Unable to find the command-palette New thread action.",
       );
       paletteNewThreadAction.click();
