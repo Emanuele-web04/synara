@@ -20,6 +20,7 @@ import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+const CODEX_SQLITE_STATE_ENTRY_PATTERN = /^.+\.sqlite(?:-(?:wal|shm|journal))?$/;
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
@@ -190,6 +191,22 @@ export function prioritizeCodexOverlayEntries(entries: readonly string[]): strin
   return [...sharedStateEntries, ...otherEntries];
 }
 
+async function removeLegacyCodexOverlaySqliteLink(targetPath: string): Promise<void> {
+  let targetStat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    targetStat = await fs.lstat(targetPath);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  if (targetStat.isSymbolicLink()) {
+    await fs.rm(targetPath, { force: true });
+  }
+}
+
 async function ensureCodexOverlaySymlink(input: {
   readonly entryName: string;
   readonly sourcePath: string;
@@ -208,13 +225,9 @@ async function ensureCodexOverlaySymlink(input: {
       return;
     }
 
-    if (
-      targetStat.isSymbolicLink() ||
-      /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName) ||
-      CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)
-    ) {
-      // SQLite files must stay generation-matched, and auth must mirror the
-      // user's real Codex home so external `codex login` changes are visible.
+    if (targetStat.isSymbolicLink() || CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
+      // Auth must mirror the user's real Codex home so external `codex login`
+      // changes are visible.
       await fs.rm(input.targetPath, { recursive: true, force: true });
     } else {
       return;
@@ -256,11 +269,21 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
 
   await fs.mkdir(overlayHomePath, { recursive: true });
 
+  for (const entry of await fs.readdir(overlayHomePath)) {
+    if (CODEX_SQLITE_STATE_ENTRY_PATTERN.test(entry)) {
+      await removeLegacyCodexOverlaySqliteLink(path.join(overlayHomePath, entry));
+    }
+  }
+
   try {
     // Auth must get a best-effort link/copy before optional entries whose
     // symlinks may fail on restricted Windows installs.
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (entry === "config.toml") {
+        continue;
+      }
+      if (CODEX_SQLITE_STATE_ENTRY_PATTERN.test(entry)) {
+        // SQLite is mutable app-server state owned by this isolated overlay.
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
@@ -329,10 +352,15 @@ export async function buildCodexProcessEnv(
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
   });
-  const configuredEnv =
-    overlayHomePath || input.homePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
-      : baseEnv;
+  const configuredCodexHome =
+    overlayHomePath ?? input.homePath?.trim() ?? baseEnv.CODEX_HOME?.trim();
+  const configuredEnv = configuredCodexHome
+    ? {
+        ...baseEnv,
+        CODEX_HOME: configuredCodexHome,
+        CODEX_SQLITE_HOME: configuredCodexHome,
+      }
+    : baseEnv;
   const platform = input.platform ?? process.platform;
   const browserUsePipePath =
     platform === "win32"

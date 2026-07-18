@@ -8,12 +8,14 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { ApprovalRequestId, ThreadId } from "@synara/contracts";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import {
   buildCodexProcessEnv,
@@ -21,6 +23,7 @@ import {
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
+  buildCodexAppServerArgs,
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
@@ -645,28 +648,79 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("repairs stale real files in Synara's Codex home overlay", async () => {
+  it("preserves recovered SQLite state across repeated overlay preparation", async () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
-      const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
-      writeFileSync(sourceMemoryPath, "fresh-source-db", "utf8");
-
       const overlayHome = path.join(runtimeHome, "codex-home-overlay");
-      const overlayMemoryPath = path.join(overlayHome, "memories_1.sqlite");
       mkdirSync(overlayHome, { recursive: true });
-      writeFileSync(overlayMemoryPath, "stale-overlay-db", "utf8");
+      const sqliteEntries = [
+        "state_5.sqlite",
+        "state_5.sqlite-wal",
+        "state_5.sqlite-shm",
+        "state_5.sqlite-journal",
+      ];
+      for (const entry of sqliteEntries) {
+        writeFileSync(path.join(tempDir, entry), `source-${entry}`, "utf8");
+        writeFileSync(path.join(overlayHome, entry), `recovered-${entry}`, "utf8");
+      }
 
-      const env = await buildCodexProcessEnv({
+      const input = {
+        env: { SYNARA_HOME: runtimeHome, CODEX_SQLITE_HOME: tempDir },
+        homePath: tempDir,
+        platform: "darwin",
+      } as const;
+      const env = await buildCodexProcessEnv(input);
+      await buildCodexProcessEnv(input);
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(env.CODEX_SQLITE_HOME).toBe(overlayHome);
+      for (const entry of sqliteEntries) {
+        const overlayPath = path.join(overlayHome, entry);
+        expect(lstatSync(overlayPath).isFile()).toBe(true);
+        expect(lstatSync(overlayPath).isSymbolicLink()).toBe(false);
+        expect(readFileSync(overlayPath, "utf8")).toBe(`recovered-${entry}`);
+        expect(readFileSync(path.join(tempDir, entry), "utf8")).toBe(`source-${entry}`);
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("removes legacy SQLite family links without relinking source state", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      mkdirSync(overlayHome, { recursive: true });
+      const sqliteEntries = [
+        "state_5.sqlite",
+        "state_5.sqlite-wal",
+        "state_5.sqlite-shm",
+        "state_5.sqlite-journal",
+      ];
+      for (const entry of sqliteEntries) {
+        const sourcePath = path.join(tempDir, entry);
+        writeFileSync(sourcePath, `source-${entry}`, "utf8");
+        symlinkSync(sourcePath, path.join(overlayHome, entry), "file");
+      }
+
+      const input = {
         env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
-      });
+      } as const;
+      const env = await buildCodexProcessEnv(input);
+      await buildCodexProcessEnv(input);
 
       expect(env.CODEX_HOME).toBe(overlayHome);
-      expect(lstatSync(overlayMemoryPath).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+      for (const entry of sqliteEntries) {
+        expect(() => lstatSync(path.join(overlayHome, entry))).toThrow();
+        expect(readFileSync(path.join(tempDir, entry), "utf8")).toBe(`source-${entry}`);
+      }
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
@@ -741,6 +795,44 @@ describe("buildCodexProcessEnv", () => {
     ).toBe(
       '[plugins."historical-plugin@local"]\nenabled = false\n\n[plugins."other@local"]\nenabled = true',
     );
+  });
+});
+
+describe("buildCodexAppServerArgs", () => {
+  it("pins SQLite to the process overlay above project and user config", () => {
+    expect(
+      buildCodexAppServerArgs({
+        CODEX_SQLITE_HOME: String.raw`C:\Users\test\.synara\codex-home-overlay`,
+      }),
+    ).toEqual([
+      "-c",
+      'sqlite_home="C:\\\\Users\\\\test\\\\.synara\\\\codex-home-overlay"',
+      "app-server",
+    ]);
+  });
+
+  it("keeps the legacy invocation when no isolated SQLite home is configured", () => {
+    expect(buildCodexAppServerArgs({ CODEX_SQLITE_HOME: "  " })).toEqual(["app-server"]);
+  });
+
+  it("keeps valid cmd metacharacters inside the SQLite path inert", () => {
+    const args = buildCodexAppServerArgs({
+      CODEX_SQLITE_HOME: String.raw`D:\R&D\100% Local^State`,
+    });
+    expect(args).toEqual([
+      "-c",
+      String.raw`sqlite_home="D:\\R\u0026D\\100\u0025 Local\u005eState"`,
+      "app-server",
+    ]);
+    expect(args[1]).not.toMatch(/[&|<>^%]/);
+
+    expect(() =>
+      prepareWindowsSafeProcess("C:\\tools\\codex.cmd", args, {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -3111,7 +3203,8 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
         },
       });
 
-      expect(resumedSession.threadId).toBe(originalThreadId);
+      expect(resumedSession.threadId).toBe(firstSession.threadId);
+      expect(resumedSession.resumeCursor).toMatchObject({ threadId: originalThreadId });
 
       const resumedSnapshotBeforeTurn = await manager.readThread(resumedSession.threadId);
       expect(resumedSnapshotBeforeTurn.threadId).toBe(originalThreadId);
