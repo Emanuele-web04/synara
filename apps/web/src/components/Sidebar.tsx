@@ -136,7 +136,11 @@ import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
-import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
+import {
+  resolveCurrentProjectTargetId,
+  resolveLatestProjectTargetId,
+  resolveNewThreadTarget,
+} from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
   pullRequestQueryKeys,
@@ -165,6 +169,7 @@ import {
   prewarmStudioProject,
 } from "../lib/studioProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
@@ -1582,6 +1587,7 @@ export default function Sidebar() {
   });
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
+  const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
@@ -2795,6 +2801,18 @@ export default function Sidebar() {
     () => resolveCurrentProjectTargetId(projects, focusedProjectId),
     [focusedProjectId, projects],
   );
+  const latestUsableProjectId = useMemo(
+    () => resolveLatestProjectTargetId(projects, latestProjectId),
+    [latestProjectId, projects],
+  );
+  const primaryNewThreadTarget = useMemo(
+    () =>
+      resolveNewThreadTarget({
+        currentProjectId: currentProjectShortcutTargetId,
+        latestUsableProjectId,
+      }),
+    [currentProjectShortcutTargetId, latestUsableProjectId],
+  );
 
   // Warm model discovery before ChatView mounts so new-thread composers skip
   // the "Loading models" skeleton when React Query already has a fresh cache hit.
@@ -2837,23 +2855,23 @@ export default function Sidebar() {
   );
 
   const prefetchModelsForPrimaryNewThread = useCallback(() => {
-    if (!currentProjectShortcutTargetId) {
+    if (!primaryNewThreadTarget) {
       return;
     }
-    prefetchModelsForProjectNewThread(currentProjectShortcutTargetId, { includeDroid: true });
-  }, [currentProjectShortcutTargetId, prefetchModelsForProjectNewThread]);
+    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
+  }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   useEffect(() => {
-    if (!currentProjectShortcutTargetId) {
+    if (!primaryNewThreadTarget) {
       return;
     }
-    prefetchModelsForProjectNewThread(currentProjectShortcutTargetId);
-  }, [currentProjectShortcutTargetId, prefetchModelsForProjectNewThread]);
+    prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId);
+  }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
   const handlePrimaryNewThread = useCallback(() => {
-    if (currentProjectShortcutTargetId) {
-      prefetchModelsForProjectNewThread(currentProjectShortcutTargetId, { includeDroid: true });
-      void handleNewThread(currentProjectShortcutTargetId, {
+    if (primaryNewThreadTarget) {
+      prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
+      void handleNewThread(primaryNewThreadTarget.projectId, {
         envMode: resolveSidebarNewThreadEnvMode({
           defaultEnvMode: appSettings.defaultThreadEnvMode,
         }),
@@ -2861,13 +2879,19 @@ export default function Sidebar() {
       return;
     }
 
+    // The projects snapshot can be temporarily empty during startup. Wait for hydration
+    // before treating a missing target as a genuine no-project state.
+    if (!threadsHydrated) {
+      return;
+    }
     handleStartAddProject();
   }, [
     appSettings.defaultThreadEnvMode,
-    currentProjectShortcutTargetId,
     handleNewThread,
     handleStartAddProject,
     prefetchModelsForProjectNewThread,
+    primaryNewThreadTarget,
+    threadsHydrated,
   ]);
 
   const handleImportThread = useCallback(
@@ -6483,7 +6507,7 @@ export default function Sidebar() {
       {
         id: "new-thread",
         label: "New thread",
-        description: "Start a fresh thread in the current project.",
+        description: "Start a fresh thread in the current or most recently used project.",
         keywords: ["thread", "new", "project"],
         shortcutLabel: newThreadShortcutLabel,
       },
