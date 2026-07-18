@@ -32,37 +32,41 @@ export function loadProviderPromptImageBlocks(input: {
   readonly readFile: (path: string) => Effect.Effect<Uint8Array, unknown>;
   readonly readErrorDetail?: (cause: unknown) => string;
 }): Effect.Effect<ProviderPromptImageBlock[], ProviderAdapterRequestError> {
-  return Effect.forEach(filterProviderPromptImageAttachments(input.attachments), (attachment) => {
-    const attachmentPath = resolveProviderAttachmentPath({
-      attachmentsDir: input.attachmentsDir,
-      attachment,
-    });
-    if (!attachmentPath) {
-      return Effect.fail(
-        new ProviderAdapterRequestError({
-          provider: input.provider,
-          method: input.method,
-          detail: `Invalid attachment id '${attachment.id}'.`,
-        }),
-      );
-    }
-    return input.readFile(attachmentPath).pipe(
-      Effect.mapError(
-        (cause) =>
+  return Effect.forEach(
+    filterProviderPromptImageAttachments(input.attachments),
+    (attachment) => {
+      const attachmentPath = resolveProviderAttachmentPath({
+        attachmentsDir: input.attachmentsDir,
+        attachment,
+      });
+      if (!attachmentPath) {
+        return Effect.fail(
           new ProviderAdapterRequestError({
             provider: input.provider,
             method: input.method,
-            detail:
-              input.readErrorDetail?.(cause) ??
-              (cause instanceof Error ? cause.message : String(cause)),
-            cause,
+            detail: `Invalid attachment id '${attachment.id}'.`,
           }),
-      ),
-      Effect.map((bytes) => ({
-        type: "image" as const,
-        mimeType: attachment.mimeType,
-        data: Buffer.from(bytes).toString("base64"),
-      })),
-    );
-  });
+        );
+      }
+      return input.readFile(attachmentPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: input.provider,
+              method: input.method,
+              detail:
+                input.readErrorDetail?.(cause) ??
+                (cause instanceof Error ? cause.message : String(cause)),
+              cause,
+            }),
+        ),
+        Effect.map((bytes) => ({
+          type: "image" as const,
+          mimeType: attachment.mimeType,
+          data: Buffer.from(bytes).toString("base64"),
+        })),
+      );
+    },
+    { concurrency: 4 },
+  );
 }
