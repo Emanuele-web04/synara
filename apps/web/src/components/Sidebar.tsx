@@ -6798,7 +6798,10 @@ export default function Sidebar() {
             )}
           >
             {titlebarControls}
-            <SynaraLogo aria-label="Synara" className="pointer-events-none ml-auto size-7" />
+            <SynaraLogo
+              aria-label="Synara"
+              className="pointer-events-none ml-auto size-6 text-[var(--color-text-foreground-secondary)] opacity-80"
+            />
           </SidebarHeader>
         </>
       ) : (
