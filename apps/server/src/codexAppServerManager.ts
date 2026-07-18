@@ -63,6 +63,8 @@ import {
 } from "./codexAppServerTransport.ts";
 
 const log = createLogger("codex");
+const CODEX_DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_INITIALIZE_TIMEOUT_MS = 45_000;
 
 type PendingRequestKey = string;
 
@@ -2682,7 +2684,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs =
+      method === "initialize" ? CODEX_INITIALIZE_TIMEOUT_MS : CODEX_DEFAULT_REQUEST_TIMEOUT_MS,
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;

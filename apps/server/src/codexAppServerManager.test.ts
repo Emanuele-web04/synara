@@ -1070,6 +1070,99 @@ describe("startSession", () => {
   });
 });
 
+describe("sendRequest", () => {
+  function createRequestHarness() {
+    const manager = new CodexAppServerManager();
+    const context = {
+      nextRequestId: 1,
+      pending: new Map<string, unknown>(),
+    };
+    const writeMessage = vi
+      .spyOn(
+        manager as unknown as { writeMessage: (...args: unknown[]) => Promise<void> },
+        "writeMessage",
+      )
+      .mockResolvedValue(undefined);
+    const sendRequest = (
+      manager as unknown as {
+        sendRequest: (
+          context: unknown,
+          method: string,
+          params: unknown,
+          timeoutMs?: number,
+        ) => Promise<unknown>;
+      }
+    ).sendRequest.bind(manager);
+    const handleResponse = (
+      manager as unknown as {
+        handleResponse: (context: unknown, response: Record<string, unknown>) => void;
+      }
+    ).handleResponse.bind(manager);
+    return { context, handleResponse, sendRequest, writeMessage };
+  }
+
+  it("accepts an initialize response after the ordinary 20-second budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, handleResponse, sendRequest } = createRequestHarness();
+      const initializeRequest = sendRequest(context, "initialize", {});
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(context.pending.size).toBe(1);
+
+      handleResponse(context, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { ready: true },
+      });
+      await expect(initializeRequest).resolves.toEqual({ ready: true });
+      expect(context.pending.size).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(context.pending.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out initialize at 45 seconds and ordinary requests at 20 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, sendRequest } = createRequestHarness();
+      const initializeRequest = sendRequest(context, "initialize", {});
+      const initializeRejection = expect(initializeRequest).rejects.toThrow(
+        "Timed out waiting for initialize.",
+      );
+
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(context.pending.size).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await initializeRejection;
+      expect(context.pending.size).toBe(0);
+
+      const modelListRequest = sendRequest(context, "model/list", {});
+      const modelListRejection = expect(modelListRequest).rejects.toThrow(
+        "Timed out waiting for model/list.",
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await modelListRejection;
+      expect(context.pending.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects immediately and clears pending state when the transport write fails", async () => {
+    const { context, sendRequest, writeMessage } = createRequestHarness();
+    writeMessage.mockRejectedValueOnce(new Error("injected transport write failure"));
+
+    await expect(sendRequest(context, "initialize", {})).rejects.toThrow(
+      "injected transport write failure",
+    );
+    expect(context.pending.size).toBe(0);
+  });
+});
+
 describe("sendTurn", () => {
   it("sends text and image user input items to turn/start", async () => {
     const { manager, context, requireSession, sendRequest, updateSession } =
