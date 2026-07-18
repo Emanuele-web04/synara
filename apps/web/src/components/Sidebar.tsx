@@ -10,7 +10,6 @@ import {
   ClockIcon,
   CopyIcon,
   ExternalLinkIcon,
-  FolderIcon,
   FolderOpenIcon,
   KanbanIcon,
   type LucideIcon,
@@ -176,6 +175,7 @@ import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
+import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -7073,7 +7073,7 @@ export default function Sidebar() {
                               onClick={() => void handlePickFolder()}
                               disabled={isPickingFolder || isAddingProject}
                             >
-                              <SidebarGlyph icon={FolderIcon} variant="chrome" />
+                              <FolderClosed className={sidebarGlyphClass("chrome")} />
                               {isPickingFolder
                                 ? "Opening..."
                                 : isAddingProject
