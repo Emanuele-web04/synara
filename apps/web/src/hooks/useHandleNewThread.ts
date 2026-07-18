@@ -1,7 +1,7 @@
 import { type ProjectId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { useCallback } from "react";
+import { startTransition, useCallback } from "react";
 import { useAppSettings } from "../appSettings";
 import {
   type ComposerThreadDraftState,
@@ -286,11 +286,18 @@ export function useHandleNewThread() {
             applyStickyState(threadId);
             applyProviderOverride(threadId);
           },
+          // Mark the draft-landing navigation as a transition so the new route
+          // subtree renders interruptibly and the browser can paint the composer
+          // skeleton immediately instead of freezing on the synchronous commit.
           navigate: () =>
-            navigate({
-              to: "/$threadId",
-              params: { threadId },
-              ...(navigation?.search ? { search: navigation.search } : {}),
+            new Promise<void>((resolve, reject) => {
+              startTransition(() => {
+                navigate({
+                  to: "/$threadId",
+                  params: { threadId },
+                  ...(navigation?.search ? { search: navigation.search } : {}),
+                }).then(resolve, reject);
+              });
             }),
           // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
           // Verify the committed route before deleting the previous project draft.

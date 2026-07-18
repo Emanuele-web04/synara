@@ -8,7 +8,8 @@
 import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import { createDeferredPersistStorage, flushStorageBeforePageHide } from "./lib/storage";
 import {
   DEFAULT_THREAD_TERMINAL_HEIGHT,
   DEFAULT_THREAD_TERMINAL_ID,
@@ -1289,6 +1290,25 @@ interface TerminalStateStoreState {
   removeOrphanedTerminalStates: (activeThreadIds: Set<ThreadId>) => void;
 }
 
+// Defers partialize + JSON.stringify off the hot set() path (terminal layout
+// changes, resizes, activity updates fire rapidly). Serialization now runs once
+// per debounce window at flush time instead of synchronously on every set().
+const terminalPersistStorage = createDeferredPersistStorage<
+  TerminalStateStoreState,
+  Pick<TerminalStateStoreState, "terminalStateByThreadId">
+>({
+  getStorage: () => localStorage,
+  partialize: (state) => ({
+    terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
+      state.terminalStateByThreadId,
+    ),
+  }),
+});
+
+// Flush pending terminal-state writes before the page goes away so at most one
+// debounce window of changes can be lost.
+flushStorageBeforePageHide(() => terminalPersistStorage.flush());
+
 export const useTerminalStateStore = create<TerminalStateStoreState>()(
   persist(
     (set) => {
@@ -1394,12 +1414,9 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
     {
       name: TERMINAL_STATE_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
-          state.terminalStateByThreadId,
-        ),
-      }),
+      // partialize is owned by the deferred storage (runs at flush time, not
+      // eagerly on every set()).
+      storage: terminalPersistStorage,
       merge: (persistedState, currentState) => ({
         ...currentState,
         terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(

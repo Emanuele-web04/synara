@@ -1463,6 +1463,11 @@ function SingleChatSurface(props: {
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
   );
+  // A registered-but-unpromoted draft is the freeze case: landing a brand-new
+  // chat commits the whole ChatView subtree synchronously. Defer that mount
+  // behind the composer skeleton so the paint is never blocked. Opening an
+  // existing thread keeps today's immediate mount (no draft -> no skeleton).
+  const isBrandNewDraftThread = draftThread !== null;
   // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
   // worktree-backed threads resolve links against their materialized worktree.
   const workspaceRoot = resolveFilePreviewWorkspaceRoot({
@@ -2298,7 +2303,7 @@ function SingleChatSurface(props: {
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
-              deferMount={false}
+              deferMount={isBrandNewDraftThread}
               surfaceMode="single"
               isFocusedPane
               panelState={chatPanelState}
