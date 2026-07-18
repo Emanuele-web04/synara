@@ -5068,7 +5068,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
         );
         const stackedPanels = taskListCard?.parentElement ?? null;
 
-        expect(finalTranscriptRow, "Unable to find the final rendered transcript row.").toBeTruthy();
+        expect(
+          finalTranscriptRow,
+          "Unable to find the final rendered transcript row.",
+        ).toBeTruthy();
         expect(taskListCard, "Unable to find the active task-list card.").toBeTruthy();
         expect(stackedPanels, "Unable to find the stacked composer-panel wrapper.").toBeTruthy();
 
@@ -5110,7 +5113,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(expanded.stackHeightPx).toBeGreaterThan(maxFixedClearancePx);
 
       const collapseButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
         "Unable to find the task-banner collapse button.",
       );
       collapseButton.click();
@@ -5138,7 +5142,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(Math.abs(reexpanded.gapPx - expanded.gapPx)).toBeLessThanOrEqual(8);
 
       const finalCollapseButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Collapse task banner"]'),
         "Unable to find the task-banner collapse button before the away-from-end check.",
       );
       finalCollapseButton.click();
