@@ -6132,6 +6132,254 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread.title).toBe("Harper [reviewer]");
   });
 
+  it("routes fallback-annotated child events without polluting the parent projection", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const childThreadId = asThreadId("subagent:thread-1:child-provider-unmapped");
+    const childTurnId = asTurnId("turn-child-unmapped");
+    const providerRefs = {
+      providerThreadId: "child-provider-unmapped",
+      providerParentThreadId: "parent-provider-1",
+    } as const;
+
+    const before = await Effect.runPromise(harness.engine.getReadModel());
+    const parentBefore = before.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    expect(parentBefore).toBeDefined();
+    const parentProjectionBefore = structuredClone({
+      messages: parentBefore?.messages,
+      latestTurn: parentBefore?.latestTurn,
+      activities: parentBefore?.activities,
+      proposedPlans: parentBefore?.proposedPlans,
+      checkpoints: parentBefore?.checkpoints,
+      pendingInteractions: parentBefore?.pendingInteractions,
+      session: parentBefore?.session,
+      hasPendingApprovals: parentBefore?.hasPendingApprovals,
+      hasPendingUserInput: parentBefore?.hasPendingUserInput,
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-unmapped-child-message-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      itemId: asItemId("item-unmapped-child-message"),
+      providerRefs,
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Child-only answer",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-unmapped-child-message-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      itemId: asItemId("item-unmapped-child-message"),
+      providerRefs,
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-unmapped-child-approval-requested"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      requestId: ApprovalRequestId.makeUnsafe("req-unmapped-child-approval"),
+      providerRefs,
+      payload: {
+        requestType: "command_execution_approval",
+        detail: "run child command",
+      },
+    });
+    harness.emit({
+      type: "user-input.requested",
+      eventId: asEventId("evt-unmapped-child-user-input-requested"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      requestId: ApprovalRequestId.makeUnsafe("req-unmapped-child-user-input"),
+      providerRefs,
+      payload: {
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Which child scope should be used?",
+            options: [
+              {
+                label: "child-only",
+                description: "Keep the answer on the child thread",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const pendingChildThread = await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.activities.some(
+          (activity) => activity.id === "evt-unmapped-child-approval-requested",
+        ) &&
+        thread.activities.some(
+          (activity) => activity.id === "evt-unmapped-child-user-input-requested",
+        ),
+      2000,
+      childThreadId,
+    );
+    expect(pendingChildThread.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "evt-unmapped-child-approval-requested",
+          kind: "approval.requested",
+        }),
+        expect.objectContaining({
+          id: "evt-unmapped-child-user-input-requested",
+          kind: "user-input.requested",
+        }),
+      ]),
+    );
+
+    harness.emit({
+      type: "request.resolved",
+      eventId: asEventId("evt-unmapped-child-approval-resolved"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      requestId: ApprovalRequestId.makeUnsafe("req-unmapped-child-approval"),
+      providerRefs,
+      payload: {
+        requestType: "command_execution_approval",
+        decision: "accept",
+      },
+    });
+    harness.emit({
+      type: "user-input.resolved",
+      eventId: asEventId("evt-unmapped-child-user-input-resolved"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      requestId: ApprovalRequestId.makeUnsafe("req-unmapped-child-user-input"),
+      providerRefs,
+      payload: {
+        answers: {
+          scope: "child-only",
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.tasks.updated",
+      eventId: asEventId("evt-unmapped-child-tasks"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      providerRefs,
+      payload: {
+        explanation: "Child work only",
+        tasks: [{ task: "Finish child work", status: "completed" }],
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-unmapped-child-file-change"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      itemId: asItemId("item-unmapped-child-file-change"),
+      providerRefs,
+      payload: {
+        itemType: "file_change",
+        status: "completed",
+        title: "Updated child file",
+        detail: "apps/server/src/child-only.ts",
+        data: {
+          changes: [{ path: "apps/server/src/child-only.ts", kind: "update" }],
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-unmapped-child-diff"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: childTurnId,
+      itemId: asItemId("item-unmapped-child-message"),
+      providerRefs,
+      payload: {
+        unifiedDiff: [
+          "diff --git a/child-only.txt b/child-only.txt",
+          "index 1111111..2222222 100644",
+          "--- a/child-only.txt",
+          "+++ b/child-only.txt",
+          "@@ -1 +1 @@",
+          "-parent-safe",
+          "+child-only",
+          "",
+        ].join("\n"),
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.messages.some(
+          (message) =>
+            message.id === "assistant:item-unmapped-child-message" &&
+            message.text === "Child-only answer" &&
+            message.streaming === false,
+        ) &&
+        thread.latestTurn?.turnId === childTurnId &&
+        [
+          "evt-unmapped-child-approval-requested",
+          "evt-unmapped-child-approval-resolved",
+          "evt-unmapped-child-user-input-requested",
+          "evt-unmapped-child-user-input-resolved",
+          "evt-unmapped-child-tasks",
+          "evt-unmapped-child-file-change",
+        ].every((eventId) => thread.activities.some((activity) => activity.id === eventId)) &&
+        thread.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.turnId === childTurnId &&
+            checkpoint.files.some((file) => file.path === "child-only.txt"),
+        ),
+      2000,
+      childThreadId,
+    );
+
+    expect(childThread.projectId).toBe(asProjectId("project-1"));
+    expect(childThread.parentThreadId).toBe(asThreadId("thread-1"));
+
+    const after = await Effect.runPromise(harness.engine.getReadModel());
+    const parentAfter = after.threads.find((thread) => thread.id === asThreadId("thread-1"));
+    expect(parentAfter).toBeDefined();
+    expect({
+      messages: parentAfter?.messages,
+      latestTurn: parentAfter?.latestTurn,
+      activities: parentAfter?.activities,
+      proposedPlans: parentAfter?.proposedPlans,
+      checkpoints: parentAfter?.checkpoints,
+      pendingInteractions: parentAfter?.pendingInteractions,
+      session: parentAfter?.session,
+      hasPendingApprovals: parentAfter?.hasPendingApprovals,
+      hasPendingUserInput: parentAfter?.hasPendingUserInput,
+    }).toEqual(parentProjectionBefore);
+  });
+
   it("continues processing runtime events after a single event handler failure", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
