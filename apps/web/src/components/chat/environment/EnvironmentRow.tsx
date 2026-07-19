@@ -8,6 +8,7 @@
 import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChevronDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -109,12 +110,9 @@ export function EnvironmentCollapsibleSection({
         <span className={cn(ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME, "min-w-0 truncate")}>
           {label}
         </span>
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60 transition-transform duration-220 ease-out motion-reduce:transition-none",
-            open ? "rotate-0" : "-rotate-90",
-          )}
+        <DisclosureChevron
+          open={open}
+          className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60"
         />
       </CollapsibleTrigger>
       <CollapsiblePanel>

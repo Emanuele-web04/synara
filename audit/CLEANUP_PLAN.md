@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-004 next
+> Status: in progress — CLN-004 complete
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -130,7 +130,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-001 | P0 | DONE | Remove all 40 unused imports/locals/functions/parameters; delete computations made solely for dead values. | focused Oxlint unused scan; affected unit tests |
 | CLN-002 | P0 | DONE | Delete confirmed dead/superseded modules and obsolete tests; migrate the remaining collapse constant import. | web/server focused tests; repo-wide reference scan |
 | CLN-003 | P0 | DONE | Consolidate exact low-risk domain logic: project normalization, profile selectors, terminal-context sync, automation warning updates, persistence error mapper. | existing owner tests plus affected caller tests |
-| CLN-004 | P1 | TODO | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
+| CLN-004 | P1 | DONE | Consolidate focused duplicated views/motion: Sidebar row variants, pinned/marker editable row, settings/branch/environment disclosure controls, marketing platform icon. | web unit/browser tests and disclosure tests |
 | CLN-005 | P1 | TODO | Consolidate server/desktop repeated workflows: ACP support helpers, provider-health probe, branch naming, semver, provider locks, redaction, desktop shutdown/tab activation, GitHub output. | focused subsystem suites |
 | CLN-010 | P0 | TODO | Decompose `store.ts` and its test by persistence/normalization/projection/event reducer while keeping the facade. | `apps/web/src/store.test.ts` and selector tests |
 | CLN-011 | P0 | TODO | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility. | composer draft/store tests |
@@ -208,3 +208,13 @@ For every tracker item:
   lines**. Focused verification passed across 11 unique test files (web 290 tests, server repository
   gates 11 tests, and the added snapshot-query gate 10 tests); unused diagnostics and
   `git diff --check` passed.
+- 2026-07-19 — CLN-004 started; appearance and interaction are characterization constraints, not
+  redesign targets.
+- 2026-07-19 — CLN-004 complete: pinned and standard Sidebar rows now share one identity/status
+  content owner, shrinking `Sidebar.tsx` from **7,940 → 7,675 LOC** while leaving its wrapper event
+  and drag controllers in place; pinned-message and marker edit/jump/rename behavior moved from
+  **2 implementations → 1** Environment-domain component; **4 bespoke disclosure motion paths →
+  0** in the targeted settings/branch/environment controls; and the two marketing pages now share
+  one typed platform-icon owner. Combined verification passed: web unit **131/131**, browser
+  **10/10**, marketing production build, repo scan **1,811 files / 0 unused diagnostics**, and
+  `git diff --check`.

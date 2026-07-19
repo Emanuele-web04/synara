@@ -4,6 +4,9 @@ import {
   disclosureChevronClassName,
   disclosureContentClassName,
   disclosureShellClassName,
+  DISCLOSURE_CHEVRON_MOTION_CLASS,
+  DISCLOSURE_COLLAPSIBLE_PANEL_CLASS,
+  DISCLOSURE_SHELL_MOTION_CLASS,
   DISCLOSURE_SHELL_CLOSED_CLASS,
   DISCLOSURE_SHELL_OPEN_CLASS,
 } from "./disclosureMotion";
@@ -22,5 +25,17 @@ describe("disclosureMotion", () => {
   it("disables interaction on closed content", () => {
     expect(disclosureContentClassName(false)).toContain("pointer-events-none");
     expect(disclosureContentClassName(true)).not.toContain("pointer-events-none");
+  });
+
+  it("keeps every disclosure path on the shared 220ms reduced-motion contract", () => {
+    for (const className of [
+      DISCLOSURE_SHELL_MOTION_CLASS,
+      DISCLOSURE_CHEVRON_MOTION_CLASS,
+      DISCLOSURE_COLLAPSIBLE_PANEL_CLASS,
+    ]) {
+      expect(className).toContain("duration-220");
+      expect(className).toContain("ease-out");
+      expect(className).toContain("motion-reduce:transition-none");
+    }
   });
 });

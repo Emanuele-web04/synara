@@ -76,7 +76,13 @@ import {
   AutocompletePopup,
 } from "../components/ui/autocomplete";
 import { Button } from "../components/ui/button";
-import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsiblePanel,
+  CollapsibleTrigger,
+} from "../components/ui/collapsible";
+import { DisclosureChevron } from "../components/ui/DisclosureChevron";
+import { DisclosureRegion } from "../components/ui/DisclosureRegion";
 import { Input } from "../components/ui/input";
 import { Kbd, KbdGroup } from "../components/ui/kbd";
 import {
@@ -123,7 +129,6 @@ import {
 } from "../lib/archivedThreadDelete";
 import {
   ArchiveIcon,
-  ChevronDownIcon,
   DeviceLaptopIcon,
   DownloadIcon,
   ExternalLinkIcon,
@@ -3227,15 +3232,9 @@ function SettingsRouteView() {
                   >
                     <div className="border-t border-border/70 first:border-t-0">
                       <div className="flex min-h-11 items-center gap-2 px-3 py-2">
-                        <button
+                        <CollapsibleTrigger
                           type="button"
                           className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() =>
-                            setOpenInstallProviders((existing) => ({
-                              ...existing,
-                              [providerSettings.provider]: !existing[providerSettings.provider],
-                            }))
-                          }
                         >
                           <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
                             {providerSettings.title}
@@ -3257,13 +3256,11 @@ function SettingsRouteView() {
                               {providerUpdateLabel}
                             </span>
                           ) : null}
-                          <ChevronDownIcon
-                            className={cn(
-                              "size-4 shrink-0 text-muted-foreground transition-transform",
-                              isOpen && "rotate-180",
-                            )}
+                          <DisclosureChevron
+                            open={isOpen}
+                            className="size-4 shrink-0 text-muted-foreground"
                           />
-                        </button>
+                        </CollapsibleTrigger>
                         {shouldShowProviderUpdateButton ? (
                           <Button
                             type="button"
@@ -3290,7 +3287,7 @@ function SettingsRouteView() {
                         ) : null}
                       </div>
 
-                      <CollapsibleContent>
+                      <CollapsiblePanel>
                         <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                           <div className="space-y-3">
                             <ProviderDocsLinks docs={providerSettings.docs} />
@@ -3550,7 +3547,7 @@ function SettingsRouteView() {
                             ) : null}
                           </div>
                         </div>
-                      </CollapsibleContent>
+                      </CollapsiblePanel>
                     </div>
                   </Collapsible>
                 );
@@ -3636,27 +3633,27 @@ function SettingsRouteView() {
               <button
                 type="button"
                 className="flex w-full items-center justify-between text-left"
+                aria-expanded={showRecoveryTools}
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
                 <span className="text-xs font-medium text-muted-foreground">What this does</span>
-                <ChevronDownIcon
-                  className={cn(
-                    "size-4 shrink-0 text-muted-foreground transition-transform",
-                    showRecoveryTools && "rotate-180",
-                  )}
+                <DisclosureChevron
+                  open={showRecoveryTools}
+                  className="size-4 shrink-0 text-muted-foreground"
                 />
               </button>
-              {showRecoveryTools ? (
-                <div
-                  className={cn(
-                    "mt-3 px-3 py-3 text-xs text-muted-foreground",
-                    SETTINGS_INSET_LIST_CLASS_NAME,
-                  )}
-                >
+              <DisclosureRegion
+                open={showRecoveryTools}
+                contentClassName={cn(
+                  "mt-3 px-3 py-3 text-xs text-muted-foreground",
+                  SETTINGS_INSET_LIST_CLASS_NAME,
+                )}
+              >
+                <div>
                   Rebuilds local project indexes and refreshes project snapshots. Existing chats
                   stay in place.
                 </div>
-              ) : null}
+              </DisclosureRegion>
             </div>
           ) : null}
         </SettingsRow>

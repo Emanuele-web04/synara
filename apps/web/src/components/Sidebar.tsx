@@ -121,7 +121,6 @@ import {
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
-  createThreadSelector,
 } from "../storeSelectors";
 import {
   derivePendingApprovals,
@@ -184,7 +183,6 @@ import {
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
-import { ProviderIcon } from "./ProviderIcon";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
 import { FolderClosed } from "./FolderClosed";
@@ -210,6 +208,10 @@ import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass, SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
+import {
+  SidebarThreadRowContent,
+  type SidebarThreadTerminalStatus,
+} from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
@@ -336,7 +338,6 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
@@ -726,169 +727,6 @@ function resolveThreadRowMetaChips(input: {
   return chips;
 }
 
-function ProviderAvatarWithTerminal({
-  provider,
-  handoffSourceProvider,
-  handoffTooltip,
-  terminalStatus,
-  terminalCount,
-}: {
-  provider: ProviderKind;
-  handoffSourceProvider?: ProviderKind | null;
-  handoffTooltip?: string | null;
-  terminalStatus: TerminalStatusIndicator | null;
-  terminalCount: number;
-}) {
-  const showBadge = terminalCount > 1 || terminalStatus !== null;
-  const badgeTooltip =
-    terminalCount > 1
-      ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
-      : (terminalStatus?.label ?? "Terminal open");
-  const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
-
-  const hasHandoff = Boolean(handoffSourceProvider);
-  const containerClass = hasHandoff
-    ? "relative inline-flex h-3 w-4.5 shrink-0 items-center"
-    : "relative inline-flex size-3 shrink-0 items-center justify-center";
-
-  const avatarNode = hasHandoff ? (
-    <span className={containerClass}>
-      <span className="sidebar-icon-chip absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={handoffSourceProvider!} className="size-2" />
-      </span>
-      <span className="sidebar-icon-chip absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full">
-        <ProviderIcon provider={provider} className="size-2" />
-      </span>
-    </span>
-  ) : (
-    <span className={containerClass}>
-      <ProviderIcon provider={provider} className="size-3" />
-    </span>
-  );
-
-  const wrappedAvatar =
-    hasHandoff && handoffTooltip ? (
-      <Tooltip>
-        <TooltipTrigger render={avatarNode} />
-        <TooltipPopup side="top">{handoffTooltip}</TooltipPopup>
-      </Tooltip>
-    ) : (
-      avatarNode
-    );
-
-  return (
-    <span className="relative inline-flex shrink-0 items-center">
-      {wrappedAvatar}
-      {showBadge ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                aria-label={badgeTooltip}
-                className="sidebar-icon-chip absolute -top-1.5 -right-1.5 inline-flex size-3 min-w-3 items-center justify-center rounded-full px-px"
-              >
-                {terminalCount > 1 ? (
-                  <span
-                    className={cn(
-                      "text-[8px] font-semibold leading-none tabular-nums",
-                      badgeColorClass,
-                    )}
-                  >
-                    {terminalCount}
-                  </span>
-                ) : (
-                  <TerminalIcon className={cn("size-2.5", badgeColorClass)} />
-                )}
-              </span>
-            }
-          />
-          <TooltipPopup side="top">{badgeTooltip}</TooltipPopup>
-        </Tooltip>
-      ) : null}
-    </span>
-  );
-}
-
-function renderSubagentLabel(input: {
-  threadId: string;
-  parentThreadId?: string | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  threads?: ReadonlyArray<Thread> | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const presentation = resolveSubagentPresentationForThread({
-    thread: {
-      id: input.threadId,
-      parentThreadId: input.parentThreadId,
-      subagentAgentId: input.agentId,
-      subagentNickname: input.nickname,
-      subagentRole: input.role,
-      title: input.title,
-    },
-    threads: input.threads,
-  });
-  const supportingLabel =
-    presentation.role ??
-    (presentation.nickname && presentation.title && presentation.title !== presentation.nickname
-      ? presentation.title
-      : null);
-
-  return (
-    <span className="min-w-0 truncate">
-      <span
-        className={cn("font-medium", input.titleClassName)}
-        style={{ color: presentation.accentColor }}
-      >
-        {presentation.nickname ?? presentation.primaryLabel}
-      </span>
-      {supportingLabel ? (
-        <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
-          {presentation.role ? `(${presentation.role})` : supportingLabel}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function SidebarSubagentLabel(props: {
-  threadId: ThreadId;
-  parentThreadId?: ThreadId | null | undefined;
-  agentId?: string | null | undefined;
-  nickname?: string | null | undefined;
-  role?: string | null | undefined;
-  title?: string | null | undefined;
-  titleClassName?: string | undefined;
-  roleClassName?: string | undefined;
-}) {
-  const selectParentThread = useMemo(
-    () => createThreadSelector(props.parentThreadId ?? null),
-    [props.parentThreadId],
-  );
-  const parentThread = useStore(selectParentThread);
-
-  return renderSubagentLabel({
-    threadId: props.threadId,
-    parentThreadId: props.parentThreadId,
-    agentId: props.agentId,
-    nickname: props.nickname,
-    role: props.role,
-    title: props.title,
-    threads: parentThread ? [parentThread] : undefined,
-    titleClassName: props.titleClassName,
-    roleClassName: props.roleClassName,
-  });
-}
-
-interface TerminalStatusIndicator {
-  label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
-  colorClass: string;
-  pulse: boolean;
-}
-
 interface PrStatusIndicator {
   label: PrStatePresentation["label"];
   colorClass: string;
@@ -936,7 +774,7 @@ function toThreadPr(
 function terminalStatusFromThreadState(input: {
   runningTerminalIds: string[];
   terminalAttentionStatesById: Record<string, "attention" | "review">;
-}): TerminalStatusIndicator | null {
+}): SidebarThreadTerminalStatus | null {
   const terminalAttentionStates = Object.values(input.terminalAttentionStatesById ?? {});
   if (terminalAttentionStates.includes("attention")) {
     return {
@@ -5437,7 +5275,6 @@ export default function Sidebar() {
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
         : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5446,7 +5283,6 @@ export default function Sidebar() {
     // occupies the status slot. In that state the right-aligned project label needs a
     // hair of clearance so it stops kissing the worktree chip — see the margin below.
     const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
       threadId: thread.id,
@@ -5511,64 +5347,36 @@ export default function Sidebar() {
               });
             }}
           >
-            {threadEntryPoint === "terminal" ? (
-              <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-            ) : showThreadProviderAvatar ? (
-              <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
-                handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-                handoffTooltip={handoffBadgeLabel}
-                terminalStatus={terminalStatus}
-                terminalCount={terminalCount}
-              />
-            ) : null}
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5",
-                  isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                )}
-                data-testid={`thread-title-${thread.id}`}
-              >
-                {isSubagentThread ? (
-                  <SidebarSubagentLabel
-                    threadId={thread.id}
-                    parentThreadId={thread.parentThreadId}
-                    agentId={thread.subagentAgentId}
-                    nickname={thread.subagentNickname}
-                    role={thread.subagentRole}
-                    title={thread.title}
-                  />
-                ) : (
-                  thread.title
-                )}
-              </span>
-              {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-                <span
-                  aria-label="Pending approval"
-                  className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-                >
-                  Pending
-                </span>
-              ) : null}
-            </div>
-            {projectLabel ? (
-              // Right-aligned project context for the flattened pinned list. The title
-              // (flex-1) pushes it to the content edge, so it shows in full when the row
-              // has room and only truncates under real pressure, shifting left as the
-              // trailing reserve grows on hover/status. When a live status glyph occupies
-              // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-              // a few px past the reserve — a small margin keeps the folder name from
-              // touching the worktree chip. It costs no space when the row is idle.
-              <span
-                className={cn(
-                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
-                  hasTrailingStatusGlyph && "mr-2",
-                )}
-              >
-                {projectLabel}
-              </span>
-            ) : null}
+            <SidebarThreadRowContent
+              thread={thread}
+              terminalEntryPoint={threadEntryPoint === "terminal"}
+              terminalStatus={terminalStatus}
+              terminalCount={terminalCount}
+              isActive={isActive}
+              variant="pinned"
+              pendingStatusColorClass={
+                threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
+              }
+              suffix={
+                projectLabel ? (
+                  // Right-aligned project context for the flattened pinned list. The title
+                  // (flex-1) pushes it to the content edge, so it shows in full when the row
+                  // has room and only truncates under real pressure, shifting left as the
+                  // trailing reserve grows on hover/status. When a live status glyph occupies
+                  // the trailing slot (e.g. the running spinner), the absolute cluster reaches
+                  // a few px past the reserve — a small margin keeps the folder name from
+                  // touching the worktree chip. It costs no space when the row is idle.
+                  <span
+                    className={cn(
+                      "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                      hasTrailingStatusGlyph && "mr-2",
+                    )}
+                  >
+                    {projectLabel}
+                  </span>
+                ) : null
+              }
+            />
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
@@ -5636,27 +5444,12 @@ export default function Sidebar() {
       isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
         ? null
         : prStatus;
-    const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
-    const subagentPresentation = isSubagentThread
-      ? resolveSubagentPresentationForThread({
-          thread: {
-            id: thread.id,
-            parentThreadId: thread.parentThreadId,
-            subagentAgentId: thread.subagentAgentId,
-            subagentNickname: thread.subagentNickname,
-            subagentRole: thread.subagentRole,
-            title: thread.title,
-          },
-        })
-      : null;
     const canToggleSubagents = childCount > 0;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // Untouched draft chat threads are intentionally text-only until they get a real title.
-    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const childCountLabel = `${childCount} ${pluralize(childCount, "subagent")}`;
     const toggleButtonClassName = isHighlighted
       ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
@@ -5757,109 +5550,60 @@ export default function Sidebar() {
               />
             }
           >
-            {isSubagentThread ? (
-              <span
-                aria-hidden="true"
-                className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
-                style={{ marginLeft: `${subagentIndentPx}px` }}
-              >
-                <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
-                <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
-                <span
-                  className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                  style={{ backgroundColor: subagentPresentation?.accentColor }}
-                />
-              </span>
-            ) : threadEntryPoint === "terminal" ? (
-              <SidebarGlyph icon={TerminalIcon} variant="chrome" />
-            ) : showThreadProviderAvatar ? (
-              <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
-                handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
-                handoffTooltip={handoffBadgeLabel}
-                terminalStatus={terminalStatus}
-                terminalCount={terminalCount}
-              />
-            ) : null}
-            <div
-              className={cn(
-                "flex min-w-0 flex-1 items-center text-left",
-                isSubagentThread ? "gap-[5px]" : "gap-1.5",
-              )}
-            >
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
-                  // Inactive thread names share the resting label color with
-                  // project/folder headers; the active row still pops via its
-                  // background + full-foreground color from resolveThreadRowClassName.
-                  isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                  isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
-                )}
-              >
-                {isSubagentThread ? (
-                  <SidebarSubagentLabel
-                    threadId={thread.id}
-                    parentThreadId={thread.parentThreadId}
-                    agentId={thread.subagentAgentId}
-                    nickname={thread.subagentNickname}
-                    role={thread.subagentRole}
-                    title={thread.title}
-                    roleClassName="text-muted-foreground/42"
-                  />
-                ) : (
-                  thread.title
-                )}
-              </span>
-              {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
-                <span
-                  aria-label="Pending approval"
-                  className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
-                >
-                  Pending
-                </span>
-              ) : null}
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-              {canToggleSubagents ? (
-                <button
-                  type="button"
-                  data-thread-selection-safe
-                  aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
-                  title={childCountLabel}
-                  className={cn(
-                    "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
-                    toggleButtonClassName,
-                  )}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    toggleSubagentParent(thread.id);
-                  }}
-                >
-                  <span className="text-[9px] font-medium leading-none tabular-nums">
-                    {childCount}
-                  </span>
-                  {isExpanded ? (
-                    <SidebarGlyph icon={ChevronDownIcon} variant="chevron" />
-                  ) : (
-                    <SidebarGlyph icon={ChevronRightIcon} variant="chevron" />
-                  )}
-                </button>
-              ) : null}
-              {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                        <TemporaryThreadIcon />
+            <SidebarThreadRowContent
+              thread={thread}
+              terminalEntryPoint={threadEntryPoint === "terminal"}
+              terminalStatus={terminalStatus}
+              terminalCount={terminalCount}
+              isActive={isActive}
+              variant="standard"
+              subagentIndentPx={subagentIndentPx}
+              pendingStatusColorClass={
+                threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
+              }
+              suffix={
+                <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
+                  {canToggleSubagents ? (
+                    <button
+                      type="button"
+                      data-thread-selection-safe
+                      aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
+                      title={childCountLabel}
+                      className={cn(
+                        "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
+                        toggleButtonClassName,
+                      )}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleSubagentParent(thread.id);
+                      }}
+                    >
+                      <span className="text-[9px] font-medium leading-none tabular-nums">
+                        {childCount}
                       </span>
-                    }
-                  />
-                  <TooltipPopup side="top">Temporary chat</TooltipPopup>
-                </Tooltip>
-              ) : null}
-            </div>
+                      {isExpanded ? (
+                        <SidebarGlyph icon={ChevronDownIcon} variant="chevron" />
+                      ) : (
+                        <SidebarGlyph icon={ChevronRightIcon} variant="chevron" />
+                      )}
+                    </button>
+                  ) : null}
+                  {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                            <TemporaryThreadIcon />
+                          </span>
+                        }
+                      />
+                      <TooltipPopup side="top">Temporary chat</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              }
+            />
             <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
