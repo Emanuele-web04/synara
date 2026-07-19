@@ -806,6 +806,7 @@ describe("AppSettingsSchema", () => {
       enableAppSnap: false,
       appSnapPlaySound: true,
       enableAssistantStreaming: true,
+      enableAdvancedEffortSlider: false,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
       showStudioSection: true,

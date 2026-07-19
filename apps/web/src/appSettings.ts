@@ -215,6 +215,9 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Optional composer control. The familiar effort menu remains the default;
+  // this only swaps its presentation for a direct manipulation slider.
+  enableAdvancedEffortSlider: Schema.Boolean.pipe(withDefaults(() => false)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),

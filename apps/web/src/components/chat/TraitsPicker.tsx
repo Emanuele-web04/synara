@@ -191,6 +191,135 @@ interface TraitRadioOption {
   description?: string | null;
 }
 
+// A direct-manipulation alternative to the standard effort radio list. It intentionally
+// uses the provider's already-normalized capability ladder: no arbitrary numeric effort
+// values are introduced, and models with fewer/more runtime-discovered levels adapt
+// automatically. The invisible native range input keeps keyboard and screen-reader
+// semantics while the rail, dots, and thumb carry Synara's compact picker styling.
+function AdvancedEffortSliderSection({
+  label,
+  labelTrailing,
+  value,
+  options,
+  onValueChange,
+}: {
+  label: string;
+  labelTrailing?: ReactNode;
+  value: string;
+  options: ReadonlyArray<TraitRadioOption>;
+  onValueChange: (value: string) => void;
+}) {
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const lastIndex = Math.max(0, options.length - 1);
+  const [previewIndex, setPreviewIndex] = useState(selectedIndex);
+  const previewIndexRef = useRef(selectedIndex);
+  const lastCommittedIndexRef = useRef(selectedIndex);
+
+  useEffect(() => {
+    previewIndexRef.current = selectedIndex;
+    lastCommittedIndexRef.current = selectedIndex;
+    setPreviewIndex(selectedIndex);
+  }, [selectedIndex]);
+
+  const activeIndex = Math.min(Math.max(previewIndex, 0), lastIndex);
+  const selectedOption = options[activeIndex] ?? options[0];
+  const thumbPercent = lastIndex === 0 ? 0 : (activeIndex / lastIndex) * 100;
+
+  const previewValue = (nextIndex: number) => {
+    const boundedIndex = Math.min(Math.max(nextIndex, 0), lastIndex);
+    previewIndexRef.current = boundedIndex;
+    setPreviewIndex(boundedIndex);
+  };
+
+  const commitPreview = (nextIndex = previewIndexRef.current) => {
+    const boundedIndex = Math.min(Math.max(nextIndex, 0), lastIndex);
+    const nextOption = options[boundedIndex];
+    if (!nextOption || boundedIndex === lastCommittedIndexRef.current) return;
+    lastCommittedIndexRef.current = boundedIndex;
+    onValueChange(nextOption.value);
+  };
+
+  if (!selectedOption || options.length < 2) {
+    return null;
+  }
+
+  return (
+    <MenuGroup>
+      <div className="mx-2 mb-2 overflow-hidden rounded-xl border border-border/70 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--primary)_12%,var(--background)),var(--background)_64%)] shadow-[0_1px_0_color-mix(in_srgb,var(--foreground)_7%,transparent)_inset]">
+        <div className="flex items-start gap-2 px-2.5 pb-1 pt-2.5">
+          <div className="min-w-0 flex-1">
+            <MenuGroupLabel className="p-0 text-[11px]">{label}</MenuGroupLabel>
+            <p className="mt-0.5 text-[10px] text-muted-foreground/70">Drag or tap a notch</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="inline-flex h-6 w-[4.75rem] items-center justify-center gap-1.5 rounded-full border border-primary/20 bg-primary/10 px-2 text-[11px] font-medium text-primary shadow-[0_1px_0_color-mix(in_srgb,var(--background)_60%,transparent)_inset]">
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-primary shadow-[0_0_0_3px_color-mix(in_srgb,var(--primary)_15%,transparent)]" />
+              <span className="truncate">{selectedOption.label}</span>
+            </span>
+            {labelTrailing}
+          </div>
+        </div>
+        <div className="px-2.5 pb-2.5">
+          <div className="relative h-10 rounded-lg border border-border/60 bg-background/55 px-3 shadow-[0_1px_0_color-mix(in_srgb,var(--foreground)_5%,transparent)_inset] focus-within:border-primary/45 focus-within:ring-2 focus-within:ring-primary/20">
+            <div className="absolute inset-x-4 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-muted-foreground/15 shadow-[0_1px_1px_color-mix(in_srgb,var(--foreground)_12%,transparent)_inset]">
+              <div className="relative h-full">
+                <div
+                  aria-hidden="true"
+                  className="h-full rounded-full bg-[linear-gradient(90deg,hsl(var(--primary)/0.6),hsl(var(--primary)))]"
+                  style={{ width: `${thumbPercent}%` }}
+                />
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 flex items-center justify-between"
+                >
+                  {options.map((option, index) => (
+                    <span
+                      key={option.value}
+                      className={cn(
+                        "size-2 rounded-full border-2 border-background",
+                        index <= activeIndex
+                          ? "bg-primary shadow-[0_0_0_1px_hsl(var(--primary)/0.35)]"
+                          : "bg-muted-foreground/35",
+                      )}
+                    />
+                  ))}
+                </div>
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-1/2 z-10 flex size-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background bg-primary shadow-[0_2px_8px_hsl(var(--primary)/0.32)]"
+                  style={{ left: `${thumbPercent}%` }}
+                >
+                  <span className="size-1.5 rounded-full bg-background/90" />
+                </div>
+              </div>
+            </div>
+            <input
+              aria-label={`${label}: ${selectedOption.label}`}
+              className="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none opacity-0"
+              max={lastIndex}
+              min={0}
+              onBlur={(event) => commitPreview(Number(event.currentTarget.value))}
+              onChange={(event) => previewValue(Number(event.currentTarget.value))}
+              onKeyUp={(event) => commitPreview(Number(event.currentTarget.value))}
+              onPointerUp={(event) => commitPreview(Number(event.currentTarget.value))}
+              step={1}
+              type="range"
+              value={activeIndex}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center justify-between px-0.5 text-[10px] font-medium text-muted-foreground/70">
+            <span>{options[0]?.label}</span>
+            <span>{options[lastIndex]?.label}</span>
+          </div>
+        </div>
+      </div>
+    </MenuGroup>
+  );
+}
+
 // Shared layout for one composer trait section: a labeled radio group whose rows
 // optionally show a "(default)" suffix and a right-side description tooltip.
 // `onSelectionComplete` runs on every row click (not just on value change) so
@@ -269,6 +398,7 @@ export interface TraitsMenuContentProps {
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
+  useAdvancedEffortSlider?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
   onSelectionComplete?: () => void;
 }
@@ -283,6 +413,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   prompt,
   onPromptChange,
   includeFastMode = true,
+  useAdvancedEffortSlider = false,
   modelOptions,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
@@ -340,8 +471,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     [threadId, provider, modelOptions, model, setProviderModelOptions, onSelectionComplete],
   );
 
-  const handleEffortChange = useCallback(
-    (value: string) => {
+  const changeEffort = useCallback(
+    (value: string, keepMenuOpen = false) => {
       if (ultrathinkPromptControlled) return;
       if (!value) return;
       const nextOption = effortLevels.find((option) => option.value === value);
@@ -364,7 +495,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             : provider === "claudeAgent"
               ? "effort"
               : "reasoningEffort");
-      commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
+      commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value), { keepMenuOpen });
     },
     [
       ultrathinkPromptControlled,
@@ -378,6 +509,17 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       commitTrait,
     ],
   );
+
+  const handleEffortChange = useCallback((value: string) => changeEffort(value), [changeEffort]);
+  const advancedEffortLevels = effortLevels.filter(
+    (option) => !promptInjectedValues.includes(option.value),
+  );
+  const showAdvancedEffortSlider =
+    useAdvancedEffortSlider &&
+    provider !== "kilo" &&
+    provider !== "opencode" &&
+    !ultrathinkPromptControlled &&
+    advancedEffortLevels.length > 1;
 
   if (!hasVisibleControls && !hasAgentControls) {
     return null;
@@ -418,36 +560,63 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       {effortLevels.length > 0 ? (
         <>
           {hasPriorEffortSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-            labelTrailing={
-              showsFastModeEffortToggle ? (
-                <FastModeToggle
-                  enabled={fastModeEnabled}
-                  onToggle={() =>
-                    commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
-                  }
-                />
-              ) : undefined
-            }
-            note={
-              ultrathinkPromptControlled ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Remove Ultrathink from the prompt to change effort.
-                </div>
-              ) : undefined
-            }
-            value={effort ?? ""}
-            disabled={ultrathinkPromptControlled}
-            options={effortLevels.map((option) => ({
-              value: option.value,
-              label: option.label,
-              isDefault: option.value === defaultEffort,
-              description: option.description ?? null,
-            }))}
-            onValueChange={handleEffortChange}
-            onSelectionComplete={onSelectionComplete}
-          />
+          {showAdvancedEffortSlider ? (
+            <AdvancedEffortSliderSection
+              key={`${provider}:${model ?? "unknown"}:${advancedEffortLevels
+                .map((option) => option.value)
+                .join(",")}`}
+              label="Effort"
+              labelTrailing={
+                showsFastModeEffortToggle ? (
+                  <FastModeToggle
+                    enabled={fastModeEnabled}
+                    onToggle={() =>
+                      commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
+                    }
+                  />
+                ) : undefined
+              }
+              value={effort ?? defaultEffort ?? advancedEffortLevels[0]?.value ?? ""}
+              options={advancedEffortLevels.map((option) => ({
+                value: option.value,
+                label: option.label,
+                isDefault: option.value === defaultEffort,
+                description: option.description ?? null,
+              }))}
+              onValueChange={(value) => changeEffort(value, true)}
+            />
+          ) : (
+            <TraitRadioSection
+              label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+              labelTrailing={
+                showsFastModeEffortToggle ? (
+                  <FastModeToggle
+                    enabled={fastModeEnabled}
+                    onToggle={() =>
+                      commitTrait({ fastMode: !fastModeEnabled }, { keepMenuOpen: true })
+                    }
+                  />
+                ) : undefined
+              }
+              note={
+                ultrathinkPromptControlled ? (
+                  <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                    Remove Ultrathink from the prompt to change effort.
+                  </div>
+                ) : undefined
+              }
+              value={effort ?? ""}
+              disabled={ultrathinkPromptControlled}
+              options={effortLevels.map((option) => ({
+                value: option.value,
+                label: option.label,
+                isDefault: option.value === defaultEffort,
+                description: option.description ?? null,
+              }))}
+              onValueChange={handleEffortChange}
+              onSelectionComplete={onSelectionComplete}
+            />
+          )}
         </>
       ) : null}
       {includeFastMode && supportsFastModeControl && !showsFastModeEffortToggle ? (
@@ -498,6 +667,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   prompt,
   onPromptChange,
   includeFastMode = true,
+  useAdvancedEffortSlider = false,
   modelOptions,
   open,
   onOpenChange,
@@ -685,6 +855,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           prompt={prompt}
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
+          useAdvancedEffortSlider={useAdvancedEffortSlider}
           modelOptions={modelOptions}
           onSelectionComplete={handleSelectionComplete}
         />
