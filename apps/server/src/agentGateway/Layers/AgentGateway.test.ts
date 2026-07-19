@@ -211,6 +211,7 @@ function makeHarnessLayer(
     readonly advanceParentTurnAfterDispatch?: {
       readonly commandType: OrchestrationCommand["type"];
       readonly turnId: string;
+      readonly state?: "running" | "completed" | "interrupted";
     };
   } = {},
 ) {
@@ -323,20 +324,22 @@ function makeHarnessLayer(
         Effect.flatMap(() =>
           Effect.suspend(() => {
             dispatched.push(command);
+            const advancedTurnState = options.advanceParentTurnAfterDispatch?.state ?? "running";
             if (
               options.advanceParentTurnAfterDispatch?.commandType === command.type &&
-              threadsById.get("thread-parent")?.latestTurn?.turnId !==
-                options.advanceParentTurnAfterDispatch.turnId
+              (threadsById.get("thread-parent")?.latestTurn?.turnId !==
+                options.advanceParentTurnAfterDispatch.turnId ||
+                threadsById.get("thread-parent")?.latestTurn?.state !== advancedTurnState)
             ) {
               threadsById.set(
                 "thread-parent",
                 makeThreadShell("thread-parent", {
                   latestTurn: {
                     turnId: TurnId.makeUnsafe(options.advanceParentTurnAfterDispatch.turnId),
-                    state: "running",
+                    state: advancedTurnState,
                     requestedAt: NOW,
                     startedAt: NOW,
-                    completedAt: null,
+                    completedAt: advancedTurnState === "running" ? null : NOW,
                     assistantMessageId: null,
                   },
                 }),
@@ -1708,11 +1711,12 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("keeps an in-flight MCP batch bound to its ingress turn and idempotency scope", () => {
+  it.effect("compensates a child started while its ingress turn is interrupted", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       advanceParentTurnAfterDispatch: {
-        commandType: "thread.create",
-        turnId: "turn-parent-later",
+        commandType: "thread.turn.start",
+        turnId: "turn-parent-active",
+        state: "interrupted",
       },
     });
     return Effect.gen(function* () {
@@ -1732,6 +1736,8 @@ describe("AgentGateway", () => {
                   {
                     prompt: "worker from turn A",
                     target: { provider: "codex", model: "gpt-5.5" },
+                    environment: "worktree",
+                    branchName: "agent/interrupted-worker",
                   },
                 ],
               },
@@ -1759,17 +1765,30 @@ describe("AgentGateway", () => {
 
       const results = response.body as Array<{ result?: Record<string, unknown> }>;
       assert.equal(response.status, 200);
-      assert.isFalse(isToolError(results[0]?.result));
+      assert.equal(
+        (toolResultJson(results[0]?.result).error as { code: string }).code,
+        "operation_failed",
+      );
       assert.equal(
         (toolResultJson(results[1]?.result).error as { code: string }).code,
         "caller_turn_inactive",
       );
-      assert.equal(harness.getOperationStatus("turn-parent-active"), "completed");
-      assert.isNull(harness.getOperationStatus("turn-parent-later"));
+      assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
       assert.equal(
         harness.dispatched.filter((command) => command.type === "thread.create").length,
         1,
       );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.turn.start").length,
+        1,
+      );
+      assert.equal(
+        harness.dispatched.filter((command) => command.type === "thread.delete").length,
+        1,
+      );
+      assert.equal(harness.worktreeCreates.length, 1);
+      assert.equal(harness.worktreeRemoves.length, 1);
+      assert.equal(harness.branchDeletes.length, 1);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

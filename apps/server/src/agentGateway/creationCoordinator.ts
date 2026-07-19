@@ -376,6 +376,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         );
       }
 
+      yield* context.assertCallerTurnActive();
+
       const reservation = yield* operationRepository
         .reserve({
           operationId,
@@ -470,6 +472,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         prepared,
         (entry) =>
           Effect.gen(function* () {
+            yield* context.assertCallerTurnActive();
             let branch: string | null = null;
             let worktreePath: string | null = null;
             if (entry.environment === "worktree") {
@@ -514,6 +517,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               }
             }
 
+            yield* context.assertCallerTurnActive();
             yield* orchestrationEngine.dispatch({
               type: "thread.create",
               commandId: entry.ids.threadCreateCommandId,
@@ -542,6 +546,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             });
             createdThreads.push(entry);
 
+            yield* context.assertCallerTurnActive();
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.start",
               commandId: entry.ids.turnStartCommandId,
@@ -559,6 +564,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               interactionMode: "default",
               createdAt: gatewayIsoNow(),
             });
+            // The dispatch can outlive the caller turn. Recheck after it returns so
+            // a child started in that final race window is compensated as part of
+            // the same durable operation instead of being left detached.
+            yield* context.assertCallerTurnActive();
 
             return {
               index: entry.index,

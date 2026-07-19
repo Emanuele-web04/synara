@@ -86,61 +86,20 @@ export function makeAgentGatewayMcpTransport(input: {
               ),
             );
           }
-          let invocationContext: ToolContext = {
+          const invocationContext: ToolContext = {
             ...context,
             jsonRpcRequestId: request.id,
           };
           if (tool.requiresActiveTurn) {
-            const writeAuthority = context.callerWriteAuthority;
-            if (writeAuthority === null) {
-              return jsonRpcResult(
-                request.id,
-                gatewayToolErrorResult(
-                  new GatewayToolError(
-                    "caller_turn_inactive",
-                    "This Synara write was rejected because no caller turn was active when the MCP request arrived.",
-                    { callerThreadId: context.callerThreadId },
-                  ),
-                ),
-              );
+            const authorityError = yield* context.assertCallerTurnActive().pipe(
+              Effect.match({
+                onFailure: (error) => error,
+                onSuccess: () => null,
+              }),
+            );
+            if (authorityError !== null) {
+              return jsonRpcResult(request.id, gatewayToolErrorResult(authorityError));
             }
-            if (!input.credentials.verifyWriteAuthority(writeAuthority)) {
-              return jsonRpcResult(
-                request.id,
-                gatewayToolErrorResult(
-                  new GatewayToolError(
-                    "caller_session_inactive",
-                    "This Synara write was rejected because its provider-session authority is no longer active.",
-                    { callerThreadId: context.callerThreadId },
-                  ),
-                ),
-              );
-            }
-            const caller = yield* input.requireThreadShell(context.callerThreadId);
-            if (
-              caller.latestTurn?.state !== "running" ||
-              caller.latestTurn.turnId !== writeAuthority.turnId
-            ) {
-              return jsonRpcResult(
-                request.id,
-                gatewayToolErrorResult(
-                  new GatewayToolError(
-                    "caller_turn_inactive",
-                    "This Synara write was rejected because the turn that received this MCP request is no longer active. In-flight requests cannot inherit authority from a later turn.",
-                    {
-                      callerThreadId: context.callerThreadId,
-                      authorizedTurnId: writeAuthority.turnId,
-                      latestTurnId: caller.latestTurn?.turnId ?? null,
-                      latestTurnState: caller.latestTurn?.state ?? null,
-                    },
-                  ),
-                ),
-              );
-            }
-            invocationContext = {
-              ...invocationContext,
-              callerTurnId: writeAuthority.turnId,
-            };
           }
           const result = yield* Effect.suspend(() => tool.handler(args, invocationContext)).pipe(
             Effect.catchDefect((defect) => Effect.succeed(mcpToolResultError(errorText(defect)))),
@@ -195,19 +154,67 @@ export function makeAgentGatewayMcpTransport(input: {
           ),
         };
       }
+      const callerWriteAuthority =
+        callerThread.value.latestTurn?.state === "running"
+          ? input.credentials.bindWriteAuthority(token, callerThread.value.latestTurn.turnId)
+          : null;
+      const assertCallerTurnActive = () =>
+        Effect.gen(function* () {
+          if (callerWriteAuthority === null) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "caller_turn_inactive",
+                "This Synara write was rejected because no caller turn was active when the MCP request arrived.",
+                { callerThreadId },
+              ),
+            );
+          }
+          if (!input.credentials.verifyWriteAuthority(callerWriteAuthority)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "caller_session_inactive",
+                "This Synara write was rejected because its provider-session authority is no longer active.",
+                { callerThreadId },
+              ),
+            );
+          }
+          const caller = yield* input
+            .requireThreadShell(callerThreadId)
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new GatewayToolError(
+                    "caller_turn_inactive",
+                    "This Synara write was rejected because the caller thread could no longer be verified.",
+                    { callerThreadId, error: errorText(error) },
+                  ),
+              ),
+            );
+          if (
+            caller.latestTurn?.state !== "running" ||
+            caller.latestTurn.turnId !== callerWriteAuthority.turnId
+          ) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "caller_turn_inactive",
+                "This Synara write was rejected because the turn that received this MCP request is no longer active. In-flight requests cannot inherit authority from a later turn.",
+                {
+                  callerThreadId,
+                  authorizedTurnId: callerWriteAuthority.turnId,
+                  latestTurnId: caller.latestTurn?.turnId ?? null,
+                  latestTurnState: caller.latestTurn?.state ?? null,
+                },
+              ),
+            );
+          }
+        });
       const context: Omit<ToolContext, "jsonRpcRequestId"> = {
         callerThreadId,
         callerSessionKey: callerSession.sessionKey,
         callerProvider: callerSession.provider,
         callerCapabilities: callerSession.capabilities,
-        callerWriteAuthority:
-          callerThread.value.latestTurn?.state === "running"
-            ? input.credentials.bindWriteAuthority(token, callerThread.value.latestTurn.turnId)
-            : null,
-        callerTurnId:
-          callerThread.value.latestTurn?.state === "running"
-            ? callerThread.value.latestTurn.turnId
-            : null,
+        callerTurnId: callerWriteAuthority?.turnId ?? null,
+        assertCallerTurnActive,
       };
 
       const rawMessages = Array.isArray(requestInput.body)
