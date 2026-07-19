@@ -2,6 +2,7 @@ import type {
   OrchestrationCommand,
   OrchestrationProject,
   OrchestrationReadModel,
+  OrchestrationSession,
   OrchestrationThread,
   ProjectKind,
   ProjectId,
@@ -18,6 +19,24 @@ function invariantError(commandType: string, detail: string): OrchestrationComma
     commandType,
     detail,
   });
+}
+
+/**
+ * True when the thread still has an in-flight / unsettled turn:
+ * session mid-lifecycle ("starting"/"running"), an activeTurnId, or a
+ * latestTurn still projected as "running".
+ */
+export function threadHasInFlightTurn(thread: {
+  readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
+  readonly latestTurn: { readonly state: string } | null;
+}): boolean {
+  const session = thread.session;
+  return (
+    session?.activeTurnId != null ||
+    session?.status === "starting" ||
+    session?.status === "running" ||
+    thread.latestTurn?.state === "running"
+  );
 }
 
 export function findThreadById(

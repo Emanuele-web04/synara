@@ -36,6 +36,7 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasInFlightTurn,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -1386,11 +1387,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (threadHasInFlightTurn(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' has an active turn. Interrupt the current turn before reverting checkpoints.`,
+        });
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",

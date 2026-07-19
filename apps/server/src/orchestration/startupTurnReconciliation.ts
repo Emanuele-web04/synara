@@ -43,6 +43,7 @@ import {
 } from "@synara/shared/threadSummary";
 import { Effect, Option } from "effect";
 
+import { threadHasInFlightTurn } from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -70,20 +71,11 @@ export interface ReconcilableThread {
 
 /**
  * True when a thread's persisted state implies a turn that only a now-dead
- * in-process runtime could ever advance:
- *  - the session still points at an active turn,
- *  - the session itself is mid-lifecycle ("starting"/"running"), or
- *  - the latest turn projection is still open ("running").
- *
- * A clean session (idle/ready/interrupted/stopped/error with no active turn and
- * no open turn) is left untouched — it is not showing "Working".
+ * in-process runtime could ever advance. A clean session (idle/ready/interrupted/
+ * stopped/error with no active turn and no open turn) is left untouched.
  */
 function needsRestartReconciliation(thread: ReconcilableThread): boolean {
-  const session = thread.session;
-  const hasActiveTurn = session?.activeTurnId != null;
-  const sessionInFlight = session?.status === "running" || session?.status === "starting";
-  const latestTurnRunning = thread.latestTurn?.state === "running";
-  return hasActiveTurn || sessionInFlight || latestTurnRunning;
+  return threadHasInFlightTurn(thread);
 }
 
 function planStalePendingRequestCommands(input: {
