@@ -762,6 +762,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           return sql`
             UPDATE agent_gateway_operations
             SET plan_json = ${recoveryPlanJson},
+                caller_thread_id = 'purged-thread:' || operation_id,
+                caller_turn_id = 'purged-turn:' || operation_id,
                 request_id = operation_id,
                 fingerprint = operation_id,
                 result_json = NULL,

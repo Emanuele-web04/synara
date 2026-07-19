@@ -1,4 +1,4 @@
-import { OrchestrationCheckpointFile } from "@synara/contracts";
+import { OrchestrationCheckpointFile, ThreadId, TurnId } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema, Struct } from "effect";
@@ -13,6 +13,7 @@ import {
   ProjectionPendingTurnStart,
   ProjectionTurn,
   ProjectionTurnById,
+  ProjectionTurnState,
   ProjectionTurnRepository,
   type ProjectionTurnRepositoryShape,
 } from "../Services/ProjectionTurns.ts";
@@ -28,6 +29,12 @@ const ProjectionTurnByIdDbRowSchema = ProjectionTurnById.mapFields(
     checkpointFiles: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   }),
 );
+
+const ProjectionWaitTurnDbRowSchema = Schema.Struct({
+  threadId: ThreadId,
+  turnId: Schema.NullOr(TurnId),
+  state: Schema.NullOr(ProjectionTurnState),
+});
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown) =>
@@ -251,6 +258,37 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const getProjectionWaitSnapshot = SqlSchema.findAll({
+    Request: Schema.Struct({
+      threadIds: Schema.Array(ThreadId),
+      turnIds: Schema.Array(TurnId),
+    }),
+    Result: ProjectionWaitTurnDbRowSchema,
+    execute: ({ threadIds, turnIds }) =>
+      turnIds.length > 0
+        ? sql`
+            SELECT
+              threads.thread_id AS "threadId",
+              turns.turn_id AS "turnId",
+              turns.state
+            FROM projection_threads AS threads
+            LEFT JOIN projection_turns AS turns
+              ON turns.thread_id = threads.thread_id
+             AND turns.turn_id IN ${sql.in(turnIds)}
+            WHERE threads.thread_id IN ${sql.in(threadIds)}
+              AND threads.deleted_at IS NULL
+          `
+        : sql`
+            SELECT
+              threads.thread_id AS "threadId",
+              NULL AS "turnId",
+              NULL AS state
+            FROM projection_threads AS threads
+            WHERE threads.thread_id IN ${sql.in(threadIds)}
+              AND threads.deleted_at IS NULL
+          `,
+  });
+
   const clearCheckpointTurnConflictRow = SqlSchema.void({
     Request: ClearCheckpointTurnConflictInput,
     execute: ({ threadId, turnId, checkpointTurnCount }) =>
@@ -363,6 +401,34 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     );
   };
 
+  const getManyWaitSnapshot: ProjectionTurnRepositoryShape["getManyWaitSnapshot"] = (input) => {
+    if (input.threadIds.length === 0) {
+      return Effect.succeed({ existingThreadIds: [], turns: [] });
+    }
+    const requested = new Set(input.turns.map((entry) => `${entry.threadId}\u0000${entry.turnId}`));
+    return getProjectionWaitSnapshot({
+      threadIds: [...new Set(input.threadIds)],
+      turnIds: [...new Set(input.turns.map((entry) => entry.turnId))],
+    }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.getManyWaitSnapshot:query",
+          "ProjectionTurnRepository.getManyWaitSnapshot:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => ({
+        existingThreadIds: [...new Set(rows.map((row) => row.threadId))],
+        turns: rows.flatMap((row) =>
+          row.turnId !== null &&
+          row.state !== null &&
+          requested.has(`${row.threadId}\u0000${row.turnId}`)
+            ? [{ threadId: row.threadId, turnId: row.turnId, state: row.state }]
+            : [],
+        ),
+      })),
+    );
+  };
+
   const clearCheckpointTurnConflict: ProjectionTurnRepositoryShape["clearCheckpointTurnConflict"] =
     (input) =>
       clearCheckpointTurnConflictRow(input).pipe(
@@ -384,6 +450,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     listByThreadId,
     getByTurnId,
     getManyByTurnId,
+    getManyWaitSnapshot,
     clearCheckpointTurnConflict,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;

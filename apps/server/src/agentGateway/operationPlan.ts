@@ -8,6 +8,9 @@ export interface RecoverableCreationPlanEntry {
     readonly operationId: string;
     readonly path: string;
     readonly branch: string;
+    readonly token: string;
+    readonly gitDir: string;
+    readonly head: string;
     readonly recordedAt: string;
   } | null;
   readonly ids: {
@@ -58,6 +61,9 @@ export function parseRecoverableCreationPlan(
       ownership?.operationId === operationId &&
       typeof ownership.path === "string" &&
       typeof ownership.branch === "string" &&
+      typeof ownership.token === "string" &&
+      typeof ownership.gitDir === "string" &&
+      typeof ownership.head === "string" &&
       typeof ownership.recordedAt === "string" &&
       ownership.path === value.plannedWorktreePath &&
       ownership.branch === value.newBranch
@@ -65,6 +71,9 @@ export function parseRecoverableCreationPlan(
             operationId,
             path: ownership.path,
             branch: ownership.branch,
+            token: ownership.token,
+            gitDir: ownership.gitDir,
+            head: ownership.head,
             recordedAt: ownership.recordedAt,
           }
         : null;
@@ -93,6 +102,9 @@ export function recordCreatedWorktreeInPlan(input: {
   readonly workspaceRoot: string;
   readonly path: string;
   readonly branch: string;
+  readonly token: string;
+  readonly gitDir: string;
+  readonly head: string;
   readonly recordedAt: string;
 }): string {
   const plan = parsePlanArray(input.planJson);
@@ -115,6 +127,9 @@ export function recordCreatedWorktreeInPlan(input: {
     operationId: input.operationId,
     path: input.path,
     branch: input.branch,
+    token: input.token,
+    gitDir: input.gitDir,
+    head: input.head,
     recordedAt: input.recordedAt,
   };
   return JSON.stringify(plan);
@@ -126,7 +141,7 @@ export function redactCreationPlanForPurgedCaller(input: {
 }): string {
   return JSON.stringify(
     parseRecoverableCreationPlan(input.planJson, input.operationId).map((entry) => ({
-      workspaceRoot: entry.workspaceRoot,
+      workspaceRoot: entry.environment === "worktree" ? entry.workspaceRoot : "",
       environment: entry.environment,
       newBranch: entry.newBranch,
       plannedWorktreePath: entry.plannedWorktreePath,

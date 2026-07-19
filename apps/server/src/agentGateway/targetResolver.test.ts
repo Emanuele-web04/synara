@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import type { ModelSelection } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -212,7 +213,7 @@ describe("agent gateway target resolver", () => {
           provider: "opencode",
           model: "openai/gpt-5",
           options: { inventedOption: "invented-value" },
-        },
+        } as unknown as ModelSelection,
         discovery: optionDiscovery,
       }).pipe(
         Effect.map(() => ({ code: "unexpected-success" })),

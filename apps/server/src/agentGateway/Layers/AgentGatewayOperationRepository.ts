@@ -150,6 +150,9 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
             workspaceRoot: input.workspaceRoot,
             path: input.path,
             branch: input.branch,
+            token: input.token,
+            gitDir: input.gitDir,
+            head: input.head,
             recordedAt: input.now,
           });
           const updated = yield* sql<{ readonly operationId: string }>`
@@ -191,6 +194,20 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
       WHERE operation_id = ${input.operationId}
         AND status IN ('reserved', 'dispatching', 'compensating')
     `.pipe(Effect.asVoid, Effect.mapError(mapSqlError("markCompensating")));
+
+  const recordCompensationFailure: AgentGatewayOperationRepositoryShape["recordCompensationFailure"] =
+    (input) =>
+      sql`
+        UPDATE agent_gateway_operations
+        SET status = 'compensating',
+            error_json = CASE
+              WHEN caller_purged_at IS NULL THEN ${input.errorJson}
+              ELSE '{"code":"cleanup_pending"}'
+            END,
+            updated_at = ${input.now}
+        WHERE operation_id = ${input.operationId}
+          AND status IN ('dispatching', 'compensating')
+      `.pipe(Effect.asVoid, Effect.mapError(mapSqlError("recordCompensationFailure")));
 
   const fail: AgentGatewayOperationRepositoryShape["fail"] = (input) =>
     sql
@@ -266,6 +283,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
     markDispatching,
     recordWorktreeCreated,
     markCompensating,
+    recordCompensationFailure,
     complete,
     fail,
     getById,

@@ -493,53 +493,93 @@ export const makeAgentGateway = Effect.gen(function* () {
           [...plan].reverse(),
           (entry) =>
             entry.environment === "worktree" && entry.plannedWorktreePath && entry.newBranch
-              ? Effect.gen(function* () {
-                  // A successful preflight only proves the names were free at
-                  // one point in time. Destructive startup cleanup requires a
-                  // marker persisted after git actually created this exact
-                  // worktree. A crash before that marker may leak an owned
-                  // resource, but can never delete a later unrelated one.
-                  if (!entry.worktreeOwnership) {
-                    return;
-                  }
-                  const branches = yield* git.listBranches({ cwd: entry.workspaceRoot });
-                  const branch = branches.branches.find(
-                    (candidate) => !candidate.isRemote && candidate.name === entry.newBranch,
-                  );
-                  if (existsSync(entry.plannedWorktreePath!)) {
-                    if (branch?.worktreePath !== entry.plannedWorktreePath) {
-                      return yield* Effect.fail(
-                        new Error(
-                          `Refusing to clean worktree ${entry.plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
-                        ),
+              ? git
+                  .withMutation(
+                    entry.workspaceRoot,
+                    Effect.gen(function* () {
+                      const plannedWorktreePath = entry.plannedWorktreePath;
+                      const newBranch = entry.newBranch;
+                      if (plannedWorktreePath === null || newBranch === null) return;
+                      const branches = yield* git.listBranches({ cwd: entry.workspaceRoot });
+                      const branch = branches.branches.find(
+                        (candidate) => !candidate.isRemote && candidate.name === entry.newBranch,
                       );
-                    }
-                    yield* git.removeWorktree({
-                      cwd: entry.workspaceRoot,
-                      path: entry.plannedWorktreePath!,
-                      force: true,
-                    });
-                  }
-                  if (branch) {
-                    yield* git.deleteBranch({
-                      cwd: entry.workspaceRoot,
-                      branch: entry.newBranch!,
-                      force: true,
-                    });
-                  }
-                }).pipe(
-                  Effect.catch((error) => Effect.sync(() => recoveryErrors.push(errorText(error)))),
-                )
+                      // A successful preflight only proves the names were free at
+                      // one point in time. Destructive startup cleanup requires a
+                      // marker persisted after git actually created this exact
+                      // worktree. If the marker was never persisted, retain the
+                      // sanitized operation whenever either planned resource now
+                      // exists so a leaked resource is never falsely terminalized.
+                      if (!entry.worktreeOwnership) {
+                        if (existsSync(plannedWorktreePath) || branch) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Cleanup remains pending for unverified worktree plan ${plannedWorktreePath}; automatic removal is unsafe without a durable ownership marker.`,
+                            ),
+                          );
+                        }
+                        return;
+                      }
+                      if (!existsSync(plannedWorktreePath)) {
+                        if (branch) {
+                          return yield* Effect.fail(
+                            new Error(
+                              `Refusing to delete branch ${newBranch}: the owned worktree is missing, so current branch ownership cannot be verified.`,
+                            ),
+                          );
+                        }
+                        return;
+                      }
+                      if (branch?.worktreePath !== plannedWorktreePath) {
+                        return yield* Effect.fail(
+                          new Error(
+                            `Refusing to clean worktree ${plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
+                          ),
+                        );
+                      }
+                      const verification = yield* git.verifyWorktreeOwnership({
+                        path: plannedWorktreePath,
+                        proof: {
+                          token: entry.worktreeOwnership.token,
+                          gitDir: entry.worktreeOwnership.gitDir,
+                          branch: entry.worktreeOwnership.branch,
+                          head: entry.worktreeOwnership.head,
+                        },
+                      });
+                      if (!verification.verified) {
+                        return yield* Effect.fail(
+                          new Error(
+                            `Refusing to clean worktree ${plannedWorktreePath}: ${verification.reason ?? "ownership verification failed"}.`,
+                          ),
+                        );
+                      }
+                      yield* git.removeWorktree({
+                        cwd: entry.workspaceRoot,
+                        path: plannedWorktreePath,
+                        force: false,
+                      });
+                      yield* git.deleteBranchIfUnchanged({
+                        cwd: entry.workspaceRoot,
+                        branch: newBranch,
+                        expectedHead: entry.worktreeOwnership.head,
+                      });
+                    }),
+                  )
+                  .pipe(
+                    Effect.catch((error) =>
+                      Effect.sync(() => recoveryErrors.push(errorText(error))),
+                    ),
+                  )
               : Effect.void,
           { discard: true },
         );
         if (recoveryErrors.length > 0) {
-          yield* operationRepository.fail({
+          yield* operationRepository.recordCompensationFailure({
             operationId: operation.operationId,
             errorJson: JSON.stringify({
               code: "recovery_compensation_failed",
               message:
-                "Synara could not fully compensate the interrupted operation during startup recovery. Some operation-owned resources may require manual cleanup; no replacements will be created.",
+                "Synara could not fully compensate the interrupted operation during startup recovery. The sanitized operation remains retryable and some resources may require manual cleanup; no replacements will be created.",
               errors: recoveryErrors,
             }),
             now: isoNow(),
@@ -565,12 +605,12 @@ export const makeAgentGateway = Effect.gen(function* () {
           Effect.gen(function* () {
             const detail = errorText(error);
             yield* operationRepository
-              .fail({
+              .recordCompensationFailure({
                 operationId: operation.operationId,
                 errorJson: JSON.stringify({
                   code: "startup_recovery_failed",
                   message:
-                    "Synara could not recover the interrupted operation. Operation-owned resources may require manual cleanup; no replacements will be created.",
+                    "Synara could not recover the interrupted operation. The sanitized operation remains retryable and resources may require manual cleanup; no replacements will be created.",
                   error: detail,
                 }),
                 now: isoNow(),
@@ -957,46 +997,61 @@ export const makeAgentGateway = Effect.gen(function* () {
         );
         const readPinnedStates = () =>
           projectionTurns
-            .getManyByTurnId(
-              pinned.flatMap((pin) =>
+            .getManyWaitSnapshot({
+              threadIds: pinned.map((pin) => ThreadId.makeUnsafe(pin.threadId)),
+              turns: pinned.flatMap((pin) =>
                 pin.runId === null
                   ? []
                   : [{ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) }],
               ),
-            )
+            })
             .pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
-              Effect.map((turns) => {
+              Effect.flatMap((snapshot) => {
+                const existingThreadIds = new Set(snapshot.existingThreadIds);
+                const missing = pinned.find((pin) => !existingThreadIds.has(pin.threadId));
+                if (missing) {
+                  return Effect.fail(
+                    new GatewayToolError(
+                      "thread_not_found",
+                      `Thread "${missing.threadId}" was not found.`,
+                    ),
+                  );
+                }
                 const turnsByKey = new Map(
-                  turns.map((turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const),
+                  snapshot.turns.map(
+                    (turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const,
+                  ),
                 );
-                return pinned.map((pin) => {
-                  const state =
-                    pin.runId === null
-                      ? ("idle" as const)
-                      : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
-                        initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
-                        "pending");
-                  const terminal =
-                    state === "idle" ||
-                    state === "completed" ||
-                    state === "error" ||
-                    state === "interrupted";
-                  return {
-                    threadId: pin.threadId,
-                    runId: pin.runId,
-                    state,
-                    terminal,
-                    timedOut: false,
-                    summary: null as string | null,
-                    summaryTruncated: false,
-                    error: null as string | null,
-                    readThread: {
-                      tool: "synara_read_thread" as const,
-                      arguments: { threadId: pin.threadId },
-                    },
-                  };
-                });
+                return Effect.succeed(
+                  pinned.map((pin) => {
+                    const state =
+                      pin.runId === null
+                        ? ("idle" as const)
+                        : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
+                          initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
+                          "pending");
+                    const terminal =
+                      state === "idle" ||
+                      state === "completed" ||
+                      state === "error" ||
+                      state === "interrupted";
+                    return {
+                      threadId: pin.threadId,
+                      runId: pin.runId,
+                      state,
+                      terminal,
+                      timedOut: false,
+                      summary: null as string | null,
+                      summaryTruncated: false,
+                      error: null as string | null,
+                      readThread: {
+                        tool: "synara_read_thread" as const,
+                        arguments: { threadId: pin.threadId },
+                      },
+                    };
+                  }),
+                );
               }),
             );
 
@@ -1380,6 +1435,12 @@ export const makeAgentGateway = Effect.gen(function* () {
         readonly cwd: string;
         readonly path: string;
         readonly branch: string;
+        proof: {
+          readonly token: string;
+          readonly gitDir: string;
+          readonly branch: string;
+          readonly head: string;
+        } | null;
       }> = [];
 
       const result = yield* Effect.forEach(
@@ -1397,13 +1458,28 @@ export const makeAgentGateway = Effect.gen(function* () {
               });
               branch = created.worktree.branch;
               worktreePath = created.worktree.path;
-              createdWorktrees.push({ cwd: entry.workspaceRoot, path: worktreePath, branch });
+              const trackedWorktree = {
+                cwd: entry.workspaceRoot,
+                path: worktreePath,
+                branch,
+                proof: null as (typeof createdWorktrees)[number]["proof"],
+              };
+              createdWorktrees.push(trackedWorktree);
+              const proof = yield* git.recordWorktreeOwnership({
+                path: worktreePath,
+                branch,
+                token: randomUUID(),
+              });
+              trackedWorktree.proof = proof;
               const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
                 operationId,
                 index: entry.index,
                 workspaceRoot: entry.workspaceRoot,
                 path: worktreePath,
                 branch,
+                token: proof.token,
+                gitDir: proof.gitDir,
+                head: proof.head,
                 now: isoNow(),
               });
               if (!ownershipRecorded) {
@@ -1527,25 +1603,68 @@ export const makeAgentGateway = Effect.gen(function* () {
             yield* Effect.forEach(
               [...createdWorktrees].reverse(),
               (worktree) =>
-                git.removeWorktree({ cwd: worktree.cwd, path: worktree.path, force: true }).pipe(
-                  Effect.flatMap(() =>
-                    git.deleteBranch({
-                      cwd: worktree.cwd,
-                      branch: worktree.branch,
-                      force: true,
-                    }),
-                  ),
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      compensatedWorktreeCount += 1;
-                    }),
-                  ),
-                  Effect.catch((error) =>
-                    Effect.sync(() =>
-                      compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
+                git
+                  .withMutation(
+                    worktree.cwd,
+                    worktree.proof === null
+                      ? git
+                          .removeWorktree({
+                            cwd: worktree.cwd,
+                            path: worktree.path,
+                            force: false,
+                          })
+                          .pipe(
+                            Effect.flatMap(() =>
+                              git.deleteBranch({
+                                cwd: worktree.cwd,
+                                branch: worktree.branch,
+                                force: false,
+                              }),
+                            ),
+                          )
+                      : git
+                          .verifyWorktreeOwnership({
+                            path: worktree.path,
+                            proof: worktree.proof,
+                          })
+                          .pipe(
+                            Effect.flatMap((verification) =>
+                              verification.verified
+                                ? Effect.void
+                                : Effect.fail(
+                                    new Error(
+                                      `Refusing live compensation: ${verification.reason ?? "ownership verification failed"}.`,
+                                    ),
+                                  ),
+                            ),
+                            Effect.flatMap(() =>
+                              git.removeWorktree({
+                                cwd: worktree.cwd,
+                                path: worktree.path,
+                                force: false,
+                              }),
+                            ),
+                            Effect.flatMap(() =>
+                              git.deleteBranchIfUnchanged({
+                                cwd: worktree.cwd,
+                                branch: worktree.branch,
+                                expectedHead: worktree.proof!.head,
+                              }),
+                            ),
+                          ),
+                  )
+                  .pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        compensatedWorktreeCount += 1;
+                      }),
+                    ),
+                    Effect.catch((error) =>
+                      Effect.sync(() =>
+                        compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
+                      ),
                     ),
                   ),
-                ),
               { discard: true },
             );
             const failure = {
@@ -1556,6 +1675,13 @@ export const makeAgentGateway = Effect.gen(function* () {
               compensationErrors,
             };
             if (compensationErrors.length > 0) {
+              yield* operationRepository
+                .recordCompensationFailure({
+                  operationId,
+                  errorJson: JSON.stringify(failure),
+                  now: isoNow(),
+                })
+                .pipe(Effect.catch(() => Effect.void));
               yield* Effect.logWarning("agent gateway compensation remains pending", {
                 operationId,
                 errors: compensationErrors,

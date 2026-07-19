@@ -547,6 +547,9 @@ describe("ProfileStatsArchive", () => {
               operationId: "operation-live",
               path: "/worktrees/private",
               branch: "agent/private",
+              token: "private-owner-token",
+              gitDir: "/repo/.git/worktrees/private",
+              head: "0123456789abcdef",
               recordedAt: "2026-06-14T10:06:00.000Z",
             },
             ids: {
@@ -581,6 +584,8 @@ describe("ProfileStatsArchive", () => {
         );
         const rows = yield* sql<{
           readonly operationId: string;
+          readonly callerThreadId: string;
+          readonly callerTurnId: string;
           readonly requestId: string;
           readonly fingerprint: string;
           readonly planJson: string;
@@ -590,15 +595,18 @@ describe("ProfileStatsArchive", () => {
           readonly callerPurgedAt: string | null;
         }>`
           SELECT
-            operation_id AS "operationId", request_id AS "requestId", fingerprint,
+            operation_id AS "operationId", caller_thread_id AS "callerThreadId",
+            caller_turn_id AS "callerTurnId", request_id AS "requestId", fingerprint,
             plan_json AS "planJson", status, result_json AS "resultJson",
             error_json AS "errorJson", caller_purged_at AS "callerPurgedAt"
           FROM agent_gateway_operations
-          WHERE caller_thread_id = 'thread-purge'
+          WHERE operation_id = 'operation-live'
         `;
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({
           operationId: "operation-live",
+          callerThreadId: "purged-thread:operation-live",
+          callerTurnId: "purged-turn:operation-live",
           requestId: "operation-live",
           fingerprint: "operation-live",
           status: "dispatching",
@@ -606,6 +614,13 @@ describe("ProfileStatsArchive", () => {
           errorJson: null,
           callerPurgedAt: expect.any(String),
         });
+        const retainedCallerIds = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM agent_gateway_operations
+          WHERE caller_thread_id = 'thread-purge'
+             OR caller_turn_id IN ('turn-purge-terminal', 'turn-purge-live')
+        `;
+        expect(retainedCallerIds[0]?.count).toBe(0);
         expect(rows[0]!.planJson).not.toContain("private live prompt");
         expect(rows[0]!.planJson).not.toContain("project-archive");
         expect(JSON.parse(rows[0]!.planJson)[0]).toEqual({
@@ -618,6 +633,9 @@ describe("ProfileStatsArchive", () => {
             operationId: "operation-live",
             path: "/worktrees/private",
             branch: "agent/private",
+            token: "private-owner-token",
+            gitDir: "/repo/.git/worktrees/private",
+            head: "0123456789abcdef",
             recordedAt: "2026-06-14T10:06:00.000Z",
           },
           ids: {

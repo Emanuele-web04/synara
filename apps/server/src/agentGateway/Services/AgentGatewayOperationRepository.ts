@@ -56,10 +56,18 @@ export interface AgentGatewayOperationRepositoryShape {
     readonly workspaceRoot: string;
     readonly path: string;
     readonly branch: string;
+    readonly token: string;
+    readonly gitDir: string;
+    readonly head: string;
     readonly now: string;
   }) => Effect.Effect<boolean, Error>;
   readonly markCompensating: (input: {
     readonly operationId: string;
+    readonly now: string;
+  }) => Effect.Effect<void, Error>;
+  readonly recordCompensationFailure: (input: {
+    readonly operationId: string;
+    readonly errorJson: string;
     readonly now: string;
   }) => Effect.Effect<void, Error>;
   readonly complete: (input: {

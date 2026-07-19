@@ -120,8 +120,20 @@ export function summarizeWaitThreadText(text: string | null | undefined): {
   readonly truncated: boolean;
 } {
   if (text === null || text === undefined) return { summary: null, truncated: false };
-  const result = truncateMessageText(text, WAIT_THREAD_SUMMARY_MAX_CHARS);
-  return { summary: result.text, truncated: result.truncated };
+  if (text.length <= WAIT_THREAD_SUMMARY_MAX_CHARS) {
+    return { summary: text, truncated: false };
+  }
+  let retainedChars = WAIT_THREAD_SUMMARY_MAX_CHARS;
+  let marker = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    marker = `\n[... truncated ${text.length - retainedChars} chars]`;
+    retainedChars = Math.max(0, WAIT_THREAD_SUMMARY_MAX_CHARS - marker.length);
+  }
+  marker = `\n[... truncated ${text.length - retainedChars} chars]`;
+  return {
+    summary: `${text.slice(0, retainedChars)}${marker}`,
+    truncated: true,
+  };
 }
 
 /**

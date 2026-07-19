@@ -126,6 +126,9 @@ layer("AgentGatewayOperationRepository", (it) => {
           workspaceRoot: "/repo",
           path: "/worktrees/owned",
           branch: "agent/owned",
+          token: "owner-token",
+          gitDir: "/repo/.git/worktrees/owned",
+          head: "0123456789abcdef",
           now: scoped.now,
         }),
       );
@@ -137,6 +140,9 @@ layer("AgentGatewayOperationRepository", (it) => {
           workspaceRoot: "/repo",
           path: "/worktrees/owned",
           branch: "agent/owned",
+          token: "owner-token",
+          gitDir: "/repo/.git/worktrees/owned",
+          head: "0123456789abcdef",
           now: "2026-07-16T00:00:01.000Z",
         }),
       );
@@ -147,6 +153,9 @@ layer("AgentGatewayOperationRepository", (it) => {
           operationId: scoped.operationId,
           path: "/worktrees/owned",
           branch: "agent/owned",
+          token: "owner-token",
+          gitDir: "/repo/.git/worktrees/owned",
+          head: "0123456789abcdef",
         },
       });
     }),
@@ -170,6 +179,40 @@ layer("AgentGatewayOperationRepository", (it) => {
         now: "2026-07-16T00:00:02.000Z",
       });
       assert.isNull(yield* repository.getById(scoped.operationId));
+    }),
+  );
+
+  it.effect("retains sanitized caller-purged operations while compensation is retryable", () =>
+    Effect.gen(function* () {
+      const repository = yield* AgentGatewayOperationRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const scoped = {
+        ...base,
+        callerTurnId: "turn-purged-retry",
+        operationId: "operation-purged-retry",
+      };
+      yield* repository.reserve(scoped);
+      yield* repository.markDispatching({ operationId: scoped.operationId, now: scoped.now });
+      yield* sql`
+        UPDATE agent_gateway_operations
+        SET caller_purged_at = '2026-07-16T00:00:01.000Z'
+        WHERE operation_id = ${scoped.operationId}
+      `;
+      yield* repository.recordCompensationFailure({
+        operationId: scoped.operationId,
+        errorJson: '{"code":"cleanup_pending","path":"/private/worktree"}',
+        now: "2026-07-16T00:00:02.000Z",
+      });
+
+      const stored = yield* repository.getById(scoped.operationId);
+      assert.equal(stored?.status, "compensating");
+      assert.equal(stored?.errorJson, '{"code":"cleanup_pending"}');
+      assert.notInclude(stored?.errorJson ?? "", "/private/worktree");
+      assert.isTrue(
+        (yield* repository.listNonTerminal()).some(
+          (operation) => operation.operationId === scoped.operationId,
+        ),
+      );
     }),
   );
 

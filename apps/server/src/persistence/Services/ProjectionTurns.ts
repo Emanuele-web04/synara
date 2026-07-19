@@ -87,6 +87,15 @@ export const GetProjectionTurnByTurnIdInput = Schema.Struct({
 });
 export type GetProjectionTurnByTurnIdInput = typeof GetProjectionTurnByTurnIdInput.Type;
 
+export interface ProjectionTurnWaitSnapshot {
+  readonly existingThreadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
+  readonly turns: ReadonlyArray<{
+    readonly threadId: GetProjectionTurnByTurnIdInput["threadId"];
+    readonly turnId: GetProjectionTurnByTurnIdInput["turnId"];
+    readonly state: ProjectionTurnState;
+  }>;
+}
+
 export const GetProjectionPendingTurnStartInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -151,6 +160,12 @@ export interface ProjectionTurnRepositoryShape {
   readonly getManyByTurnId: (
     input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
+
+  /** One lightweight query for pinned turn states plus current thread existence. */
+  readonly getManyWaitSnapshot: (input: {
+    readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
+    readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
+  }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
 
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
