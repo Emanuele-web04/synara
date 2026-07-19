@@ -11,10 +11,9 @@ import React, {
   type CSSProperties,
   Suspense,
   isValidElement,
-  use,
-  useCallback,
-  useDeferredValue,
   memo,
+  use,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -179,6 +178,11 @@ function restoreLiteralDollarPlaceholders(value: string): string {
     .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
+function markdownUrlTransform(href: string): string {
+  const restoredHref = restoreLiteralDollarPlaceholders(href);
+  return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
+}
+
 function restoreLiteralDollarsInNode(node: unknown): void {
   if (!node || typeof node !== "object") {
     return;
@@ -258,7 +262,7 @@ function normalizeRenderableMarkers(input: {
   const markers = input.markers ?? [];
   const result: RenderableThreadMarker[] = [];
   let previousEnd = -1;
-  for (const marker of [...markers].sort((left, right) => left.startOffset - right.startOffset)) {
+  for (const marker of markers.toSorted((left, right) => left.startOffset - right.startOffset)) {
     if (marker.startOffset < previousEnd) {
       continue;
     }
@@ -848,7 +852,7 @@ function MarkdownCodeBlock({
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleCopy = useCallback(() => {
+  const handleCopy = () => {
     void copyTextToClipboard(code)
       .then(() => {
         if (copiedTimerRef.current != null) {
@@ -861,8 +865,8 @@ function MarkdownCodeBlock({
         }, 1200);
       })
       .catch(() => undefined);
-  }, [code]);
-  const toggleWrap = useCallback(() => setWrap((previous) => !previous), []);
+  };
+  const toggleWrap = () => setWrap((previous) => !previous);
 
   useEffect(
     () => () => {
@@ -988,14 +992,12 @@ function UncachedShikiCodeBlock({
   cacheKey: string;
 }) {
   const highlighter = use(syntaxHighlighting.getSyntaxHighlighterPromise(language));
-  const highlightedHtml = useMemo(() => {
-    return syntaxHighlighting.highlightCodeToHtmlWithFallback(
-      highlighter,
-      code,
-      language,
-      themeName,
-    );
-  }, [code, highlighter, language, syntaxHighlighting, themeName]);
+  const highlightedHtml = syntaxHighlighting.highlightCodeToHtmlWithFallback(
+    highlighter,
+    code,
+    language,
+    themeName,
+  );
 
   useEffect(() => {
     if (!isStreaming) {
@@ -1011,16 +1013,22 @@ function UncachedShikiCodeBlock({
 function ChatMarkdown({
   text,
   cwd,
-  isStreaming = false,
-  className = "text-sm leading-relaxed",
+  isStreaming: isStreamingProp,
+  className: classNameProp,
   style,
   onImageExpand,
   markers,
   onTaskToggle,
-  variant = "assistant",
+  variant: variantProp,
   mentionReferences,
   terminalContexts,
 }: ChatMarkdownProps) {
+  // Defaults applied with ?? in the body, not in the destructuring: default
+  // values in parameter destructuring make React Compiler 1.0.0 bail on the
+  // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
+  const isStreaming = isStreamingProp ?? false;
+  const className = classNameProp ?? "text-sm leading-relaxed";
+  const variant = variantProp ?? "assistant";
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
@@ -1031,6 +1039,7 @@ function ChatMarkdown({
   const smoothedText = useSmoothStreamedText(text, isStreaming);
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const normalizedText = useMemo(
     () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
     [isUserVariant, smoothedText],
@@ -1068,10 +1077,6 @@ function ChatMarkdown({
       : MARKDOWN_REMARK_PLUGINS;
   }, [composerChipsRemarkPlugin, threadMarkerRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
-  const markdownUrlTransform = useCallback((href: string) => {
-    const restoredHref = restoreLiteralDollarPlaceholders(href);
-    return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
-  }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, children, ...props }) {
@@ -1166,7 +1171,8 @@ function ChatMarkdown({
           </code>
         );
       },
-      img({ node: _node, src, alt = "", ...props }) {
+      img({ node: _node, src, alt: altProp, ...props }) {
+        const alt = altProp ?? "";
         const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
         if (isLocalImageMarkdownSrc(restoredSrc)) {
           return (

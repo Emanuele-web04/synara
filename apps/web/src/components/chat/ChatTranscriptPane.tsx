@@ -6,11 +6,9 @@
 import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
-  memo,
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
+  useState,
   type ComponentProps,
   type CSSProperties,
   type MouseEventHandler,
@@ -92,7 +90,7 @@ interface ChatTranscriptPaneProps {
   worktreeSetup: WorktreeSetupSnapshot | null;
 }
 
-export const ChatTranscriptPane = memo(function ChatTranscriptPane({
+export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
@@ -157,21 +155,14 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   // flow through a stable store (not pane state) so scroll updates re-render only
   // the trail, not the memoized timeline; reset on thread switch so stale
   // highlights can't linger.
-  const trailItems = useMemo(() => deriveMessageTrailItems(timelineEntries), [timelineEntries]);
-  const activeTrailStoreRef = useRef<ReturnType<typeof createActiveTrailStore> | null>(null);
-  if (activeTrailStoreRef.current === null) {
-    activeTrailStoreRef.current = createActiveTrailStore();
-  }
-  const activeTrailStore = activeTrailStoreRef.current;
+  const trailItems = deriveMessageTrailItems(timelineEntries);
+  const [activeTrailStore] = useState(() => createActiveTrailStore());
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
-  const handleTrailSelect = useCallback(
-    (messageId: MessageId) => {
-      timelineControllerRef?.current?.scrollToMessage(messageId);
-    },
-    [timelineControllerRef],
-  );
+  const handleTrailSelect = (messageId: MessageId) => {
+    timelineControllerRef?.current?.scrollToMessage(messageId);
+  };
 
   return (
     <div
@@ -296,4 +287,4 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
       </div>
     </div>
   );
-});
+}

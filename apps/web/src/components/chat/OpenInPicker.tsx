@@ -5,7 +5,6 @@
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { memo } from "react";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -31,7 +30,7 @@ import {
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
 
-export const OpenInPicker = memo(function OpenInPicker({
+export function OpenInPicker({
   keybindings: keybindingsProp,
   availableEditors: availableEditorsProp,
   openInTarget,
@@ -135,4 +134,4 @@ export const OpenInPicker = memo(function OpenInPicker({
       </Menu>
     </ChatHeaderSplitGroup>
   );
-});
+}

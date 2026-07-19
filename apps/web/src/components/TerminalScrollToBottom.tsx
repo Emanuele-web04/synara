@@ -4,7 +4,7 @@
 // Exports: TerminalScrollToBottom
 
 import type { Terminal } from "@xterm/xterm";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconButton } from "~/components/ui/icon-button";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -14,17 +14,30 @@ interface TerminalScrollToBottomProps {
 }
 
 export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps) {
-  const [isVisible, setIsVisible] = useState(false);
+  // Keyed by terminal: swapping terminals derives back to hidden in the same
+  // render (no state-resetting effect); the rAF check re-evaluates right after.
+  const [visibility, setVisibility] = useState<{
+    terminal: Terminal;
+    visible: boolean;
+  } | null>(null);
+  const isVisible =
+    terminal !== null && visibility !== null && visibility.terminal === terminal
+      ? visibility.visible
+      : false;
   const visibilityRafRef = useRef<number | null>(null);
 
-  const checkPosition = useCallback(() => {
+  const checkPosition = () => {
     if (!terminal) return;
     const buf = terminal.buffer.active;
     const nextVisible = buf.viewportY < buf.baseY;
-    setIsVisible((current) => (current === nextVisible ? current : nextVisible));
-  }, [terminal]);
+    setVisibility((current) =>
+      current !== null && current.terminal === terminal && current.visible === nextVisible
+        ? current
+        : { terminal, visible: nextVisible },
+    );
+  };
 
-  const scheduleVisibilityCheck = useCallback(() => {
+  const scheduleVisibilityCheck = () => {
     if (visibilityRafRef.current !== null) {
       return;
     }
@@ -32,11 +45,10 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
       visibilityRafRef.current = null;
       checkPosition();
     });
-  }, [checkPosition]);
+  };
 
   useEffect(() => {
     if (!terminal) {
-      setIsVisible(false);
       return;
     }
     scheduleVisibilityCheck();

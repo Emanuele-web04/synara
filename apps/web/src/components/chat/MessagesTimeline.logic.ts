@@ -403,44 +403,40 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    const message = timelineEntry.message;
     const leadingWorkEntries =
-      timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
-    const leadingWorkGroupId =
-      timelineEntry.message.role === "assistant" ? pendingWorkGroup?.id : undefined;
-    if (timelineEntry.message.role === "assistant") {
+      message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
+    const leadingWorkGroupId = message.role === "assistant" ? pendingWorkGroup?.id : undefined;
+    if (message.role === "assistant") {
       pendingWorkGroup = null;
     } else {
       flushPendingWorkGroup();
     }
 
     const assistantTurnStillInProgress =
-      timelineEntry.message.role === "assistant" &&
+      message.role === "assistant" &&
       input.activeTurnInProgress === true &&
       input.activeTurnId != null &&
-      timelineEntry.message.turnId === input.activeTurnId;
+      message.turnId === input.activeTurnId;
 
     nextRows.push({
       kind: "message",
       id: timelineEntry.id,
       createdAt: timelineEntry.createdAt,
-      message: timelineEntry.message,
+      message,
       ...(leadingWorkEntries ? { leadingWorkEntries } : {}),
       ...(leadingWorkGroupId ? { leadingWorkGroupId } : {}),
-      durationStart:
-        durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
+      durationStart: durationStartByMessageId.get(message.id) ?? message.createdAt,
       showAssistantCopyButton:
-        timelineEntry.message.role === "assistant" &&
-        terminalAssistantMessageIds.has(timelineEntry.message.id),
-      assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
+        message.role === "assistant" && terminalAssistantMessageIds.has(message.id),
+      assistantCopyStreaming: message.streaming || assistantTurnStillInProgress,
       assistantTurnInProgress: assistantTurnStillInProgress,
       assistantTurnDiffSummary:
-        timelineEntry.message.role === "assistant"
-          ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
+        message.role === "assistant"
+          ? input.turnDiffSummaryByAssistantMessageId.get(message.id)
           : undefined,
       revertTurnCount:
-        timelineEntry.message.role === "user"
-          ? input.revertTurnCountByUserMessageId.get(timelineEntry.message.id)
-          : undefined,
+        message.role === "user" ? input.revertTurnCountByUserMessageId.get(message.id) : undefined,
     });
   }
 
@@ -560,18 +556,19 @@ function collapseSettledTurns(
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
+    const message = row.message;
     // Only the terminal message of a turn owns the collapsed group.
-    if (!terminalAssistantMessageIds.has(row.message.id)) continue;
+    if (!terminalAssistantMessageIds.has(message.id)) continue;
     // Never collapse the live turn: streaming text or the in-progress turn stays
     // inline so the user sees output as it arrives.
-    if (row.message.streaming) continue;
-    const turnId = row.message.turnId ?? null;
+    if (message.streaming) continue;
+    const turnId = message.turnId ?? null;
     const turnIsActive =
       activeTurnInProgress &&
       (activeTurnId != null
         ? (turnId != null && turnId === activeTurnId) ||
-          row.message.id === lastTerminalAssistantMessageId
-        : row.message.id === lastTerminalAssistantMessageId);
+          message.id === lastTerminalAssistantMessageId
+        : message.id === lastTerminalAssistantMessageId);
     if (turnIsActive) continue;
 
     // Scan back to the response boundary collecting rows to fold. Provider
@@ -629,7 +626,7 @@ function collapseSettledTurns(
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
-      const elapsed = formatElapsed(collapsedStart, row.message.completedAt);
+      const elapsed = formatElapsed(collapsedStart, message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
       delete row.leadingWorkEntries;
@@ -637,7 +634,7 @@ function collapseSettledTurns(
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
-      for (const index of [...foldIndices].sort((a, b) => b - a)) {
+      for (const index of foldIndices.toSorted((a, b) => b - a)) {
         rows.splice(index, 1);
       }
       pass -= foldIndices.length;

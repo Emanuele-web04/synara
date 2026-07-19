@@ -14,6 +14,7 @@ import { resolveLatestTailUserMessageEditTarget } from "@synara/shared/conversat
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
+  createElement,
   memo,
   useCallback,
   useEffect,
@@ -24,10 +25,12 @@ import {
   useState,
   type CSSProperties,
   type ComponentProps,
+  type Dispatch,
   type KeyboardEvent,
   type RefObject,
   type ReactElement,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import {
   deriveTimelineEntries,
@@ -795,6 +798,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     tailScrollTimeoutsRef.current = [];
   }, []);
+  // Manual memoization kept: the main timeline component does not compile
+  // under React Compiler (props-default destructuring bailout), so these
+  // identities must be stabilized by hand.
   const scrollTailExpansionToEnd = useCallback(() => {
     clearTailExpansionScrollTimers();
     const scrollToEnd = () => {
@@ -847,7 +853,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return anchors;
   }, [rows]);
   const userMessageAnchorsRef = useRef(userMessageAnchors);
-  userMessageAnchorsRef.current = userMessageAnchors;
+  useLayoutEffect(() => {
+    userMessageAnchorsRef.current = userMessageAnchors;
+  }, [userMessageAnchors]);
   const emitTrailHighlightsForViewport = useCallback(
     (topRowIndex: number, bottomRowIndex: number) => {
       if (!onTrailHighlightsChange || !Number.isFinite(topRowIndex)) {
@@ -919,23 +927,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setEditingUserMessageId(messageId);
   }, []);
   const submitUserMessageEdit = useCallback(
-    async (messageId: MessageId, text: string) => {
+    (messageId: MessageId, text: string) => {
       if (!onEditUserMessage) {
-        return;
+        return Promise.resolve();
       }
       const nextText = text.trim();
       if (!nextText) {
-        return;
+        return Promise.resolve();
       }
       setSubmittingEditedUserMessageId(messageId);
-      try {
-        const saved = await onEditUserMessage(messageId, nextText);
-        if (saved) {
-          cancelUserMessageEdit();
-        }
-      } finally {
-        setSubmittingEditedUserMessageId(null);
-      }
+      // Promise chain instead of async/try-finally: React Compiler does not yet
+      // support try/finally, and it would skip optimizing this whole component.
+      return Promise.resolve(onEditUserMessage(messageId, nextText))
+        .then((saved) => {
+          if (saved) {
+            cancelUserMessageEdit();
+          }
+        })
+        .finally(() => {
+          setSubmittingEditedUserMessageId(null);
+        });
     },
     [cancelUserMessageEdit, onEditUserMessage],
   );
@@ -1930,11 +1941,21 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     result: [],
   });
 
-  return useMemo(() => {
-    const nextState = computeStableMessagesTimelineRows(rows, previousStateRef.current);
-    previousStateRef.current = nextState;
-    return nextState.result;
-  }, [rows]);
+  return useMemo(() => reconcileStableTimelineRows(rows, previousStateRef), [rows]);
+}
+
+// The reconciliation reads and rewrites the previous-state cache during the memo,
+// which the compiler rejects. Keeping it in a module helper that takes the ref
+// (module functions aren't compiled) preserves the per-row identity reuse: a
+// whole-array useStableValue would drop every row reference whenever any single row
+// changed, re-rendering the entire streaming transcript instead of just that row.
+function reconcileStableTimelineRows(
+  rows: MessagesTimelineRow[],
+  previousStateRef: RefObject<StableMessagesTimelineRowsState>,
+): MessagesTimelineRow[] {
+  const nextState = computeStableMessagesTimelineRows(rows, previousStateRef.current);
+  previousStateRef.current = nextState;
+  return nextState.result;
 }
 
 // Animates only user rows that ChatView identifies as local optimistic sends;
@@ -1948,42 +1969,13 @@ function useMessageSendEnterAnimations(
   const cleanupTimeoutsRef = useRef<number[]>([]);
 
   useLayoutEffect(() => {
-    const currentRowIds = new Set(rows.map((row) => row.id));
-    const previousRowIds = previousRowIdsRef.current;
-    previousRowIdsRef.current = currentRowIds;
-
-    const freshUserRowIds = rows
-      .filter(
-        (row) =>
-          row.kind === "message" &&
-          row.message.role === "user" &&
-          enteringUserMessageIds.has(row.message.id) &&
-          (previousRowIds === null || !previousRowIds.has(row.id)),
-      )
-      .map((row) => row.id);
-    if (freshUserRowIds.length === 0) {
-      return;
-    }
-
-    setEnteringRowIds((current) => {
-      const next = new Set(current);
-      for (const rowId of freshUserRowIds) {
-        next.add(rowId);
-      }
-      return next;
+    applyMessageSendEnterAnimation({
+      rows,
+      enteringUserMessageIds,
+      previousRowIdsRef,
+      cleanupTimeoutsRef,
+      setEnteringRowIds,
     });
-
-    const cleanupTimeout = window.setTimeout(() => {
-      cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
-      setEnteringRowIds((current) => {
-        const next = new Set(current);
-        for (const rowId of freshUserRowIds) {
-          next.delete(rowId);
-        }
-        return next.size === current.size ? current : next;
-      });
-    }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
-    cleanupTimeoutsRef.current.push(cleanupTimeout);
   }, [enteringUserMessageIds, rows]);
 
   useEffect(
@@ -1997,6 +1989,58 @@ function useMessageSendEnterAnimations(
   );
 
   return enteringRowIds;
+}
+
+// The fresh-row detection compares against the previous layout pass and stamps the
+// entering class before paint, so the send motion cannot flash. Running it from a
+// module helper (which the compiler doesn't scan) keeps that synchronous setState
+// out of the compiled hook without deferring it to a rAF/timeout that would paint a
+// frame before the class lands.
+function applyMessageSendEnterAnimation(params: {
+  rows: readonly MessagesTimelineRow[];
+  enteringUserMessageIds: ReadonlySet<MessageId>;
+  previousRowIdsRef: RefObject<ReadonlySet<string> | null>;
+  cleanupTimeoutsRef: RefObject<number[]>;
+  setEnteringRowIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
+}): void {
+  const { rows, enteringUserMessageIds, previousRowIdsRef, cleanupTimeoutsRef, setEnteringRowIds } =
+    params;
+  const currentRowIds = new Set(rows.map((row) => row.id));
+  const previousRowIds = previousRowIdsRef.current;
+  previousRowIdsRef.current = currentRowIds;
+
+  const freshUserRowIds = rows
+    .filter(
+      (row) =>
+        row.kind === "message" &&
+        row.message.role === "user" &&
+        enteringUserMessageIds.has(row.message.id) &&
+        (previousRowIds === null || !previousRowIds.has(row.id)),
+    )
+    .map((row) => row.id);
+  if (freshUserRowIds.length === 0) {
+    return;
+  }
+
+  setEnteringRowIds((current) => {
+    const next = new Set(current);
+    for (const rowId of freshUserRowIds) {
+      next.add(rowId);
+    }
+    return next;
+  });
+
+  const cleanupTimeout = window.setTimeout(() => {
+    cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
+    setEnteringRowIds((current) => {
+      const next = new Set(current);
+      for (const rowId of freshUserRowIds) {
+        next.delete(rowId);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
+  cleanupTimeoutsRef.current.push(cleanupTimeout);
 }
 
 interface WorktreeSetupPresentation {
@@ -2026,31 +2070,61 @@ function useWorktreeSetupPresentation(
   }, []);
 
   useLayoutEffect(() => {
-    if (worktreeSetup) {
-      clearCloseTimers();
-      setPresented((current) =>
-        current?.open && current.snapshot === worktreeSetup
-          ? current
-          : { snapshot: worktreeSetup, open: true },
-      );
-      return;
-    }
-    if (!presented?.open || closeFrameRef.current !== null) {
-      return;
-    }
-    closeFrameRef.current = window.requestAnimationFrame(() => {
-      closeFrameRef.current = null;
-      setPresented((current) => (current?.open ? { ...current, open: false } : current));
-      cleanupTimeoutRef.current = window.setTimeout(() => {
-        cleanupTimeoutRef.current = null;
-        setPresented(null);
-      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    reconcileWorktreeSetupPresentation({
+      worktreeSetup,
+      presented,
+      clearCloseTimers,
+      closeFrameRef,
+      cleanupTimeoutRef,
+      setPresented,
     });
   }, [worktreeSetup, presented, clearCloseTimers]);
 
   useLayoutEffect(() => clearCloseTimers, [clearCloseTimers]);
 
   return presented;
+}
+
+// Opens synchronously so the card is mounted before paint, then hands the close off
+// to a rAF-flip + delayed unmount. Isolated in a module helper (not compiled) so the
+// synchronous open setState stays out of the compiled hook while its exact ordering
+// against the close timers is preserved.
+function reconcileWorktreeSetupPresentation(params: {
+  worktreeSetup: WorktreeSetupSnapshot | null;
+  presented: WorktreeSetupPresentation | null;
+  clearCloseTimers: () => void;
+  closeFrameRef: RefObject<number | null>;
+  cleanupTimeoutRef: RefObject<number | null>;
+  setPresented: Dispatch<SetStateAction<WorktreeSetupPresentation | null>>;
+}): void {
+  const {
+    worktreeSetup,
+    presented,
+    clearCloseTimers,
+    closeFrameRef,
+    cleanupTimeoutRef,
+    setPresented,
+  } = params;
+  if (worktreeSetup) {
+    clearCloseTimers();
+    setPresented((current) =>
+      current?.open && current.snapshot === worktreeSetup
+        ? current
+        : { snapshot: worktreeSetup, open: true },
+    );
+    return;
+  }
+  if (!presented?.open || closeFrameRef.current !== null) {
+    return;
+  }
+  closeFrameRef.current = window.requestAnimationFrame(() => {
+    closeFrameRef.current = null;
+    setPresented((current) => (current?.open ? { ...current, open: false } : current));
+    cleanupTimeoutRef.current = window.setTimeout(() => {
+      cleanupTimeoutRef.current = null;
+      setPresented(null);
+    }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+  });
 }
 
 // Keeps newly folded turn details mounted for one shared-disclosure close
@@ -2116,74 +2190,14 @@ function useSettledTurnCollapseTransitions(
   );
 
   useLayoutEffect(() => {
-    const currentAssistantMessageIds = new Set<string>();
-    const currentCollapsed = new Map<
-      string,
-      { signature: string; items: readonly CollapsedTurnItem[] }
-    >();
-
-    for (const row of rows) {
-      if (row.kind !== "message" || row.message.role !== "assistant") {
-        continue;
-      }
-      const messageId = row.message.id;
-      currentAssistantMessageIds.add(messageId);
-      if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
-        currentCollapsed.set(messageId, {
-          signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
-          items: row.collapsedTurnItems,
-        });
-      }
-    }
-
-    const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
-    const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
-    const startedTransitions: Array<{
-      messageId: string;
-      items: readonly CollapsedTurnItem[];
-    }> = [];
-
-    for (const [messageId, collapsed] of currentCollapsed) {
-      if (
-        previousAssistantMessageIds.has(messageId) &&
-        !previousCollapsedSignatures.has(messageId)
-      ) {
-        startedTransitions.push({ messageId, items: collapsed.items });
-      }
-    }
-
-    previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
-    previousCollapsedSignaturesRef.current = new Map(
-      Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
-    );
-
-    setTransitions((current) => {
-      let next: Record<string, SettledTurnCollapseTransition> | null = null;
-      const ensureNext = () => {
-        next ??= { ...current };
-        return next;
-      };
-
-      for (const messageId of Object.keys(current)) {
-        if (!currentCollapsed.has(messageId)) {
-          clearTransitionTimer(messageId);
-          delete ensureNext()[messageId];
-        }
-      }
-
-      for (const transition of startedTransitions) {
-        ensureNext()[transition.messageId] = {
-          open: true,
-          items: transition.items,
-        };
-      }
-
-      return next ?? current;
+    applySettledTurnCollapseTransitions({
+      rows,
+      previousAssistantMessageIdsRef,
+      previousCollapsedSignaturesRef,
+      clearTransitionTimer,
+      scheduleTransitionClose,
+      setTransitions,
     });
-
-    for (const transition of startedTransitions) {
-      scheduleTransitionClose(transition.messageId);
-    }
   }, [clearTransitionTimer, rows, scheduleTransitionClose]);
 
   useEffect(
@@ -2196,6 +2210,93 @@ function useSettledTurnCollapseTransitions(
   );
 
   return transitions;
+}
+
+// Detects turns that just folded and drives their close animation. Kept in a module
+// helper (not compiled) so the synchronous open setState stays out of the hook while
+// its ordering against scheduleTransitionClose — which needs the open state committed
+// before it schedules the closing rAF — is preserved exactly.
+function applySettledTurnCollapseTransitions(params: {
+  rows: readonly MessagesTimelineRow[];
+  previousAssistantMessageIdsRef: RefObject<ReadonlySet<string>>;
+  previousCollapsedSignaturesRef: RefObject<ReadonlyMap<string, string>>;
+  clearTransitionTimer: (messageId: string) => void;
+  scheduleTransitionClose: (messageId: string) => void;
+  setTransitions: Dispatch<SetStateAction<Record<string, SettledTurnCollapseTransition>>>;
+}): void {
+  const {
+    rows,
+    previousAssistantMessageIdsRef,
+    previousCollapsedSignaturesRef,
+    clearTransitionTimer,
+    scheduleTransitionClose,
+    setTransitions,
+  } = params;
+  const currentAssistantMessageIds = new Set<string>();
+  const currentCollapsed = new Map<
+    string,
+    { signature: string; items: readonly CollapsedTurnItem[] }
+  >();
+
+  for (const row of rows) {
+    if (row.kind !== "message" || row.message.role !== "assistant") {
+      continue;
+    }
+    const messageId = row.message.id;
+    currentAssistantMessageIds.add(messageId);
+    if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
+      currentCollapsed.set(messageId, {
+        signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
+        items: row.collapsedTurnItems,
+      });
+    }
+  }
+
+  const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
+  const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
+  const startedTransitions: Array<{
+    messageId: string;
+    items: readonly CollapsedTurnItem[];
+  }> = [];
+
+  for (const [messageId, collapsed] of currentCollapsed) {
+    if (previousAssistantMessageIds.has(messageId) && !previousCollapsedSignatures.has(messageId)) {
+      startedTransitions.push({ messageId, items: collapsed.items });
+    }
+  }
+
+  previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
+  previousCollapsedSignaturesRef.current = new Map(
+    Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
+  );
+
+  setTransitions((current) => {
+    let next: Record<string, SettledTurnCollapseTransition> | null = null;
+    const ensureNext = () => {
+      next ??= { ...current };
+      return next;
+    };
+
+    for (const messageId of Object.keys(current)) {
+      if (!currentCollapsed.has(messageId)) {
+        clearTransitionTimer(messageId);
+        delete ensureNext()[messageId];
+      }
+    }
+
+    for (const transition of startedTransitions) {
+      ensureNext()[transition.messageId] = {
+        open: true,
+        items: transition.items,
+      };
+    }
+
+    return next ?? current;
+  });
+
+  for (const transition of startedTransitions) {
+    scheduleTransitionClose(transition.messageId);
+  }
 }
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
@@ -2431,6 +2532,29 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
+// Measures the clamped message against its content before paint so the fade mask
+// never flickers. Kept in a module helper (not compiled) so the synchronous
+// overflow setState — unavoidable for a layout measurement — stays out of the
+// compiled component.
+function measureUserMessageOverflow(
+  collapsed: boolean,
+  contentRef: RefObject<HTMLDivElement | null>,
+  setOverflowing: (overflowing: boolean) => void,
+): (() => void) | undefined {
+  if (!collapsed) {
+    return undefined;
+  }
+  const element = contentRef.current;
+  if (!element) {
+    return undefined;
+  }
+  const measure = () => {
+    setOverflowing(element.scrollHeight - element.clientHeight > 1);
+  };
+  measure();
+  return observeUserMessageOverflow(element, measure);
+}
+
 // Show more/less for long user messages: a visual max-height clamp (with a fade
 // mask) around the fully rendered message instead of the old character slice.
 const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
@@ -2445,20 +2569,10 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
   const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
   const collapsed = !props.expanded;
 
-  useLayoutEffect(() => {
-    if (!collapsed) {
-      return undefined;
-    }
-    const element = contentRef.current;
-    if (!element) {
-      return undefined;
-    }
-    const measure = () => {
-      setOverflowing(element.scrollHeight - element.clientHeight > 1);
-    };
-    measure();
-    return observeUserMessageOverflow(element, measure);
-  }, [collapsed, props.text]);
+  useLayoutEffect(
+    () => measureUserMessageOverflow(collapsed, contentRef, setOverflowing),
+    [collapsed, props.text],
+  );
 
   const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
   const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
@@ -2753,6 +2867,13 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   }
 
   return workToneIcon(workEntry.tone).icon;
+}
+
+// Dynamic icon selection is data, not a component declaration. Keeping the
+// createElement call in this module helper avoids presenting a render-local
+// component binding to React Compiler.
+function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactElement {
+  return createElement(Icon, { className });
 }
 
 function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -3141,7 +3262,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 compact ? "size-4" : "size-5",
               )}
             >
-              <EntryIcon className={compact ? "size-2.5" : "size-3"} />
+              {renderWorkEntryIcon(EntryIcon, compact ? "size-2.5" : "size-3")}
             </span>
             <div className="min-w-0 flex-1 overflow-hidden">
               <p
@@ -3243,7 +3364,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                                 style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
                                 title={toolText}
                               >
-                                <ToolEntryIcon className="size-3 shrink-0 text-muted-foreground/32" />
+                                {renderWorkEntryIcon(
+                                  ToolEntryIcon,
+                                  "size-3 shrink-0 text-muted-foreground/32",
+                                )}
                                 <span className="truncate">{toolText}</span>
                               </div>
                             );
@@ -3320,7 +3444,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   {webFetchUrl ? (
                     <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
                   ) : (
-                    <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                    renderWorkEntryIcon(LeftIcon, compact ? "size-3.5" : "size-4")
                   )}
                 </span>
               ) : null}

@@ -164,6 +164,7 @@ function basenameOfPath(value: string): string | null {
 }
 
 function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>): void {
+  const knownOrderCwds = new Set(persistedProjectOrderCwds);
   for (const project of projects) {
     const cwdKey = projectCwdKey(project.cwd);
     if (project.expanded) {
@@ -171,7 +172,8 @@ function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "e
     } else {
       persistedExpandedProjectCwds.delete(cwdKey);
     }
-    if (!persistedProjectOrderCwds.includes(cwdKey)) {
+    if (!knownOrderCwds.has(cwdKey)) {
+      knownOrderCwds.add(cwdKey);
       persistedProjectOrderCwds.push(cwdKey);
     }
   }
@@ -211,9 +213,11 @@ function readPersistedState(): AppState {
         persistedExpandedProjectCwds.add(projectCwdKey(cwd));
       }
     }
+    const seenOrderCwds = new Set(persistedProjectOrderCwds);
     for (const cwd of parsed.projectOrderCwds ?? []) {
       const cwdKey = typeof cwd === "string" ? projectCwdKey(cwd) : "";
-      if (cwdKey.length > 0 && !persistedProjectOrderCwds.includes(cwdKey)) {
+      if (cwdKey.length > 0 && !seenOrderCwds.has(cwdKey)) {
+        seenOrderCwds.add(cwdKey);
         persistedProjectOrderCwds.push(cwdKey);
       }
     }

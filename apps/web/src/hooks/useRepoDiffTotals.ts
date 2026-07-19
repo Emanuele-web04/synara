@@ -5,7 +5,6 @@
 // Layer: Chat git data hook
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { summarizePatchTotals } from "~/lib/diffRendering";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
@@ -40,10 +39,7 @@ export function useRepoDiffTotals({
     }),
   );
   // Patch parsing can be noticeable on large diffs; only redo it when the patch text changes.
-  const totals = useMemo(
-    () => summarizePatchTotals(selectedRepoDiff?.patch),
-    [selectedRepoDiff?.patch],
-  );
+  const totals = summarizePatchTotals(selectedRepoDiff?.patch);
   const additions = totals?.additions ?? 0;
   const deletions = totals?.deletions ?? 0;
   const fileCount = totals?.fileCount ?? 0;

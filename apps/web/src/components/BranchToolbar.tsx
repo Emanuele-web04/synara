@@ -11,7 +11,7 @@ import {
 } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
@@ -234,7 +234,8 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const threads = useStore(useRef(createAllThreadsSelector()).current);
+  const [allThreadsSelector] = useState(() => createAllThreadsSelector());
+  const threads = useStore(allThreadsSelector);
   const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));

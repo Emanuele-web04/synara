@@ -40,7 +40,6 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
-  useMemo,
   useRef,
   type ClipboardEventHandler,
   type Ref,
@@ -88,11 +87,7 @@ import {
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
 
-const ComposerTerminalContextActionsContext = createContext<{
-  onRemoveTerminalContext: (contextId: string) => void;
-}>({
-  onRemoveTerminalContext: () => {},
-});
+const ComposerRemoveTerminalContextContext = createContext<(contextId: string) => void>(() => {});
 
 // Node classes imported from ./composer-nodes
 
@@ -697,7 +692,7 @@ function ComposerInlineTokenSelectionNormalizePlugin() {
 
 function ComposerInlineTokenBackspacePlugin() {
   const [editor] = useLexicalComposerContext();
-  const { onRemoveTerminalContext } = useContext(ComposerTerminalContextActionsContext);
+  const onRemoveTerminalContext = useContext(ComposerRemoveTerminalContextContext);
 
   useEffect(() => {
     return editor.registerCommand(
@@ -916,10 +911,6 @@ function ComposerPromptEditorInner({
     terminalContextIds: terminalContexts.map((context) => context.id),
   });
   const isApplyingControlledUpdateRef = useRef(false);
-  const terminalContextActions = useMemo(
-    () => ({ onRemoveTerminalContext }),
-    [onRemoveTerminalContext],
-  );
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -1000,6 +991,7 @@ function ComposerPromptEditorInner({
     value,
   ]);
 
+  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const focusAt = useCallback(
     (nextCursor: number) => {
       const rootElement = editor.getRootElement();
@@ -1152,7 +1144,7 @@ function ComposerPromptEditorInner({
   }, []);
 
   return (
-    <ComposerTerminalContextActionsContext.Provider value={terminalContextActions}>
+    <ComposerRemoveTerminalContextContext.Provider value={onRemoveTerminalContext}>
       <div className="relative">
         <PlainTextPlugin
           contentEditable={
@@ -1198,7 +1190,7 @@ function ComposerPromptEditorInner({
         ) : null}
         <HistoryPlugin />
       </div>
-    </ComposerTerminalContextActionsContext.Provider>
+    </ComposerRemoveTerminalContextContext.Provider>
   );
 }
 
@@ -1227,24 +1219,21 @@ export const ComposerPromptEditor = forwardRef<
   // Normalize once at the wrapper boundary so the inner editor can treat mention refs as concrete.
   const normalizedMentionReferences = mentionReferences ?? [];
   const initialMentionReferencesRef = useRef(normalizedMentionReferences);
-  const initialConfig = useMemo<InitialConfigType>(
-    () => ({
-      namespace: "synara-composer-editor",
-      editable: true,
-      nodes: [...COMPOSER_NODE_CLASSES],
-      editorState: () => {
-        $setComposerEditorPrompt(
-          initialValueRef.current,
-          initialTerminalContextsRef.current,
-          initialMentionReferencesRef.current,
-        );
-      },
-      onError: (error) => {
-        throw error;
-      },
-    }),
-    [],
-  );
+  const initialConfig: InitialConfigType = {
+    namespace: "synara-composer-editor",
+    editable: true,
+    nodes: [...COMPOSER_NODE_CLASSES],
+    editorState: () => {
+      $setComposerEditorPrompt(
+        initialValueRef.current,
+        initialTerminalContextsRef.current,
+        initialMentionReferencesRef.current,
+      );
+    },
+    onError: (error) => {
+      throw error;
+    },
+  };
 
   return (
     <LexicalComposer key={COMPOSER_EDITOR_HMR_KEY} initialConfig={initialConfig}>

@@ -4,12 +4,10 @@
 //          the automations view: clock glyph, automation name, cadence, and an Open action.
 // Layer: Chat transcript UI
 
-import { memo } from "react";
-
 import { Button } from "~/components/ui/button";
 import { ClockIcon } from "~/lib/icons";
 
-export const AutomationCreatedCard = memo(function AutomationCreatedCard({
+export function AutomationCreatedCard({
   name,
   cadenceLabel,
   textFontSizePx,
@@ -51,4 +49,4 @@ export const AutomationCreatedCard = memo(function AutomationCreatedCard({
       ) : null}
     </div>
   );
-});
+}

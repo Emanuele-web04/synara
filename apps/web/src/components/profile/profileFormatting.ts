@@ -30,7 +30,7 @@ export function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "—";
   }
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+  return WHOLE_NUMBER_FORMATTER.format(value);
 }
 
 export function formatDays(value: number): string {
@@ -71,7 +71,8 @@ export function formatShortDate(day: string | null): string | null {
   if (!year || !month || !date) {
     return null;
   }
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-    new Date(Date.UTC(year, month - 1, date)),
-  );
+  return MONTH_DAY_FORMATTER.format(new Date(Date.UTC(year, month - 1, date)));
 }
+
+const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });

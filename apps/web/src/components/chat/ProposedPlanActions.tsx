@@ -21,6 +21,7 @@ interface ProposedPlanActionsProps {
   iconClassName?: string;
 }
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const ProposedPlanActions = memo(function ProposedPlanActions({
   planMarkdown,
   workspaceRoot,

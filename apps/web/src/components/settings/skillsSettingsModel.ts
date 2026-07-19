@@ -99,7 +99,7 @@ export function providerDisplayName(provider: ProviderKind): string {
 }
 
 export function sortProviderStack(providers: ReadonlyArray<ProviderKind>): ProviderKind[] {
-  return [...providers].sort(
+  return providers.toSorted(
     (left, right) => DEFAULT_PROVIDER_ORDER.indexOf(left) - DEFAULT_PROVIDER_ORDER.indexOf(right),
   );
 }
@@ -146,7 +146,7 @@ export function buildSettingsSkillGroups(
 
   return [...groups.entries()]
     .map(([key, unsortedSources]): SettingsSkillGroup | null => {
-      const sources = [...unsortedSources].sort((left, right) =>
+      const sources = unsortedSources.toSorted((left, right) =>
         sourceSortKey(left).localeCompare(sourceSortKey(right)),
       );
       const primarySkill = sources[0]?.skill;

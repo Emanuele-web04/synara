@@ -45,9 +45,6 @@ export function ComposerPickerMenuPopup({
   );
 }
 
-/** Alias for menus outside the composer footer that share the same open panel chrome. */
-export const PickerMenuPopup = ComposerPickerMenuPopup;
-
 type ComposerPickerSelectPopupProps = Omit<ComponentProps<typeof SelectPopup>, "surface"> & {
   size?: ComposerPickerSize;
 };
@@ -72,9 +69,6 @@ export function ComposerPickerSelectPopup({
     />
   );
 }
-
-/** Alias for settings and other non-menu pickers that open a select list panel. */
-export const PickerSelectPopup = ComposerPickerSelectPopup;
 
 type ComposerPickerMenuSubPopupProps = Omit<ComponentProps<typeof MenuSubPopup>, "surface"> & {
   /** Override global COMPOSER_PICKER_SIZE for this submenu. */

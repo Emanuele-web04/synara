@@ -3,7 +3,7 @@ import "../../index.css";
 import { MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { page } from "vitest/browser";
-import { Profiler, useCallback, useRef, useState, type ProfilerOnRenderCallback } from "react";
+import { Profiler, useRef, useState, type ProfilerOnRenderCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -69,12 +69,12 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
     onMessagesTouchStartBase: NOOP,
     onMessagesWheelBase: NOOP,
   });
-  const handleComposerChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleComposerChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setComposerValue(event.target.value);
-  }, []);
-  const handleTranscriptRender = useCallback<ProfilerOnRenderCallback>(() => {
+  };
+  const handleTranscriptRender: ProfilerOnRenderCallback = () => {
     props.onTranscriptRender();
-  }, [props]);
+  };
 
   return (
     <div>

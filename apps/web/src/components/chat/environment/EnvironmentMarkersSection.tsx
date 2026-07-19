@@ -4,15 +4,7 @@
 
 import type { MessageId, ThreadMarker, ThreadMarkerId } from "@synara/contracts";
 import { isThreadMarkerAvailable } from "@synara/shared/threadMarkers";
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { Checkbox } from "~/components/ui/checkbox";
 import { IconButton } from "~/components/ui/icon-button";
@@ -68,7 +60,7 @@ export function EnvironmentMarkersSection({
   );
 }
 
-const MarkerRow = memo(function MarkerRow({
+function MarkerRow({
   marker,
   text,
   onJump,
@@ -93,12 +85,12 @@ const MarkerRow = memo(function MarkerRow({
   const resolvedLabel = marker.label?.trim() || deriveThreadMarkerLabel(marker);
   const displayLabel = available ? resolvedLabel : `${resolvedLabel} (unavailable)`;
 
-  const clearScheduledJump = useCallback(() => {
+  const clearScheduledJump = () => {
     if (jumpClickTimeoutRef.current !== null) {
       window.clearTimeout(jumpClickTimeoutRef.current);
       jumpClickTimeoutRef.current = null;
     }
-  }, []);
+  };
 
   useEffect(() => {
     if (editing) {
@@ -107,77 +99,68 @@ const MarkerRow = memo(function MarkerRow({
   }, [editing]);
   useEffect(() => () => clearScheduledJump(), [clearScheduledJump]);
 
-  const beginEditing = useCallback(() => {
+  const beginEditing = () => {
     clearScheduledJump();
     suppressNextBlurCommitRef.current = false;
     setDraft(marker.label ?? resolvedLabel);
     setEditing(true);
-  }, [clearScheduledJump, marker.label, resolvedLabel]);
+  };
 
-  const commitEditing = useCallback(() => {
+  const commitEditing = () => {
     suppressNextBlurCommitRef.current = true;
     setEditing(false);
     const trimmed = draft.trim();
     onRename(marker.id, trimmed.length === 0 ? null : trimmed);
-  }, [draft, marker.id, onRename]);
+  };
 
-  const cancelEditing = useCallback(() => {
+  const cancelEditing = () => {
     suppressNextBlurCommitRef.current = true;
     setEditing(false);
-  }, []);
+  };
 
-  const handleInputBlur = useCallback(() => {
+  const handleInputBlur = () => {
     if (suppressNextBlurCommitRef.current) {
       suppressNextBlurCommitRef.current = false;
       return;
     }
     commitEditing();
-  }, [commitEditing]);
+  };
 
-  const handleInputKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        commitEditing();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        cancelEditing();
-      }
-    },
-    [cancelEditing, commitEditing],
-  );
+  const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitEditing();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+    }
+  };
 
-  const handleLabelClick = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => {
-      if (!available) {
-        beginEditing();
-        return;
-      }
-      if (event.detail > 1) {
-        return;
-      }
-      clearScheduledJump();
-      jumpClickTimeoutRef.current = window.setTimeout(() => {
-        jumpClickTimeoutRef.current = null;
-        onJump(marker);
-      }, 180);
-    },
-    [available, beginEditing, clearScheduledJump, marker, onJump],
-  );
+  const handleLabelClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (!available) {
+      beginEditing();
+      return;
+    }
+    if (event.detail > 1) {
+      return;
+    }
+    clearScheduledJump();
+    jumpClickTimeoutRef.current = window.setTimeout(() => {
+      jumpClickTimeoutRef.current = null;
+      onJump(marker);
+    }, 180);
+  };
 
-  const handleLabelDoubleClick = useCallback(() => {
+  const handleLabelDoubleClick = () => {
     beginEditing();
-  }, [beginEditing]);
+  };
 
-  const handleLabelKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === "F2" || (!available && event.key === "Enter")) {
-        event.preventDefault();
-        beginEditing();
-      }
-    },
-    [available, beginEditing],
-  );
+  const handleLabelKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "F2" || (!available && event.key === "Enter")) {
+      event.preventDefault();
+      beginEditing();
+    }
+  };
 
   return (
     <li className="group/marker flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-[var(--color-background-elevated-secondary)]">
@@ -240,4 +223,4 @@ const MarkerRow = memo(function MarkerRow({
       </IconButton>
     </li>
   );
-});
+}

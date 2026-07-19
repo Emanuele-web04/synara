@@ -3,7 +3,6 @@
 // Layer: Chat/shared UI
 // Exports: FileEntryIcon
 
-import { memo } from "react";
 import { getAttachmentIconName, getFileIconName } from "../../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -44,7 +43,7 @@ const FILE_ICON_COLOR_CLASS_BY_ICON_NAME: Record<string, string> = {
 
 const FOLDER_ICON_COLOR_CLASS_NAME = "text-muted-foreground";
 
-export const FileEntryIcon = memo(function FileEntryIcon(props: {
+export const FileEntryIcon = function FileEntryIcon(props: {
   pathValue: string;
   kind: "file" | "directory";
   // When provided, the glyph is resolved attachment-style: the MIME type is
@@ -90,4 +89,4 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
       className={cn("size-4 shrink-0", props.className, colorClassName)}
     />
   );
-});
+};

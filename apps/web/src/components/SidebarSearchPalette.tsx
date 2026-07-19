@@ -19,7 +19,7 @@ import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "react-icons/lu";
-import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { type ComponentType, useEffect, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
@@ -313,16 +313,15 @@ function escapeRegExp(value: string): string {
 }
 
 function HighlightedText(props: { text: string; query: string; className?: string }) {
-  const segments = useMemo(() => {
-    const tokens = tokenizeHighlightQuery(props.query);
-    if (tokens.length === 0) {
-      return [{ key: "full", text: props.text, highlighted: false }];
-    }
-
+  const tokens = tokenizeHighlightQuery(props.query);
+  let segments: Array<{ key: string; text: string; highlighted: boolean }>;
+  if (tokens.length === 0) {
+    segments = [{ key: "full", text: props.text, highlighted: false }];
+  } else {
     const pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "gi");
     const parts = props.text.split(pattern).filter((part) => part.length > 0);
     let offset = 0;
-    return parts.map((part) => {
+    segments = parts.map((part) => {
       const segment = {
         key: `${offset}-${part.length}`,
         text: part,
@@ -331,7 +330,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
       offset += part.length;
       return segment;
     });
-  }, [props.query, props.text]);
+  }
 
   return (
     <span className={props.className}>
@@ -355,17 +354,38 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const { activeTheme, resolvedTheme, setCodeThemeId, setTheme, theme } = useTheme();
   const [query, setQuery] = useState(props.initialBrowseQuery ?? "");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
-  const [importProvider, setImportProvider] = useState<ImportProviderKind>(
+  const [importProviderState, setImportProvider] = useState<ImportProviderKind>(
     props.importProviders[0] ?? "codex",
   );
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
-  const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  // Derived fallback (no syncing effect): an unavailable provider renders as
+  // the first available one, and the user's pick resurfaces if it comes back.
+  const importProvider = props.importProviders.includes(importProviderState)
+    ? importProviderState
+    : (props.importProviders[0] ?? "codex");
+  // Error keyed to the query it was produced for: editing the query derives
+  // straight back to null with no state-clearing effect.
+  const [addProjectErrorState, setAddProjectErrorState] = useState<{
+    query: string;
+    message: string;
+  } | null>(null);
   const [isAddingProject, setIsAddingProject] = useState(false);
+  const addProjectError =
+    addProjectErrorState !== null && addProjectErrorState.query === query
+      ? addProjectErrorState.message
+      : null;
+  const setAddProjectError = (message: string | null) =>
+    setAddProjectErrorState(message === null ? null : { query, message });
 
   useEffect(() => {
-    if (!props.open) {
+    if (props.open) {
+      return;
+    }
+    // Timeout-0 keeps the reset writes asynchronous (the palette is already
+    // hidden), which keeps this component eligible for React Compiler.
+    const timeoutId = window.setTimeout(() => {
       setQuery("");
       setHighlightedItemValue(null);
       setImportProvider(props.importProviders[0] ?? "codex");
@@ -374,19 +394,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       setIsImporting(false);
       setAddProjectError(null);
       setIsAddingProject(false);
-    }
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [props.importProviders, props.open]);
-
-  useEffect(() => {
-    if (props.importProviders.includes(importProvider)) {
-      return;
-    }
-    setImportProvider(props.importProviders[0] ?? "codex");
-  }, [importProvider, props.importProviders]);
-
-  useEffect(() => {
-    setAddProjectError(null);
-  }, [query]);
 
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const trimmedQuery = query.trim();
@@ -412,70 +422,50 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     });
 
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
-  const filteredBrowseEntries = useMemo(() => {
-    const lowerFilter = leafSegment.toLowerCase();
-    const showHidden = leafSegment.startsWith(".");
-    return browseEntries.filter(
-      (entry) =>
-        entry.name.toLowerCase().startsWith(lowerFilter) &&
-        (showHidden || !entry.name.startsWith(".")),
-    );
-  }, [browseEntries, leafSegment]);
+  const lowerFilter = leafSegment.toLowerCase();
+  const showHidden = leafSegment.startsWith(".");
+  const filteredBrowseEntries = browseEntries.filter(
+    (entry) =>
+      entry.name.toLowerCase().startsWith(lowerFilter) &&
+      (showHidden || !entry.name.startsWith(".")),
+  );
 
-  const exactBrowseEntry = useMemo(() => {
-    if (leafSegment.length === 0) return null;
-    return filteredBrowseEntries.find((entry) => entry.name === leafSegment) ?? null;
-  }, [filteredBrowseEntries, leafSegment]);
+  const exactBrowseEntry =
+    leafSegment.length === 0
+      ? null
+      : (filteredBrowseEntries.find((entry) => entry.name === leafSegment) ?? null);
 
   const browseParentPath = canBrowse ? getBrowseParentPath(query) : null;
   const canBrowseUp = canBrowse && canNavigateUp(query);
 
-  const matchedActions = useMemo(
-    () => (isBrowsing ? [] : matchSidebarSearchActions(props.actions, query)),
-    [isBrowsing, props.actions, query],
+  const matchedActions = isBrowsing ? [] : matchSidebarSearchActions(props.actions, query);
+  const themeCommandItems = buildThemeCommandItems({
+    query,
+    resolvedTheme,
+    theme,
+  });
+  const currentCodeThemeItems: SidebarSearchTheme[] = getAvailableCodeThemes(resolvedTheme).map(
+    (option) => ({
+      id: `theme-code:${resolvedTheme}:${option.id}`,
+      type: "code-theme",
+      label: option.label,
+      description: `Apply to the current ${resolvedTheme} theme slot.`,
+      keywords: ["appearance", "theme", resolvedTheme, option.id],
+      codeThemeId: option.id,
+      variant: resolvedTheme,
+      isActive: activeTheme.codeThemeId === option.id,
+    }),
   );
-  const themeCommandItems = useMemo(
-    () =>
-      buildThemeCommandItems({
-        query,
-        resolvedTheme,
-        theme,
-      }),
-    [query, resolvedTheme, theme],
-  );
-  const currentCodeThemeItems = useMemo<SidebarSearchTheme[]>(
-    () =>
-      getAvailableCodeThemes(resolvedTheme).map((option) => ({
-        id: `theme-code:${resolvedTheme}:${option.id}`,
-        type: "code-theme",
-        label: option.label,
-        description: `Apply to the current ${resolvedTheme} theme slot.`,
-        keywords: ["appearance", "theme", resolvedTheme, option.id],
-        codeThemeId: option.id,
-        variant: resolvedTheme,
-        isActive: activeTheme.codeThemeId === option.id,
-      })),
-    [activeTheme.codeThemeId, resolvedTheme],
-  );
-  const matchedCurrentThemes = useMemo(
-    () =>
-      isBrowsing || query.trim().length === 0
-        ? []
-        : matchSidebarSearchThemes(currentCodeThemeItems, query),
-    [currentCodeThemeItems, isBrowsing, query],
-  );
+  const matchedCurrentThemes =
+    isBrowsing || query.trim().length === 0
+      ? []
+      : matchSidebarSearchThemes(currentCodeThemeItems, query);
   const showThemeSection =
     !isBrowsing &&
     query.trim().length > 0 &&
     (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
-  const matchedProjects = useMemo(
-    () => (isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query)),
-    [isBrowsing, props.projects, query],
-  );
-  const matchedThreads = useMemo(
-    () => (isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query)),
-    [isBrowsing, props.threads, query],
-  );
+  const matchedProjects = isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query);
+  const matchedThreads = isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query);
   const hasSearchResults =
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
@@ -541,16 +531,22 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     }
     setIsAddingProject(true);
     setAddProjectError(null);
-    try {
-      await props.onAddProjectPath(resolveBrowseSubmitPath(), {
+    // Promise chain instead of async/try-finally: React Compiler does not yet
+    // support try/finally, and it would skip optimizing this whole component.
+    void Promise.resolve(
+      props.onAddProjectPath(resolveBrowseSubmitPath(), {
         createIfMissing: willCreateMissingFolder,
+      }),
+    )
+      .then(() => {
+        props.onOpenChange(false);
+      })
+      .catch((cause: unknown) => {
+        setAddProjectError(cause instanceof Error ? cause.message : "Failed to add project.");
+      })
+      .finally(() => {
+        setIsAddingProject(false);
       });
-      props.onOpenChange(false);
-    } catch (cause) {
-      setAddProjectError(cause instanceof Error ? cause.message : "Failed to add project.");
-    } finally {
-      setIsAddingProject(false);
-    }
   };
 
   const isMac = isMacPlatform(platform);
@@ -579,21 +575,23 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     }
   };
 
-  const submitImport = async () => {
+  const submitImport = () => {
     const normalizedImportId = importId.trim();
     if (!normalizedImportId || isImporting) {
       return;
     }
     setImportError(null);
     setIsImporting(true);
-    try {
-      await props.onImportThread(importProvider, normalizedImportId);
-      props.onOpenChange(false);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : "Failed to import thread.");
-    } finally {
-      setIsImporting(false);
-    }
+    void Promise.resolve(props.onImportThread(importProvider, normalizedImportId))
+      .then(() => {
+        props.onOpenChange(false);
+      })
+      .catch((error: unknown) => {
+        setImportError(error instanceof Error ? error.message : "Failed to import thread.");
+      })
+      .finally(() => {
+        setIsImporting(false);
+      });
   };
 
   return (

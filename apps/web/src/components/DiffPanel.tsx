@@ -755,18 +755,30 @@ export default function DiffPanel({
     () => areAllRenderableFilesCollapsed(renderableFiles, collapsedFiles),
     [collapsedFiles, renderableFiles],
   );
+  // Timeout-0 keeps these two sync writes asynchronous (no wasted pre-paint
+  // render), which also keeps this component eligible for React Compiler; the
+  // panel opens behind a 300ms slide, so one tick is invisible.
   useEffect(() => {
-    if (diffOpen && !previousDiffOpenRef.current) {
+    const wasOpen = previousDiffOpenRef.current;
+    previousDiffOpenRef.current = diffOpen;
+    if (!diffOpen || wasOpen) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
       setDiffWordWrap(settings.diffWordWrap);
       setDiffViewKind(resolveInitialDiffViewKind(selectedTurnId));
-    }
-    previousDiffOpenRef.current = diffOpen;
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [diffOpen, selectedTurnId, settings.diffWordWrap]);
 
   useEffect(() => {
-    if (selectedTurnId !== null) {
-      setDiffViewKind((current) => (current === "turn" ? current : "turn"));
+    if (selectedTurnId === null) {
+      return;
     }
+    const timeoutId = window.setTimeout(() => {
+      setDiffViewKind((current) => (current === "turn" ? current : "turn"));
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [selectedTurnId]);
 
   useEffect(() => {

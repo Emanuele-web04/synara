@@ -4,7 +4,7 @@
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
 import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { Project } from "../../types";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../../lib/voiceRecorder";
@@ -65,33 +65,26 @@ export function useComposerVoiceController(
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
-  voiceThreadIdRef.current = threadId;
-  voiceProviderRef.current = selectedProvider;
+  // Mirrored in an effect (not during render) so the hook stays eligible for
+  // React Compiler; the transcription flow only reads these post-commit.
+  useEffect(() => {
+    voiceThreadIdRef.current = threadId;
+    voiceProviderRef.current = selectedProvider;
+  }, [threadId, selectedProvider]);
 
-  const voiceRecordingDurationLabel = useMemo(
-    () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
-    [voiceRecordingDurationMs],
-  );
-  const { canStartVoiceNotes, showVoiceNotesControl } = useMemo(
-    () =>
-      deriveComposerVoiceState({
-        authStatus: activeProviderStatus?.authStatus,
-        voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
-        isRecording: isVoiceRecording,
-        isTranscribing: isVoiceTranscribing,
-      }),
-    [
-      activeProviderStatus?.authStatus,
-      activeProviderStatus?.voiceTranscriptionAvailable,
-      isVoiceRecording,
-      isVoiceTranscribing,
-    ],
-  );
+  const voiceRecordingDurationLabel = formatVoiceRecordingDuration(voiceRecordingDurationMs);
+  const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
+    authStatus: activeProviderStatus?.authStatus,
+    voiceTranscriptionAvailable: activeProviderStatus?.voiceTranscriptionAvailable,
+    isRecording: isVoiceRecording,
+    isTranscribing: isVoiceTranscribing,
+  });
 
   useEffect(() => {
     voiceTranscriptionRequestIdRef.current += 1;
-    void cancelVoiceRecording();
-    setIsVoiceTranscribing(false);
+    // The spinner reset rides the cancel promise so no state is written
+    // synchronously inside the effect (keeps the hook compiler-eligible).
+    void cancelVoiceRecording().finally(() => setIsVoiceTranscribing(false));
   }, [cancelVoiceRecording, threadId]);
 
   useEffect(() => {
@@ -99,11 +92,10 @@ export function useComposerVoiceController(
       return;
     }
     voiceTranscriptionRequestIdRef.current += 1;
-    void cancelVoiceRecording();
-    setIsVoiceTranscribing(false);
+    void cancelVoiceRecording().finally(() => setIsVoiceTranscribing(false));
   }, [canStartVoiceNotes, cancelVoiceRecording, isVoiceRecording]);
 
-  const startComposerVoiceRecording = useCallback(async () => {
+  const startComposerVoiceRecording = async () => {
     if (!activeProject) {
       return;
     }
@@ -138,17 +130,11 @@ export function useComposerVoiceController(
         description: describeVoiceRecordingStartError(error),
       });
     }
-  }, [
-    activeProject,
-    activeProviderStatus?.authStatus,
-    canStartVoiceNotes,
-    pendingUserInputCount,
-    startVoiceRecording,
-  ]);
+  };
 
-  const submitComposerVoiceRecording = useCallback(async () => {
+  const submitComposerVoiceRecording = (): Promise<void> => {
     if (!activeProject || !isVoiceRecording) {
-      return;
+      return Promise.resolve();
     }
 
     const api = readNativeApi();
@@ -158,7 +144,7 @@ export function useComposerVoiceController(
         title: "Voice transcription is unavailable right now.",
       });
       void cancelVoiceRecording();
-      return;
+      return Promise.resolve();
     }
 
     setIsVoiceTranscribing(true);
@@ -171,78 +157,76 @@ export function useComposerVoiceController(
       voiceThreadIdRef.current === requestThreadId &&
       voiceProviderRef.current === requestProvider;
 
-    try {
-      const payload = await stopVoiceRecording();
-      if (!isCurrentVoiceRequest()) {
-        return;
-      }
-      if (!payload) {
-        toastManager.add({
-          type: "warning",
-          title: "No audio was captured.",
-        });
-        return;
-      }
-      const result = await api.server.transcribeVoice({
-        provider: "codex",
-        cwd: activeProject.cwd,
-        ...(activeThreadId ? { threadId: activeThreadId } : {}),
-        ...payload,
-      });
-      if (!isCurrentVoiceRequest()) {
-        return;
-      }
-      onTranscriptReady(result.text);
-    } catch (error) {
-      if (!isCurrentVoiceRequest()) {
-        return;
-      }
-
-      const description =
-        error instanceof Error
-          ? sanitizeVoiceErrorMessage(error.message)
-          : "The voice note could not be transcribed.";
-      const authExpired = isVoiceAuthExpiredMessage(description);
-      if (authExpired) {
-        refreshVoiceStatus();
-      }
-      toastManager.add({
-        type: "error",
-        title: authExpired ? "Sign in to ChatGPT again" : "Voice transcription failed",
-        description: authExpired
-          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
-          : description,
-        ...(authExpired
-          ? {
-              actionProps: {
-                children: "Refresh status",
-                onClick: refreshVoiceStatus,
-              },
+    // Promise chain instead of async/try-catch-finally: React Compiler does
+    // not yet support try/finally, and it would skip optimizing this hook.
+    return stopVoiceRecording()
+      .then((payload) => {
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
+        if (!payload) {
+          toastManager.add({
+            type: "warning",
+            title: "No audio was captured.",
+          });
+          return;
+        }
+        return api.server
+          .transcribeVoice({
+            provider: "codex",
+            cwd: activeProject.cwd,
+            ...(activeThreadId ? { threadId: activeThreadId } : {}),
+            ...payload,
+          })
+          .then((result) => {
+            if (!isCurrentVoiceRequest()) {
+              return;
             }
-          : {}),
-      });
-    } finally {
-      if (isCurrentVoiceRequest()) {
-        setIsVoiceTranscribing(false);
-      }
-    }
-  }, [
-    activeProject,
-    activeThreadId,
-    cancelVoiceRecording,
-    isVoiceRecording,
-    onTranscriptReady,
-    refreshVoiceStatus,
-    selectedProvider,
-    stopVoiceRecording,
-    threadId,
-  ]);
+            onTranscriptReady(result.text);
+          });
+      })
+      .catch((error: unknown) => {
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
 
-  const cancelComposerVoiceRecording = useCallback(() => {
+        const description =
+          error instanceof Error
+            ? sanitizeVoiceErrorMessage(error.message)
+            : "The voice note could not be transcribed.";
+        const authExpired = isVoiceAuthExpiredMessage(description);
+        if (authExpired) {
+          refreshVoiceStatus();
+        }
+        toastManager.add({
+          type: "error",
+          title: authExpired ? "Sign in to ChatGPT again" : "Voice transcription failed",
+          description: authExpired
+            ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
+            : description,
+          ...(authExpired
+            ? {
+                actionProps: {
+                  children: "Refresh status",
+                  onClick: refreshVoiceStatus,
+                },
+              }
+            : {}),
+        });
+      })
+      .finally(() => {
+        if (isCurrentVoiceRequest()) {
+          setIsVoiceTranscribing(false);
+        }
+      })
+      .then(() => undefined);
+  };
+
+  const cancelComposerVoiceRecording = () => {
     voiceTranscriptionRequestIdRef.current += 1;
     setIsVoiceTranscribing(false);
     void cancelVoiceRecording();
-  }, [cancelVoiceRecording]);
+  };
 
   return {
     isVoiceRecording,

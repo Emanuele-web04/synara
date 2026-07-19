@@ -290,7 +290,7 @@ export function orderedActivities(
 
   const ordered = isActivityOrderStable(activities)
     ? activities
-    : [...activities].sort(compareActivitiesByOrder);
+    : activities.toSorted(compareActivitiesByOrder);
   orderedActivitiesCache.set(activities, ordered);
   return ordered;
 }
@@ -1534,7 +1534,8 @@ function areToolLifecycleChangedFilesCompatible(
   if (!previous?.length || !next?.length) {
     return true;
   }
-  return previous.some((path) => next.includes(path));
+  const nextSet = new Set(next);
+  return previous.some((path) => nextSet.has(path));
 }
 
 function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {

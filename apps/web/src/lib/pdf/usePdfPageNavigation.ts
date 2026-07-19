@@ -5,7 +5,7 @@
 // Layer: Web PDF rendering hook
 // Exports: usePdfPageNavigation, PdfPageNavigation
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PDF_PAGE_MARGIN_PX } from "./pdfZoom";
 
@@ -39,49 +39,43 @@ export function usePdfPageNavigation(input: {
   const currentPage = Object.is(currentPageState.resetKey, resetKey) ? currentPageState.page : 1;
   const pageElementsRef = useRef(new Map<number, HTMLElement>());
 
-  const registerElement = useCallback((pageNumber: number, element: HTMLElement | null) => {
+  const registerElement = (pageNumber: number, element: HTMLElement | null) => {
     if (element) {
       pageElementsRef.current.set(pageNumber, element);
     } else {
       pageElementsRef.current.delete(pageNumber);
     }
-  }, []);
+  };
 
-  const scrollToPage = useCallback(
-    (pageNumber: number, behavior: ScrollBehavior) => {
-      const container = scrollRoot;
-      const element = pageElementsRef.current.get(pageNumber);
-      if (!container || !element) {
-        return;
-      }
-      const top =
-        element.getBoundingClientRect().top -
-        container.getBoundingClientRect().top +
-        container.scrollTop -
-        PDF_PAGE_MARGIN_PX;
-      container.scrollTo({ top, behavior });
-    },
-    [scrollRoot],
-  );
+  const scrollToPage = (pageNumber: number, behavior: ScrollBehavior) => {
+    const container = scrollRoot;
+    const element = pageElementsRef.current.get(pageNumber);
+    if (!container || !element) {
+      return;
+    }
+    const top =
+      element.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop -
+      PDF_PAGE_MARGIN_PX;
+    container.scrollTo({ top, behavior });
+  };
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
     // A new PDF should start at the top even when React reuses the same viewer
-    // pane, otherwise stale scroll/page state can survive across files.
-    setCurrentPageState({ resetKey, page: 1 });
+    // pane, otherwise stale scroll state can survive across files. The page
+    // number itself derives from the resetKey guard above — no reset needed.
     scrollRoot?.scrollTo({ top: 0, behavior: "auto" });
   }, [enabled, numPages, resetKey, scrollRoot]);
 
-  const jumpToPage = useCallback(
-    (pageNumber: number) => {
-      const clamped = Math.min(Math.max(pageNumber, 1), Math.max(numPages, 1));
-      setCurrentPageState({ resetKey, page: clamped });
-      scrollToPage(clamped, "smooth");
-    },
-    [numPages, resetKey, scrollToPage],
-  );
+  const jumpToPage = (pageNumber: number) => {
+    const clamped = Math.min(Math.max(pageNumber, 1), Math.max(numPages, 1));
+    setCurrentPageState({ resetKey, page: clamped });
+    scrollToPage(clamped, "smooth");
+  };
 
   // Track the page the reader is on from scroll position (rAF-throttled). Pages
   // stack top-to-bottom, so their tops are monotonic in page order: we scan

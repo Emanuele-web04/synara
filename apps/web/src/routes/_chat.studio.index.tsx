@@ -9,7 +9,7 @@
 //             new-chat hook.
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
 import {
@@ -44,75 +44,61 @@ function StudioIndexRouteView() {
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
 
-  const studioProjectIds = useMemo(
-    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
-    [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
-  );
+  const studioProjectIds = collectStudioProjectIds(projects, {
+    homeDir,
+    chatWorkspaceRoot,
+    studioWorkspaceRoot,
+  });
   // The container's stored draft (if any). It's a valid remembered-route target below, and when
   // nothing is remembered it wins over the latest thread: the resolver defers to
   // `createFreshChat`, whose `handleNewStudioChat` reopens the stored draft.
-  const studioDraftThreadId = useMemo(
-    () =>
-      findStudioDraftThreadId({
-        studioProjectIds,
-        projectDraftThreadIdByProjectId,
-        draftThreadsByThreadId,
-      }),
-    [draftThreadsByThreadId, projectDraftThreadIdByProjectId, studioProjectIds],
-  );
+  const studioDraftThreadId = findStudioDraftThreadId({
+    studioProjectIds,
+    projectDraftThreadIdByProjectId,
+    draftThreadsByThreadId,
+  });
   // Studio threads (sidebar summaries) backing both the remembered-route scope and the
   // latest-thread fallback below. Archived chats are excluded — the sidebar hides them, so the
   // landing must not resurrect one; an archived-only Studio opens the draft or a fresh chat.
-  const studioThreadSummaries = useMemo(
-    () =>
-      threadIds.flatMap((threadId) => {
-        const summary = sidebarThreadSummaryById[threadId];
-        return summary &&
-          (summary.archivedAt ?? null) === null &&
-          studioProjectIds.has(summary.projectId)
-          ? [summary]
-          : [];
-      }),
-    [sidebarThreadSummaryById, studioProjectIds, threadIds],
-  );
+  const studioThreadSummaries = threadIds.flatMap((threadId) => {
+    const summary = sidebarThreadSummaryById[threadId];
+    return summary &&
+      (summary.archivedAt ?? null) === null &&
+      studioProjectIds.has(summary.projectId)
+      ? [summary]
+      : [];
+  });
   // The most recent Studio chat (if any), used to restore the surface instead of always opening
   // a brand-new draft.
-  const latestStudioThreadId = useMemo(
-    () =>
-      sortThreadsForSidebar(studioThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ??
-      null,
-    [appSettings.sidebarThreadSortOrder, studioThreadSummaries],
-  );
+  const latestStudioThreadId =
+    sortThreadsForSidebar(studioThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
 
   // Same landing policy as the Studio segment switch and settings back: remembered route first
   // (scoped to Studio threads plus the stored draft), then the stored draft, then the latest
   // Studio chat — so a refresh or deep link on /studio returns to the chat you last had open.
-  const resolveRestoreRoute = useCallback<RestoreRouteResolver>(
-    ({ availableSplitViewIds }) => {
-      const availableThreadIds = new Set<string>(studioThreadSummaries.map((thread) => thread.id));
-      if (studioDraftThreadId) {
-        availableThreadIds.add(studioDraftThreadId);
-      }
-      const rememberedRoute = resolveRestorableThreadRoute({
-        lastThreadRoute: readSidebarUiState().lastThreadRoute,
-        availableThreadIds,
-        availableSplitViewIds,
-      });
-      if (rememberedRoute) {
-        return rememberedRoute;
-      }
-      if (studioDraftThreadId || !latestStudioThreadId) {
-        return null;
-      }
-      return { threadId: latestStudioThreadId };
-    },
-    [latestStudioThreadId, studioDraftThreadId, studioThreadSummaries],
-  );
+  const resolveRestoreRoute: RestoreRouteResolver = ({ availableSplitViewIds }) => {
+    const availableThreadIds = new Set<string>(studioThreadSummaries.map((thread) => thread.id));
+    if (studioDraftThreadId) {
+      availableThreadIds.add(studioDraftThreadId);
+    }
+    const rememberedRoute = resolveRestorableThreadRoute({
+      lastThreadRoute: readSidebarUiState().lastThreadRoute,
+      availableThreadIds,
+      availableSplitViewIds,
+    });
+    if (rememberedRoute) {
+      return rememberedRoute;
+    }
+    if (studioDraftThreadId || !latestStudioThreadId) {
+      return null;
+    }
+    return { threadId: latestStudioThreadId };
+  };
 
   // Deliberately NOT `{ fresh: true }` (unlike the "/" route): when the resolver returns null
   // because a Studio draft exists, handleNewStudioChat reopens that stored draft instead of
   // minting a new one per visit — a fresh draft each landing would litter the hidden container.
-  const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
+  const createFreshChat = () => handleNewStudioChat();
 
   // A hidden Studio tab must never start the restore/create flow: a direct /studio link would
   // otherwise race the sidebar's hidden-section redirect and could mint a hidden Studio draft.

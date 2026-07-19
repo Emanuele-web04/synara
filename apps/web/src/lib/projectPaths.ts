@@ -124,17 +124,6 @@ export function normalizeProjectPathForDispatch(value: string): string {
   return trimTrailingPathSeparators(value.trim());
 }
 
-export function inferProjectTitleFromPath(value: string): string {
-  const normalized = normalizeProjectPathForDispatch(value);
-  const absolutePath = splitAbsolutePath(normalized);
-  if (absolutePath) {
-    return absolutePath.segments.findLast(Boolean) ?? normalized;
-  }
-
-  const segments = normalized.split(/[/\\]/);
-  return segments.findLast(Boolean) ?? normalized;
-}
-
 export function appendBrowsePathSegment(currentPath: string, segment: string): string {
   const separator = preferredPathSeparator(currentPath);
   return `${getBrowseDirectoryPath(currentPath)}${segment}${separator}`;

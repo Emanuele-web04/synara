@@ -35,7 +35,6 @@ import {
   resolveSelectableModel,
   resolveModelSlugForProvider,
 } from "@synara/shared/model";
-import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
 import {
@@ -5155,27 +5154,16 @@ export function useEffectiveComposerModelState(input: {
 }): EffectiveComposerModelState {
   const draft = useComposerThreadDraft(input.threadId);
 
-  return useMemo(
-    () =>
-      deriveEffectiveComposerModelState({
-        draft,
-        selectedProvider: input.selectedProvider,
-        threadModelSelection: input.threadModelSelection,
-        projectModelSelection: input.projectModelSelection,
-        customModelsByProvider: input.customModelsByProvider,
-        ...(input.availableModelOptionsByProvider !== undefined
-          ? { availableModelOptionsByProvider: input.availableModelOptionsByProvider }
-          : {}),
-      }),
-    [
-      input.availableModelOptionsByProvider,
-      draft,
-      input.customModelsByProvider,
-      input.projectModelSelection,
-      input.selectedProvider,
-      input.threadModelSelection,
-    ],
-  );
+  return deriveEffectiveComposerModelState({
+    draft,
+    selectedProvider: input.selectedProvider,
+    threadModelSelection: input.threadModelSelection,
+    projectModelSelection: input.projectModelSelection,
+    customModelsByProvider: input.customModelsByProvider,
+    ...(input.availableModelOptionsByProvider !== undefined
+      ? { availableModelOptionsByProvider: input.availableModelOptionsByProvider }
+      : {}),
+  });
 }
 
 // Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.

@@ -558,21 +558,6 @@ export function resizeTerminalGroupLayout(
   return result.didResize ? { ...group, layout: result.node } : group;
 }
 
-function equalizeLayoutNode(node: ThreadTerminalLayoutNode): ThreadTerminalLayoutNode {
-  if (node.type === "terminal") {
-    return node;
-  }
-  return {
-    ...node,
-    children: node.children.map(equalizeLayoutNode),
-    weights: node.children.map(() => 1),
-  };
-}
-
-export function equalizeTerminalGroupLayout(group: ThreadTerminalGroup): ThreadTerminalGroup {
-  return { ...group, layout: equalizeLayoutNode(group.layout) };
-}
-
 export function createTerminalGroup(groupId: string, terminalId: string): ThreadTerminalGroup {
   return {
     id: groupId,

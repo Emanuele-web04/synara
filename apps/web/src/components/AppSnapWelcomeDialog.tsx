@@ -13,7 +13,7 @@
 
 import { Schema } from "effect";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { CentralIcon } from "../lib/central-icons";
@@ -48,7 +48,6 @@ export function AppSnapWelcomeDialog() {
 
   useEffect(() => {
     if (storage.acknowledged) {
-      setOpen(false);
       return;
     }
 
@@ -72,29 +71,30 @@ export function AppSnapWelcomeDialog() {
     };
   }, [storage.acknowledged]);
 
-  const acknowledge = useCallback(() => {
+  const acknowledge = () => {
     setOpen(false);
     setStorage({ acknowledged: true });
-  }, [setStorage]);
+  };
 
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
-        setOpen(true);
-        return;
-      }
-      acknowledge();
-    },
-    [acknowledge],
-  );
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setOpen(true);
+      return;
+    }
+    acknowledge();
+  };
 
-  const openSettings = useCallback(() => {
+  const openSettings = () => {
     acknowledge();
     void navigate({ to: "/settings", search: { section: "appsnap" } });
-  }, [acknowledge, navigate]);
+  };
+
+  // Derived instead of synced: acknowledging closes the dialog in the same
+  // render, so the effect never needs a synchronous setOpen(false).
+  const dialogOpen = open && !storage.acknowledged;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={dialogOpen} onOpenChange={handleOpenChange}>
       {/* "Not now" is the close affordance, so the popup's own X would be a duplicate. */}
       <DialogPopup
         surface="solid"

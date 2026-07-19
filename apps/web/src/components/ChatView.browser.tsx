@@ -59,6 +59,9 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailSubscriptionRetention";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+// Pre-transform the compiler-heavy component outside the first case's timeout.
+// The router's auto-split route otherwise requests this module on first mount.
+import "./ChatView";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
@@ -1704,9 +1707,9 @@ async function waitForMountedChatReady(options: {
       if (!expectedThread) return;
       const state = useStore.getState();
       expect(state.threadIds?.includes(expectedThread.id)).toBe(true);
-      const hydratedMessageIds = state.messageIdsByThreadId?.[expectedThread.id] ?? [];
+      const hydratedMessageIdSet = new Set(state.messageIdsByThreadId?.[expectedThread.id] ?? []);
       expect(
-        expectedThread.messages.every((message) => hydratedMessageIds.includes(message.id)),
+        expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         "Active thread detail did not hydrate.",
       ).toBe(true);
     },

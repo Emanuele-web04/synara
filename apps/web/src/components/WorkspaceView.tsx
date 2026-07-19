@@ -3,7 +3,7 @@
 // Layer: Workspace route surface
 
 import { Plus, SettingsIcon } from "~/lib/icons";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
@@ -47,7 +47,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const setWorkspaceLayoutPreset = useWorkspaceStore((state) => state.setWorkspaceLayoutPreset);
   const setServerWorkspacePaths = useWorkspaceStore((state) => state.setServerWorkspacePaths);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const threadId = useMemo(() => workspaceThreadId(workspaceId), [workspaceId]);
+  const threadId = workspaceThreadId(workspaceId);
   const terminal = useTerminalSurfaceController(threadId);
   const {
     terminalState,
@@ -72,7 +72,17 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftTitle, setDraftTitle] = useState(workspace?.title ?? "Workspace");
+  // Draft keyed to the title it was seeded from: an external rename derives
+  // straight back to the fresh title with no state-syncing effect.
+  const [draftTitleState, setDraftTitleState] = useState<{ base: string; value: string } | null>(
+    null,
+  );
+  const baseTitle = workspace?.title ?? "Workspace";
+  const draftTitle =
+    draftTitleState !== null && draftTitleState.base === baseTitle
+      ? draftTitleState.value
+      : baseTitle;
+  const setDraftTitle = (value: string) => setDraftTitleState({ base: baseTitle, value });
   const workspaceLayoutPresetId = workspace?.layoutPresetId ?? DEFAULT_WORKSPACE_LAYOUT_PRESET_ID;
 
   useEffect(() => {
@@ -108,13 +118,6 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   ]);
 
   useEffect(() => {
-    if (!workspace) {
-      return;
-    }
-    setDraftTitle(workspace.title);
-  }, [workspace]);
-
-  useEffect(() => {
     if (!renaming) {
       return;
     }
@@ -148,14 +151,14 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     workspaceLayoutPresetId,
   ]);
 
-  const commitRename = useCallback(() => {
+  const commitRename = () => {
     if (!workspace) {
       setRenaming(false);
       return;
     }
     renameWorkspace(workspace.id, draftTitle);
     setRenaming(false);
-  }, [draftTitle, renameWorkspace, workspace]);
+  };
 
   const restoreTerminalWorkspace = useCallback(
     (presetId: WorkspaceLayoutPresetId = workspaceLayoutPresetId) => {
@@ -178,41 +181,30 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     ],
   );
 
-  const applyWorkspacePresetSelection = useCallback(
-    (presetId: WorkspaceLayoutPresetId) => {
-      if (!workspace) {
-        return;
-      }
-      setWorkspaceLayoutPreset(workspace.id, presetId);
-      const nextTerminalIds = ensureTerminalIdsForPreset(
-        terminalState.terminalIds,
-        presetId,
-        randomTerminalId,
-      );
-      applyWorkspaceLayoutPreset(threadId, presetId, nextTerminalIds);
-      openTerminalThreadPage(threadId, { terminalOnly: true });
-      bumpFocusRequest();
-    },
-    [
-      applyWorkspaceLayoutPreset,
-      bumpFocusRequest,
-      openTerminalThreadPage,
-      setWorkspaceLayoutPreset,
+  const applyWorkspacePresetSelection = (presetId: WorkspaceLayoutPresetId) => {
+    if (!workspace) {
+      return;
+    }
+    setWorkspaceLayoutPreset(workspace.id, presetId);
+    const nextTerminalIds = ensureTerminalIdsForPreset(
       terminalState.terminalIds,
-      threadId,
-      workspace,
-    ],
-  );
+      presetId,
+      randomTerminalId,
+    );
+    applyWorkspaceLayoutPreset(threadId, presetId, nextTerminalIds);
+    openTerminalThreadPage(threadId, { terminalOnly: true });
+    bumpFocusRequest();
+  };
 
-  const createWorkspaceTerminal = useCallback(() => {
+  const createWorkspaceTerminal = () => {
     if (!terminalState.terminalOpen) {
       restoreTerminalWorkspace();
       return;
     }
     newTerminalGroup();
-  }, [newTerminalGroup, restoreTerminalWorkspace, terminalState.terminalOpen]);
+  };
 
-  const createWorkspaceTerminalFromShortcut = useCallback(() => {
+  const createWorkspaceTerminalFromShortcut = () => {
     const action = resolveTerminalNewAction({
       terminalOpen: terminalState.terminalOpen,
       activeTerminalId: terminalState.activeTerminalId,
@@ -226,14 +218,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     }
 
     createTerminalTab(action.targetTerminalId);
-  }, [
-    createTerminalTab,
-    createWorkspaceTerminal,
-    terminalState.activeTerminalGroupId,
-    terminalState.activeTerminalId,
-    terminalState.terminalGroups,
-    terminalState.terminalOpen,
-  ]);
+  };
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -251,63 +236,34 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     };
   }, [createWorkspaceTerminalFromShortcut]);
 
-  const terminalDrawerProps = useMemo(
-    () => ({
-      threadId,
-      cwd: homeDir ?? "",
-      height: terminalState.terminalHeight,
-      terminalIds: terminalState.terminalIds,
-      terminalLabelsById: terminalState.terminalLabelsById,
-      terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-      terminalCliKindsById: terminalState.terminalCliKindsById,
-      terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
-      runningTerminalIds: terminalState.runningTerminalIds,
-      activeTerminalId: terminalState.activeTerminalId,
-      terminalGroups: terminalState.terminalGroups,
-      activeTerminalGroupId: terminalState.activeTerminalGroupId,
-      focusRequestId,
-      onSplitTerminal: splitRight,
-      onSplitTerminalDown: splitDown,
-      onNewTerminal: createWorkspaceTerminal,
-      onNewTerminalTab: createTerminalTab,
-      onMoveTerminalToGroup: moveTerminalToNewGroup,
-      onActiveTerminalChange: activateTerminal,
-      onCloseTerminal: closeTerminal,
-      onCloseTerminalGroup: closeTerminalGroup,
-      onHeightChange: setTerminalHeight,
-      onResizeTerminalSplit: resizeTerminalSplit,
-      onTerminalMetadataChange: setTerminalMetadata,
-      onTerminalActivityChange: setTerminalActivity,
-      onAddTerminalContext: () => {},
-    }),
-    [
-      activateTerminal,
-      closeTerminal,
-      closeTerminalGroup,
-      createTerminalTab,
-      createWorkspaceTerminal,
-      focusRequestId,
-      homeDir,
-      moveTerminalToNewGroup,
-      resizeTerminalSplit,
-      setTerminalActivity,
-      setTerminalHeight,
-      setTerminalMetadata,
-      splitDown,
-      splitRight,
-      terminalState.activeTerminalGroupId,
-      terminalState.activeTerminalId,
-      terminalState.terminalAttentionStatesById,
-      terminalState.runningTerminalIds,
-      terminalState.terminalCliKindsById,
-      terminalState.terminalGroups,
-      terminalState.terminalHeight,
-      terminalState.terminalIds,
-      terminalState.terminalLabelsById,
-      terminalState.terminalTitleOverridesById,
-      threadId,
-    ],
-  );
+  const terminalDrawerProps = {
+    threadId,
+    cwd: homeDir ?? "",
+    height: terminalState.terminalHeight,
+    terminalIds: terminalState.terminalIds,
+    terminalLabelsById: terminalState.terminalLabelsById,
+    terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+    terminalCliKindsById: terminalState.terminalCliKindsById,
+    terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
+    runningTerminalIds: terminalState.runningTerminalIds,
+    activeTerminalId: terminalState.activeTerminalId,
+    terminalGroups: terminalState.terminalGroups,
+    activeTerminalGroupId: terminalState.activeTerminalGroupId,
+    focusRequestId,
+    onSplitTerminal: splitRight,
+    onSplitTerminalDown: splitDown,
+    onNewTerminal: createWorkspaceTerminal,
+    onNewTerminalTab: createTerminalTab,
+    onMoveTerminalToGroup: moveTerminalToNewGroup,
+    onActiveTerminalChange: activateTerminal,
+    onCloseTerminal: closeTerminal,
+    onCloseTerminalGroup: closeTerminalGroup,
+    onHeightChange: setTerminalHeight,
+    onResizeTerminalSplit: resizeTerminalSplit,
+    onTerminalMetadataChange: setTerminalMetadata,
+    onTerminalActivityChange: setTerminalActivity,
+    onAddTerminalContext: () => {},
+  };
 
   return (
     <RouteInsetSurface>

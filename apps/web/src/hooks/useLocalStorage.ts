@@ -71,6 +71,9 @@ export function useLocalStorage<T, E>(
   });
 
   // Return a wrapped version of useState's setter function that persists the new value to localStorage
+  // Manual memoization kept: this hook does not compile under React Compiler
+  // (try/catch with value blocks), so the setter identity must be stabilized
+  // by hand — it flows into effect deps across the app.
   const setValue = useCallback(
     (value: T | ((val: T) => T)) => {
       try {
@@ -94,17 +97,25 @@ export function useLocalStorage<T, E>(
 
   const prevKeyRef = useRef(key);
 
-  // Re-sync from localStorage when key changes
+  // Re-sync from localStorage when key changes. Timeout-0 keeps the state
+  // write asynchronous (compiler-eligible); key changes are rare and the
+  // fresh value lands within a frame.
   useEffect(() => {
-    if (prevKeyRef.current !== key) {
-      prevKeyRef.current = key;
+    if (prevKeyRef.current === key) {
+      return;
+    }
+    prevKeyRef.current = key;
+    const timeoutId = window.setTimeout(() => {
       try {
         const newValue = getLocalStorageItem(key, schema);
         setStoredValue(newValue ?? initialValue);
       } catch (error) {
         console.error("[LOCALSTORAGE] Error:", error);
       }
-    }
+    }, 0);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [key, initialValue, schema]);
 
   // Listen for storage events from other tabs AND custom events from the same tab

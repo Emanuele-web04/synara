@@ -6,7 +6,7 @@
 // Layer: Pull request presentation
 // Exports: PullRequestMarkdown
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
@@ -58,10 +58,7 @@ export function PullRequestMarkdown({
   fallback: string;
   cwd: string;
 }) {
-  const sections = useMemo(
-    () => splitPullRequestMarkdownSections(preparePullRequestMarkdown(text)),
-    [text],
-  );
+  const sections = splitPullRequestMarkdownSections(preparePullRequestMarkdown(text));
   if (sections.length === 0) {
     return (
       <ChatMarkdown

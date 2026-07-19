@@ -273,6 +273,7 @@ export interface TraitsMenuContentProps {
   onSelectionComplete?: () => void;
 }
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
   threadId,

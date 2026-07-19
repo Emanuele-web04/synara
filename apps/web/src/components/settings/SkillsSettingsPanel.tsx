@@ -6,7 +6,6 @@
 
 import type { ProviderKind, ServerSettings } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { SettingsRow, SettingsSection } from "~/components/settings/SettingsPanelPrimitives";
@@ -55,21 +54,12 @@ export function SkillsSettingsPanel() {
   const catalogQuery = useQuery(skillsCatalogQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
 
-  const disabledSkillNames = useMemo(
-    () =>
-      new Set(
-        (serverSettingsQuery.data?.skills.disabled ?? []).map((name) => settingsSkillNameKey(name)),
-      ),
-    [serverSettingsQuery.data?.skills.disabled],
+  const disabledSkillNames = new Set(
+    (serverSettingsQuery.data?.skills.disabled ?? []).map((name) => settingsSkillNameKey(name)),
   );
 
-  const skillGroups = useMemo(
-    () => buildSettingsSkillGroups(catalogQuery.data?.skills ?? []),
-    [catalogQuery.data?.skills],
-  );
-  const skillSections = useMemo(() => {
-    return buildSettingsSkillSections(catalogQuery.data?.skills ?? []);
-  }, [catalogQuery.data?.skills]);
+  const skillGroups = buildSettingsSkillGroups(catalogQuery.data?.skills ?? []);
+  const skillSections = buildSettingsSkillSections(catalogQuery.data?.skills ?? []);
 
   const setSkillEnabled = (skillName: string, enabled: boolean) => {
     // Read through the query cache (not the render closure) so rapid toggles

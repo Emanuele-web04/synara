@@ -14,7 +14,6 @@ import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
-  type ChatAssistantSelectionAttachment,
   type ChatMessage,
   type SessionPhase,
   type Thread,
@@ -73,10 +72,11 @@ export function hasFileUndoSettled(input: {
     return true;
   }
 
+  const existingFailureActivityIdSet = new Set(input.pending.existingFailureActivityIds);
   return input.thread.activities.some((activity) => {
     if (
       activity.kind !== "checkpoint.revert.failed" ||
-      input.pending.existingFailureActivityIds.includes(activity.id) ||
+      existingFailureActivityIdSet.has(activity.id) ||
       typeof activity.payload !== "object" ||
       activity.payload === null ||
       !("turnCount" in activity.payload)
@@ -1043,18 +1043,6 @@ export function deriveComposerSendState(options: {
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,
   };
-}
-
-export function collectUserMessageAssistantSelections(
-  message: ChatMessage,
-): ChatAssistantSelectionAttachment[] {
-  if (message.role !== "user" || !message.attachments) {
-    return [];
-  }
-  return message.attachments.filter(
-    (attachment): attachment is ChatAssistantSelectionAttachment =>
-      attachment.type === "assistant-selection",
-  );
 }
 
 export function buildExpiredTerminalContextToastCopy(

@@ -11,7 +11,6 @@
 import type { StudioOutputEntry, ThreadId } from "@synara/contracts";
 import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
 
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { studioThreadOutputsQueryOptions } from "~/lib/serverReactQuery";
@@ -21,6 +20,11 @@ import { readNativeApi } from "~/nativeApi";
 
 import { FileEntryIcon } from "../FileEntryIcon";
 import { EnvironmentLabeledSection, EnvironmentRow } from "./EnvironmentRow";
+
+function revealEntryInFinder(entry: StudioOutputEntry) {
+  const api = readNativeApi();
+  void api?.shell.showInFolder(entry.fullPath).catch(() => {});
+}
 
 export function EnvironmentStudioOutputsSection({
   threadId,
@@ -32,21 +36,13 @@ export function EnvironmentStudioOutputsSection({
   const outputsQuery = useQuery(studioThreadOutputsQueryOptions({ threadId, enabled }));
   const fileOpener = useWorkspaceFileOpener();
 
-  const revealEntryInFinder = useCallback((entry: StudioOutputEntry) => {
-    const api = readNativeApi();
-    void api?.shell.showInFolder(entry.fullPath).catch(() => {});
-  }, []);
-
   // Plain click opens the output in the in-app side panel; meta/ctrl-click — or a
   // file the panel can't view — reveals it in the Finder instead.
-  const openEntry = useCallback(
-    (entry: StudioOutputEntry, forceFinderReveal: boolean) => {
-      if (forceFinderReveal || !fileOpener?.openFile(entry.fullPath)) {
-        revealEntryInFinder(entry);
-      }
-    },
-    [fileOpener, revealEntryInFinder],
-  );
+  const openEntry = (entry: StudioOutputEntry, forceFinderReveal: boolean) => {
+    if (forceFinderReveal || !fileOpener?.openFile(entry.fullPath)) {
+      revealEntryInFinder(entry);
+    }
+  };
 
   const entries = outputsQuery.data?.entries ?? [];
   if (entries.length === 0) {

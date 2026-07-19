@@ -13,7 +13,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
-import { memo, useState } from "react";
+import { useState } from "react";
 
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import {
@@ -275,7 +275,7 @@ function WorkflowAgentRowView({
   );
 }
 
-export const WorkflowRunCard = memo(function WorkflowRunCard({
+export function WorkflowRunCard({
   workflowRun,
   nowMs,
   compact,
@@ -544,4 +544,4 @@ export const WorkflowRunCard = memo(function WorkflowRunCard({
       </DisclosureRegion>
     </ComposerStackedPanel>
   );
-});
+}

@@ -3,7 +3,6 @@
 // Layer: Chat status presentation
 // Exports: RateLimitBanner and rate-limit derivation helpers.
 
-import { memo } from "react";
 import type { OrchestrationThreadActivity } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
@@ -54,7 +53,7 @@ function formatResetsAt(resetsAt: string): string {
   return ` Resets in ${minutesLeft}m.`;
 }
 
-export const RateLimitBanner = memo(function RateLimitBanner({
+export const RateLimitBanner = function RateLimitBanner({
   onDismiss,
   rateLimitStatus,
 }: {
@@ -89,4 +88,4 @@ export const RateLimitBanner = memo(function RateLimitBanner({
       </Alert>
     </ChatColumnBannerFrame>
   );
-});
+};

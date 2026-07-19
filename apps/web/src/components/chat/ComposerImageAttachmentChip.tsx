@@ -3,7 +3,6 @@
 // Layer: Chat composer presentation
 // Depends on: composer draft image metadata, shared chip styles, and expanded image preview helpers.
 
-import { memo } from "react";
 import { WindowIcon } from "~/lib/icons";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
 import { normalizeComposerImageSource } from "../../lib/composerImageSource";
@@ -23,7 +22,7 @@ interface ComposerImageAttachmentChipProps {
   onRemoveImage: (imageId: string) => void;
 }
 
-export const ComposerImageAttachmentChip = memo(function ComposerImageAttachmentChip({
+export function ComposerImageAttachmentChip({
   image,
   images,
   nonPersisted,
@@ -152,4 +151,4 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
       />
     </div>
   );
-});
+}

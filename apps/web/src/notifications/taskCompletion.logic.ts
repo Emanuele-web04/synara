@@ -408,14 +408,6 @@ export function buildTerminalAttentionCopy(candidate: TerminalAttentionCandidate
   };
 }
 
-export function shouldSuppressVisibleThreadNotification(input: {
-  threadId: Thread["id"];
-  visibleThreadIds: ReadonlySet<Thread["id"]>;
-  windowForeground: boolean;
-}): boolean {
-  return input.windowForeground && input.visibleThreadIds.has(input.threadId);
-}
-
 export const collectInputNeededThreadCandidates = collectThreadAttentionCandidates;
 
 export const buildInputNeededCopy = buildThreadAttentionCopy;

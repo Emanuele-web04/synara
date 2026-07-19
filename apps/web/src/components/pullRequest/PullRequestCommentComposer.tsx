@@ -28,27 +28,32 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
   const trimmed = body.trim();
   const canSubmit = trimmed.length > 0 && !mutation.isPending;
 
-  const submit = async () => {
+  // Promise chain instead of async/try-catch-finally: React Compiler does not
+  // yet support try/finally, and it would skip optimizing this whole component.
+  const submit = () => {
     if (!canSubmit || submittingRef.current) return;
     submittingRef.current = true;
-    try {
-      await mutation.mutateAsync({
+    void mutation
+      .mutateAsync({
         projectId: detail.projectId,
         repository: detail.repository,
         number: detail.number,
         body: trimmed,
+      })
+      .then(() => {
+        setBody("");
+      })
+      .catch((error: unknown) => {
+        // The draft stays in the field on failure — nothing to re-type.
+        toastManager.add({
+          type: "error",
+          title: "Could not post comment",
+          description: error instanceof Error ? error.message : "GitHub CLI comment failed.",
+        });
+      })
+      .finally(() => {
+        submittingRef.current = false;
       });
-      setBody("");
-    } catch (error) {
-      // The draft stays in the field on failure — nothing to re-type.
-      toastManager.add({
-        type: "error",
-        title: "Could not post comment",
-        description: error instanceof Error ? error.message : "GitHub CLI comment failed.",
-      });
-    } finally {
-      submittingRef.current = false;
-    }
   };
 
   return (

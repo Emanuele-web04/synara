@@ -12,7 +12,6 @@ import {
   ThreadId,
 } from "@synara/contracts";
 import { page } from "vitest/browser";
-import { useCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -52,12 +51,9 @@ function ClaudeTraitsPickerHarness(props: {
       pi: [],
     },
   });
-  const handlePromptChange = useCallback(
-    (nextPrompt: string) => {
-      setPrompt(CLAUDE_THREAD_ID, nextPrompt);
-    },
-    [setPrompt],
-  );
+  const handlePromptChange = (nextPrompt: string) => {
+    setPrompt(CLAUDE_THREAD_ID, nextPrompt);
+  };
 
   return (
     <TraitsPicker
@@ -655,12 +651,9 @@ function OpenCodeTraitsPickerHarness(props: {
       pi: [],
     },
   });
-  const handlePromptChange = useCallback(
-    (nextPrompt: string) => {
-      setPrompt(OPENCODE_THREAD_ID, nextPrompt);
-    },
-    [setPrompt],
-  );
+  const handlePromptChange = (nextPrompt: string) => {
+    setPrompt(OPENCODE_THREAD_ID, nextPrompt);
+  };
 
   return (
     <TraitsPicker

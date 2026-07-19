@@ -245,12 +245,6 @@ export function parseComposerSlashInvocationForCommands(
   };
 }
 
-export function getComposerSlashCommandDefinition(
-  command: ComposerSlashCommand,
-): ComposerSlashCommandDefinition {
-  return COMPOSER_SLASH_COMMAND_DEFINITIONS[command];
-}
-
 export function filterComposerSlashCommands(
   query: string,
   commands: ReadonlyArray<ComposerSlashCommand> = BUILT_IN_COMPOSER_SLASH_COMMANDS,
