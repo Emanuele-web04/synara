@@ -1,0 +1,560 @@
+import { EventEmitter } from "node:events";
+import * as Http from "node:http";
+import type { AddressInfo } from "node:net";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  DESKTOP_BACKEND_SHUTDOWN_PATH,
+  startDesktopBackendShutdownRequest,
+  stopWindowsBackendAndWait,
+  type BackendShutdownProcess,
+  type DesktopBackendShutdownRequestOutcome,
+  type PendingDesktopBackendShutdownRequest,
+} from "./backendShutdown";
+
+class FakeBackendProcess extends EventEmitter {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  readonly killSignals: Array<NodeJS.Signals | number | undefined> = [];
+  exitOnKill = false;
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.killSignals.push(signal);
+    if (this.exitOnKill) {
+      this.exit(null, typeof signal === "string" ? signal : "SIGTERM");
+    }
+    return true;
+  }
+
+  exit(exitCode: number | null = 0, signalCode: NodeJS.Signals | null = null): void {
+    this.exitCode = exitCode;
+    this.signalCode = signalCode;
+    this.emit("exit", exitCode, signalCode);
+  }
+}
+
+type TestBackendShutdownProcess = FakeBackendProcess & BackendShutdownProcess;
+
+function makeTestBackendShutdownProcess(): TestBackendShutdownProcess {
+  return new FakeBackendProcess() as unknown as TestBackendShutdownProcess;
+}
+
+function makePendingRequest(
+  outcome: Promise<DesktopBackendShutdownRequestOutcome> = new Promise(() => {}),
+): PendingDesktopBackendShutdownRequest & {
+  readonly cancel: ReturnType<typeof vi.fn<() => void>>;
+} {
+  return {
+    outcome,
+    cancel: vi.fn<() => void>(),
+  };
+}
+
+async function expectPromisePending(promise: Promise<unknown>): Promise<void> {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await Promise.resolve();
+  expect(settled).toBe(false);
+}
+
+describe("stopWindowsBackendAndWait", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("posts the per-launch credential but treats only child exit as graceful success", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const pendingRequest = makePendingRequest(
+      Promise.resolve({ type: "response", statusCode: 202 }),
+    );
+    const startRequest = vi.fn(() => pendingRequest);
+
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest,
+    });
+
+    expect(startRequest).toHaveBeenCalledOnce();
+    expect(startRequest).toHaveBeenCalledWith({
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+    });
+    await expectPromisePending(shutdown);
+    await vi.advanceTimersByTimeAsync(7_999);
+    await expectPromisePending(shutdown);
+
+    child.exit(0);
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: false });
+    expect(child.killSignals).toEqual([]);
+    expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("shares duplicate shutdown calls for the same process", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const pendingRequest = makePendingRequest();
+    const startRequest = vi.fn(() => pendingRequest);
+    const input = {
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest,
+    };
+
+    const first = stopWindowsBackendAndWait(input);
+    const duplicate = stopWindowsBackendAndWait(input);
+
+    expect(duplicate).toBe(first);
+    expect(startRequest).toHaveBeenCalledOnce();
+    child.exit(0);
+    await expect(first).resolves.toEqual({ type: "exited", forced: false });
+    await expect(duplicate).resolves.toEqual({ type: "exited", forced: false });
+    expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a request created during a synchronous child-exit race", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const pendingRequest = makePendingRequest();
+
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => {
+        child.exit(0);
+        return pendingRequest;
+      },
+    });
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: false });
+    expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+    expect(child.killSignals).toEqual([]);
+  });
+
+  it.each([
+    ["rejected response", () => Promise.resolve({ type: "response", statusCode: 401 } as const)],
+    ["connection reset or refusal", () => Promise.resolve({ type: "error" } as const)],
+    ["request rejection", () => Promise.reject(new Error("transport rejected"))],
+  ])("keeps the absolute fallback schedule after a %s", async (_label, makeOutcome) => {
+    const child = makeTestBackendShutdownProcess();
+    child.exitOnKill = true;
+    const startRequest = vi.fn(() => makePendingRequest(makeOutcome()));
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest,
+    });
+
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(child.killSignals).toEqual([]);
+    await expectPromisePending(shutdown);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: true });
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+    expect(startRequest).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same bounded fallback when request construction fails synchronously", async () => {
+    const child = makeTestBackendShutdownProcess();
+    child.exitOnKill = true;
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => {
+        throw new Error("missing credential or unavailable endpoint");
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: true });
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("cancels a hung request at the overall deadline and never forces twice", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const pendingRequest = makePendingRequest();
+    const forceTerminate = vi.fn((processHandle: BackendShutdownProcess) => {
+      processHandle.kill("SIGTERM");
+    });
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => pendingRequest,
+      forceTerminate,
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+    await expectPromisePending(shutdown);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(shutdown).resolves.toEqual({ type: "timed-out", forced: true });
+    expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+
+    const duplicateAfterDeadline = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => makePendingRequest(),
+      forceTerminate,
+    });
+    expect(duplicateAfterDeadline).toBe(shutdown);
+    await expect(duplicateAfterDeadline).resolves.toEqual({ type: "timed-out", forced: true });
+    expect(forceTerminate).toHaveBeenCalledOnce();
+  });
+
+  it("does not request or force shutdown for an already-exited child", async () => {
+    const child = makeTestBackendShutdownProcess();
+    child.exitCode = 0;
+    const startRequest = vi.fn(() => makePendingRequest());
+
+    await expect(
+      stopWindowsBackendAndWait({
+        child,
+        backendHttpUrl: "http://127.0.0.1:3773",
+        shutdownToken: "desktop-only-token",
+        forceKillDelayMs: 8_000,
+        timeoutMs: 10_000,
+        startRequest,
+      }),
+    ).resolves.toEqual({ type: "already-exited", forced: false });
+    expect(startRequest).not.toHaveBeenCalled();
+    expect(child.killSignals).toEqual([]);
+  });
+
+  it("lets child state at the force boundary win without a force call", async () => {
+    const child = makeTestBackendShutdownProcess();
+    setTimeout(() => child.exit(0), 8_000);
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => makePendingRequest(),
+    });
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: false });
+    expect(child.killSignals).toEqual([]);
+  });
+
+  it("accepts actual child exit at the overall deadline as exit proof", async () => {
+    const child = makeTestBackendShutdownProcess();
+    setTimeout(() => child.exit(0), 10_000);
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => makePendingRequest(),
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(shutdown).resolves.toEqual({ type: "exited", forced: true });
+    expect(child.killSignals).toEqual(["SIGTERM"]);
+  });
+
+  it("remains bounded if the one forceful fallback throws", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const forceTerminate = vi.fn(() => {
+      throw new Error("force failed");
+    });
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 8_000,
+      timeoutMs: 10_000,
+      startRequest: () => makePendingRequest(),
+      forceTerminate,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(shutdown).resolves.toEqual({ type: "timed-out", forced: true });
+    expect(forceTerminate).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["a fractional deadline", 0.5],
+    ["a one-millisecond deadline", 1],
+  ])("forces synchronously before %s can settle", async (_label, timeoutMs) => {
+    const child = makeTestBackendShutdownProcess();
+    const pendingRequest = makePendingRequest();
+    const order: string[] = [];
+    const startRequest = vi.fn(() => {
+      expect(child.listenerCount("exit")).toBe(1);
+      order.push("request");
+      return pendingRequest;
+    });
+    const forceTerminate = vi.fn(() => {
+      order.push("force");
+    });
+
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 0,
+      timeoutMs,
+      startRequest,
+      forceTerminate,
+    });
+
+    expect(order).toEqual(["request", "force"]);
+    expect(startRequest).toHaveBeenCalledOnce();
+    expect(forceTerminate).toHaveBeenCalledOnce();
+    await expectPromisePending(shutdown);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+
+    await expect(shutdown).resolves.toEqual({ type: "timed-out", forced: true });
+    expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["a positive fractional force threshold", 500.5, 0.5],
+    ["the default thresholds", 10_000, 8_000],
+  ])("retains the positive timer path for %s", async (_label, timeoutMs, forceKillDelayMs) => {
+    const child = makeTestBackendShutdownProcess();
+    const forceTerminate = vi.fn();
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs,
+      timeoutMs,
+      startRequest: () => makePendingRequest(),
+      forceTerminate,
+    });
+
+    expect(forceTerminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(forceKillDelayMs);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+    await expectPromisePending(shutdown);
+
+    await vi.advanceTimersByTimeAsync(timeoutMs - forceKillDelayMs);
+
+    await expect(shutdown).resolves.toEqual({ type: "timed-out", forced: true });
+    expect(forceTerminate).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(timeoutMs + 10_000);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a zero-delay throwing force attempt bounded and single-shot", async () => {
+    const child = makeTestBackendShutdownProcess();
+    const forceTerminate = vi.fn(() => {
+      throw new Error("force failed");
+    });
+    const shutdown = stopWindowsBackendAndWait({
+      child,
+      backendHttpUrl: "http://127.0.0.1:3773",
+      shutdownToken: "desktop-only-token",
+      forceKillDelayMs: 0,
+      timeoutMs: 0.5,
+      startRequest: () => makePendingRequest(),
+      forceTerminate,
+    });
+
+    expect(forceTerminate).toHaveBeenCalledOnce();
+    await expectPromisePending(shutdown);
+
+    await vi.advanceTimersByTimeAsync(0.5);
+
+    await expect(shutdown).resolves.toEqual({ type: "timed-out", forced: true });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(forceTerminate).toHaveBeenCalledOnce();
+  });
+
+  it("rejects timing configurations that cannot preserve a force-before-deadline bound", () => {
+    const child = makeTestBackendShutdownProcess();
+    expect(() =>
+      stopWindowsBackendAndWait({
+        child,
+        backendHttpUrl: "http://127.0.0.1:3773",
+        shutdownToken: "desktop-only-token",
+        forceKillDelayMs: 10_000,
+        timeoutMs: 10_000,
+      }),
+    ).toThrow(RangeError);
+  });
+});
+
+async function listen(
+  listener: (request: Http.IncomingMessage, response: Http.ServerResponse) => void,
+): Promise<{ readonly server: Http.Server; readonly baseUrl: string }> {
+  const server = Http.createServer(listener);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return { server, baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+async function closeServer(server: Http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+describe("startDesktopBackendShutdownRequest", () => {
+  it("posts only to the loopback shutdown path with the bearer credential", async () => {
+    let observedMethod = "";
+    let observedUrl = "";
+    let observedAuthorization = "";
+    const { server, baseUrl } = await listen((request, response) => {
+      observedMethod = request.method ?? "";
+      observedUrl = request.url ?? "";
+      observedAuthorization = request.headers.authorization ?? "";
+      response.writeHead(202).end();
+    });
+
+    try {
+      const pending = startDesktopBackendShutdownRequest({
+        backendHttpUrl: `${baseUrl}/ignored?token=browser-token`,
+        shutdownToken: "desktop-only-token",
+      });
+
+      await expect(pending.outcome).resolves.toEqual({ type: "response", statusCode: 202 });
+      expect(observedMethod).toBe("POST");
+      expect(observedUrl).toBe(DESKTOP_BACKEND_SHUTDOWN_PATH);
+      expect(observedAuthorization).toBe("Bearer desktop-only-token");
+      pending.cancel();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("reports a rejected credential response without treating it as transport success", async () => {
+    const { server, baseUrl } = await listen((request, response) => {
+      response
+        .writeHead(request.headers.authorization === "Bearer expected-token" ? 202 : 401)
+        .end();
+    });
+
+    try {
+      const pending = startDesktopBackendShutdownRequest({
+        backendHttpUrl: baseUrl,
+        shutdownToken: "wrong-token",
+      });
+      await expect(pending.outcome).resolves.toEqual({ type: "response", statusCode: 401 });
+      pending.cancel();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("reports connection refusal as an error outcome", async () => {
+    const { server, baseUrl } = await listen((_request, response) => response.end());
+    await closeServer(server);
+
+    const pending = startDesktopBackendShutdownRequest({
+      backendHttpUrl: baseUrl,
+      shutdownToken: "desktop-only-token",
+    });
+
+    await expect(pending.outcome).resolves.toEqual({ type: "error" });
+    pending.cancel();
+  });
+
+  it("reports a reset connection as an error outcome", async () => {
+    const { server, baseUrl } = await listen((request) => {
+      request.socket.destroy();
+    });
+
+    try {
+      const pending = startDesktopBackendShutdownRequest({
+        backendHttpUrl: baseUrl,
+        shutdownToken: "desktop-only-token",
+      });
+      await expect(pending.outcome).resolves.toEqual({ type: "error" });
+      pending.cancel();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("cancels a hung response so it cannot outlive the shutdown deadline", async () => {
+    const sockets = new Set<import("node:net").Socket>();
+    const { server, baseUrl } = await listen((request) => {
+      sockets.add(request.socket);
+      request.socket.once("close", () => sockets.delete(request.socket));
+    });
+    const pending = startDesktopBackendShutdownRequest({
+      backendHttpUrl: baseUrl,
+      shutdownToken: "desktop-only-token",
+    });
+
+    pending.cancel();
+
+    await expect(pending.outcome).resolves.toEqual({ type: "cancelled" });
+    for (const socket of sockets) socket.destroy();
+    await closeServer(server);
+  });
+
+  it("rejects missing credentials and non-loopback endpoints before making a request", () => {
+    expect(() =>
+      startDesktopBackendShutdownRequest({
+        backendHttpUrl: "http://127.0.0.1:3773",
+        shutdownToken: "",
+      }),
+    ).toThrow("token is required");
+    expect(() =>
+      startDesktopBackendShutdownRequest({
+        backendHttpUrl: "https://example.com",
+        shutdownToken: "desktop-only-token",
+      }),
+    ).toThrow("HTTP loopback endpoint");
+  });
+});

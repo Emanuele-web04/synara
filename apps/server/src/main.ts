@@ -52,6 +52,25 @@ export class StartupError extends Data.TaggedError("StartupError")<{
   readonly cause?: unknown;
 }> {}
 
+const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
+
+function consumeDesktopShutdownTokenFromProcessEnvironment(): string | undefined {
+  const matchingKeys =
+    process.platform === "win32"
+      ? Object.keys(process.env).filter(
+          (key) => key.toUpperCase() === DESKTOP_SHUTDOWN_TOKEN_ENV_KEY,
+        )
+      : [DESKTOP_SHUTDOWN_TOKEN_ENV_KEY];
+  let token: string | undefined;
+
+  for (const key of matchingKeys) {
+    token ??= process.env[key];
+    delete process.env[key];
+  }
+
+  return token;
+}
+
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
   readonly port: Option.Option<number>;
@@ -131,6 +150,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
@@ -149,6 +172,9 @@ const ServerConfigLive = (input: CliInput) =>
           (cause) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
+      );
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(
+        consumeDesktopShutdownTokenFromProcessEnvironment,
       );
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
@@ -193,6 +219,7 @@ const ServerConfigLive = (input: CliInput) =>
       });
       const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
+      const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
       const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd,
@@ -249,6 +276,7 @@ const ServerConfigLive = (input: CliInput) =>
         allowInsecureRemote,
         noBrowser,
         authToken,
+        desktopShutdownToken,
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
@@ -305,6 +333,19 @@ export const recordStartupHeartbeat = Effect.gen(function* () {
     projectCount,
   });
 });
+
+export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
+  const safeConfig: Record<string, unknown> = { ...config };
+  delete safeConfig.authToken;
+  delete safeConfig.desktopShutdownToken;
+  delete safeConfig.devUrl;
+
+  return {
+    ...safeConfig,
+    devUrl: config.devUrl?.toString(),
+    authEnabled: Boolean(config.authToken),
+  };
+}
 
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
@@ -373,12 +414,7 @@ const makeServerProgram = (input: CliInput) =>
       }),
     );
 
-    const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("Synara running", {
-      ...safeConfig,
-      devUrl: devUrl?.toString(),
-      authEnabled: Boolean(authToken),
-    });
+    yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
     if (startupPairingUrl) {
       if (config.allowInsecureRemote && !config.publicUrl) {
         yield* Effect.logWarning(
@@ -415,7 +451,7 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     return yield* stopSignal;
-  }).pipe(Effect.provide(LayerLive(input)));
+  }).pipe(Effect.scoped, Effect.provide(LayerLive(input)));
 
 /**
  * These flags mirrors the environment variables and the config shape.
@@ -492,5 +528,5 @@ export const synaraCli = Command.make("synara", {
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(
   Command.withDescription("Run the Synara server."),
-  Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
+  Command.withHandler((input) => makeServerProgram(input)),
 );
