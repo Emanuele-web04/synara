@@ -21,8 +21,8 @@ export const serverQueryKeys = {
   localServers: () => ["server", "localServers"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
-  allProviderUsage: (provider?: ProviderKind | null) =>
-    ["server", "allProviderUsage", provider ?? null] as const,
+  allProviderUsage: (provider?: ProviderKind | null, includeLocalUsage = true) =>
+    ["server", "allProviderUsage", provider ?? null, includeLocalUsage] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -244,18 +244,24 @@ export function serverAllProviderUsageQueryOptions(
     | boolean
     | {
         enabled?: boolean;
+        includeLocalUsage?: boolean;
         provider?: ProviderKind | null;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const includeLocalUsage = typeof input === "boolean" ? true : (input.includeLocalUsage ?? true);
   const provider = typeof input === "boolean" ? null : (input.provider ?? null);
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(provider),
+    queryKey: serverQueryKeys.allProviderUsage(provider, includeLocalUsage),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(provider ? { provider } : {}),
+    queryFn: async () =>
+      fetchAllProviderUsage({
+        ...(provider ? { provider } : {}),
+        ...(includeLocalUsage ? {} : { includeLocalUsage: false }),
+      }),
   });
 }

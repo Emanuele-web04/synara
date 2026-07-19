@@ -352,6 +352,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Usage ─────────────────────────────────────────────────────────────────────
   {
+    id: "usage:composer-usage",
+    section: "usage",
+    title: "Show provider quota in composer",
+    keywords:
+      "Show the active provider quota and reset time beside the model picker. remaining limits credits footer",
+  },
+  {
     id: "usage:usage",
     section: "usage",
     title: "Usage and billing",

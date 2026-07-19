@@ -42,6 +42,7 @@ import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
+import { isProviderUsageSupported } from "@synara/shared/providerUsage";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
   buildPromptThreadTitleFallback,
@@ -388,6 +389,8 @@ import {
 } from "../lib/contextWindow";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
 import {
+  COMPOSER_FOOTER_MAX_TIER,
+  composerFooterMaxTier,
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
   shouldUseCompactComposerFooter,
@@ -459,6 +462,7 @@ import {
   resolveProviderModelLabel,
 } from "./chat/ProviderModelPicker";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
+import { ComposerProviderUsageControl } from "./chat/ComposerProviderUsageControl";
 import { resolveTraitsTriggerSummary, TraitsPicker } from "./chat/TraitsPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
@@ -1327,6 +1331,7 @@ export default function ChatView({
   // so label changes can re-plan without a resize.
   const [composerFooterTier, setComposerFooterTier] = useState(0);
   const composerFooterTierRef = useRef(0);
+  const composerFooterMaxTierRef = useRef(COMPOSER_FOOTER_MAX_TIER);
   const composerFooterDemotionWidthsRef = useRef<ReadonlyArray<number | undefined>>([]);
   const composerFooterLayoutSyncRef = useRef<(() => void) | null>(null);
   const [confirmedCustomBinaryPathsByProvider, setConfirmedCustomBinaryPathsByProvider] = useState<
@@ -5436,6 +5441,7 @@ export default function ChatView({
           clientWidth: footerRow.clientWidth,
           isOverflowing: rowOverflows || leadingClips,
           demotionWidths: composerFooterDemotionWidthsRef.current,
+          maxTier: composerFooterMaxTierRef.current,
         });
         composerFooterDemotionWidthsRef.current = nextStep.demotionWidths;
         if (nextStep.tier !== composerFooterTierRef.current) {
@@ -9224,9 +9230,21 @@ export default function ChatView({
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
   const useSplitComposerPickerControls = isLocalDraftThread && !hasThreadStarted;
+  const hasComposerProviderUsage =
+    settings.showComposerProviderUsage && isProviderUsageSupported(selectedProvider);
+  const activeComposerFooterMaxTier = composerFooterMaxTier(
+    Boolean(runtimeUsageContextWindow),
+    hasComposerProviderUsage,
+  );
+  composerFooterMaxTierRef.current = activeComposerFooterMaxTier;
   const composerFooterControlsPlan = useMemo(
-    () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
-    [composerFooterTier, runtimeUsageContextWindow],
+    () =>
+      composerFooterPlanForTier(
+        composerFooterTier,
+        Boolean(runtimeUsageContextWindow),
+        hasComposerProviderUsage,
+      ),
+    [composerFooterTier, hasComposerProviderUsage, runtimeUsageContextWindow],
   );
   // The displayed labels changed (model switch, effort change, picker layout):
   // recorded overflow widths no longer apply, so reset to the richest tier and
@@ -9246,17 +9264,22 @@ export default function ChatView({
     runtimeAgents: dynamicAgents,
   });
   const composerFooterPlanInputsKey = [
+    selectedProvider,
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
     Boolean(runtimeUsageContextWindow),
+    hasComposerProviderUsage,
     useSplitComposerPickerControls,
   ].join(":");
-  useLayoutEffect(() => {
+  const resetComposerFooterLayout = useCallback(() => {
     composerFooterDemotionWidthsRef.current = [];
     composerFooterTierRef.current = 0;
     setComposerFooterTier(0);
     composerFooterLayoutSyncRef.current?.();
-  }, [composerFooterPlanInputsKey]);
+  }, []);
+  useLayoutEffect(() => {
+    resetComposerFooterLayout();
+  }, [composerFooterPlanInputsKey, resetComposerFooterLayout]);
   // After a tier renders, re-measure before paint: a still-overflowing footer
   // demotes another step until it fits (bounded by COMPOSER_FOOTER_MAX_TIER).
   useLayoutEffect(() => {
@@ -11140,6 +11163,16 @@ export default function ChatView({
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
+                      {!isVoiceRecording &&
+                      !isVoiceTranscribing &&
+                      composerFooterControlsPlan.showProviderUsage ? (
+                        <ComposerProviderUsageControl
+                          key={selectedProvider}
+                          provider={selectedProvider}
+                          showReset={composerFooterControlsPlan.showProviderUsageReset}
+                          onContentSizeChange={resetComposerFooterLayout}
+                        />
+                      ) : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}

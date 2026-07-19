@@ -2,7 +2,7 @@
 // Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
 // local, OpenUsage, and thread-derived fallback usage signals.
 
-import type { ServerProviderUsageSnapshot } from "@synara/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -45,8 +45,10 @@ function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
 
 function readProviderUsageSummary(input: {
   queryClient: QueryClient;
+  provider?: ProviderKind | undefined;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
+  includeSupplementalData?: boolean | undefined;
 }) {
   // Capture into a ref-style holder: the hook only runs inside the closure, so a
   // plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
@@ -56,10 +58,11 @@ function readProviderUsageSummary(input: {
 
   function Probe() {
     captured.current = useProviderUsageSummary({
-      provider: "claudeAgent",
+      provider: input.provider ?? "claudeAgent",
       threads: [],
       threadRateLimits: input.threadRateLimits,
       providerSnapshot: input.providerSnapshot,
+      includeSupplementalData: input.includeSupplementalData,
     });
     return <span />;
   }
@@ -83,6 +86,34 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("scopes live snapshots to the selected provider across provider switches", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("codex"), [
+      snapshot({
+        provider: "codex",
+        status: "ok",
+        limits: [{ window: "Weekly", usedPercent: 20 }],
+      }),
+    ]);
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({
+        provider: "claudeAgent",
+        status: "ok",
+        limits: [{ window: "Weekly", usedPercent: 70 }],
+      }),
+    ]);
+
+    const codexSummary = readProviderUsageSummary({ queryClient, provider: "codex" });
+    const claudeSummary = readProviderUsageSummary({ queryClient, provider: "claudeAgent" });
+
+    expect(codexSummary.rateLimits).toMatchObject([
+      { provider: "codex", limits: [{ window: "Weekly", usedPercent: 20 }] },
+    ]);
+    expect(claudeSummary.rateLimits).toMatchObject([
+      { provider: "claudeAgent", limits: [{ window: "Weekly", usedPercent: 70 }] },
+    ]);
+  });
+
   it("does not show local fallback rows when the live batch reports a non-ok status", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
@@ -148,6 +179,7 @@ describe("useProviderUsageSummary", () => {
     queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
       snapshot({
         status: "ok",
+        planName: "Max (5x)",
         detail: "Anthropic is rate-limiting usage checks — showing your last values.",
         limits: [
           {
@@ -163,6 +195,7 @@ describe("useProviderUsageSummary", () => {
     const summary = readProviderUsageSummary({ queryClient });
 
     expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.planName).toBe("Max (5x)");
     expect(summary.usageNotice).toContain("rate-limiting");
   });
 
@@ -192,5 +225,36 @@ describe("useProviderUsageSummary", () => {
 
     expect(summary.rateLimits).toEqual([]);
     expect(summary.usageLines).toEqual([]);
+  });
+
+  it("keeps an explicit composer snapshot authoritative over cached supplemental data", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({
+        status: "ok",
+        planName: "Cached plan",
+        limits: [{ window: "Weekly", usedPercent: 70 }],
+      }),
+    ]);
+    queryClient.setQueryData(
+      serverQueryKeys.providerUsage("claudeAgent", null),
+      fallbackSnapshot(),
+    );
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      includeSupplementalData: false,
+      providerSnapshot: snapshot({
+        status: "ok",
+        planName: "Authoritative plan",
+        limits: [{ window: "Weekly", usedPercent: 20 }],
+      }),
+    });
+
+    expect(summary.rateLimits).toMatchObject([
+      { provider: "claudeAgent", limits: [{ window: "Weekly", usedPercent: 20 }] },
+    ]);
+    expect(summary.usageLines).toEqual([]);
+    expect(summary.planName).toBe("Authoritative plan");
   });
 });

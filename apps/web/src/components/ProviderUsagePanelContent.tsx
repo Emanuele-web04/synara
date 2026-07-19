@@ -21,12 +21,31 @@ import { ProviderUsageLineList } from "./ProviderUsageLineList";
 
 export { providerUsageLabel };
 
+export const PROVIDER_USAGE_PILL_CLASS_NAME =
+  "shrink-0 rounded-full px-2 py-1 text-[11px] font-medium leading-none";
+
+export function ProviderUsagePlanPill({ planName }: { planName: string }) {
+  return (
+    <span
+      className={cn(
+        PROVIDER_USAGE_PILL_CLASS_NAME,
+        "max-w-32 truncate bg-muted text-muted-foreground",
+      )}
+      title={planName}
+    >
+      {planName}
+    </span>
+  );
+}
+
 export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent(props: {
   provider: ProviderKind | null | undefined;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
+  planName?: string | null | undefined;
   notice?: string | null | undefined;
   isLoading?: boolean | undefined;
+  emptyMessage?: string | null | undefined;
   learnMoreHref?: string | null | undefined;
   showUsageLines?: boolean | undefined;
   showTitle?: boolean | undefined;
@@ -48,8 +67,11 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   return (
     <div className={cn("space-y-2", props.className)}>
       {props.showTitle !== false ? (
-        <div className="text-[length:var(--app-font-size-chat-meta,10px)] font-medium text-muted-foreground">
-          {providerUsageLabel(props.provider)}
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[length:var(--app-font-size-chat-meta,10px)] font-medium text-muted-foreground">
+            {providerUsageLabel(props.provider)}
+          </div>
+          {props.planName ? <ProviderUsagePlanPill planName={props.planName} /> : null}
         </div>
       ) : null}
       {props.notice ? (
@@ -67,13 +89,14 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
         />
       ) : visibleRows.length === 0 && props.isLoading ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
-          Scanning local usage data for the selected provider.
+          Checking usage for the selected provider…
         </p>
       ) : visibleRows.length === 0 ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
-          {props.provider
-            ? "No local usage data was found yet for the selected provider."
-            : "No local usage data was found yet."}
+          {props.emptyMessage ??
+            (props.provider
+              ? "No usage data was found yet for the selected provider."
+              : "No usage data was found yet.")}
         </p>
       ) : null}
       {props.showLearnMore === true && learnMoreHref ? (

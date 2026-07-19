@@ -69,9 +69,14 @@ describe("serverAllProviderUsageQueryOptions", () => {
 
   it("keys provider-scoped usage separately from the all-provider batch", () => {
     const scoped = serverAllProviderUsageQueryOptions({ provider: "claudeAgent" });
+    const accountOnly = serverAllProviderUsageQueryOptions({
+      provider: "claudeAgent",
+      includeLocalUsage: false,
+    });
     const all = serverAllProviderUsageQueryOptions();
 
     expect(scoped.queryKey).toEqual(serverQueryKeys.allProviderUsage("claudeAgent"));
+    expect(accountOnly.queryKey).toEqual(serverQueryKeys.allProviderUsage("claudeAgent", false));
     expect(all.queryKey).toEqual(serverQueryKeys.allProviderUsage(null));
   });
 });

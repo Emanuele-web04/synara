@@ -39,12 +39,14 @@ export function useProviderUsageSummary(input: {
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   fetchProviderData?: boolean;
+  includeSupplementalData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
   const shouldFetchProviderData = input.fetchProviderData ?? true;
+  const includeSupplementalData = input.includeSupplementalData ?? true;
   const shouldFetchLiveProviderUsage =
     shouldFetchProviderData && provider !== null && input.providerSnapshot === undefined;
-  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
+  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage && includeSupplementalData;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
@@ -59,21 +61,29 @@ export function useProviderUsageSummary(input: {
     }),
   );
   const openUsageSnapshotQuery = useQuery(
-    openUsageProviderSnapshotQueryOptions(provider, { enabled: shouldFetchProviderData }),
+    openUsageProviderSnapshotQueryOptions(provider, {
+      enabled: shouldFetchProviderData && includeSupplementalData,
+    }),
   );
   const liveProviderSnapshot = useMemo(
-    () => (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === provider),
-    [allProviderUsageQuery.data, provider],
+    () =>
+      shouldFetchLiveProviderUsage
+        ? (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === provider)
+        : undefined,
+    [allProviderUsageQuery.data, provider, shouldFetchLiveProviderUsage],
   );
   const authoritativeLiveSnapshot = useMemo(
-    () => liveProviderSnapshot ?? input.providerSnapshot ?? null,
+    () => input.providerSnapshot ?? liveProviderSnapshot ?? null,
     [input.providerSnapshot, liveProviderSnapshot],
   );
   // Explicit live failures are authoritative; only fall back when no live snapshot exists.
   const blocksProviderUsageFallback = isProviderUsageSnapshotNonOk(authoritativeLiveSnapshot);
   const accountRateLimits = useMemo(
-    () => input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []),
-    [input.threadRateLimits, input.threads],
+    () =>
+      includeSupplementalData
+        ? (input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []))
+        : [],
+    [includeSupplementalData, input.threadRateLimits, input.threads],
   );
 
   const rateLimits = useMemo<ReadonlyArray<ProviderRateLimit>>(() => {
@@ -81,13 +91,15 @@ export function useProviderUsageSummary(input: {
       return [];
     }
 
-    const localSnapshot = localUsageSnapshotQuery.data ?? null;
+    const localSnapshot = includeSupplementalData ? (localUsageSnapshotQuery.data ?? null) : null;
     const derivedRateLimits = accountRateLimits.filter((rateLimit) =>
       provider ? rateLimit.provider === provider : true,
     );
     const liveUsageRateLimit = normalizeServerProviderUsageRateLimit(authoritativeLiveSnapshot);
     const localUsageRateLimit = normalizeServerProviderUsageRateLimit(localSnapshot);
-    const openUsageSnapshot = normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, provider);
+    const openUsageSnapshot = includeSupplementalData
+      ? normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, provider)
+      : null;
     return mergeProviderRateLimits(
       derivedRateLimits,
       mergeProviderRateLimits(
@@ -102,6 +114,7 @@ export function useProviderUsageSummary(input: {
     accountRateLimits,
     authoritativeLiveSnapshot,
     blocksProviderUsageFallback,
+    includeSupplementalData,
     localUsageSnapshotQuery.data,
     openUsageSnapshotQuery.data,
     provider,
@@ -116,14 +129,17 @@ export function useProviderUsageSummary(input: {
     if (liveUsageLines.length > 0) {
       return liveUsageLines;
     }
-    const localUsageLines = normalizeServerProviderUsageLines(localUsageSnapshotQuery.data);
+    const localUsageLines = includeSupplementalData
+      ? normalizeServerProviderUsageLines(localUsageSnapshotQuery.data)
+      : [];
     if (localUsageLines.length > 0) {
       return localUsageLines;
     }
-    return normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data);
+    return includeSupplementalData ? normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data) : [];
   }, [
     authoritativeLiveSnapshot,
     blocksProviderUsageFallback,
+    includeSupplementalData,
     localUsageSnapshotQuery.data,
     openUsageSnapshotQuery.data,
   ]);
@@ -151,10 +167,17 @@ export function useProviderUsageSummary(input: {
     rateLimits.length === 0 &&
     usageLines.length === 0;
 
+  const snapshotStatus = authoritativeLiveSnapshot?.status ?? null;
+  const snapshotDetail = authoritativeLiveSnapshot?.detail?.trim() || null;
+  const planName = authoritativeLiveSnapshot?.planName?.trim() || null;
+
   return {
     isLoading,
     learnMoreHref,
+    planName,
     rateLimits,
+    snapshotDetail,
+    snapshotStatus,
     usageLines,
     usageNotice,
   } as const;
