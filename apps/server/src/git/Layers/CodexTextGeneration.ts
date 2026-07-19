@@ -5,9 +5,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
 import { sanitizeGeneratedThreadTitle } from "@synara/shared/chatThreads";
+import { resolveCodexCliExecutable } from "@synara/shared/codexCliExecutable";
 import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import { prepareResolvedWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
@@ -324,7 +325,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
           "-",
         ];
-        const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
+        const executable = resolveCodexCliExecutable(codexBinaryPath, { cwd, env });
+        const prepared = prepareResolvedWindowsSafeProcess(executable, args, { cwd, env });
         const command = ChildProcess.make(prepared.command, prepared.args, {
           cwd,
           env,

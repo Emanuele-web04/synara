@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWindowsBatchCommandArgs,
   isWindowsBatchCommand,
+  prepareResolvedWindowsSafeProcess,
   prepareWindowsSafeProcess,
   resolveWindowsCommandPath,
   resolveWindowsComSpec,
@@ -207,36 +208,39 @@ describe("windowsProcess", () => {
     });
   });
 
-  it("wraps resolved extensionless path-like shims through cmd.exe", () => {
-    const spawnSync = vi.fn(() => ({
-      stdout: [
-        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
-        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
-      ].join("\r\n"),
-      status: 0,
-    }));
+  it.each([
+    {
+      configured: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
+      resolved: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd",
+    },
+    {
+      configured: "custom-codex",
+      resolved: "C:\\tools\\custom-codex.cmd",
+    },
+  ])(
+    "resolves and wraps the explicit extensionless command $configured",
+    ({ configured, resolved }) => {
+      const spawnSync = vi.fn(() => ({
+        stdout: [configured, resolved].join("\r\n"),
+        status: 0,
+      }));
 
-    expect(
-      prepareWindowsSafeProcess("C:\\Users\\test\\AppData\\Roaming\\npm\\codex", ["app-server"], {
-        platform: "win32",
-        cwd: "C:\\projects\\synara",
-        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
-        spawnSync,
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/v:off",
-        "/c",
-        'call "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd" "app-server"',
-      ],
-      shell: false,
-      windowsHide: true,
-      windowsVerbatimArguments: true,
-    });
-  });
+      expect(
+        prepareWindowsSafeProcess(configured, ["app-server"], {
+          platform: "win32",
+          cwd: "C:\\projects\\synara",
+          env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
+          spawnSync,
+        }),
+      ).toEqual({
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", `call "${resolved}" "app-server"`],
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
 
   it("wraps a configured .cmd Codex path without truncating it", () => {
     const spawnSync = vi.fn();
@@ -258,6 +262,26 @@ describe("windowsProcess", () => {
         "/c",
         'call "C:\\Users\\Test User\\AppData\\Roaming\\npm\\codex.cmd" "app-server"',
       ],
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    });
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("wraps an already-resolved .cmd command without probing again", () => {
+    const spawnSync = vi.fn();
+    const resolved = "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd";
+
+    expect(
+      prepareResolvedWindowsSafeProcess(resolved, ["app-server"], {
+        platform: "win32",
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        spawnSync,
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/v:off", "/c", `call "${resolved}" "app-server"`],
       shell: false,
       windowsHide: true,
       windowsVerbatimArguments: true,

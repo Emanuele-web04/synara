@@ -18,9 +18,13 @@ import type {
   ServerProviderUpdateState,
 } from "@synara/contracts";
 import { ServerProviderUpdateError } from "@synara/contracts";
+import { resolveCodexCliExecutable } from "@synara/shared/codexCliExecutable";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
+import {
+  prepareResolvedWindowsSafeProcess,
+  prepareWindowsSafeProcess,
+} from "@synara/shared/windowsProcess";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -649,10 +653,13 @@ const runProviderCommand = (
   executable: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
+  executableAlreadyResolved = false,
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const prepared = prepareWindowsSafeProcess(executable, args, { env });
+    const prepared = executableAlreadyResolved
+      ? prepareResolvedWindowsSafeProcess(executable, args, { env })
+      : prepareWindowsSafeProcess(executable, args, { env });
     const command = ChildProcess.make(prepared.command, prepared.args, {
       shell: prepared.shell,
       ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
@@ -681,7 +688,7 @@ const runCodexCommand = (
   executable = "codex",
   env: NodeJS.ProcessEnv = providerCommandEnv(CODEX_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  runProviderCommand(executable, args, env, true).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -875,8 +882,9 @@ export const makeCheckCodexProviderStatus = (
 > =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
     const probeEnv = yield* Effect.promise(() => makeCodexProbeEnv(homePath));
+    const configuredExecutable = nonEmptyTrimmed(binaryPath) ?? "codex";
+    const executable = resolveCodexCliExecutable(configuredExecutable, { env: probeEnv });
 
     // Probe 1: `codex --version` — is the CLI reachable?
     const versionProbe = yield* runCodexCommand(["--version"], executable, probeEnv).pipe(

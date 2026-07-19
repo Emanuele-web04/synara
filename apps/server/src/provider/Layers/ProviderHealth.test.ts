@@ -777,7 +777,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("uses configured codex binary for version and auth probes", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
-        const status = yield* makeCheckCodexProviderStatus("/custom/bin/codex");
+        const status = yield* makeCheckCodexProviderStatus("  /custom/bin/codex  ");
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
@@ -801,7 +801,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, _env, options) => {
-            assert.strictEqual(command, "C:\\Windows\\System32\\cmd.exe");
+            assert.strictEqual(command.toLowerCase(), "c:\\windows\\system32\\cmd.exe");
             assert.strictEqual(options?.windowsVerbatimArguments, true);
             const commandLine = args.at(-1) ?? "";
             if (commandLine.includes('"--version"')) {

@@ -40,6 +40,10 @@
       "types": "./src/windowsProcess.ts",
       "import": "./src/windowsProcess.ts"
     },
+    "./codexCliExecutable": {
+      "types": "./src/codexCliExecutable.ts",
+      "import": "./src/codexCliExecutable.ts"
+    },
     "./windowsCertificate": {
       "types": "./src/windowsCertificate.ts",
       "import": "./src/windowsCertificate.ts"

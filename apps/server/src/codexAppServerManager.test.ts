@@ -983,7 +983,7 @@ describe("startSession", () => {
           assertSupportedCodexCliVersion: (input: {
             binaryPath: string;
             cwd: string;
-            homePath?: string;
+            env: NodeJS.ProcessEnv;
           }) => void;
         },
         "assertSupportedCodexCliVersion",
