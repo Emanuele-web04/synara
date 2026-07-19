@@ -77,7 +77,6 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
-  const threadsHydrated = useStore((state) => state.threadsHydrated);
   const routeSplitViewId =
     typeof routeSearch.splitViewId === "string" ? routeSearch.splitViewId : undefined;
   const settingsSection = typeof routeSearch.section === "string" ? routeSearch.section : undefined;
@@ -148,7 +147,6 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const recentViewsRef = useRef(recentViews);
   const activeContextThreadIdRef = useRef(input.activeContextThreadId);
   const activeDraftThreadRef = useRef(input.activeDraftThread);
-  const didHydrationPruneRef = useRef(false);
 
   useEffect(() => {
     currentRecentViewRef.current = currentRecentView;
@@ -221,12 +219,6 @@ export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   useEffect(() => {
     prewarmThreadDetails(recentThreadIds);
   }, [prewarmThreadDetails, recentThreadIds]);
-
-  useEffect(() => {
-    if (!threadsHydrated || didHydrationPruneRef.current) return;
-    didHydrationPruneRef.current = true;
-    pruneRecentViewsStore(buildRecentViewAvailability());
-  }, [buildRecentViewAvailability, pruneRecentViewsStore, threadsHydrated]);
 
   const activateRecentView = (view: RecentView) => {
     switch (view.kind) {

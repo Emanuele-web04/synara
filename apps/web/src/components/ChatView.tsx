@@ -27,6 +27,8 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
   ThreadId,
+  WorktreeWorkspaceId,
+  WorkspaceOperationId,
   ThreadMarkerId,
   type ThreadMarker,
   type ThreadMarkerColor,
@@ -46,6 +48,7 @@ import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
+  GENERIC_WORKSPACE_CONVERSATION_TITLE,
 } from "@synara/shared/chatThreads";
 import {
   resolveThreadWorkspaceState,
@@ -160,6 +163,11 @@ import {
   warningIdsForAcknowledgedRisks,
 } from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
+import {
+  archiveThreadFromClient,
+  isThreadAlreadyUnarchivedError,
+  unarchiveThreadFromClient,
+} from "../lib/threadArchive";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -234,6 +242,7 @@ import {
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
+  isThreadRunningTurn,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -331,6 +340,10 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
+import {
+  waitForManagedWorkspaceReady,
+  waitForWorkspaceConversationSnapshot,
+} from "../lib/managedWorkspace";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isEditableEventTarget } from "../lib/editableEventTarget";
 import { compareProvidersByOrder } from "../providerOrdering";
@@ -403,6 +416,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { dedupeRemoteBranchesWithLocalMatches } from "./BranchToolbar.logic";
 import { dispatchThreadNotes } from "~/pinnedMessages";
 import {
   mergeProjectInstructionsIntoThreadNotes,
@@ -1131,8 +1145,13 @@ export default function ChatView({
 }: ChatViewProps) {
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
+  const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
+  const worktreeWorkspaces = useStore((store) => store.worktreeWorkspaces ?? []);
   const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -1727,6 +1746,18 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const activeWorktreeWorkspace = useMemo(
+    () =>
+      activeThread?.workspaceId
+        ? (worktreeWorkspaces.find(
+            (workspace) =>
+              workspace.id === activeThread.workspaceId && workspace.deletedAt === null,
+          ) ?? null)
+        : null,
+    [activeThread?.workspaceId, worktreeWorkspaces],
+  );
+  const [updatingWorkspaceTargetId, setUpdatingWorkspaceTargetId] =
+    useState<WorktreeWorkspaceId | null>(null);
   useEffect(() => {
     if (
       !pendingFileUndo ||
@@ -1886,7 +1917,10 @@ export default function ChatView({
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameThreadTarget, setRenameThreadTarget] = useState<{
+    threadId: ThreadId;
+    title: string;
+  } | null>(null);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
     homeDir,
     chatWorkspaceRoot,
@@ -3514,6 +3548,52 @@ export default function ChatView({
   const isMentionTrigger = composerTriggerKind === "mention";
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
+  const workspaceTargetBranchOptions = useMemo(() => {
+    if (!activeWorktreeWorkspace) return [];
+
+    const options = dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? [])
+      .filter((branch) => branch.name !== activeWorktreeWorkspace.branch)
+      .sort((left, right) => {
+        if (left.name === activeWorktreeWorkspace.targetRef) return -1;
+        if (right.name === activeWorktreeWorkspace.targetRef) return 1;
+        if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
+        if (Boolean(left.isRemote) !== Boolean(right.isRemote)) return left.isRemote ? 1 : -1;
+        return left.name.localeCompare(right.name);
+      })
+      .map((branch) => branch.name);
+
+    return options.includes(activeWorktreeWorkspace.targetRef)
+      ? options
+      : [activeWorktreeWorkspace.targetRef, ...options];
+  }, [activeWorktreeWorkspace, branchesQuery.data?.branches]);
+  const handleWorkspaceTargetRefChange = useCallback(
+    async (targetRef: string) => {
+      const workspace = activeWorktreeWorkspace;
+      const api = readNativeApi();
+      if (!workspace || !api || targetRef === workspace.targetRef) return;
+
+      setUpdatingWorkspaceTargetId(workspace.id);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.meta.update",
+          commandId: newCommandId(),
+          workspaceId: workspace.id,
+          targetRef,
+          updatedAt: new Date().toISOString(),
+        });
+        syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to change target branch",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setUpdatingWorkspaceTargetId((current) => (current === workspace.id ? null : current));
+      }
+    },
+    [activeWorktreeWorkspace, syncServerWorkspaceShellSnapshot],
+  );
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
     isMacPlatform(platform),
@@ -3596,12 +3676,18 @@ export default function ChatView({
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
   const activeRootBranch = useMemo(
     () =>
+      activeWorktreeWorkspace?.targetRef ??
       resolveComposerSlashRootBranch({
         branches: branchesQuery.data?.branches,
         activeProjectCwd: activeProject?.cwd,
         activeThreadBranch: activeThread?.branch,
       }),
-    [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.branches],
+    [
+      activeProject?.cwd,
+      activeThread?.branch,
+      activeWorktreeWorkspace?.targetRef,
+      branchesQuery.data?.branches,
+    ],
   );
   // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
   const providerPlugins = useMemo(
@@ -4471,22 +4557,6 @@ export default function ChatView({
     storeOpenNewFullWidthTerminal(activeThreadId, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
   }, [activeProject, activeThreadId, storeOpenNewFullWidthTerminal]);
-  // Desktop accelerators like Cmd+T can be claimed by Electron before the page sees keydown.
-  useEffect(() => {
-    const onMenuAction = window.desktopBridge?.onMenuAction;
-    if (typeof onMenuAction !== "function" || !isFocusedPane) {
-      return;
-    }
-
-    const unsubscribe = onMenuAction((action) => {
-      if (action !== "new-terminal-tab") return;
-      createTerminalFromShortcut();
-    });
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [createTerminalFromShortcut, isFocusedPane]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -4671,7 +4741,11 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
+    gitGithubRepositoryQueryOptions(
+      gitBranchSourceCwd,
+      environmentPanelVisible,
+      activeProject?.githubAccount ?? undefined,
+    ),
   );
   const threadRecap = useThreadRecap({
     thread: activeThread,
@@ -5590,7 +5664,7 @@ export default function ChatView({
     planSidebarDismissedForTurnRef.current = null;
     const settle = window.setTimeout(() => {
       setPullRequestDialogState(null);
-      setRenameDialogOpen(false);
+      setRenameThreadTarget((current) => (current?.threadId === activeThread?.id ? current : null));
       setShowScrollToBottom(false);
       setPlanSidebarOpen(openPlanSidebar);
     }, 0);
@@ -8043,6 +8117,8 @@ export default function ChatView({
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
       isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+    const shouldCreateManagedWorkspace =
+      workspaceProtocolVersion === 2 && shouldCreateWorktree && isLocalDraftThread;
     if (shouldCreateWorktree && !nextThreadBranch) {
       setStoreThreadError(
         threadIdForSend,
@@ -8192,47 +8268,9 @@ export default function ChatView({
     }
 
     let createdServerThreadForLocalDraft = false;
+    let createdManagedWorkspace = false;
     let turnStartSucceeded = false;
     await (async () => {
-      // On first message: lock in branch + create worktree if needed.
-      if (baseBranchForWorktree) {
-        const result = await createWorktreeMutation.mutateAsync({
-          cwd: targetProjectCwdForSend,
-          branch: baseBranchForWorktree,
-          newBranch: buildTemporaryWorktreeBranchName(),
-        });
-        beginLocalDispatch({
-          worktreeSetupStepId: "prepare-thread",
-          setupScriptName: worktreeSetupScriptName,
-        });
-        nextThreadBranch = result.worktree.branch;
-        nextThreadWorktreePath = result.worktree.path;
-        const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
-          branch: result.worktree.branch,
-          worktreePath: result.worktree.path,
-        });
-        if (isServerThread) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.meta.update",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            envMode: "worktree",
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
-            associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
-            associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
-          });
-          // Keep local thread state in sync immediately so terminal drawer opens
-          // with the worktree cwd/env instead of briefly using the project root.
-          setStoreThreadWorkspace(threadIdForSend, {
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            ...nextAssociatedWorktree,
-          });
-        }
-      }
-
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedModelSelectionForSend.provider,
         selectedModelSelectionForSend.model ||
@@ -8242,7 +8280,93 @@ export default function ChatView({
         selectedModelSelectionForSend.options,
       );
 
-      if (isLocalDraftThread) {
+      // On first message: lock in branch + create worktree if needed.
+      if (baseBranchForWorktree) {
+        if (shouldCreateManagedWorkspace) {
+          const workspaceId = WorktreeWorkspaceId.makeUnsafe(randomUUID());
+          await api.orchestration.dispatchCommand({
+            type: "workspace.create",
+            commandId: newCommandId(),
+            workspaceId,
+            threadId: threadIdForSend,
+            projectId: targetProjectIdForSend,
+            operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
+            title,
+            targetRef: baseBranchForWorktree,
+            sourceRef: null,
+            modelSelection: threadCreateModelSelection,
+            runtimeMode: nextRuntimeModeForSend,
+            interactionMode: interactionModeForSend,
+            createdAt: activeThread.createdAt,
+          });
+
+          createdManagedWorkspace = true;
+          createdServerThreadForLocalDraft = true;
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
+          });
+          const workspace = await waitForManagedWorkspaceReady({
+            workspaceId,
+            loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+          });
+          nextThreadBranch = workspace.branch;
+          nextThreadWorktreePath = workspace.path;
+          const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+          });
+          setDraftThreadContext(threadIdForSend, {
+            projectId: targetProjectIdForSend,
+            envMode: "worktree",
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+          });
+          setStoreThreadWorkspace(threadIdForSend, {
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+            ...nextAssociatedWorktree,
+          });
+        } else {
+          const result = await createWorktreeMutation.mutateAsync({
+            cwd: targetProjectCwdForSend,
+            branch: baseBranchForWorktree,
+            newBranch: buildTemporaryWorktreeBranchName(),
+          });
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
+          });
+          nextThreadBranch = result.worktree.branch;
+          nextThreadWorktreePath = result.worktree.path;
+          const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+            branch: result.worktree.branch,
+            worktreePath: result.worktree.path,
+          });
+          if (isServerThread) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              envMode: "worktree",
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+              associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+              associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+            });
+            // Keep local thread state in sync immediately so terminal drawer opens
+            // with the worktree cwd/env instead of briefly using the project root.
+            setStoreThreadWorkspace(threadIdForSend, {
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              ...nextAssociatedWorktree,
+            });
+          }
+        }
+      }
+
+      if (isLocalDraftThread && !createdManagedWorkspace) {
         const inheritedProjectInstructions =
           useProjectInstructionsStore.getState().instructionsByProjectId[targetProjectIdForSend] ??
           "";
@@ -8291,7 +8415,7 @@ export default function ChatView({
       }
 
       const setupScript = setupScriptForWorktree;
-      if (setupScript) {
+      if (setupScript && !createdManagedWorkspace) {
         let shouldRunSetupScript = false;
         if (isServerThread) {
           shouldRunSetupScript = true;
@@ -8394,7 +8518,7 @@ export default function ChatView({
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
       failLocalDispatchWorktreeSetup();
-      if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
+      if (createdServerThreadForLocalDraft && !createdManagedWorkspace && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
         await api.orchestration
           .dispatchCommand({
@@ -10478,12 +10602,214 @@ export default function ChatView({
       search: (previous) => ({ ...stripDiffSearchParams(previous), view: "editor" }),
     });
   }, [activeProjectIdForNewChat, handleNewThread]);
+  const onNewProjectChat = useCallback(() => {
+    if (!activeProjectIdForNewChat) {
+      return;
+    }
+    void handleNewThread(activeProjectIdForNewChat);
+  }, [activeProjectIdForNewChat, handleNewThread]);
+  const onNewWorkspaceChat = useCallback(async () => {
+    if (!activeThread?.workspaceId) return;
+    const api = readNativeApi();
+    if (!api) return;
+    try {
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId);
+      const nextThreadId = newThreadId();
+      await api.orchestration.dispatchCommand({
+        type: "workspace.conversation.create",
+        commandId: newCommandId(),
+        workspaceId,
+        threadId: nextThreadId,
+        title: GENERIC_WORKSPACE_CONVERSATION_TITLE,
+        modelSelection: activeThread.modelSelection,
+        runtimeMode: activeThread.runtimeMode,
+        interactionMode: activeThread.interactionMode,
+        createdAt: new Date().toISOString(),
+      });
+      const snapshot = await waitForWorkspaceConversationSnapshot({
+        workspaceId,
+        threadId: nextThreadId,
+        loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+      });
+      syncServerWorkspaceShellSnapshot(snapshot);
+      onNavigateToThread(nextThreadId);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add conversation",
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
+    }
+  }, [activeThread, onNavigateToThread, syncServerWorkspaceShellSnapshot]);
+  useEffect(() => {
+    if (!activeThread?.workspaceId || !isFocusedPane) return;
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: Boolean(terminalState.terminalOpen),
+          terminalWorkspaceOpen,
+        },
+      });
+      if (command !== "chat.newConversation") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void onNewWorkspaceChat();
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    activeThread?.workspaceId,
+    isFocusedPane,
+    keybindings,
+    onNewWorkspaceChat,
+    terminalState.terminalOpen,
+    terminalWorkspaceOpen,
+  ]);
+  // Electron claims Cmd/Ctrl+T before the webview receives a keydown event.
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function" || !activeThread?.workspaceId || !isFocusedPane) {
+      return;
+    }
+
+    const unsubscribe = onMenuAction((action) => {
+      if (action !== "new-conversation-tab") return;
+      void onNewWorkspaceChat();
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [activeThread?.workspaceId, isFocusedPane, onNewWorkspaceChat]);
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);
       onNavigateToThread(nextThreadId);
     },
     [onNavigateToThread, storeOpenChatThreadPage],
+  );
+  const onCloseConversationTab = useCallback(
+    async (closingThreadId: ThreadId, nextThreadId: ThreadId | null): Promise<boolean> => {
+      const closingThread = getThreadFromState(useStore.getState(), closingThreadId);
+      if (!closingThread) return false;
+      if (isThreadRunningTurn(closingThread)) {
+        toastManager.add({
+          type: "error",
+          title: "Cannot close chat",
+          description: "Stop the running session before closing this chat.",
+        });
+        return false;
+      }
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close chat",
+          description: "Reconnect to the server and try again.",
+        });
+        return false;
+      }
+
+      const wasActive = closingThreadId === activeThread?.id;
+      try {
+        await archiveThreadFromClient(api.orchestration, closingThreadId);
+        if (wasActive) {
+          if (nextThreadId) {
+            onOpenEditorChat(nextThreadId);
+          } else if (closingThread.workspaceId) {
+            await onNewWorkspaceChat();
+          } else if (isEditorRail) {
+            onNewEditorChat();
+          } else {
+            onNewProjectChat();
+          }
+        }
+        toastManager.add({
+          id: `archive-undo:${closingThreadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: 8000,
+            archiveUndo: {
+              onUndo: async () => {
+                try {
+                  await unarchiveThreadFromClient(api.orchestration, closingThreadId);
+                  if (wasActive) {
+                    onNavigateToThread(closingThreadId);
+                  }
+                  return true;
+                } catch (error) {
+                  toastManager.add({
+                    type: "error",
+                    title: "Could not restore chat",
+                    description:
+                      error instanceof Error ? error.message : "Unable to restore the chat.",
+                  });
+                  return false;
+                }
+              },
+              onViewArchived: () => {
+                void navigate({ to: "/settings", search: { section: "archived" } });
+              },
+            },
+          },
+        });
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close chat",
+          description: error instanceof Error ? error.message : "Unable to archive the chat.",
+        });
+        return false;
+      }
+    },
+    [
+      activeThread?.id,
+      isEditorRail,
+      navigate,
+      onNavigateToThread,
+      onNewEditorChat,
+      onNewProjectChat,
+      onNewWorkspaceChat,
+      onOpenEditorChat,
+    ],
+  );
+  const onReopenWorkspaceChat = useCallback(
+    async (threadId: ThreadId): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to reopen chat",
+          description: "Reconnect to the server and try again.",
+        });
+        return false;
+      }
+      try {
+        await unarchiveThreadFromClient(api.orchestration, threadId);
+        onNavigateToThread(threadId);
+        return true;
+      } catch (error) {
+        if (isThreadAlreadyUnarchivedError(error, threadId)) {
+          onNavigateToThread(threadId);
+          return true;
+        }
+        toastManager.add({
+          type: "error",
+          title: "Unable to reopen chat",
+          description: error instanceof Error ? error.message : "Unable to restore the chat.",
+        });
+        return false;
+      }
+    },
+    [onNavigateToThread],
   );
   const onOpenEditorTerminal = useCallback(() => {
     if (!activeThreadId) return;
@@ -10590,12 +10916,16 @@ export default function ChatView({
     isEmpty: timelineEntries.length === 0,
   });
 
-  const handleRenameActiveThread = async (newTitle: string) => {
+  const handleRenameThread = async (newTitle: string) => {
+    if (!renameThreadTarget) return;
+    const targetThread = getThreadFromState(useStore.getState(), renameThreadTarget.threadId);
+    const renamingActiveLocalDraft =
+      renameThreadTarget.threadId === activeThread.id && isLocalDraftThread;
     const outcome = await dispatchThreadRename({
-      threadId: activeThread.id,
+      threadId: renameThreadTarget.threadId,
       newTitle,
-      unchangedTitles: [activeThread.title],
-      createIfMissing: isLocalDraftThread
+      unchangedTitles: [renameThreadTarget.title, ...(targetThread ? [targetThread.title] : [])],
+      createIfMissing: renamingActiveLocalDraft
         ? {
             projectId: activeThread.projectId,
             modelSelection: activeThread.modelSelection,
@@ -10629,6 +10959,7 @@ export default function ChatView({
     if (outcome === "unchanged" || outcome === "unavailable") {
       return;
     }
+    setRenameThreadTarget(null);
   };
 
   const runtimeUsageControlsProps = {
@@ -11428,7 +11759,11 @@ export default function ChatView({
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
           !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
           "flex items-center",
-          isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+          isEditorRail
+            ? "h-10"
+            : activeWorktreeWorkspace
+              ? "h-[78px]"
+              : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           // The editor-rail chat header sits in the editor's second row (inside the
           // right-side chat pane), not flush against the window edges — the editor's
@@ -11492,17 +11827,42 @@ export default function ChatView({
                 : null
           }
           editorChatControls={
-            isEditorRail && activeProject
+            activeProject
               ? {
                   projectId: activeProject.id,
+                  workspaceId: activeThread.workspaceId
+                    ? WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId)
+                    : null,
                   activeSurface: terminalWorkspaceTerminalTabActive ? "terminal" : "chat",
                   terminalAvailable: terminalState.terminalOpen,
                   terminalHasRunningActivity: terminalState.runningTerminalIds.length > 0,
-                  onNewChat: onNewEditorChat,
+                  menuActionsEnabled: isFocusedPane,
+                  onNewChat: activeThread.workspaceId
+                    ? () => void onNewWorkspaceChat()
+                    : isEditorRail
+                      ? onNewEditorChat
+                      : onNewProjectChat,
                   onNewTerminal: onOpenEditorTerminal,
                   onOpenChat: onOpenEditorChat,
                   onOpenTerminal: onOpenEditorTerminal,
                   onCloseTerminal: onCloseEditorTerminal,
+                  onRenameChat: (targetThreadId, title) =>
+                    setRenameThreadTarget({ threadId: targetThreadId, title }),
+                  onCloseChat: (targetThreadId, nextThreadId) =>
+                    onCloseConversationTab(targetThreadId, nextThreadId),
+                  onReopenChat: onReopenWorkspaceChat,
+                }
+              : null
+          }
+          workspaceHeader={
+            !isEditorRail && activeWorktreeWorkspace
+              ? {
+                  title: activeWorktreeWorkspace.title,
+                  targetRef: activeWorktreeWorkspace.targetRef,
+                  targetBranchOptions: workspaceTargetBranchOptions,
+                  targetBranchesLoading: branchesQuery.isLoading,
+                  targetRefUpdating: updatingWorkspaceTargetId === activeWorktreeWorkspace.id,
+                  onTargetRefChange: (targetRef) => void handleWorkspaceTargetRefChange(targetRef),
                 }
               : null
           }
@@ -11521,16 +11881,20 @@ export default function ChatView({
           onToggleDiff={onToggleDiff}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
-          onRenameThread={() => setRenameDialogOpen(true)}
+          onRenameThread={() =>
+            setRenameThreadTarget({ threadId: activeThread.id, title: activeThread.title })
+          }
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
       </header>
 
       <RenameThreadDialog
-        open={renameDialogOpen}
-        currentTitle={activeThread.title}
-        onOpenChange={setRenameDialogOpen}
-        onSave={handleRenameActiveThread}
+        open={renameThreadTarget !== null}
+        currentTitle={renameThreadTarget?.title ?? ""}
+        onOpenChange={(open) => {
+          if (!open) setRenameThreadTarget(null);
+        }}
+        onSave={handleRenameThread}
       />
       {automationDraftForm ? (
         <AutomationDialog
@@ -11749,6 +12113,9 @@ export default function ChatView({
                 key={pullRequestDialogState.key}
                 open
                 cwd={activeProject?.cwd ?? null}
+                {...(activeProject?.githubAccount
+                  ? { githubAccount: activeProject.githubAccount }
+                  : {})}
                 initialReference={pullRequestDialogState.initialReference}
                 onOpenChange={(open) => {
                   if (!open) {

@@ -19,7 +19,11 @@ import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { APP_TOOLTIP_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import {
+  buildVisibleToastLayout,
+  isOpenThreadToastShortcut,
+  shouldHideCollapsedToastContent,
+} from "./toast.logic";
 import {
   COMPACT_NOTIFICATION_SURFACE_CLASS_NAME,
   EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
@@ -36,6 +40,7 @@ type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
   copyText?: string;
   onClose?: () => void;
+  openThreadShortcut?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
@@ -468,6 +473,14 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
       if (leftEnding === rightEnding) return 0;
       return leftEnding ? 1 : -1;
     });
+  const frontmostToast = visibleToasts[0];
+  const shortcutToast =
+    frontmostToast &&
+    frontmostToast.transitionStatus !== "ending" &&
+    !frontmostToast.limited &&
+    typeof frontmostToast.data?.openThreadShortcut === "function"
+      ? frontmostToast
+      : undefined;
   const visibleToastLayout = buildVisibleToastLayout(visibleToasts);
 
   useEffect(() => {
@@ -478,6 +491,23 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
       }
     }
   }, [toasts]);
+
+  useEffect(() => {
+    if (!shortcutToast) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isOpenThreadToastShortcut(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toastManager.close(shortcutToast.id);
+      shortcutToast.data?.openThreadShortcut?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
+  }, [shortcutToast]);
 
   return (
     <Toast.Portal data-slot="toast-portal">

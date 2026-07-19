@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
+import {
+  type OrchestrationWorktreeWorkspace,
+  type PullRequestActor,
+  type PullRequestListEntry,
+  ProjectId,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 
 import {
   countUniqueViewerReviewRequests,
@@ -10,6 +16,7 @@ import {
   orderPullRequestEntriesPinnedFirst,
   pullRequestListEntryKey,
   pullRequestPinToggleInputs,
+  pullRequestWorkspaceAssociation,
 } from "./pullRequestList.logic";
 
 function makeActor(login: string): PullRequestActor {
@@ -70,7 +77,7 @@ describe("groupPullRequestEntriesByInvolvement", () => {
   it("buckets self-authored entries into Authored regardless of review-request state", () => {
     const entry = makeEntry({ author: makeActor("viewer"), viewerReviewRequested: true });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "authored", label: "Authored", entries: [entry] }]);
+    expect(groups).toEqual([{ key: "authored", label: "My PRs", entries: [entry] }]);
   });
 
   it("buckets entries with an active review request into Review requested", () => {
@@ -123,6 +130,13 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     const groups = groupPullRequestEntriesByInvolvement([entry], null);
     expect(groups[0]?.key).toBe("others");
+  });
+
+  it("uses account-scoped authorship when the aggregate viewer is unknown", () => {
+    const authored = makeEntry({ viewerAuthored: true, author: makeActor("alice") });
+    const other = makeEntry({ number: 2, viewerAuthored: false, author: makeActor("bob") });
+    const groups = groupPullRequestEntriesByInvolvement([authored, other], null);
+    expect(groups.map((group) => group.key)).toEqual(["authored", "others"]);
   });
 });
 
@@ -266,6 +280,35 @@ describe("filterPullRequestEntriesByInvolvement", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
   });
+
+  it("filters My PRs by account-scoped authorship when the aggregate viewer is null", () => {
+    const authoredByFirstAccount = makeEntry({ viewerAuthored: true, author: makeActor("alice") });
+    const authoredBySecondAccount = makeEntry({
+      number: 2,
+      viewerAuthored: true,
+      author: makeActor("bob"),
+    });
+    const notAuthored = makeEntry({
+      number: 3,
+      viewerAuthored: false,
+      author: makeActor("alice"),
+    });
+
+    expect(
+      filterPullRequestEntriesByInvolvement(
+        [authoredByFirstAccount, authoredBySecondAccount, notAuthored],
+        null,
+        "authored",
+      ),
+    ).toEqual([authoredByFirstAccount, authoredBySecondAccount]);
+  });
+
+  it("falls back to the aggregate viewer for entries from an older server", () => {
+    const legacyEntry = makeEntry({ author: makeActor("Viewer"), viewerAuthored: undefined });
+    expect(filterPullRequestEntriesByInvolvement([legacyEntry], "viewer", "authored")).toEqual([
+      legacyEntry,
+    ]);
+  });
 });
 
 describe("matchesPullRequestSearchQuery", () => {
@@ -273,16 +316,19 @@ describe("matchesPullRequestSearchQuery", () => {
     expect(matchesPullRequestSearchQuery(makeEntry(), "")).toBe(true);
   });
 
-  it("matches title, repository, branch, and author case-insensitively", () => {
+  it("matches title, repository, head/base branches, URL, and author case-insensitively", () => {
     const entry = makeEntry({
       title: "Fix Widget",
       repository: "acme/widgets",
       headBranch: "feat/widget-fix",
+      baseBranch: "release/2026",
       author: makeActor("Reviewer"),
     });
     expect(matchesPullRequestSearchQuery(entry, "widget")).toBe(true);
     expect(matchesPullRequestSearchQuery(entry, "acme/")).toBe(true);
     expect(matchesPullRequestSearchQuery(entry, "feat/")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "release/2026")).toBe(true);
+    expect(matchesPullRequestSearchQuery(entry, "github.com/acme/widgets/pull/1")).toBe(true);
     expect(matchesPullRequestSearchQuery(entry, "reviewer")).toBe(true);
     expect(matchesPullRequestSearchQuery(entry, "nomatch")).toBe(false);
   });
@@ -291,5 +337,59 @@ describe("matchesPullRequestSearchQuery", () => {
     const entry = makeEntry({ number: 350 });
     expect(matchesPullRequestSearchQuery(entry, "#350")).toBe(true);
     expect(matchesPullRequestSearchQuery(entry, "350")).toBe(true);
+  });
+});
+
+describe("pullRequestWorkspaceAssociation", () => {
+  const workspace: OrchestrationWorktreeWorkspace = {
+    id: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+    projectId: ProjectId.makeUnsafe("project-1"),
+    repositoryIdentity: "github.com/acme/widgets",
+    kind: "managed",
+    state: "ready",
+    title: "Widget fix",
+    path: "/tmp/widget-fix",
+    branch: "feature",
+    headRef: "feature",
+    targetRef: "main",
+    targetResolvedCommit: null,
+    createdFromCommit: null,
+    sourceKind: "pull-request",
+    sourceRef: "https://github.com/acme/widgets/pull/1",
+    setupStatus: "succeeded",
+    setupError: null,
+    setupLogId: null,
+    lastKnownPr: null,
+    isPinned: false,
+    lifecycleGeneration: 0,
+    activeOperation: null,
+    lastFailure: null,
+    mutationRevision: 0,
+    createdAt: "2026-07-16T00:00:00.000Z",
+    updatedAt: "2026-07-16T00:00:00.000Z",
+    archivedAt: null,
+    deletedAt: null,
+  };
+
+  it("marks active and archived workspaces without excluding archived records", () => {
+    expect(pullRequestWorkspaceAssociation(makeEntry(), [workspace])).toBe("active");
+    expect(
+      pullRequestWorkspaceAssociation(makeEntry(), [
+        { ...workspace, archivedAt: "2026-07-16T01:00:00.000Z", state: "archived" },
+      ]),
+    ).toBe("archived");
+  });
+
+  it("does not associate another project or deleted workspace", () => {
+    expect(
+      pullRequestWorkspaceAssociation(makeEntry(), [
+        { ...workspace, projectId: ProjectId.makeUnsafe("project-2") },
+        {
+          ...workspace,
+          id: WorktreeWorkspaceId.makeUnsafe("workspace-2"),
+          deletedAt: "2026-07-16T01:00:00.000Z",
+        },
+      ]),
+    ).toBeNull();
   });
 });

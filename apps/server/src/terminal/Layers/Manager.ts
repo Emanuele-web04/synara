@@ -969,6 +969,14 @@ interface KillEscalationHandle {
 
 export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> {
   private readonly sessions = new Map<string, TerminalSessionState>();
+
+  hasRunningSessionForThreadIds(threadIds: ReadonlySet<string>): boolean {
+    return [...this.sessions.values()].some(
+      (session) =>
+        threadIds.has(session.threadId) &&
+        (session.status === "starting" || session.status === "running"),
+    );
+  }
   private readonly logsDir: string;
   private managedWrapperBinDir: string | null;
   private managedWrapperZshDir: string | null;
@@ -2521,6 +2529,8 @@ export const TerminalManagerLive = Layer.effect(
     );
 
     return {
+      hasRunningSessionForThreadIds: (threadIds) =>
+        Effect.sync(() => runtime.hasRunningSessionForThreadIds(threadIds)),
       open: (input) =>
         Effect.tryPromise({
           try: () => runtime.open(input),

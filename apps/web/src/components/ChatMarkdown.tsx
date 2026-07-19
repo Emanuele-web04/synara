@@ -34,7 +34,6 @@ import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
-import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1032,20 +1031,15 @@ function ChatMarkdown({
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
-  // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
-  // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
-  // streaming or under reduced motion. Governs cadence only; the deferred value below still
-  // bounds the markdown re-parse cost.
-  const smoothedText = useSmoothStreamedText(text, isStreaming);
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
   const normalizedText = useMemo(
-    () => (isUserVariant ? smoothedText : protectLiteralMarkdownDollars(smoothedText)),
-    [isUserVariant, smoothedText],
+    () => (isUserVariant ? text : protectLiteralMarkdownDollars(text)),
+    [isUserVariant, text],
   );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
-  // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
+  // fast token stream doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
@@ -1077,8 +1071,34 @@ function ChatMarkdown({
       : MARKDOWN_REMARK_PLUGINS;
   }, [composerChipsRemarkPlugin, threadMarkerRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
-  const markdownComponents = useMemo<Components>(
-    () => ({
+  const markdownComponents = useMemo<Components>(() => {
+    const customComponents = {
+      [COMPOSER_CHIP_TAG_NAME]: (props: {
+        className?: string | undefined;
+        [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
+      }) => (
+        <ComposerChipElement
+          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+          theme={resolvedTheme}
+          mentionReferences={mentionReferences ?? []}
+        />
+      ),
+      [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
+        [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
+      }) => {
+        const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
+        const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
+        const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
+        if (!context) {
+          return null;
+        }
+        const tooltipText =
+          context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
+        return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      },
+    } as unknown as Components;
+
+    return {
       a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const isExternalHttp = isExternalHttpHref(restoredHref);
@@ -1210,48 +1230,22 @@ function ChatMarkdown({
         }
         return <input {...props} />;
       },
-      // Custom elements emitted by the composer-chips remark plugin (user
-      // variant only; they never appear in assistant markdown). `Components`
-      // only models intrinsic tags, so these entries are typed on their own
-      // and cast into the map.
-      ...({
-        [COMPOSER_CHIP_TAG_NAME]: (props: {
-          className?: string | undefined;
-          [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
-        }) => (
-          <ComposerChipElement
-            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-            theme={resolvedTheme}
-            mentionReferences={mentionReferences ?? []}
-          />
-        ),
-        [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
-          [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
-        }) => {
-          const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
-          const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
-          const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
-          if (!context) {
-            return null;
-          }
-          const tooltipText =
-            context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-          return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
-        },
-      } as unknown as Components),
-    }),
-    [
-      cwd,
-      diffThemeName,
-      isStreaming,
-      isUserVariant,
-      mentionReferences,
-      onImageExpand,
-      onTaskToggle,
-      resolvedTheme,
-      terminalContexts,
-    ],
-  );
+      // Custom elements emitted by the composer-chips remark plugin. React Markdown's
+      // public Components type only names HTML tags, so merge the runtime tag map after
+      // defining the standard element overrides instead of aliasing both tags to `span`.
+      ...customComponents,
+    };
+  }, [
+    cwd,
+    diffThemeName,
+    isStreaming,
+    isUserVariant,
+    mentionReferences,
+    onImageExpand,
+    onTaskToggle,
+    resolvedTheme,
+    terminalContexts,
+  ]);
 
   return (
     <div

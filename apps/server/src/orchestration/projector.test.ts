@@ -154,6 +154,7 @@ describe("orchestration projector", () => {
       {
         id: "thread-1",
         projectId: "project-1",
+        workspaceId: null,
         title: "demo",
         modelSelection: {
           provider: "codex",

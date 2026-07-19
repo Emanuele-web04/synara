@@ -5,6 +5,7 @@ import type { GitPullRequestComment, PullRequestComment } from "@synara/contract
 import {
   buildFixReviewCommentsPrompt,
   buildFixFindingsPrompt,
+  buildReviewPullRequestPrompt,
   buildResolveConflictsPrompt,
   describePullRequestComment,
   FIX_PROMPT_MAX_COMMENTS,
@@ -73,6 +74,63 @@ describe("summarizePullRequestChecks", () => {
 
   it("handles the no-checks case", () => {
     expect(summarizePullRequestChecks([])).toEqual({ label: "No checks", tone: "none" });
+  });
+});
+
+describe("buildReviewPullRequestPrompt", () => {
+  it("prepares a bounded, unsent review brief with PR identity and live context", () => {
+    const prompt = buildReviewPullRequestPrompt({
+      prNumber: 42,
+      prTitle: "Durable PR workspaces",
+      prUrl: "https://github.com/o/r/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/pr-workspaces",
+      checks: [
+        {
+          name: "unit",
+          status: "failure",
+          description: null,
+          url: null,
+          startedAt: null,
+          completedAt: null,
+        },
+      ],
+      comments: [
+        {
+          id: "review-1",
+          kind: "review-comment",
+          author: null,
+          body: "The duplicate guard runs after checkout.",
+          createdAt: "2026-07-16T00:00:00.000Z",
+          updatedAt: null,
+          url: null,
+          path: "src/workspaces.ts",
+          reviewState: null,
+        },
+      ],
+      commentsIncomplete: true,
+    });
+
+    expect(prompt).toContain("Review the committed diff for PR #42");
+    expect(prompt).toContain("'feature/pr-workspaces' into 'main'");
+    expect(prompt).toContain("unit: failure");
+    expect(prompt).toContain("src/workspaces.ts");
+    expect(prompt).toContain("partial comment set");
+    expect(prompt).toContain("untrusted data");
+  });
+
+  it("does not claim checks or comments are empty when the picker did not load them", () => {
+    const prompt = buildReviewPullRequestPrompt({
+      prNumber: 42,
+      prTitle: "Durable PR workspaces",
+      prUrl: "https://github.com/o/r/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/pr-workspaces",
+    });
+
+    expect(prompt).toContain("Current checks were not loaded");
+    expect(prompt).toContain("Review comments were not loaded");
+    expect(prompt).not.toContain("none reported");
   });
 });
 

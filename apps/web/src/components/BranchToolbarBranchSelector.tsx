@@ -29,6 +29,7 @@ import {
 } from "../lib/gitReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { parsePullRequestReference } from "../pullRequestReference";
+import { useStore } from "../store";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
@@ -384,9 +385,14 @@ export function BranchToolbarBranchSelector({
   const [createBranchName, setCreateBranchName] = useState("");
   const [branchQuery, setBranchQuery] = useState("");
   const deferredBranchQuery = useDeferredValue(branchQuery);
+  const githubAccount = useStore(
+    (state) =>
+      state.projects.find((project) => project.cwd === activeProjectCwd)?.githubAccount ??
+      undefined,
+  );
 
   const branchesQuery = useQuery(gitBranchesQueryOptions(branchCwd));
-  const branchStatusQuery = useQuery(gitStatusQueryOptions(branchCwd));
+  const branchStatusQuery = useQuery(gitStatusQueryOptions(branchCwd, githubAccount));
   const branches = useMemo(
     () => dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? []),
     [branchesQuery.data?.branches],
@@ -589,7 +595,9 @@ export function BranchToolbarBranchSelector({
 
       let nextBranchName = selectedBranchName;
       if (branch.isRemote) {
-        const status = await api.git.status({ cwd: branchCwd }).catch(() => null);
+        const status = await api.git
+          .status({ cwd: branchCwd, ...(githubAccount ? { account: githubAccount } : {}) })
+          .catch(() => null);
         if (status?.branch) {
           nextBranchName = status.branch;
         }
@@ -840,6 +848,8 @@ export function BranchToolbarBranchSelector({
       value={resolvedActiveBranch}
     >
       <ComboboxTrigger
+        aria-label="Choose branch"
+        title="Choose branch"
         className={
           isPanel
             ? ENVIRONMENT_ROW_CLASS_NAME

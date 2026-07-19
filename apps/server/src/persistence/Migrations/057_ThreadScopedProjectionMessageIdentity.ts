@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { primaryKeyColumns } from "./schemaHelpers.ts";
+
 /**
  * Provider message ids are only stable inside their owning thread. Rebuild the
  * projection table around that durable identity so a provider may reuse an id
@@ -8,6 +10,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+
+  const primaryKey = yield* primaryKeyColumns(sql, "projection_thread_messages");
+  if (primaryKey.length === 2 && primaryKey[0] === "thread_id" && primaryKey[1] === "message_id") {
+    return;
+  }
 
   yield* sql`DROP TABLE IF EXISTS projection_thread_messages_v57`;
   yield* sql`

@@ -12,9 +12,11 @@ type ProjectAwarePullRequestEntry = Pick<
 /** Remote identity for a pull request. A PR belongs to a GitHub repository, not to each local
  * project or worktree that happens to have that repository checked out. */
 export function pullRequestListRepositoryIdentity(
-  entry: Pick<PullRequestListEntry, "repository" | "number">,
+  entry: Pick<PullRequestListEntry, "repository" | "number" | "githubAccount">,
 ): string {
-  return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
+  const repositoryIdentity = `${entry.repository.trim().toLowerCase()}#${entry.number}`;
+  if (!entry.githubAccount) return repositoryIdentity;
+  return `${entry.githubAccount.host.trim().toLowerCase()}/${entry.githubAccount.login.trim().toLowerCase()}\u0000${repositoryIdentity}`;
 }
 
 /** Project associations for a repository-level row, with a legacy fallback for older payloads. */

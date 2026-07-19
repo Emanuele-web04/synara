@@ -166,18 +166,6 @@ function resolveBrowserNavigationShortcut(
   platform: string,
 ): "back" | "forward" | null {
   const isMac = /Mac|iPhone|iPad|iPod/i.test(platform);
-  const key = event.key.toLowerCase();
-
-  if (
-    isMac &&
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    (key === "[" || key === "]")
-  ) {
-    return key === "[" ? "back" : "forward";
-  }
 
   if (
     !isMac &&

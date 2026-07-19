@@ -7,6 +7,7 @@ import type {
   NativeApi,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
+  OrchestrationWorkspaceShellSnapshot,
 } from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
@@ -18,6 +19,14 @@ function shellSnapshotHasProjectsOrThreads(snapshot: OrchestrationShellSnapshot)
 
 function shellSnapshotHasThreads(snapshot: OrchestrationShellSnapshot): boolean {
   return snapshot.threads.length > 0;
+}
+
+function workspaceShellSnapshotHasProjectsWorkspacesOrThreads(
+  snapshot: OrchestrationWorkspaceShellSnapshot,
+): boolean {
+  return (
+    snapshot.projects.length > 0 || snapshot.workspaces.length > 0 || snapshot.threads.length > 0
+  );
 }
 
 function readModelHasProjectsOrThreads(snapshot: OrchestrationReadModel): boolean {
@@ -41,6 +50,29 @@ export async function refreshEmptyRouteRestoreSnapshot(
 ): Promise<boolean> {
   if (!api) {
     return false;
+  }
+
+  const supportsWorkspaceShell = await api.orchestration
+    .getCapabilities()
+    .then(
+      (capabilities) =>
+        capabilities.worktreeWorkspacesV2 && capabilities.protocolVersions.includes(2),
+    )
+    .catch(() => false);
+  if (supportsWorkspaceShell) {
+    const workspaceShellSnapshot = await api.orchestration
+      .getWorkspaceShellSnapshot()
+      .catch(() => null);
+    if (
+      workspaceShellSnapshot &&
+      workspaceShellSnapshotHasProjectsWorkspacesOrThreads(workspaceShellSnapshot)
+    ) {
+      useStore.getState().syncServerWorkspaceShellSnapshot(workspaceShellSnapshot);
+      if (workspaceShellSnapshot.threads.length > 0) {
+        return true;
+      }
+      // A project/workspace-only V2 shell can still need the legacy full snapshot repair below.
+    }
   }
 
   const shellSnapshot = await api.orchestration.getShellSnapshot();

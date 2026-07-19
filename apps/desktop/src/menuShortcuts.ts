@@ -27,3 +27,32 @@ export function resolveKeyboardShortcutsMenuAccelerator(
   // which steals the native zoom-out accelerator before the page receives it.
   return platform === "darwin" ? "Cmd+/" : undefined;
 }
+
+export interface DesktopTabMenuItem {
+  label: string;
+  action: "close-active-tab" | "reopen-closed-tab";
+  accelerator?: MenuItemConstructorOptions["accelerator"];
+}
+
+export function resolveDesktopTabMenuItems(platform: NodeJS.Platform): DesktopTabMenuItem[] {
+  const definitions = [
+    {
+      label: "Close Tab",
+      action: "close-active-tab" as const,
+      accelerator: "CmdOrCtrl+W" as const,
+    },
+    {
+      label: "Reopen Closed Tab",
+      action: "reopen-closed-tab" as const,
+      accelerator: "CmdOrCtrl+Shift+W" as const,
+    },
+  ];
+  return definitions.map((definition) => {
+    const accelerator = resolveDesktopMenuAccelerator(platform, definition.accelerator);
+    return {
+      label: definition.label,
+      action: definition.action,
+      ...(accelerator ? { accelerator } : {}),
+    };
+  });
+}

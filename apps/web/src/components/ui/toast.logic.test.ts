@@ -1,5 +1,9 @@
 import { assert, describe, it } from "vitest";
-import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import {
+  buildVisibleToastLayout,
+  isOpenThreadToastShortcut,
+  shouldHideCollapsedToastContent,
+} from "./toast.logic";
 
 describe("shouldHideCollapsedToastContent", () => {
   it("keeps a single visible toast readable", () => {
@@ -59,5 +63,36 @@ describe("buildVisibleToastLayout", () => {
         { id: "c", offsetY: 0 },
       ],
     );
+  });
+});
+
+describe("isOpenThreadToastShortcut", () => {
+  type ShortcutEvent = Parameters<typeof isOpenThreadToastShortcut>[0];
+  const event = (overrides: Partial<ShortcutEvent> = {}): ShortcutEvent => ({
+    altKey: true,
+    code: "KeyL",
+    ctrlKey: false,
+    key: "l",
+    metaKey: false,
+    repeat: false,
+    shiftKey: false,
+    ...overrides,
+  });
+
+  it("matches Option+L by physical key when Option changes the typed character", () => {
+    assert.isTrue(isOpenThreadToastShortcut(event({ key: "¬" })));
+  });
+
+  it("matches Alt+L without a physical key code", () => {
+    assert.isTrue(isOpenThreadToastShortcut(event({ code: "" })));
+  });
+
+  it("rejects repeats, other keys, and additional modifiers", () => {
+    assert.isFalse(isOpenThreadToastShortcut(event({ repeat: true })));
+    assert.isFalse(isOpenThreadToastShortcut(event({ altKey: false })));
+    assert.isFalse(isOpenThreadToastShortcut(event({ code: "KeyK", key: "k" })));
+    assert.isFalse(isOpenThreadToastShortcut(event({ ctrlKey: true })));
+    assert.isFalse(isOpenThreadToastShortcut(event({ metaKey: true })));
+    assert.isFalse(isOpenThreadToastShortcut(event({ shiftKey: true })));
   });
 });

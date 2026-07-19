@@ -73,6 +73,25 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("ships the workspace and conversation navigation shortcuts", () =>
+    Effect.sync(() => {
+      const defaultShortcutFor = (command: KeybindingCommand) =>
+        DEFAULT_KEYBINDINGS.find((binding) => binding.command === command)?.key;
+
+      assert.strictEqual(defaultShortcutFor("thread.jump.3"), "mod+3");
+      assert.strictEqual(defaultShortcutFor("chat.jump.3"), "mod+shift+3");
+      assert.strictEqual(defaultShortcutFor("chat.visible.next"), "mod+]");
+      assert.strictEqual(defaultShortcutFor("chat.visible.previous"), "mod+[");
+      assert.strictEqual(defaultShortcutFor("workspace.visible.next"), "mod+arrowdown");
+      assert.strictEqual(defaultShortcutFor("workspace.visible.previous"), "mod+arrowup");
+      assert.strictEqual(defaultShortcutFor("chat.newConversation"), "mod+t");
+      assert.strictEqual(defaultShortcutFor("chat.newTerminal"), "mod+shift+t");
+      assert.strictEqual(defaultShortcutFor("chat.closeActiveTab"), "mod+w");
+      assert.strictEqual(defaultShortcutFor("chat.reopenClosedTab"), "mod+shift+w");
+      assert.isUndefined(defaultShortcutFor("terminal.new"));
+    }),
+  );
+
   it.effect("compiles valid rule with parsed when AST", () =>
     Effect.sync(() => {
       const compiled = compileResolvedKeybindingRule({
@@ -448,6 +467,113 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         persisted.some(
           (entry) => entry.command === "view.recent.previous" && entry.when === "!terminalFocus",
         ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("migrates the old terminal-tab shortcut to a conversation tab", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(persisted.some((entry) => entry.command === "terminal.new"));
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+t" &&
+            entry.command === "chat.newConversation" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("migrates the previous workspace and conversation navigation defaults", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
+        { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+        {
+          key: "mod+alt+arrowdown",
+          command: "workspace.visible.next",
+          when: "!terminalFocus",
+        },
+        {
+          key: "mod+alt+arrowup",
+          command: "workspace.visible.previous",
+          when: "!terminalFocus",
+        },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+]" &&
+            entry.command === "chat.visible.next" &&
+            entry.when === "!terminalFocus && !terminalWorkspaceOpen",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+[" &&
+            entry.command === "chat.visible.previous" &&
+            entry.when === "!terminalFocus && !terminalWorkspaceOpen",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+arrowdown" && entry.command === "workspace.visible.next",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+arrowup" && entry.command === "workspace.visible.previous",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("preserves a custom shortcut that already occupies a new navigation chord", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
+        {
+          key: "mod+]",
+          command: "model.next",
+          when: "!terminalFocus && !terminalWorkspaceOpen",
+        },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+]" && entry.command === "chat.visible.next",
+        ),
+      );
+      assert.isTrue(
+        persisted.some((entry) => entry.key === "mod+]" && entry.command === "model.next"),
       );
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );

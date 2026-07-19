@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   WsAutomationCreateRpc,
+  WsGitListPullRequestsRpc,
   WsBootstrapRpcGroup,
   WsFeatureRpcGroup,
   WsProjectsDiscoverScriptsRpc,
@@ -38,5 +39,9 @@ describe("WS RPC contracts", () => {
 
   it("exports the count-only pull request review RPC", () => {
     expect(WsPullRequestsReviewRequestCountRpc).toBeDefined();
+  });
+
+  it("exports the pull request list RPC", () => {
+    expect(WsGitListPullRequestsRpc).toBeDefined();
   });
 });

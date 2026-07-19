@@ -21,6 +21,9 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
+  type OrchestrationWorkspaceShellStreamEvent,
+  type OrchestrationWorkspaceShellStreamItem,
+  type OrchestrationWorkspaceShellSnapshot,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
@@ -41,6 +44,7 @@ import {
 } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
+import type { ProjectionRepositoryError } from "./persistence/Errors";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
@@ -51,6 +55,7 @@ import {
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore } from "./git/Services/GitCore";
+import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -77,6 +82,7 @@ import { OrchestrationEngineService } from "./orchestration/Services/Orchestrati
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
+import { getWorkspaceLifecyclePreflight } from "./orchestration/workspaceLifecyclePreflight";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
@@ -245,6 +251,14 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
+function isWorkspaceShellRelevantEvent(event: OrchestrationEvent): boolean {
+  return event.aggregateKind === "workspace" || isShellRelevantEvent(event);
+}
+
+function isV1OrchestrationEvent(event: OrchestrationEvent): boolean {
+  return event.aggregateKind !== "workspace" && event.type !== "thread.workspace-assigned";
+}
+
 function isThreadDetailEventFor(threadId: ThreadId, event: OrchestrationEvent): boolean {
   return (
     event.aggregateKind === "thread" &&
@@ -279,6 +293,7 @@ const makeWsRpcHandlersLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const git = yield* GitCore;
+      const gitHubCli = yield* GitHubCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -289,6 +304,19 @@ const makeWsRpcHandlersLayer = () =>
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const getWorkspaceShellSnapshot: () => Effect.Effect<
+        OrchestrationWorkspaceShellSnapshot,
+        ProjectionRepositoryError
+      > =
+        projectionReadModelQuery.getWorkspaceShellSnapshot ??
+        (() =>
+          projectionReadModelQuery.getShellSnapshot().pipe(
+            Effect.map((snapshot) => ({
+              ...snapshot,
+              protocolVersion: 2 as const,
+              workspaces: [] as OrchestrationWorkspaceShellSnapshot["workspaces"],
+            })),
+          ));
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
@@ -491,7 +519,10 @@ const makeWsRpcHandlersLayer = () =>
           });
           if (trackedServer) {
             yield* devServerManager
-              .stop({ projectId: trackedServer.projectId })
+              .stop({
+                projectId: trackedServer.projectId,
+                workspaceId: trackedServer.workspaceId,
+              })
               .pipe(Effect.catch(() => Effect.void));
           }
         }
@@ -576,8 +607,92 @@ const makeWsRpcHandlersLayer = () =>
         }
       };
 
+      const toWorkspaceShellStreamEvent = (
+        event: OrchestrationEvent,
+      ): Effect.Effect<Option.Option<OrchestrationWorkspaceShellStreamEvent>, never> => {
+        if (event.type === "project.deleted" || event.type === "thread.deleted") {
+          return toShellStreamEvent(event);
+        }
+
+        return getWorkspaceShellSnapshot().pipe(
+          Effect.map((snapshot) => {
+            if (event.aggregateKind === "workspace") {
+              const workspace = snapshot.workspaces.find(
+                (candidate) => candidate.id === event.aggregateId,
+              );
+              return workspace
+                ? Option.some({
+                    kind: "workspace-upserted" as const,
+                    sequence: event.sequence,
+                    workspace,
+                  })
+                : Option.none();
+            }
+            if (event.aggregateKind === "project") {
+              const project = snapshot.projects.find(
+                (candidate) => candidate.id === event.aggregateId,
+              );
+              return project
+                ? Option.some({
+                    kind: "project-upserted" as const,
+                    sequence: event.sequence,
+                    project,
+                  })
+                : Option.none();
+            }
+            const thread = snapshot.threads.find((candidate) => candidate.id === event.aggregateId);
+            return thread
+              ? Option.some({
+                  kind: "thread-upserted" as const,
+                  sequence: event.sequence,
+                  thread,
+                })
+              : Option.none();
+          }),
+          Effect.catch(() => Effect.succeed(Option.none())),
+        );
+      };
+
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+
+      const requireWorkspaceReadyForRuntime = (input: {
+        readonly threadId?: string;
+        readonly workspaceId?: string | null;
+        readonly projectId?: string;
+        readonly cwd?: string;
+      }) =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.flatMap((readModel) => {
+            const workspaceId =
+              input.workspaceId ??
+              (input.threadId
+                ? readModel.threads.find((thread) => thread.id === input.threadId)?.workspaceId
+                : null);
+            if (!workspaceId) return Effect.void;
+            const workspace = (readModel.workspaces ?? []).find(
+              (candidate) => candidate.id === workspaceId,
+            );
+            if (!workspace) return Effect.fail(new Error("The workspace is unavailable."));
+            if (workspace.state !== "ready") {
+              return Effect.fail(
+                new Error(
+                  `Workspace '${workspace.title}' cannot start a runtime while ${workspace.state}.`,
+                ),
+              );
+            }
+            if (input.projectId && workspace.projectId !== input.projectId) {
+              return Effect.fail(new Error("The workspace does not belong to this project."));
+            }
+            if (
+              input.cwd &&
+              (!workspace.path || path.resolve(workspace.path) !== path.resolve(input.cwd))
+            ) {
+              return Effect.fail(new Error("The runtime directory does not match the workspace."));
+            }
+            return Effect.void;
+          }),
+        );
 
       return AdmittedWsFeatureRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -596,6 +711,22 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to dispatch orchestration command",
           ),
+        [ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight]: (input) =>
+          rpcEffect(
+            orchestrationEngine.getReadModel().pipe(
+              Effect.flatMap((readModel) =>
+                getWorkspaceLifecyclePreflight({
+                  readModel,
+                  input,
+                  git,
+                  fileSystem,
+                  devServerManager,
+                  terminalManager,
+                }),
+              ),
+            ),
+            "Failed to inspect workspace lifecycle safety",
+          ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
           rpcEffect(importThread(input), "Failed to import thread"),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
@@ -608,6 +739,14 @@ const makeWsRpcHandlersLayer = () =>
             projectionReadModelQuery.getShellSnapshot(),
             "Failed to load orchestration shell snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.getCapabilities]: () =>
+          Effect.succeed({
+            protocolVersions: [1, 2],
+            worktreeWorkspacesV2: true,
+            canonicalWorkspaceRoutes: true,
+          }),
+        [ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot]: () =>
+          rpcEffect(getWorkspaceShellSnapshot(), "Failed to load workspace shell snapshot"),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -626,8 +765,20 @@ const makeWsRpcHandlersLayer = () =>
                   minimum: 0,
                 }),
               ),
-            ).pipe(Effect.map((events) => Array.from(events))),
+            ).pipe(Effect.map((events) => Array.from(events).filter(isV1OrchestrationEvent))),
             "Failed to replay orchestration events",
+          ),
+        [ORCHESTRATION_WS_METHODS.replayWorkspaceEvents]: (input) =>
+          rpcEffect(
+            Stream.runCollect(
+              orchestrationEngine.readEvents(
+                clamp(input.fromSequenceExclusive, {
+                  maximum: Number.MAX_SAFE_INTEGER,
+                  minimum: 0,
+                }),
+              ),
+            ).pipe(Effect.map((events) => Array.from(events))),
+            "Failed to replay workspace orchestration events",
           ),
         [ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers]: (input) =>
           rpcEffect(
@@ -707,6 +858,52 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "orchestration.workspace-shell" },
+            makeCursorSafeSnapshotLiveStream({
+              subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
+                Effect.map((stream) =>
+                  bufferLiveUiStream(stream.pipe(Stream.filter(isWorkspaceShellRelevantEvent)), {
+                    label: "orchestration.workspace-shell",
+                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                  }),
+                ),
+              ),
+              snapshot: getWorkspaceShellSnapshot().pipe(
+                Effect.mapError((cause) =>
+                  toWsRpcError(cause, "Failed to load workspace shell snapshot"),
+                ),
+              ),
+              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+              getHighWaterSequence: getOrchestrationHighWaterSequence,
+              replay: (fromSequenceExclusive, throughSequenceInclusive) =>
+                orchestrationEngine
+                  .readEventsThrough(fromSequenceExclusive, throughSequenceInclusive)
+                  .pipe(
+                    Stream.filter(isWorkspaceShellRelevantEvent),
+                    Stream.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to replay workspace shell events"),
+                    ),
+                  ),
+            }).pipe(
+              Stream.mapEffect((item) =>
+                item.kind === "snapshot"
+                  ? Effect.succeed(
+                      Option.some<OrchestrationWorkspaceShellStreamItem>({
+                        kind: "snapshot",
+                        snapshot: item.snapshot,
+                      }),
+                    )
+                  : toWorkspaceShellStreamEvent(item.event),
+              ),
+              Stream.flatMap((item) =>
+                Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
+              ),
+            ),
+          ),
+        [ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell]: () => Effect.void,
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -780,9 +977,10 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "orchestration.domain-events" },
-            bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
-              label: "orchestration.domain-events",
-            }),
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(Stream.filter(isV1OrchestrationEvent)),
+              { label: "orchestration.domain-events" },
+            ),
           ),
 
         [WS_METHODS.projectsListDirectories]: (input) =>
@@ -806,7 +1004,18 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.projectsWriteFile]: (input) =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
         [WS_METHODS.projectsRunDevServer]: (input) =>
-          rpcEffect(devServerManager.run(input), "Failed to start dev server"),
+          rpcEffect(
+            requireWorkspaceReadyForRuntime(
+              input.workspaceId == null
+                ? {}
+                : {
+                    workspaceId: input.workspaceId,
+                    projectId: input.projectId,
+                    cwd: input.cwd,
+                  },
+            ).pipe(Effect.andThen(devServerManager.run(input))),
+            "Failed to start dev server",
+          ),
         [WS_METHODS.projectsStopDevServer]: (input) =>
           rpcEffect(devServerManager.stop(input), "Failed to stop dev server"),
         [WS_METHODS.projectsListDevServers]: () =>
@@ -885,7 +1094,10 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
-          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
+          rpcEffect(
+            resolveGitHubRepository(git, input.cwd, input.account?.host ?? "github.com"),
+            "Failed to resolve GitHub repository",
+          ),
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>
@@ -951,6 +1163,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
+        [WS_METHODS.gitListPullRequests]: (input) =>
+          rpcEffect(gitManager.listPullRequests(input), "Failed to list pull requests"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(
@@ -979,6 +1193,119 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             refreshGitStatusAfter(input.cwd, git.withMutation(input.cwd, git.createBranch(input))),
             "Failed to create branch",
+          ),
+        [WS_METHODS.gitRenameBranch]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const details = yield* git.statusDetails(input.cwd);
+              if (details.branch !== input.oldBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Workspace is on '${details.branch ?? "detached HEAD"}', not '${input.oldBranch}'. Refresh and try again.`,
+                  ),
+                );
+              }
+              const branches = yield* git.listBranches({ cwd: input.cwd });
+              const hasPublishedBranch = branches.branches.some(
+                (branch) => branch.isRemote === true && branch.name.endsWith(`/${input.oldBranch}`),
+              );
+              if (details.hasUpstream || hasPublishedBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    "Published branches cannot be renamed from Synara yet. Rename it on GitHub, then refresh the workspace.",
+                  ),
+                );
+              }
+              return yield* refreshGitStatusAfter(input.cwd, git.renameBranch(input));
+            }),
+            "Failed to rename branch",
+          ),
+        [WS_METHODS.gitCloneRepository]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const repository = yield* gitHubCli.getRepositoryCloneUrls({
+                cwd: config.homeDir,
+                repository: input.repository,
+                ...(input.account ? { account: input.account } : {}),
+              });
+              const segments = repository.nameWithOwner.split("/");
+              if (
+                segments.length !== 2 ||
+                segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment))
+              ) {
+                return yield* Effect.fail(new Error("GitHub returned an invalid repository name."));
+              }
+              const destination = path.join(config.repositoriesDir, ...segments);
+              const destinationExists = yield* fileSystem.exists(destination);
+              if (!destinationExists) {
+                yield* fileSystem.makeDirectory(path.dirname(destination), { recursive: true });
+                yield* gitHubCli.execute({
+                  cwd: config.homeDir,
+                  args: ["repo", "clone", repository.nameWithOwner, destination],
+                  timeoutMs: 120_000,
+                  ...(input.account ? { account: input.account } : {}),
+                });
+              }
+              const branches = yield* git.listBranches({ cwd: destination });
+              if (!branches.isRepo) {
+                return yield* Effect.fail(
+                  new Error(
+                    `The managed destination already exists but is not a Git repository: ${destination}`,
+                  ),
+                );
+              }
+              if (destinationExists) {
+                const existingRepository = yield* resolveGitHubRepository(
+                  git,
+                  destination,
+                  input.account?.host ?? "github.com",
+                );
+                if (
+                  existingRepository.repository?.nameWithOwner.toLowerCase() !==
+                  repository.nameWithOwner.toLowerCase()
+                ) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `The managed destination belongs to a different repository: ${destination}`,
+                    ),
+                  );
+                }
+              }
+              const defaultBranch =
+                branches.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ??
+                branches.branches.find((branch) => !branch.isRemote && branch.current)?.name;
+              if (!defaultBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    "The repository was cloned, but its default branch could not be resolved.",
+                  ),
+                );
+              }
+              return {
+                path: destination,
+                nameWithOwner: repository.nameWithOwner,
+                defaultBranch,
+                reused: destinationExists,
+              };
+            }),
+            "Failed to clone GitHub repository",
+          ),
+        [WS_METHODS.gitListGitHubAccounts]: () =>
+          rpcEffect(
+            gitHubCli
+              .listAccounts({ cwd: config.homeDir })
+              .pipe(Effect.map((accounts) => ({ accounts: [...accounts] }))),
+            "Failed to list GitHub accounts",
+          ),
+        [WS_METHODS.gitListGitHubRepositories]: (input) =>
+          rpcEffect(
+            gitHubCli
+              .listRepositories({
+                cwd: config.homeDir,
+                ...(input.account ? { account: input.account } : {}),
+              })
+              .pipe(Effect.map((repositories) => ({ repositories: [...repositories] }))),
+            "Failed to list GitHub repositories",
           ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(
@@ -1069,7 +1396,10 @@ const makeWsRpcHandlersLayer = () =>
 
         [WS_METHODS.terminalOpen]: (input) =>
           rpcEffect(
-            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+            requireWorkspaceReadyForRuntime({ threadId: input.threadId }).pipe(
+              Effect.andThen(
+                resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID),
+              ),
               Effect.andThen(terminalManager.open(input)),
             ),
             "Failed to open terminal",
@@ -1095,7 +1425,10 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(terminalManager.clear(input), "Failed to clear terminal"),
         [WS_METHODS.terminalRestart]: (input) =>
           rpcEffect(
-            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+            requireWorkspaceReadyForRuntime({ threadId: input.threadId }).pipe(
+              Effect.andThen(
+                resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID),
+              ),
               Effect.andThen(terminalManager.restart(input)),
             ),
             "Failed to restart terminal",

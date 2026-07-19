@@ -105,6 +105,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           workspaceRoot: "/tmp/project-1",
           defaultModelSelection: null,
           scripts: [],
+          githubAccount: { host: "github.com", login: "octocat" },
           createdAt: now,
           updatedAt: now,
         },
@@ -164,15 +165,22 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         readonly projectId: string;
         readonly title: string;
         readonly scriptsJson: string;
+        readonly githubAccountJson: string | null;
       }>`
         SELECT
           project_id AS "projectId",
           title,
-          scripts_json AS "scriptsJson"
+          scripts_json AS "scriptsJson",
+          github_account_json AS "githubAccountJson"
         FROM projection_projects
       `;
       assert.deepEqual(projectRows, [
-        { projectId: "project-1", title: "Project 1", scriptsJson: "[]" },
+        {
+          projectId: "project-1",
+          title: "Project 1",
+          scriptsJson: "[]",
+          githubAccountJson: '{"host":"github.com","login":"octocat"}',
+        },
       ]);
 
       const messageRows = yield* sql<{

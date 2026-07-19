@@ -45,6 +45,9 @@ export function ComposerPickerMenuPopup({
   );
 }
 
+/** Shared picker shell for context menus outside the composer footer. */
+export const PickerMenuPopup = ComposerPickerMenuPopup;
+
 type ComposerPickerSelectPopupProps = Omit<ComponentProps<typeof SelectPopup>, "surface"> & {
   size?: ComposerPickerSize;
 };

@@ -11,6 +11,7 @@ const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
 
 const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.created",
+  "thread.workspace-assigned",
   "thread.meta-updated",
   "thread.pinned-message-added",
   "thread.pinned-message-removed",

@@ -798,7 +798,7 @@ describe("EventRouter scoped orchestration sync", () => {
         occurredAt: "2026-03-04T12:00:05.050Z",
         payload: {
           ...firstAssistantChunk.payload,
-          text: " by scanning the repository.",
+          text: " by scanning",
           updatedAt: "2026-03-04T12:00:05.050Z",
         },
       } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
@@ -819,7 +819,7 @@ describe("EventRouter scoped orchestration sync", () => {
           const message = thread?.messages.find(
             (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
           );
-          expect(message?.text).toBe("I’ll start by scanning the repository.");
+          expect(message?.text).toBe("I’ll start by scanning");
         },
         { timeout: 4_000, interval: 16 },
       );

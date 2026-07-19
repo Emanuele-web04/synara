@@ -11,9 +11,10 @@ import {
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import React, { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
@@ -22,12 +23,15 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  CheckCircle2Icon,
+  ChevronDownIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
   TerminalIcon,
+  WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -51,18 +55,40 @@ import { useSidebar } from "../ui/sidebar";
 import { useAppSettings } from "../../appSettings";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
-import { sortThreadsForSidebar } from "../Sidebar.logic";
 import {
+  resolveThreadStatusPill,
+  sortThreadsForConversationTabs,
+  sortThreadsForSidebar,
+  type ThreadStatusPill,
+} from "../Sidebar.logic";
+import {
+  pushEditorRailClosedChatTab,
+  readEditorRailClosedChatTabs,
+  storeEditorRailActiveChat,
   readEditorRailChatTabs,
+  storeEditorRailClosedChatTabs,
   storeEditorRailChatTabs,
   type EditorRailChatTabSnapshot,
 } from "../../editorViewState";
+import { resolveShortcutCommand } from "../../keybindings";
+import { isTerminalFocused } from "../../lib/terminalFocus";
 import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { readNativeApi } from "../../nativeApi";
+import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxTrigger,
+} from "../ui/combobox";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -123,14 +149,27 @@ interface ChatHeaderProps {
   // a project chat-history menu. Provided only by the editor workspace chat pane.
   editorChatControls?: {
     projectId: ProjectId;
+    workspaceId: WorktreeWorkspaceId | null;
     activeSurface: "chat" | "terminal";
     terminalAvailable: boolean;
     terminalHasRunningActivity: boolean;
+    menuActionsEnabled: boolean;
     onNewChat: () => void;
     onNewTerminal: () => void;
     onOpenChat: (threadId: ThreadId) => void;
     onOpenTerminal: () => void;
     onCloseTerminal: () => void;
+    onRenameChat: (threadId: ThreadId, title: string) => void;
+    onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => Promise<boolean>;
+    onReopenChat: (threadId: ThreadId) => Promise<boolean>;
+  } | null;
+  workspaceHeader?: {
+    title: string;
+    targetRef: string;
+    targetBranchOptions: readonly string[];
+    targetBranchesLoading: boolean;
+    targetRefUpdating: boolean;
+    onTargetRefChange: (targetRef: string) => void;
   } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -147,22 +186,66 @@ const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
 type EditorRailChatTab = EditorRailChatTabSnapshot;
 
-function updateStoredEditorRailChatTabs(
-  setOpenChatTabs: Dispatch<SetStateAction<ReadonlyArray<EditorRailChatTab>>>,
-  projectId: ProjectId,
-  updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
-): void {
-  setOpenChatTabs((current) => {
-    const next = updater(current);
-    storeEditorRailChatTabs(projectId, next);
-    return next;
-  });
+function ConversationTabStatus({ status }: { status: ThreadStatusPill }) {
+  if (status.label === "Completed") {
+    return <CheckCircle2Icon aria-hidden="true" className={cn("size-3", status.colorClass)} />;
+  }
+  if (status.pulse) {
+    return <ThreadRunningSpinner className={cn("size-2.5", status.colorClass)} />;
+  }
+  return <span aria-hidden="true" className={cn("size-1.5 rounded-full", status.dotClass)} />;
+}
+
+export function resolveVisibleConversationTabs(input: {
+  workspaceScoped: boolean;
+  availableTabs: ReadonlyArray<EditorRailChatTab>;
+  openTabs: ReadonlyArray<EditorRailChatTab>;
+  activeTab: EditorRailChatTab;
+  activeSurface: "chat" | "terminal";
+}): ReadonlyArray<EditorRailChatTab> {
+  const availableTabById = new Map(input.availableTabs.map((tab) => [tab.id, tab] as const));
+  const activeTabIsAvailable = availableTabById.has(input.activeTab.id);
+
+  if (input.workspaceScoped) {
+    if (input.activeSurface !== "chat" || activeTabIsAvailable) {
+      return input.availableTabs;
+    }
+    return [...input.availableTabs, input.activeTab];
+  }
+
+  const activeTabIsOpen = input.openTabs.some((tab) => tab.id === input.activeTab.id);
+  const orderedOpenTabs =
+    input.activeSurface === "chat" && !activeTabIsOpen
+      ? [...input.openTabs, input.activeTab]
+      : input.openTabs;
+  return orderedOpenTabs.map((tab) => availableTabById.get(tab.id) ?? tab);
+}
+
+export function resolveTabStripScrollLeft(input: {
+  scrollLeft: number;
+  viewportStart: number;
+  viewportEnd: number;
+  tabStart: number;
+  tabEnd: number;
+  inset?: number;
+}): number | null {
+  const inset = input.inset ?? 4;
+  const visibleStart = input.viewportStart + inset;
+  const visibleEnd = input.viewportEnd - inset;
+  if (input.tabStart < visibleStart) {
+    return Math.max(0, input.scrollLeft - (visibleStart - input.tabStart));
+  }
+  if (input.tabEnd > visibleEnd) {
+    return Math.max(0, input.scrollLeft + (input.tabEnd - visibleEnd));
+  }
+  return null;
 }
 
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
 // editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
   projectId: ProjectId;
+  workspaceId: WorktreeWorkspaceId | null;
   activeThreadId: ThreadId;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
@@ -170,7 +253,11 @@ function EditorChatHistoryMenu(props: {
   const selectDisplayThreads = createSidebarDisplayThreadsSelector();
   const displayThreads = useStore(selectDisplayThreads);
   const historyThreads = sortThreadsForSidebar(
-    displayThreads.filter((thread) => thread.projectId === props.projectId),
+    displayThreads.filter((thread) =>
+      props.workspaceId
+        ? thread.workspaceId === props.workspaceId
+        : thread.projectId === props.projectId,
+    ),
     settings.sidebarThreadSortOrder,
   ).slice(0, EDITOR_CHAT_HISTORY_LIMIT);
 
@@ -191,7 +278,11 @@ function EditorChatHistoryMenu(props: {
       />
       <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-72 min-w-72">
         {historyThreads.length === 0 ? (
-          <MenuItem disabled>No chats in this project yet</MenuItem>
+          <MenuItem disabled>
+            {props.workspaceId
+              ? "No conversations in this workspace yet"
+              : "No chats in this project yet"}
+          </MenuItem>
         ) : (
           historyThreads.map((thread) => (
             <MenuItem
@@ -225,22 +316,30 @@ function EditorChatHistoryMenu(props: {
 
 function EditorRailTabs(props: {
   projectId: ProjectId;
+  workspaceId: WorktreeWorkspaceId | null;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProvider: ProviderKind;
   activeSurface: "chat" | "terminal";
   terminalAvailable: boolean;
   terminalHasRunningActivity: boolean;
+  menuActionsEnabled: boolean;
+  keybindings: ResolvedKeybindingsConfig;
   onNewChat: () => void;
   onNewTerminal: () => void;
   onOpenChat: (threadId: ThreadId) => void;
   onOpenTerminal: () => void;
   onCloseTerminal: () => void;
+  onRenameChat: (threadId: ThreadId, title: string) => void;
+  onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => Promise<boolean>;
+  onReopenChat: (threadId: ThreadId) => Promise<boolean>;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
-  const { settings } = useAppSettings();
+  const tabScopeKey = props.workspaceId
+    ? `workspace:${props.workspaceId}`
+    : `project:${props.projectId}`;
   const [openChatTabs, setOpenChatTabs] = useState<ReadonlyArray<EditorRailChatTab>>(() => {
-    const storedTabs = readEditorRailChatTabs(props.projectId);
+    const storedTabs = readEditorRailChatTabs(tabScopeKey);
     return storedTabs.length > 0
       ? storedTabs
       : [
@@ -252,24 +351,49 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector();
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef<HTMLDivElement>(null);
+  const previousActiveTabKeyRef = useRef<string | null>(null);
+  const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const displayThreads = useStore(selectDisplayThreads);
-  const currentChatTab: EditorRailChatTab = {
-    id: props.activeThreadId,
-    title: props.activeThreadTitle,
-    provider: props.activeProvider,
-  };
-  const setAndStoreOpenChatTabs = (
-    updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
-  ) => {
-    updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, updater);
-  };
-  // Timeout-0 in the three sync effects below keeps every state write
-  // asynchronous (no wasted pre-paint render), which also keeps this component
-  // eligible for React Compiler; tab seeding/mirroring is invisible at a tick.
+  const conversationStatusByThreadId = useMemo(
+    () =>
+      new Map(
+        displayThreads.map(
+          (thread) =>
+            [
+              thread.id,
+              resolveThreadStatusPill({
+                thread,
+                hasPendingApprovals: thread.hasPendingApprovals,
+                hasPendingUserInput: thread.hasPendingUserInput,
+              }),
+            ] as const,
+        ),
+      ),
+    [displayThreads],
+  );
+  const currentChatTab = useMemo<EditorRailChatTab>(
+    () => ({
+      id: props.activeThreadId,
+      title: props.activeThreadTitle,
+      provider: props.activeProvider,
+    }),
+    [props.activeProvider, props.activeThreadId, props.activeThreadTitle],
+  );
+  const setAndStoreOpenChatTabs = useCallback(
+    (updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>) => {
+      setOpenChatTabs((current) => {
+        const next = updater(current);
+        storeEditorRailChatTabs(tabScopeKey, next);
+        return next;
+      });
+    },
+    [tabScopeKey],
+  );
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      const storedTabs = readEditorRailChatTabs(props.projectId);
+      const storedTabs = readEditorRailChatTabs(tabScopeKey);
       setOpenChatTabs(
         storedTabs.length > 0
           ? storedTabs
@@ -283,7 +407,7 @@ function EditorRailTabs(props: {
       );
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, props.projectId]);
+  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, tabScopeKey]);
   useEffect(() => {
     if (!props.terminalAvailable) {
       return;
@@ -298,57 +422,101 @@ function EditorRailTabs(props: {
       return;
     }
     const timeoutId = window.setTimeout(() => {
-      const activeChatTab: EditorRailChatTab = {
-        id: props.activeThreadId,
-        title: props.activeThreadTitle,
-        provider: props.activeProvider,
-      };
-      updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, (current) => {
-        const existingIndex = current.findIndex((thread) => thread.id === activeChatTab.id);
+      storeEditorRailActiveChat(tabScopeKey, props.activeThreadId);
+      setAndStoreOpenChatTabs((current) => {
+        const existingIndex = current.findIndex((thread) => thread.id === currentChatTab.id);
         if (existingIndex < 0) {
-          return [...current, activeChatTab];
+          return [...current, currentChatTab];
         }
         const existing = current[existingIndex];
         if (
-          existing?.title === activeChatTab.title &&
-          existing.provider === activeChatTab.provider
+          existing?.title === currentChatTab.title &&
+          existing.provider === currentChatTab.provider
         ) {
           return current;
         }
-        return current.map((thread) => (thread.id === activeChatTab.id ? activeChatTab : thread));
+        return current.map((thread) => (thread.id === currentChatTab.id ? currentChatTab : thread));
       });
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [
-    props.activeProvider,
+    currentChatTab,
     props.activeSurface,
     props.activeThreadId,
-    props.activeThreadTitle,
-    props.projectId,
+    setAndStoreOpenChatTabs,
+    tabScopeKey,
   ]);
-  const sortedProjectThreads = sortThreadsForSidebar(
-    displayThreads.filter((thread) => thread.projectId === props.projectId),
-    settings.sidebarThreadSortOrder,
-  );
-  const sidebarThreadById = new Map(
-    sortedProjectThreads.map((thread) => [
-      thread.id,
-      {
-        id: thread.id,
-        title: thread.title,
-        provider: thread.session?.provider ?? thread.modelSelection.provider,
-      },
-    ]),
-  );
-  const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
-  const orderedOpenTabs =
-    props.activeSurface === "chat" && !activeChatAlreadyOpen
-      ? [...openChatTabs, currentChatTab]
-      : openChatTabs;
-  const chatTabs = orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
+  const chatTabs = useMemo(() => {
+    const sortedProjectThreads = sortThreadsForConversationTabs(
+      displayThreads.filter((thread) =>
+        props.workspaceId
+          ? thread.workspaceId === props.workspaceId
+          : thread.projectId === props.projectId,
+      ),
+    );
+    const availableTabs = sortedProjectThreads.map((thread) => ({
+      id: thread.id,
+      title: thread.title,
+      provider: thread.session?.provider ?? thread.modelSelection.provider,
+    }));
+    return resolveVisibleConversationTabs({
+      workspaceScoped: props.workspaceId !== null,
+      availableTabs,
+      openTabs: openChatTabs,
+      activeTab: currentChatTab,
+      activeSurface: props.activeSurface,
+    });
+  }, [
+    currentChatTab,
+    displayThreads,
+    props.activeSurface,
+    openChatTabs,
+    props.projectId,
+    props.workspaceId,
+  ]);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
-  const shouldShowTabs = tabCount > 1;
+  const shouldShowTabs = props.workspaceId !== null || tabCount > 1;
+  const activeTabKey =
+    props.activeSurface === "terminal" ? "terminal" : `chat:${props.activeThreadId}`;
+  const keepActiveTabVisible = useCallback((behavior: ScrollBehavior) => {
+    const tabStrip = tabStripRef.current;
+    const activeTab = activeTabRef.current;
+    if (!tabStrip || !activeTab) {
+      return;
+    }
+    const stripRect = tabStrip.getBoundingClientRect();
+    const tabRect = activeTab.getBoundingClientRect();
+    const nextScrollLeft = resolveTabStripScrollLeft({
+      scrollLeft: tabStrip.scrollLeft,
+      viewportStart: stripRect.left,
+      viewportEnd: stripRect.right,
+      tabStart: tabRect.left,
+      tabEnd: tabRect.right,
+    });
+    if (nextScrollLeft === null || Math.abs(nextScrollLeft - tabStrip.scrollLeft) < 1) {
+      return;
+    }
+    tabStrip.scrollTo({ left: nextScrollLeft, behavior });
+  }, []);
+  useLayoutEffect(() => {
+    const switchedTabs =
+      previousActiveTabKeyRef.current !== null && previousActiveTabKeyRef.current !== activeTabKey;
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    keepActiveTabVisible(switchedTabs && !prefersReducedMotion ? "smooth" : "auto");
+    previousActiveTabKeyRef.current = activeTabKey;
+  }, [activeTabKey, chatTabs, keepActiveTabVisible, terminalTabVisible]);
+  useEffect(() => {
+    const tabStrip = tabStripRef.current;
+    if (!tabStrip || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => keepActiveTabVisible("auto"));
+    observer.observe(tabStrip);
+    return () => observer.disconnect();
+  }, [keepActiveTabVisible]);
   const newTerminalTab = () => {
     setTerminalTabOpen(true);
     props.onNewTerminal();
@@ -373,104 +541,238 @@ function EditorRailTabs(props: {
         current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],
       );
     }
+    storeEditorRailActiveChat(tabScopeKey, threadId);
     props.onOpenChat(threadId);
   };
-  const closeChatTab = (threadId: ThreadId) => {
-    const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
-    const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
-    setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
-    if (!closingActiveChat) {
-      return;
+  const closeChatTab = useCallback(
+    async (threadId: ThreadId) => {
+      const closingTab = chatTabs.find((thread) => thread.id === threadId);
+      if (!closingTab) return;
+      const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
+      const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
+      if (props.workspaceId !== null) {
+        const closed = await props.onCloseChat(
+          threadId,
+          closingActiveChat ? (nextChatTab?.id ?? null) : null,
+        );
+        if (closed) pushEditorRailClosedChatTab(tabScopeKey, closingTab);
+        return;
+      }
+      pushEditorRailClosedChatTab(tabScopeKey, closingTab);
+      setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
+      if (!closingActiveChat) return;
+      if (nextChatTab) {
+        props.onOpenChat(nextChatTab.id);
+        return;
+      }
+      if (terminalTabVisible) openTerminalTab();
+    },
+    [chatTabs, props, setAndStoreOpenChatTabs, tabScopeKey, terminalTabVisible],
+  );
+  const reopenClosedChatTab = useCallback(async () => {
+    const closedTabs = readEditorRailClosedChatTabs(tabScopeKey);
+    const closedTab = closedTabs.at(-1);
+    if (!closedTab) return;
+    if (props.workspaceId !== null && !(await props.onReopenChat(closedTab.id))) return;
+
+    storeEditorRailClosedChatTabs(tabScopeKey, closedTabs.slice(0, -1));
+    if (props.workspaceId === null) {
+      setAndStoreOpenChatTabs((current) =>
+        current.some((tab) => tab.id === closedTab.id) ? current : [...current, closedTab],
+      );
+      storeEditorRailActiveChat(tabScopeKey, closedTab.id);
+      props.onOpenChat(closedTab.id);
     }
-    if (nextChatTab) {
-      props.onOpenChat(nextChatTab.id);
-      return;
-    }
-    if (terminalTabVisible) {
-      openTerminalTab();
-    }
+  }, [props, setAndStoreOpenChatTabs, tabScopeKey]);
+  useEffect(() => {
+    if (!props.menuActionsEnabled) return;
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function") return;
+    return onMenuAction((action) => {
+      if (action === "close-active-tab") {
+        if (props.activeSurface === "terminal") {
+          closeTerminalTab();
+        } else {
+          void closeChatTab(props.activeThreadId);
+        }
+      } else if (action === "reopen-closed-tab") {
+        void reopenClosedChatTab();
+      }
+    });
+  }, [closeChatTab, props, reopenClosedChatTab]);
+  useEffect(() => {
+    if (!props.menuActionsEnabled) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, props.keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: props.terminalAvailable,
+          terminalWorkspaceOpen: props.workspaceId !== null && props.terminalAvailable,
+          terminalWorkspaceChatTabActive: props.activeSurface === "chat",
+          terminalWorkspaceTerminalTabActive: props.activeSurface === "terminal",
+        },
+      });
+      if (command !== "chat.closeActiveTab" && command !== "chat.reopenClosedTab") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (command === "chat.closeActiveTab") {
+        void closeChatTab(props.activeThreadId);
+      } else {
+        void reopenClosedChatTab();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [closeChatTab, props, reopenClosedChatTab]);
+  const openChatTabContextMenu = (
+    event: React.MouseEvent<HTMLDivElement>,
+    thread: EditorRailChatTab,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const api = readNativeApi();
+    if (!api) return;
+
+    void (async () => {
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "rename", label: "Rename chat" },
+          { id: "close", label: "Close chat", separatorBefore: true },
+        ],
+        { x: event.clientX, y: event.clientY },
+      );
+      if (clicked === "rename") {
+        props.onRenameChat(thread.id, thread.title);
+      } else if (clicked === "close") {
+        void closeChatTab(thread.id);
+      }
+    })();
   };
+  const newItemMenu = (
+    <Menu modal={false}>
+      <MenuTrigger
+        render={
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            label={props.workspaceId ? "New workspace item" : "New editor rail item"}
+            title="New"
+            className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <PlusIcon className="size-3.5" />
+          </IconButton>
+        }
+      />
+      <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-44 min-w-44">
+        <MenuItem onClick={props.onNewChat}>
+          <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>New chat</span>
+        </MenuItem>
+        <MenuItem onClick={newTerminalTab}>
+          <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>New terminal</span>
+        </MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-      <div className="flex shrink-0 items-center gap-0.5">
-        <Menu modal={false}>
-          <MenuTrigger
-            render={
-              <IconButton
-                variant="ghost"
-                size="icon-xs"
-                label="New editor rail item"
-                title="New"
-                className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <PlusIcon className="size-3.5" />
-              </IconButton>
-            }
+      {props.workspaceId === null ? (
+        <div className="flex shrink-0 items-center gap-0.5">
+          {newItemMenu}
+          <EditorChatHistoryMenu
+            projectId={props.projectId}
+            workspaceId={props.workspaceId}
+            activeThreadId={props.activeThreadId}
+            onNavigateToThread={openChatTab}
           />
-          <ComposerPickerMenuPopup
-            align="start"
-            side="bottom"
-            sideOffset={6}
-            className="w-44 min-w-44"
-          >
-            <MenuItem onClick={props.onNewChat}>
-              <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span>New chat</span>
-            </MenuItem>
-            <MenuItem onClick={newTerminalTab}>
-              <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span>New terminal</span>
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
-        <EditorChatHistoryMenu
-          projectId={props.projectId}
-          activeThreadId={props.activeThreadId}
-          onNavigateToThread={openChatTab}
-        />
-      </div>
+        </div>
+      ) : null}
       {shouldShowTabs ? (
         // Same chip tabs as the right dock's pane strip so every tab row in the
-        // app reads identically. Pushed to the header's right edge (ml-auto) so the
-        // title and new/history controls stay grouped on the left.
-        <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {chatTabs.map((thread, index) => (
-            <SurfaceTabChip
-              key={thread.id}
-              active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
-              title={thread.title}
-              label={`Chat ${index + 1}`}
-              labelClassName="max-w-24"
-              icon={
-                <ProviderIcon
-                  provider={thread.provider}
-                  tone="header"
-                  className="size-3 shrink-0"
+        // app reads identically. Workspace tabs start at the worktree-title edge;
+        // editor-rail tabs keep their legacy right alignment.
+        <div
+          className={cn(
+            "relative min-w-0 flex-1 [container-type:inline-size]",
+            props.workspaceId === null && "ml-auto",
+          )}
+        >
+          <div
+            ref={tabStripRef}
+            className="overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Open workspace tabs"
+          >
+            <div
+              className={cn(
+                "flex w-max min-w-full items-center gap-1",
+                props.workspaceId === null ? "justify-end" : "justify-start",
+              )}
+            >
+              {chatTabs.map((thread) => {
+                const active = props.activeSurface === "chat" && thread.id === props.activeThreadId;
+                const threadStatus = conversationStatusByThreadId.get(thread.id) ?? null;
+                return (
+                  <SurfaceTabChip
+                    key={thread.id}
+                    ref={active ? activeTabRef : undefined}
+                    active={active}
+                    title={thread.title}
+                    label={thread.title}
+                    labelClassName="max-w-[clamp(3.75rem,18cqi,8.5rem)]"
+                    icon={
+                      <ProviderIcon
+                        provider={thread.provider}
+                        tone="header"
+                        className="size-3 shrink-0"
+                      />
+                    }
+                    trailing={
+                      threadStatus ? (
+                        <span
+                          aria-label={threadStatus.label}
+                          title={threadStatus.label}
+                          className="flex size-3 shrink-0 items-center justify-center"
+                        >
+                          <ConversationTabStatus status={threadStatus} />
+                        </span>
+                      ) : null
+                    }
+                    closeLabel={`Close ${thread.title}`}
+                    closePlacement="trailing"
+                    renameLabel={`Rename ${thread.title}`}
+                    onSelect={() => openChatTab(thread.id)}
+                    onClose={() => void closeChatTab(thread.id)}
+                    onRename={() => props.onRenameChat(thread.id, thread.title)}
+                    onContextMenu={(event) => openChatTabContextMenu(event, thread)}
+                  />
+                );
+              })}
+              {terminalTabVisible ? (
+                <SurfaceTabChip
+                  ref={props.activeSurface === "terminal" ? activeTabRef : undefined}
+                  active={props.activeSurface === "terminal"}
+                  title="Terminal"
+                  label="Terminal"
+                  labelClassName="max-w-[clamp(3.75rem,18cqi,8.5rem)]"
+                  icon={
+                    <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />
+                  }
+                  trailing={
+                    props.terminalHasRunningActivity ? (
+                      <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                    ) : null
+                  }
+                  onSelect={openTerminalTab}
+                  closeLabel="Close Terminal"
+                  onClose={closeTerminalTab}
                 />
-              }
-              closeLabel={`Close ${thread.title}`}
-              onSelect={() => openChatTab(thread.id)}
-              onClose={() => closeChatTab(thread.id)}
-            />
-          ))}
-          {terminalTabVisible ? (
-            <SurfaceTabChip
-              active={props.activeSurface === "terminal"}
-              title="Terminal"
-              label="Terminal"
-              labelClassName="max-w-24"
-              icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
-              trailing={
-                props.terminalHasRunningActivity ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
-                ) : null
-              }
-              onSelect={openTerminalTab}
-              closeLabel="Close Terminal"
-              onClose={closeTerminalTab}
-            />
-          ) : null}
+              ) : null}
+              {props.workspaceId !== null ? newItemMenu : null}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
@@ -487,6 +789,77 @@ export function resolveChatHeaderThreadIconKind(
     return "none";
   }
   return entryPoint === "terminal" ? "terminal" : "provider";
+}
+
+function WorkspaceTargetBranchControl(props: NonNullable<ChatHeaderProps["workspaceHeader"]>) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = useMemo(
+    () =>
+      normalizedQuery.length === 0
+        ? props.targetBranchOptions
+        : props.targetBranchOptions.filter((branch) =>
+            branch.toLowerCase().includes(normalizedQuery),
+          ),
+    [normalizedQuery, props.targetBranchOptions],
+  );
+
+  return (
+    <Combobox
+      items={props.targetBranchOptions}
+      filteredItems={filteredOptions}
+      open={open}
+      value={props.targetRef}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setQuery("");
+      }}
+    >
+      <ComboboxTrigger
+        aria-label={`Change target branch. Current target: ${props.targetRef}`}
+        className="flex h-7 min-w-0 max-w-[min(16rem,30vw)] shrink items-center gap-1 rounded-lg px-2 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [-webkit-app-region:no-drag]"
+        disabled={
+          props.targetRefUpdating ||
+          (props.targetBranchesLoading && props.targetBranchOptions.length === 0)
+        }
+      >
+        <span className="shrink-0">Target:</span>
+        <span className="min-w-0 truncate font-medium text-foreground">{props.targetRef}</span>
+        <ChevronDownIcon className="size-3 shrink-0 opacity-55" aria-hidden />
+      </ComboboxTrigger>
+      <ComboboxPopup align="start" side="bottom" sideOffset={5} className="w-72">
+        <div className="border-b p-1">
+          <ComboboxInput
+            autoFocus
+            className="rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0"
+            inputClassName="ring-0"
+            placeholder="Search target branches…"
+            showTrigger={false}
+            size="sm"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <ComboboxEmpty>No target branches found.</ComboboxEmpty>
+        <ComboboxList className="max-h-64">
+          {filteredOptions.map((branch) => (
+            <ComboboxItem
+              key={branch}
+              value={branch}
+              onClick={() => {
+                setOpen(false);
+                setQuery("");
+                if (branch !== props.targetRef) props.onTargetRefChange(branch);
+              }}
+            >
+              <span className="block min-w-0 truncate">{branch}</span>
+            </ComboboxItem>
+          ))}
+        </ComboboxList>
+      </ComboboxPopup>
+    </Combobox>
+  );
 }
 
 export function ChatHeader({
@@ -524,6 +897,7 @@ export function ChatHeader({
   chatLayoutAction = null,
   changeThreadAction = null,
   editorChatControls = null,
+  workspaceHeader = null,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -627,251 +1001,295 @@ export function ChatHeader({
     </Tooltip>
   ) : null;
 
+  const editorTabs = editorChatControls ? (
+    <EditorRailTabs
+      key={editorChatControls.workspaceId ?? editorChatControls.projectId}
+      projectId={editorChatControls.projectId}
+      workspaceId={editorChatControls.workspaceId}
+      activeThreadId={activeThreadId}
+      activeThreadTitle={activeThreadTitle}
+      activeProvider={activeProvider}
+      activeSurface={editorChatControls.activeSurface}
+      terminalAvailable={editorChatControls.terminalAvailable}
+      terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
+      menuActionsEnabled={editorChatControls.menuActionsEnabled}
+      keybindings={keybindings}
+      onNewChat={editorChatControls.onNewChat}
+      onNewTerminal={editorChatControls.onNewTerminal}
+      onOpenChat={editorChatControls.onOpenChat}
+      onOpenTerminal={editorChatControls.onOpenTerminal}
+      onCloseTerminal={editorChatControls.onCloseTerminal}
+      onRenameChat={editorChatControls.onRenameChat}
+      onCloseChat={editorChatControls.onCloseChat}
+      onReopenChat={editorChatControls.onReopenChat}
+      onNavigateToThread={onNavigateToThread}
+    />
+  ) : null;
+
   return (
-    <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
+    <div
+      ref={headerRef}
+      className={cn(
+        "flex min-w-0 flex-1 gap-2",
+        workspaceHeader ? "flex-col" : "items-center",
+        className,
+      )}
+    >
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center",
-          editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
-          !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
+          "flex min-w-0 w-full items-center gap-2",
+          workspaceHeader ? "h-10" : "h-full",
         )}
       >
-        {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
         <div
-          className={cn("flex min-w-0 flex-1 items-center gap-2", editorChatControls && "h-full")}
+          className={cn(
+            "flex min-w-0 flex-1 items-center",
+            editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
+            !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
+          )}
         >
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 flex-col",
-              editorChatControls && "h-full justify-center",
-            )}
-          >
-            {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
-                {threadBreadcrumbs.map((breadcrumb, index) => (
-                  <React.Fragment key={breadcrumb.threadId}>
-                    {index > 0 ? (
-                      <span className="shrink-0 text-muted-foreground/35">/</span>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="min-w-0 truncate transition-colors hover:text-foreground/80"
-                      title={breadcrumb.title}
-                      onClick={() => onNavigateToThread(breadcrumb.threadId)}
-                    >
-                      {breadcrumb.title}
-                    </button>
-                  </React.Fragment>
-                ))}
-              </div>
-            ) : null}
-            <div className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}>
+          {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
+          {workspaceHeader ? (
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <WorktreeIcon className="size-3.5 shrink-0 text-muted-foreground/80" aria-hidden />
+              <h2
+                className="min-w-0 max-w-[clamp(8rem,30vw,28rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground"
+                title={workspaceHeader.title}
+              >
+                {workspaceHeader.title}
+              </h2>
+              <WorkspaceTargetBranchControl {...workspaceHeader} />
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2",
+                editorChatControls && "h-full",
+              )}
+            >
               <div
                 className={cn(
-                  "flex min-w-0 items-center gap-2",
-                  showSidechatTitleChip &&
-                    "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
+                  "flex min-w-0 flex-1 flex-col",
+                  editorChatControls && "h-full justify-center",
                 )}
               >
-                {threadIconKind === "none" ? null : (
-                  <span
-                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
-                    title={
-                      threadIconKind === "terminal"
-                        ? "Terminal"
-                        : PROVIDER_DISPLAY_NAMES[activeProvider]
-                    }
-                  >
-                    {threadIconKind === "terminal" ? (
-                      <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
-                    ) : (
-                      renderProviderIcon(activeProvider, "size-3.5")
-                    )}
-                  </span>
-                )}
-                <h2
-                  className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
-                  title={activeThreadTitle}
-                  onDoubleClick={() => onRenameThread()}
-                >
-                  {activeThreadTitle}
-                </h2>
-                {showSidechatTitleChip && onCloseThreadPane ? (
-                  <IconButton
-                    variant="chrome"
-                    size="icon-xs"
-                    label="Close selected Side"
-                    tooltip="Close selected Side"
-                    tooltipSide="bottom"
-                    className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseThreadPane();
-                    }}
-                  >
-                    <XIcon />
-                  </IconButton>
+                {threadBreadcrumbs.length > 0 ? (
+                  <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
+                    {threadBreadcrumbs.map((breadcrumb, index) => (
+                      <React.Fragment key={breadcrumb.threadId}>
+                        {index > 0 ? (
+                          <span className="shrink-0 text-muted-foreground/35">/</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="min-w-0 truncate transition-colors hover:text-foreground/80"
+                          title={breadcrumb.title}
+                          onClick={() => onNavigateToThread(breadcrumb.threadId)}
+                        >
+                          {breadcrumb.title}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  </div>
                 ) : null}
-              </div>
-              {editorChatControls ? (
-                <EditorRailTabs
-                  projectId={editorChatControls.projectId}
-                  activeThreadId={activeThreadId}
-                  activeThreadTitle={activeThreadTitle}
-                  activeProvider={activeProvider}
-                  activeSurface={editorChatControls.activeSurface}
-                  terminalAvailable={editorChatControls.terminalAvailable}
-                  terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
-                  onNewChat={editorChatControls.onNewChat}
-                  onNewTerminal={editorChatControls.onNewTerminal}
-                  onOpenChat={editorChatControls.onOpenChat}
-                  onOpenTerminal={editorChatControls.onOpenTerminal}
-                  onCloseTerminal={editorChatControls.onCloseTerminal}
-                  onNavigateToThread={onNavigateToThread}
-                />
-              ) : null}
-              {!hideHandoffControls && handoffBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Badge
-                        variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                <div
+                  className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}
+                >
+                  <div
+                    className={cn(
+                      "flex min-w-0 items-center gap-2",
+                      showSidechatTitleChip &&
+                        "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
+                    )}
+                  >
+                    {threadIconKind === "none" ? null : (
+                      <span
+                        className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                        title={
+                          threadIconKind === "terminal"
+                            ? "Terminal"
+                            : PROVIDER_DISPLAY_NAMES[activeProvider]
+                        }
                       >
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-                        </span>
-                        <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-                        </span>
-                      </Badge>
-                    }
-                  />
-                  <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-                </Tooltip>
-              ) : null}
+                        {threadIconKind === "terminal" ? (
+                          <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
+                        ) : (
+                          renderProviderIcon(activeProvider, "size-3.5")
+                        )}
+                      </span>
+                    )}
+                    <h2
+                      className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
+                      title={activeThreadTitle}
+                      onDoubleClick={() => onRenameThread()}
+                    >
+                      {activeThreadTitle}
+                    </h2>
+                    {showSidechatTitleChip && onCloseThreadPane ? (
+                      <IconButton
+                        variant="chrome"
+                        size="icon-xs"
+                        label="Close selected Side"
+                        tooltip="Close selected Side"
+                        tooltipSide="bottom"
+                        className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onCloseThreadPane();
+                        }}
+                      >
+                        <XIcon />
+                      </IconButton>
+                    ) : null}
+                  </div>
+                  {editorTabs}
+                  {!hideHandoffControls && handoffBadgeLabel ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Badge
+                            variant="outline"
+                            className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                          >
+                            <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                              {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
+                            </span>
+                            <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                            <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                              {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
+                            </span>
+                          </Badge>
+                        }
+                      />
+                      <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!hideHandoffControls && !environment ? (
-          <ProviderUsageMenuControl provider={activeProvider} />
-        ) : null}
-        {!hideHandoffControls ? (
-          <Menu modal={false}>
+        <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+          {!hideHandoffControls && !environment ? (
+            <ProviderUsageMenuControl provider={activeProvider} />
+          ) : null}
+          {!hideHandoffControls ? (
+            <Menu modal={false}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <MenuTrigger
+                      render={
+                        <ChatHeaderButton
+                          type="button"
+                          tone="outline"
+                          className={compact ? "gap-1" : "gap-1.5"}
+                          aria-label={handoffActionLabel}
+                          disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        />
+                      }
+                    >
+                      <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
+                      {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    </MenuTrigger>
+                  }
+                />
+                <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+              </Tooltip>
+              <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
+                {handoffActionTargetProviders.map((provider) => (
+                  <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+                    {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                    <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  </MenuItem>
+                ))}
+              </ComposerPickerMenuPopup>
+            </Menu>
+          ) : null}
+          {activeProjectScripts ? (
+            <ProjectScriptsControl
+              scripts={activeProjectScripts}
+              keybindings={keybindings}
+              preferredScriptId={preferredScriptId}
+              hideInlineLabel={compact}
+              onRunScript={onRunProjectScript}
+              onAddScript={onAddProjectScript}
+              onUpdateScript={onUpdateProjectScript}
+              onDeleteScript={onDeleteProjectScript}
+            />
+          ) : null}
+
+          {inlineChatLayoutAction ? (
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <MenuTrigger
-                    render={
-                      <ChatHeaderButton
-                        type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
-                      />
-                    }
+                  <ChatHeaderIconButton
+                    type="button"
+                    label={inlineChatLayoutAction.label}
+                    onClick={inlineChatLayoutAction.onClick}
                   >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
-                  </MenuTrigger>
+                    <HiMiniArrowsPointingOut className="size-3.5" />
+                  </ChatHeaderIconButton>
                 }
               />
-              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+              <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
             </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
-                </MenuItem>
-              ))}
-            </ComposerPickerMenuPopup>
-          </Menu>
-        ) : null}
-        {activeProjectScripts ? (
-          <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            keybindings={keybindings}
-            preferredScriptId={preferredScriptId}
-            hideInlineLabel={compact}
-            onRunScript={onRunProjectScript}
-            onAddScript={onAddProjectScript}
-            onUpdateScript={onUpdateProjectScript}
-            onDeleteScript={onDeleteProjectScript}
-          />
-        ) : null}
+          ) : null}
 
-        {inlineChatLayoutAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={inlineChatLayoutAction.label}
-                  onClick={inlineChatLayoutAction.onClick}
-                >
-                  <HiMiniArrowsPointingOut className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
+          {/* Change thread stays as a standalone control (split/sidechat only). */}
+          {changeThreadAction ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ChatHeaderIconButton
+                    type="button"
+                    label={changeThreadAction.label}
+                    onClick={changeThreadAction.onClick}
+                  >
+                    <TbExchange className="size-3.5" />
+                  </ChatHeaderIconButton>
+                }
+              />
+              <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
+            </Tooltip>
+          ) : null}
 
-        {/* Change thread stays as a standalone control (split/sidechat only). */}
-        {changeThreadAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={changeThreadAction.label}
-                  onClick={changeThreadAction.onClick}
-                >
-                  <TbExchange className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-
-        {/* Environment: one button consolidating Open-in-editor and git actions into the
+          {/* Environment: one button consolidating Open-in-editor and git actions into the
             Environment panel. The right-side diff toggle stays beside it so the familiar
             "open the diff on the right" control is preserved. Falls back to the legacy split
             controls when no environment is resolved. */}
-        {environment ? (
-          <>
-            <EnvironmentToggle environment={environment} />
-            {diffToggleControl}
-          </>
-        ) : (
-          <>
-            {/* Open in editor: dedicated split-button with an editor switcher; the project
+          {environment ? (
+            <>
+              <EnvironmentToggle environment={environment} />
+              {diffToggleControl}
+            </>
+          ) : (
+            <>
+              {/* Open in editor: dedicated split-button with an editor switcher; the project
                 action control now lives beside Hand off as its own project command surface. */}
-            {activeProjectName ? (
-              <OpenInPicker
-                keybindings={keybindings}
-                availableEditors={availableEditors}
-                openInTarget={openInTarget}
-              />
-            ) : null}
+              {activeProjectName ? (
+                <OpenInPicker
+                  keybindings={keybindings}
+                  availableEditors={availableEditors}
+                  openInTarget={openInTarget}
+                />
+              ) : null}
 
-            {activeProjectName && showGitActions ? (
-              <GitActionsControl
-                gitCwd={gitCwd}
-                activeThreadId={activeThreadId}
-                hideQuickActionLabel={compact}
-              />
-            ) : null}
-            {diffToggleControl}
-          </>
-        )}
+              {activeProjectName && showGitActions ? (
+                <GitActionsControl
+                  gitCwd={gitCwd}
+                  activeThreadId={activeThreadId}
+                  hideQuickActionLabel={compact}
+                />
+              ) : null}
+              {diffToggleControl}
+            </>
+          )}
+        </div>
       </div>
+      {workspaceHeader && editorTabs ? (
+        <div className="flex min-h-0 min-w-0 flex-1 items-center">{editorTabs}</div>
+      ) : null}
     </div>
   );
 }

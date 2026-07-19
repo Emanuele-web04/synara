@@ -24,6 +24,12 @@ import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./s
 import {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitCloneRepositoryInput,
+  GitCloneRepositoryResult,
+  GitHubListAccountsInput,
+  GitHubListAccountsResult,
+  GitHubListRepositoriesInput,
+  GitHubListRepositoriesResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -36,6 +42,8 @@ import {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListPullRequestsInput,
+  GitListPullRequestsResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullInput,
@@ -46,6 +54,8 @@ import {
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
   GitRemoveIndexLockInput,
+  GitRenameBranchInput,
+  GitRenameBranchResult,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
@@ -87,6 +97,7 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
+  OrchestrationWorkspaceShellStreamItem,
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
@@ -206,6 +217,15 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetWorkspaceLifecyclePreflightRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight,
+  {
+    payload: OrchestrationRpcSchemas.getWorkspaceLifecyclePreflight.input,
+    success: OrchestrationRpcSchemas.getWorkspaceLifecyclePreflight.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationImportThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importThread, {
   payload: OrchestrationImportThreadInput,
   success: OrchestrationImportThreadResult,
@@ -223,6 +243,24 @@ export const WsOrchestrationGetShellSnapshotRpc = Rpc.make(
   {
     payload: OrchestrationRpcSchemas.getShellSnapshot.input,
     success: OrchestrationRpcSchemas.getShellSnapshot.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationGetCapabilitiesRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getCapabilities,
+  {
+    payload: OrchestrationRpcSchemas.getCapabilities.input,
+    success: OrchestrationRpcSchemas.getCapabilities.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationGetWorkspaceShellSnapshotRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot,
+  {
+    payload: OrchestrationRpcSchemas.getWorkspaceShellSnapshot.input,
+    success: OrchestrationRpcSchemas.getWorkspaceShellSnapshot.output,
     error: WsRpcError,
   },
 );
@@ -283,6 +321,34 @@ export const WsOrchestrationUnsubscribeShellRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.unsubscribeShell,
   {
     payload: OrchestrationRpcSchemas.unsubscribeShell.input,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationReplayWorkspaceEventsRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.replayWorkspaceEvents,
+  {
+    payload: OrchestrationRpcSchemas.replayWorkspaceEvents.input,
+    success: OrchestrationRpcSchemas.replayWorkspaceEvents.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationSubscribeWorkspaceShellRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell,
+  {
+    payload: OrchestrationRpcSchemas.subscribeWorkspaceShell.input,
+    success: OrchestrationWorkspaceShellStreamItem,
+    error: WsRpcError,
+    stream: true,
+  },
+);
+
+export const WsOrchestrationUnsubscribeWorkspaceShellRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell,
+  {
+    payload: OrchestrationRpcSchemas.unsubscribeWorkspaceShell.input,
     success: Schema.Void,
     error: WsRpcError,
   },
@@ -518,6 +584,12 @@ export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
   error: WsRpcError,
 });
 
+export const WsGitListPullRequestsRpc = Rpc.make(WS_METHODS.gitListPullRequests, {
+  payload: GitListPullRequestsInput,
+  success: GitListPullRequestsResult,
+  error: WsRpcError,
+});
+
 export const WsGitCreateWorktreeRpc = Rpc.make(WS_METHODS.gitCreateWorktree, {
   payload: GitCreateWorktreeInput,
   success: GitCreateWorktreeResult,
@@ -539,6 +611,30 @@ export const WsGitRemoveWorktreeRpc = Rpc.make(WS_METHODS.gitRemoveWorktree, {
 export const WsGitCreateBranchRpc = Rpc.make(WS_METHODS.gitCreateBranch, {
   payload: GitCreateBranchInput,
   success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsGitRenameBranchRpc = Rpc.make(WS_METHODS.gitRenameBranch, {
+  payload: GitRenameBranchInput,
+  success: GitRenameBranchResult,
+  error: WsRpcError,
+});
+
+export const WsGitCloneRepositoryRpc = Rpc.make(WS_METHODS.gitCloneRepository, {
+  payload: GitCloneRepositoryInput,
+  success: GitCloneRepositoryResult,
+  error: WsRpcError,
+});
+
+export const WsGitListGitHubAccountsRpc = Rpc.make(WS_METHODS.gitListGitHubAccounts, {
+  payload: GitHubListAccountsInput,
+  success: GitHubListAccountsResult,
+  error: WsRpcError,
+});
+
+export const WsGitListGitHubRepositoriesRpc = Rpc.make(WS_METHODS.gitListGitHubRepositories, {
+  payload: GitHubListRepositoriesInput,
+  success: GitHubListRepositoriesResult,
   error: WsRpcError,
 });
 
@@ -906,17 +1002,23 @@ export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
 export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationGetWorkspaceLifecyclePreflightRpc,
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
+  WsOrchestrationGetCapabilitiesRpc,
+  WsOrchestrationGetWorkspaceShellSnapshotRpc,
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsOrchestrationReplayWorkspaceEventsRpc,
   WsOrchestrationListProviderDeliveryBlockersRpc,
   WsOrchestrationReconcileProviderDeliveryRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
+  WsOrchestrationSubscribeWorkspaceShellRpc,
+  WsOrchestrationUnsubscribeWorkspaceShellRpc,
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
@@ -951,10 +1053,15 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsPullRequestsCommentRpc,
   WsPullRequestsSetPinnedRpc,
   WsGitListBranchesRpc,
+  WsGitListPullRequestsRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,
   WsGitRemoveWorktreeRpc,
   WsGitCreateBranchRpc,
+  WsGitRenameBranchRpc,
+  WsGitCloneRepositoryRpc,
+  WsGitListGitHubAccountsRpc,
+  WsGitListGitHubRepositoriesRpc,
   WsGitCheckoutRpc,
   WsGitStashAndCheckoutRpc,
   WsGitStashDropRpc,

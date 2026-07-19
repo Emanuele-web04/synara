@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitQueryKeys,
+  gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
   invalidateGitQueries,
   invalidateGitQueriesForCwds,
@@ -107,6 +108,27 @@ describe("git query invalidation", () => {
     for (const key of cwdBKeys) {
       expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
     }
+  });
+
+  it("scopes status caches by GitHub account while preserving cwd-prefix invalidation", async () => {
+    const queryClient = new QueryClient();
+    const cwd = "/repo/account";
+    const first = gitQueryKeys.status(cwd, { host: "github.com", login: "octo-one" });
+    const second = gitQueryKeys.status(cwd, { host: "github.com", login: "octo-two" });
+    queryClient.setQueryData(first, {});
+    queryClient.setQueryData(second, {});
+
+    await queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) });
+
+    expect(first).not.toEqual(second);
+    expect(queryClient.getQueryState(first)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(second)?.isInvalidated).toBe(true);
+  });
+
+  it("does not immediately retry failed status reads", () => {
+    const options = gitStatusQueryOptions("/repo/a");
+
+    expect(options.retry).toBe(false);
   });
 });
 

@@ -1,4 +1,8 @@
-import { ProjectId, type OrchestrationProject } from "@synara/contracts";
+import {
+  ProjectId,
+  type GitHubAccountSelection,
+  type OrchestrationProject,
+} from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +56,139 @@ const detail: GitHubPullRequestDetailData = {
 };
 
 describe("makePullRequestOperations", () => {
+  it("rejects native merge actions before invoking GitHub", async () => {
+    let actionCalls = 0;
+    let capabilityCalls = 0;
+    const base = createGitHubCliWithFakeGh().service;
+    const operations = makePullRequestOperations({
+      github: {
+        ...base,
+        runPullRequestAction: () =>
+          Effect.sync(() => {
+            actionCalls += 1;
+          }),
+      },
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      findProject: () => Effect.succeed(project),
+      validateRepository: (repository) => Effect.succeed(repository),
+      validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+      loadMergeCapabilities: () =>
+        Effect.sync(() => {
+          capabilityCalls += 1;
+          return {
+            merge: true,
+            squash: true,
+            rebase: true,
+            deleteBranchOnMerge: false,
+          };
+        }),
+      withGitHubRead: (effect) => effect,
+      finalizeMutationCaches: () => Effect.void,
+    });
+
+    await expect(
+      Effect.runPromise(
+        operations.action({
+          projectId: project.id,
+          repository: "acme/widgets",
+          number: 42,
+          action: "merge",
+          mergeMethod: "squash",
+        }),
+      ),
+    ).rejects.toThrow("Merge this pull request on GitHub");
+    expect(actionCalls).toBe(0);
+    expect(capabilityCalls).toBe(0);
+  });
+
+  it("uses the project's selected account for every GitHub-backed operation", async () => {
+    const account: GitHubAccountSelection = { host: "enterprise.example.com", login: "alice" };
+    const accountProject = { ...project, githubAccount: account };
+    const receivedAccounts: Array<GitHubAccountSelection | undefined> = [];
+    const finalizedAccounts: Array<GitHubAccountSelection | undefined> = [];
+    const base = createGitHubCliWithFakeGh().service;
+    const pins: ProjectPullRequestPinsShape = {
+      listByProjectIds: () => Effect.succeed([]),
+      setPinned: () => Effect.void,
+    };
+    const operations = makePullRequestOperations({
+      github: {
+        ...base,
+        getPullRequestDetail: ({ account: received }) => {
+          receivedAccounts.push(received);
+          return Effect.succeed(detail);
+        },
+        getPullRequestReviewComments: ({ account: received }) => {
+          receivedAccounts.push(received);
+          return Effect.succeed({ comments: [], truncated: false });
+        },
+        getPullRequestDiff: ({ account: received }) => {
+          receivedAccounts.push(received);
+          return Effect.succeed({ patch: "diff", truncated: false });
+        },
+        runPullRequestAction: ({ account: received }) => {
+          receivedAccounts.push(received);
+          return Effect.void;
+        },
+        commentOnPullRequest: ({ account: received }) => {
+          receivedAccounts.push(received);
+          return Effect.void;
+        },
+      },
+      pins,
+      findProject: () => Effect.succeed(accountProject),
+      validateRepository: (repository) => Effect.succeed(repository),
+      validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+      loadMergeCapabilities: (_cwd, _repository, received) => {
+        receivedAccounts.push(received);
+        return Effect.succeed({
+          merge: true,
+          squash: true,
+          rebase: true,
+          deleteBranchOnMerge: false,
+        });
+      },
+      withGitHubRead: (effect) => effect,
+      finalizeMutationCaches: (_repository, _number, _options, received) =>
+        Effect.sync(() => {
+          finalizedAccounts.push(received);
+        }),
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* operations.detail({
+          projectId: accountProject.id,
+          repository: "acme/widgets",
+          number: 42,
+        });
+        yield* operations.diff({
+          projectId: accountProject.id,
+          repository: "acme/widgets",
+          number: 42,
+        });
+        yield* operations.action({
+          projectId: accountProject.id,
+          repository: "acme/widgets",
+          number: 42,
+          action: "close",
+        });
+        yield* operations.comment({
+          projectId: accountProject.id,
+          repository: "acme/widgets",
+          number: 42,
+          body: "Looks good",
+        });
+      }),
+    );
+
+    expect(receivedAccounts).toEqual([account, account, account, account, account, account]);
+    expect(finalizedAccounts).toEqual([account, account]);
+  });
+
   it("starts detail, merge-capability, and review-comment reads together", async () => {
     await Effect.runPromise(
       Effect.scoped(

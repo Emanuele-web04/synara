@@ -1,4 +1,9 @@
-import type { OrchestrationProject, ProjectId, PullRequestsListResult } from "@synara/contracts";
+import type {
+  GitHubAccountSelection,
+  OrchestrationProject,
+  ProjectId,
+  PullRequestsListResult,
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import type {
@@ -6,6 +11,7 @@ import type {
   ProjectPullRequestPinsShape,
 } from "../persistence/Services/ProjectPullRequestPins";
 import type { GitHubRepositoryInventory, GitHubRepositoryLink } from "./repositoryResolution";
+import { githubAccountIdentityKey } from "./githubAccountIdentity";
 
 export type ProjectRepositoryResolution = {
   readonly project: OrchestrationProject;
@@ -18,7 +24,11 @@ export type ProjectRepositoryIndex = {
   readonly repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   readonly uniqueRepositories: ReadonlyMap<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    {
+      repository: GitHubRepositoryLink;
+      projects: OrchestrationProject[];
+      githubAccount: GitHubAccountSelection | null;
+    }
   >;
 };
 
@@ -63,7 +73,11 @@ export function indexProjectRepositoryInventories(
   );
   const uniqueRepositories = new Map<
     string,
-    { repository: GitHubRepositoryLink; projects: OrchestrationProject[] }
+    {
+      repository: GitHubRepositoryLink;
+      projects: OrchestrationProject[];
+      githubAccount: GitHubAccountSelection | null;
+    }
   >();
   const repositoryKeysByProject = new Map<ProjectId, Set<string>>();
 
@@ -75,14 +89,19 @@ export function indexProjectRepositoryInventories(
       ),
     );
     for (const repository of item.inventory.repositories) {
-      const key = repository.nameWithOwner.toLowerCase();
+      const githubAccount = item.project.githubAccount ?? null;
+      const key = `${githubAccountIdentityKey(githubAccount)}\u0000${repository.nameWithOwner.toLowerCase()}`;
       const existing = uniqueRepositories.get(key);
       if (existing) {
         if (!existing.projects.some((project) => project.id === item.project.id)) {
           existing.projects.push(item.project);
         }
       } else {
-        uniqueRepositories.set(key, { repository, projects: [item.project] });
+        uniqueRepositories.set(key, {
+          repository,
+          projects: [item.project],
+          githubAccount,
+        });
       }
     }
   }

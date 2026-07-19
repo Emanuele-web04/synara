@@ -6,7 +6,7 @@ import "../../index.css";
 
 import type { PullRequestListEntry } from "@synara/contracts";
 import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { useState } from "react";
 
@@ -89,10 +89,6 @@ function FocusRestoreHarness() {
 }
 
 describe("PullRequestRow pin control", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("pins without also selecting the pull request", async () => {
     const onSelect = vi.fn();
     const onTogglePinned = vi.fn();
@@ -240,6 +236,57 @@ describe("PullRequestRow pin control", () => {
     expect(document.activeElement?.getAttribute("data-pull-request-number")).toBe("42");
   });
 
+  it("shows the full head-to-base flow and workspace association", async () => {
+    await render(
+      <PullRequestRow
+        entry={makeEntry(false)}
+        selected={false}
+        workspaceAssociation="archived"
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(page.getByText("feature/pin → main")).toBeVisible();
+    expect(page.getByText("Archived workspace")).toBeVisible();
+  });
+
+  it("opens the pull request row context menu and dispatches its workspace action", async () => {
+    const onContextMenuAction = vi.fn();
+    await render(
+      <PullRequestRow
+        entry={makeEntry(false)}
+        selected={false}
+        workspaceAssociation="active"
+        contextMenuActions={{
+          "open-workspace": { label: "Open workspace" },
+          "new-review-conversation": { label: "New review conversation" },
+          "open-on-github": { label: "Open on GitHub" },
+          "copy-link": { label: "Copy pull request link" },
+        }}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+        onContextMenuAction={onContextMenuAction}
+      />,
+    );
+
+    const trigger = document.querySelector<HTMLElement>("[data-pull-request-row]");
+    expect(trigger).not.toBeNull();
+    if (!trigger) return;
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 24,
+      clientY: 36,
+      button: 2,
+    });
+    trigger.dispatchEvent(contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    await page.getByRole("menuitem", { name: "New review conversation" }).click();
+    expect(onContextMenuAction).toHaveBeenCalledWith("new-review-conversation", makeEntry(false));
+  });
+
   it("returns focus to the selected row when the focused dock closes", async () => {
     await render(<FocusRestoreHarness />);
 
@@ -254,10 +301,6 @@ describe("PullRequestRow pin control", () => {
 });
 
 describe("PullRequestProjectFilterPopover", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("announces the selected project on both the trigger and options", async () => {
     const projectId = "project-1" as PullRequestListEntry["projectId"];
     await render(
@@ -293,10 +336,6 @@ describe("PullRequestProjectFilterPopover", () => {
 });
 
 describe("PullRequestAvatar", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("does not derive an image URL from a team slug", async () => {
     await render(
       <PullRequestAvatar

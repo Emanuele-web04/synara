@@ -5,6 +5,7 @@ import { defineConfig, mergeConfig } from "vitest/config";
 import viteConfig from "./vite.config";
 
 const srcPath = fileURLToPath(new URL("./src", import.meta.url));
+const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
 
 export default mergeConfig(
   viteConfig,
@@ -22,7 +23,11 @@ export default mergeConfig(
       ],
       browser: {
         enabled: true,
-        provider: playwright(),
+        provider: playwright({
+          ...(chromiumExecutablePath
+            ? { launchOptions: { executablePath: chromiumExecutablePath } }
+            : {}),
+        }),
         instances: [{ browser: "chromium" }],
         headless: true,
       },

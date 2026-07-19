@@ -10,10 +10,12 @@ import {
   MessageId,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
+  type OrchestrationWorkspaceShellSnapshot,
   type ProjectId,
   type ServerConfig,
   ThreadId,
   TurnId,
+  type WorktreeWorkspaceId,
   type WsWelcomePayload,
   WS_METHODS,
   OrchestrationSessionStatus,
@@ -1143,7 +1145,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   return {};
 }
 
-function installDeterministicSendNativeApi(): () => void {
+function installDeterministicSendNativeApi(options?: {
+  getWorkspaceShellSnapshot?: () => Promise<OrchestrationWorkspaceShellSnapshot>;
+}): () => void {
   const previousNativeApi = window.nativeApi;
   const wsNativeApi = readNativeApi();
   if (!wsNativeApi) {
@@ -1186,6 +1190,9 @@ function installDeterministicSendNativeApi(): () => void {
       },
       orchestration: {
         ...wsNativeApi.orchestration,
+        ...(options?.getWorkspaceShellSnapshot
+          ? { getWorkspaceShellSnapshot: options.getWorkspaceShellSnapshot }
+          : {}),
         dispatchCommand: async (
           command: Parameters<typeof wsNativeApi.orchestration.dispatchCommand>[0],
         ) => {
@@ -1836,6 +1843,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useStore.setState({
       projects: [],
+      worktreeWorkspaces: [],
+      workspaceProtocolVersion: 1,
+      threads: [],
       threadIds: [],
       threadShellById: {},
       threadSessionById: {},
@@ -4394,6 +4404,134 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("uses the server-owned workspace lifecycle for a V2 New worktree send", async () => {
+    const managedPath = "/repo/.synara/worktrees/managed-workspace";
+    const managedBranch = "synara/managed-workspace";
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      getWorkspaceShellSnapshot: async () => {
+        const createCommand = wsRequests
+          .map(readDispatchedCommand)
+          .find((command) => command?.type === "workspace.create");
+        if (!createCommand) {
+          return {
+            protocolVersion: 2,
+            snapshotSequence: 1,
+            projects: [],
+            workspaces: [],
+            threads: [],
+            updatedAt: NOW_ISO,
+          };
+        }
+        return {
+          protocolVersion: 2,
+          snapshotSequence: 2,
+          projects: [],
+          workspaces: [
+            {
+              id: createCommand.workspaceId as WorktreeWorkspaceId,
+              projectId: PROJECT_ID,
+              repositoryIdentity: "/repo/project",
+              kind: "managed",
+              state: "ready",
+              title: String(createCommand.title),
+              path: managedPath,
+              branch: managedBranch,
+              headRef: managedBranch,
+              targetRef: "main",
+              targetResolvedCommit: "0123456789abcdef",
+              createdFromCommit: "0123456789abcdef",
+              sourceKind: "new-branch",
+              sourceRef: null,
+              setupStatus: "succeeded",
+              setupError: null,
+              setupLogId: null,
+              lastKnownPr: null,
+              isPinned: false,
+              lifecycleGeneration: 1,
+              activeOperation: null,
+              lastFailure: null,
+              mutationRevision: 1,
+              createdAt: NOW_ISO,
+              updatedAt: NOW_ISO,
+              archivedAt: null,
+              deletedAt: null,
+            },
+          ],
+          threads: [],
+          updatedAt: NOW_ISO,
+        };
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-v2-workspace-send-test" as MessageId,
+        targetText: "v2 workspace send test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toBeTruthy();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
+      await page.getByText("New worktree").click();
+      useStore.setState({ workspaceProtocolVersion: 2 });
+      useComposerDraftStore.getState().setPrompt(newThreadId, "Use managed workspace");
+
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      await sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const createIndex = wsRequests.findIndex(
+            (request) => readDispatchedCommand(request)?.type === "workspace.create",
+          );
+          const turnIndex = wsRequests.findIndex(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.start",
+          );
+          expect(createIndex).toBeGreaterThanOrEqual(0);
+          expect(turnIndex).toBeGreaterThan(createIndex);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const createCommand = wsRequests
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === "workspace.create");
+      expect(createCommand).toMatchObject({
+        type: "workspace.create",
+        threadId: newThreadId,
+        projectId: PROJECT_ID,
+        targetRef: "main",
+      });
+      expect(wsRequests.some((request) => request._tag === WS_METHODS.gitCreateWorktree)).toBe(
+        false,
+      );
+      expect(hasDispatchedCommandType("thread.create")).toBe(false);
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(true);
     } finally {
       await mounted.cleanup();
       restoreNativeApi();

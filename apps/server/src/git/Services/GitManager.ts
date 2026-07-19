@@ -10,6 +10,8 @@ import {
   GitActionProgressEvent,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
+  GitListPullRequestsInput,
+  GitListPullRequestsResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
@@ -71,6 +73,13 @@ export interface GitManagerShape {
   ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
 
   /**
+   * List repository pull requests for the workspace creation picker.
+   */
+  readonly listPullRequests: (
+    input: GitListPullRequestsInput,
+  ) => Effect.Effect<GitListPullRequestsResult, GitManagerServiceError>;
+
+  /**
    * Load live CI checks and top-level review comments for a pull request.
    */
   readonly pullRequestSnapshot: (
@@ -79,6 +88,8 @@ export interface GitManagerShape {
 
   /**
    * Prepare a new thread workspace from a pull request in local or worktree mode.
+   * A managed worktree path is an exact placement request and is never allowed to
+   * replace an unrelated filesystem entry.
    */
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,

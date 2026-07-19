@@ -47,6 +47,7 @@ import {
   type ProjectionThread,
   ProjectionThreadRepository,
 } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionWorktreeWorkspaceRepository } from "../../persistence/Services/ProjectionWorktreeWorkspaces.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -56,6 +57,7 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionWorktreeWorkspaceRepositoryLive } from "../../persistence/Layers/ProjectionWorktreeWorkspaces.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -82,6 +84,7 @@ import {
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
   projects: "projection.projects",
+  workspaces: "projection.worktree-workspaces",
   threads: "projection.threads",
   threadShellSummaries: "projection.thread-shell-summaries",
   threadMessages: "projection.thread-messages",
@@ -149,6 +152,18 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+]);
+
+const WORKSPACE_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "workspace.created",
+  "workspace.meta-updated",
+  "workspace.provision-requested",
+  "workspace.archive-requested",
+  "workspace.archived",
+  "workspace.restore-requested",
+  "workspace.restored",
+  "workspace.ready",
+  "workspace.operation-failed",
 ]);
 
 const THREAD_MESSAGE_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
@@ -464,6 +479,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const managedAttachments = yield* ManagedAttachmentRepository;
   const projectionStateRepository = yield* ProjectionStateRepository;
   const projectionProjectRepository = yield* ProjectionProjectRepository;
+  const projectionWorktreeWorkspaceRepository = yield* ProjectionWorktreeWorkspaceRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -486,6 +502,285 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         })
       : Effect.void;
 
+  const applyWorkspacesProjection: ProjectorDefinition["apply"] = (event) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "workspace.created":
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            workspaceId: event.payload.workspaceId,
+            projectId: event.payload.projectId,
+            repositoryIdentity: event.payload.repositoryIdentity,
+            kind: event.payload.kind,
+            state: event.payload.state,
+            title: event.payload.title,
+            path: event.payload.path,
+            branch: event.payload.branch,
+            headRef: event.payload.headRef,
+            targetRef: event.payload.targetRef,
+            targetResolvedCommit: event.payload.targetResolvedCommit,
+            createdFromCommit: event.payload.createdFromCommit,
+            sourceKind: event.payload.sourceKind,
+            sourceRef: event.payload.sourceRef,
+            setupStatus: event.payload.setupStatus,
+            setupError: event.payload.setupError,
+            setupLogId: event.payload.setupLogId,
+            lastKnownPr: event.payload.lastKnownPr,
+            isPinned: event.payload.isPinned,
+            lifecycleGeneration: event.payload.lifecycleGeneration,
+            activeOperation: event.payload.activeOperation,
+            lastFailure: event.payload.lastFailure,
+            mutationRevision: event.payload.mutationRevision,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.updatedAt,
+            archivedAt: event.payload.archivedAt,
+            deletedAt: event.payload.deletedAt,
+          });
+          return;
+
+        case "workspace.meta-updated": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+            ...(event.payload.targetRef !== undefined
+              ? { targetRef: event.payload.targetRef }
+              : {}),
+            ...(event.payload.lastKnownPr !== undefined
+              ? { lastKnownPr: event.payload.lastKnownPr }
+              : {}),
+            ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
+            mutationRevision: event.payload.mutationRevision,
+            updatedAt: event.payload.updatedAt,
+          });
+          const nextBranch = event.payload.branch;
+          const nextPr = event.payload.lastKnownPr;
+          if (nextBranch === undefined && nextPr === undefined) return;
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter(
+              (thread) =>
+                thread.workspaceId === event.payload.workspaceId && thread.deletedAt === null,
+            ),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                ...(nextBranch !== undefined
+                  ? { branch: nextBranch, associatedWorktreeBranch: nextBranch }
+                  : {}),
+                ...(nextPr !== undefined ? { lastKnownPr: nextPr } : {}),
+                updatedAt: event.payload.updatedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "workspace.provision-requested":
+        case "workspace.archive-requested":
+        case "workspace.restore-requested": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: event.type === "workspace.archive-requested" ? "archiving" : "provisioning",
+            ...(event.type === "workspace.provision-requested"
+              ? { setupStatus: "pending" as const, setupError: null }
+              : {}),
+            lifecycleGeneration: event.payload.generation,
+            activeOperation: {
+              id: event.payload.operationId,
+              generation: event.payload.generation,
+              kind:
+                event.type === "workspace.archive-requested"
+                  ? "archive"
+                  : event.type === "workspace.restore-requested"
+                    ? "restore"
+                    : "provision",
+              stage:
+                event.type === "workspace.archive-requested" && event.payload.confirmedWarnings
+                  ? "intent-confirmed"
+                  : "intent-recorded",
+              startedAt: event.payload.requestedAt,
+            },
+            lastFailure: null,
+            updatedAt: event.payload.requestedAt,
+          });
+          return;
+        }
+
+        case "workspace.archived": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: "archived",
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: event.payload.archivedAt,
+            updatedAt: event.payload.archivedAt,
+          });
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                worktreePath: null,
+                createBranchFlowCompleted: false,
+                updatedAt: event.payload.archivedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "workspace.restored": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: "ready",
+            path: event.payload.path,
+            branch: event.payload.branch,
+            headRef: event.payload.headRef,
+            setupStatus: event.payload.setupStatus,
+            setupError: null,
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: null,
+            updatedAt: event.payload.completedAt,
+          });
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                envMode: "worktree",
+                branch: event.payload.branch,
+                worktreePath: event.payload.path,
+                associatedWorktreePath: event.payload.path,
+                associatedWorktreeBranch: event.payload.branch,
+                associatedWorktreeRef: event.payload.headRef,
+                createBranchFlowCompleted: true,
+                updatedAt: event.payload.completedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "workspace.ready": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: "ready",
+            path: event.payload.path,
+            branch: event.payload.branch,
+            headRef: event.payload.headRef,
+            targetResolvedCommit: event.payload.targetResolvedCommit,
+            createdFromCommit: event.payload.createdFromCommit,
+            setupStatus: event.payload.setupStatus,
+            setupError: null,
+            activeOperation: null,
+            lastFailure: null,
+            updatedAt: event.payload.completedAt,
+          });
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                envMode: "worktree",
+                branch: event.payload.branch,
+                worktreePath: event.payload.path,
+                associatedWorktreePath: event.payload.path,
+                associatedWorktreeBranch: event.payload.branch,
+                associatedWorktreeRef: event.payload.headRef,
+                createBranchFlowCompleted: true,
+                updatedAt: event.payload.completedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "workspace.operation-failed": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state:
+              event.payload.kind === "setup"
+                ? "setup-failed"
+                : event.payload.kind === "archive"
+                  ? "ready"
+                  : event.payload.kind === "restore"
+                    ? "archived"
+                    : "error",
+            ...(event.payload.kind === "setup"
+              ? {
+                  setupStatus: "failed" as const,
+                  setupError: event.payload.summary,
+                  path: event.payload.path ?? null,
+                  branch: event.payload.branch ?? null,
+                  headRef: event.payload.headRef ?? null,
+                  targetResolvedCommit: event.payload.targetResolvedCommit ?? null,
+                  createdFromCommit: event.payload.createdFromCommit ?? null,
+                }
+              : event.payload.kind === "provision"
+                ? {
+                    setupStatus: "pending" as const,
+                    setupError: null,
+                    path: event.payload.path ?? null,
+                    branch: event.payload.branch ?? null,
+                    headRef: event.payload.headRef ?? null,
+                    targetResolvedCommit: event.payload.targetResolvedCommit ?? null,
+                    createdFromCommit: event.payload.createdFromCommit ?? null,
+                  }
+                : {}),
+            activeOperation: null,
+            lastFailure: {
+              generation: event.payload.generation,
+              kind: event.payload.kind,
+              stage: event.payload.stage,
+              summary: event.payload.summary,
+              logId: event.payload.logId,
+            },
+            updatedAt: event.payload.failedAt,
+          });
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
   const updateThreadProjection = Effect.fnUntraced(function* (
     threadId: ProjectionThread["threadId"],
     update: (thread: ProjectionThread) => ProjectionThread,
@@ -503,6 +798,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
+            workspaceId: event.payload.workspaceId ?? null,
             title: event.payload.title,
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
@@ -537,6 +833,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             deletedAt: null,
           });
           return;
+
+        case "thread.workspace-assigned": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            workspaceId: event.payload.workspaceId,
+            envMode: event.payload.envMode,
+            branch: event.payload.branch,
+            worktreePath: event.payload.worktreePath,
+            associatedWorktreePath: event.payload.worktreePath,
+            associatedWorktreeBranch: event.payload.branch,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
 
         case "thread.meta-updated": {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
@@ -1608,6 +1922,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyProjectsProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.workspaces,
+      phase: "hot",
+      shouldApply: (event) => WORKSPACE_EVENT_TYPES.has(event.type),
+      apply: applyWorkspacesProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
       phase: "hot",
       shouldApply: (event) => THREAD_MESSAGE_PROJECTION_EVENT_TYPES.has(event.type),
@@ -2006,6 +2326,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
 ).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionWorktreeWorkspaceRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

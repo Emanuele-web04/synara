@@ -1425,9 +1425,10 @@ describe("MessagesTimeline", () => {
 
     expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 2");
-    expect(markup).toContain("Tool 3");
+    expect(markup).not.toContain("Tool 3");
+    expect(markup).toContain("Tool 4");
     expect(markup).toContain("Tool 6");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup).toContain("+3 more tool calls");
   });
 
   it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
@@ -1515,10 +1516,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(3);
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(2);
     expect(markup.match(/data-work-entry-icon="true"/g) ?? []).toHaveLength(1);
     expect(markup).toContain(">Thinking<");
-    expect(markup).toContain("Inspecting apps/web/src/store.ts");
+    expect(markup).not.toContain("Inspecting apps/web/src/store.ts");
+    expect(markup).toContain("Updating the adapter");
+    expect(markup).toContain("+1 more tool call");
     expect(markup).not.toContain("Reasoning trace Inspecting");
   });
 
@@ -1768,7 +1771,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Tool 5");
-    expect(markup).toContain("Show less");
+    expect(markup).toContain("Show fewer tool calls");
   });
 
   it("renders inline file-change tool calls as edited rows with diff stats", async () => {

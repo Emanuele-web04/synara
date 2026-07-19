@@ -66,6 +66,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Start a fresh thread in the current project, or the most recent one.",
   },
   {
+    command: "chat.newConversation",
+    label: "New conversation tab",
+    description: "Add a conversation tab to the current worktree.",
+  },
+  {
     command: "chat.newLatestProject",
     label: "New thread in latest project",
     description: "Jump back into the most recently used project with a new thread.",
@@ -154,13 +159,35 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
   {
     command: "chat.visible.previous",
-    label: "Previous visible thread",
-    description: "Cycle to the previous thread that is currently visible in the sidebar.",
+    label: "Previous conversation",
+    description: "Cycle to the previous conversation tab in the active worktree.",
   },
   {
     command: "chat.visible.next",
-    label: "Next visible thread",
-    description: "Cycle to the next thread that is currently visible in the sidebar.",
+    label: "Next conversation",
+    description: "Cycle to the next conversation tab in the active worktree.",
+  },
+  {
+    command: "chat.closeActiveTab",
+    label: "Close active tab",
+    description: "Close the conversation tab currently in focus.",
+  },
+  {
+    command: "chat.reopenClosedTab",
+    label: "Reopen closed tab",
+    description: "Restore the most recently closed conversation tab.",
+  },
+  {
+    command: "workspace.visible.previous",
+    label: "Previous worktree",
+    description:
+      "Move to the previous worktree in the active project and restore its last conversation.",
+  },
+  {
+    command: "workspace.visible.next",
+    label: "Next worktree",
+    description:
+      "Move to the next worktree in the active project and restore its last conversation.",
   },
   {
     command: "editor.openFavorite",
@@ -173,8 +200,17 @@ const THREAD_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
   { length: 9 },
   (_, index) => ({
     command: `thread.jump.${index + 1}` as KeybindingCommand,
-    label: `Jump to visible thread ${index + 1}`,
-    description: "Focus a visible thread directly from the sidebar number row.",
+    label: `Jump to sidebar item ${index + 1}`,
+    description: "Focus a visible worktree or thread directly from the sidebar.",
+  }),
+);
+
+const CHAT_TAB_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
+  { length: 9 },
+  (_, index) => ({
+    command: `chat.jump.${index + 1}` as KeybindingCommand,
+    label: `Jump to conversation tab ${index + 1}`,
+    description: "Focus a visible conversation tab in the active worktree.",
   }),
 );
 
@@ -287,13 +323,20 @@ export function buildShortcutSheetSections(
         options.context,
       );
 
+  const currentConversationTabEntries = definitionsToEntries(
+    CHAT_TAB_JUMP_DEFINITIONS,
+    options.keybindings,
+    options.platform,
+    options.context,
+  );
+
   sections.push({
     id: "available-now",
     title: "Available now",
     description: options.context.terminalWorkspaceOpen
       ? "These reflect the active workspace-terminal context."
       : "These reflect the current chat and sidebar context.",
-    entries: [...currentEntries, ...currentNavigationEntries],
+    entries: [...currentEntries, ...currentNavigationEntries, ...currentConversationTabEntries],
   });
 
   const alternateContext: ShortcutSheetContext = options.context.terminalWorkspaceOpen

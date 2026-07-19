@@ -17,9 +17,11 @@ import {
 import { createMemoryStorage } from "./lib/storage";
 
 interface RecentViewsStoreState {
+  hasHydrated: boolean;
   recentViews: RecentView[];
   recordRecentView: (view: RecentView) => void;
   pruneRecentViews: (availability: RecentViewAvailability) => void;
+  setHasHydrated: (hasHydrated: boolean) => void;
 }
 
 const RECENT_VIEWS_STORAGE_KEY = "synara:recent-views:v1";
@@ -88,7 +90,9 @@ function recentViewsEqual(left: readonly RecentView[], right: readonly RecentVie
 export const useRecentViewsStore = create<RecentViewsStoreState>()(
   persist(
     (set) => ({
+      hasHydrated: false,
       recentViews: [],
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
       recordRecentView: (view) => {
         set((state) => {
           const nextRecentViews = upsertRecentView(state.recentViews, view);
@@ -121,7 +125,11 @@ export const useRecentViewsStore = create<RecentViewsStoreState>()(
         return {
           ...currentState,
           recentViews: normalizeRecentViews(candidate),
+          hasHydrated: currentState.hasHydrated,
         };
+      },
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
       },
     },
   ),

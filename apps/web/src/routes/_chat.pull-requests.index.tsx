@@ -1,4 +1,5 @@
 import type {
+  OrchestrationWorktreeWorkspace,
   ProjectId,
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -8,10 +9,12 @@ import {
   coalescePullRequestListEntries,
   isValidGitHubRepositoryNameWithOwner,
 } from "@synara/shared/githubRepository";
+import { findWorkspaceForPullRequest } from "@synara/shared/pullRequest";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
@@ -27,18 +30,29 @@ import {
   RightDock,
 } from "~/components/chat/RightDock";
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
+import { buildReviewPullRequestPrompt } from "~/components/chat/environment/environmentPullRequest.logic";
 import { pullRequestPaneTabLabel } from "~/components/pullRequest/pullRequestDetail.logic";
+import {
+  normalizePullRequestInvolvement,
+  normalizePullRequestState,
+  PULL_REQUEST_INVOLVEMENT_TABS,
+  PULL_REQUEST_STATE_TABS,
+} from "~/components/pullRequest/pullRequestBrowser.logic";
 import {
   focusPullRequestRow,
   isFocusInsideRightDock,
 } from "~/components/pullRequest/pullRequestFocus";
 import { PullRequestList } from "~/components/pullRequest/PullRequestList";
+import type { PullRequestRowContextMenuActionId } from "~/components/pullRequest/PullRequestRowContextMenu";
 import {
   filterPullRequestEntriesByInvolvement,
   groupPullRequestEntriesByInvolvement,
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
   pullRequestPinToggleInputs,
+  pullRequestListEntryKey,
+  pullRequestWorkspaceAssociation,
+  type PullRequestWorkspaceAssociation,
 } from "~/components/pullRequest/pullRequestList.logic";
 import {
   PullRequestFilterPillGroup,
@@ -54,13 +68,17 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/u
 import { SearchInput } from "~/components/ui/search-input";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
+import { appendComposerPromptText } from "~/lib/chatReferences";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { RefreshCwIcon } from "~/lib/icons";
+import { openPullRequestWorkspace, pullRequestWorkspaceMetadata } from "~/lib/pullRequestWorkspace";
 import {
   prefetchPullRequestListState,
+  pullRequestDetailQueryOptions,
   pullRequestMutationKeys,
   pullRequestQueryErrorState,
   pullRequestsExactInvolvementQueryOptions,
@@ -69,6 +87,8 @@ import {
   pullRequestSetPinnedMutationOptions,
   shouldLoadExactPullRequestInvolvement,
 } from "~/lib/pullRequestReactQuery";
+import { requestWorkspaceArchive } from "~/lib/workspaceLifecycle";
+import { ensureNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import {
   createDefaultRightDockState,
@@ -109,13 +129,13 @@ const CLEARED_SELECTION = {
 // The route hosts a single dock pane; a stable id keeps the dock tab's identity across pull
 // request switches (the detail panel itself remounts via PullRequestDockPane's key).
 const PULL_REQUESTS_ROUTE_PANE_ID = "pull-requests-route:pull-request";
+const EMPTY_WORKTREE_WORKSPACES: readonly OrchestrationWorktreeWorkspace[] = [];
 const PullRequestDockPane = lazy(() => import("~/components/pullRequest/PullRequestDockPane"));
 
 export const Route = createFileRoute("/_chat/pull-requests/")({
   validateSearch: (raw): PullRequestsSearch => ({
-    involvement:
-      raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
-    state: raw.state === "closed" || raw.state === "merged" ? raw.state : "open",
+    involvement: normalizePullRequestInvolvement(raw.involvement),
+    state: normalizePullRequestState(raw.state),
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
       : {}),
@@ -134,23 +154,19 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
   component: PullRequestsRouteView,
 });
 
-const INVOLVEMENT_TABS: ReadonlyArray<{ value: PullRequestInvolvement; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "reviewing", label: "Reviewing" },
-  { value: "authored", label: "Authored" },
-];
-const STATE_TABS: ReadonlyArray<{ value: PullRequestState; label: string }> = [
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
-];
-
 function PullRequestsRouteView() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
+  const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
+  const worktreeWorkspaces = useStore(
+    (store) => store.worktreeWorkspaces ?? EMPTY_WORKTREE_WORKSPACES,
+  );
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const queryClient = useQueryClient();
   // One fetch per (state, project): the server returns the "all" involvement superset and the
   // Reviewing/Authored tabs are derived below, so involvement switches never hit the network.
@@ -265,6 +281,34 @@ function PullRequestsRouteView() {
         : null,
     [entries, listQuery.data?.viewer, search.involvement],
   );
+  const workspaceAssociationByEntryKey = useMemo<
+    Record<string, PullRequestWorkspaceAssociation>
+  >(() => {
+    const associations: Record<string, PullRequestWorkspaceAssociation> = {};
+    for (const entry of entries) {
+      const association = pullRequestWorkspaceAssociation(entry, worktreeWorkspaces);
+      if (association) associations[pullRequestListEntryKey(entry)] = association;
+    }
+    return associations;
+  }, [entries, worktreeWorkspaces]);
+  const associatedWorkspaceByEntryKey = useMemo(() => {
+    const associations = new Map<string, OrchestrationWorktreeWorkspace>();
+    for (const entry of entries) {
+      const workspace = findWorkspaceForPullRequest(worktreeWorkspaces, entry.projectId, entry);
+      if (workspace) associations.set(pullRequestListEntryKey(entry), workspace);
+    }
+    return associations;
+  }, [entries, worktreeWorkspaces]);
+  const canArchiveWorkspaceByEntryKey = useMemo<Record<string, boolean>>(() => {
+    const archiveable: Record<string, boolean> = {};
+    for (const [entryKey, workspace] of associatedWorkspaceByEntryKey) {
+      archiveable[entryKey] =
+        workspace.kind === "managed" &&
+        workspace.state === "ready" &&
+        workspace.archivedAt === null;
+    }
+    return archiveable;
+  }, [associatedWorkspaceByEntryKey]);
   // A crafted URL must not show Project A's list while opening Project B's PR: when the list
   // is project-scoped, the selection must belong to that same project.
   const selectionMatchesScope =
@@ -358,6 +402,115 @@ function PullRequestsRouteView() {
     },
     [mutatePin, search.projectId],
   );
+  const handlePullRequestContextMenuAction = useCallback(
+    async (actionId: PullRequestRowContextMenuActionId, entry: PullRequestListEntry) => {
+      const api = ensureNativeApi();
+      try {
+        if (actionId === "open-on-github") {
+          await api.shell.openExternal(entry.url);
+          return;
+        }
+        if (actionId === "copy-link") {
+          await copyTextToClipboard(entry.url);
+          return;
+        }
+        const associatedWorkspace = findWorkspaceForPullRequest(
+          worktreeWorkspaces,
+          entry.projectId,
+          entry,
+        );
+        if (actionId === "archive-workspace") {
+          if (!associatedWorkspace) throw new Error("The associated workspace is unavailable.");
+          const result = await requestWorkspaceArchive({ api, workspace: associatedWorkspace });
+          if (result === "cancelled") return;
+          syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+          toastManager.add({
+            type: "success",
+            title: "Archiving workspace",
+            description: "The branch, pull request, conversations, and history will be retained.",
+          });
+          return;
+        }
+        const project = projects.find((candidate) => candidate.id === entry.projectId);
+        if (!project) throw new Error("The project for this pull request is unavailable.");
+        const newConversation = actionId === "new-review-conversation";
+        const needsReviewPrompt = actionId === "review-in-new-workspace" || newConversation;
+        const detail = needsReviewPrompt
+          ? await queryClient
+              .ensureQueryData(
+                pullRequestDetailQueryOptions(
+                  {
+                    projectId: entry.projectId,
+                    repository: entry.repository,
+                    number: entry.number,
+                  },
+                  { pollingEnabled: false },
+                ),
+              )
+              .catch(() => null)
+          : null;
+        const pullRequest = pullRequestWorkspaceMetadata(
+          detail ?? {
+            number: entry.number,
+            title: entry.title,
+            url: entry.url,
+            baseBranch: entry.baseBranch,
+            headBranch: entry.headBranch,
+            state: entry.state,
+            isDraft: entry.isDraft,
+            mergeability: entry.mergeability,
+            additions: entry.additions,
+            deletions: entry.deletions,
+          },
+        );
+        const result = await openPullRequestWorkspace({
+          api,
+          project,
+          defaultProvider: settings.defaultProvider,
+          intent: newConversation ? "new-conversation" : "open",
+          title: pullRequest.title,
+          conversationTitle: `Review PR #${pullRequest.number}`,
+          pullRequest,
+          onSnapshot: syncServerWorkspaceShellSnapshot,
+        });
+        if (needsReviewPrompt) {
+          appendComposerPromptText(
+            result.threadId,
+            buildReviewPullRequestPrompt({
+              prNumber: pullRequest.number,
+              prTitle: pullRequest.title,
+              prUrl: pullRequest.url,
+              headBranch: pullRequest.headBranch,
+              baseBranch: pullRequest.baseBranch,
+              ...(detail
+                ? {
+                    checks: detail.checks,
+                    comments: detail.comments,
+                    commentsTruncated: detail.commentsTruncated,
+                    commentsIncomplete: detail.commentsIncomplete,
+                  }
+                : {}),
+            }),
+          );
+        }
+        await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Pull request action failed",
+          description: error instanceof Error ? error.message : "The action could not complete.",
+        });
+      }
+    },
+    [
+      navigate,
+      projects,
+      queryClient,
+      settings.defaultProvider,
+      syncServerWorkspaceShellSnapshot,
+      worktreeWorkspaces,
+    ],
+  );
   const refreshBlocked = refreshMutation.isPending || activeActionCount > 0;
   const handleManualRefresh = useCallback(() => {
     if (activeActionCount > 0) return;
@@ -433,12 +586,12 @@ function PullRequestsRouteView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <PullRequestFilterPillGroup
                     value={search.involvement}
-                    options={INVOLVEMENT_TABS}
+                    options={PULL_REQUEST_INVOLVEMENT_TABS}
                     onChange={(involvement) => updateSearch({ involvement, ...CLEARED_SELECTION })}
                   />
                   <PullRequestFilterPillGroup
                     value={search.state}
-                    options={STATE_TABS}
+                    options={PULL_REQUEST_STATE_TABS}
                     onIntent={handleStateIntent}
                     onChange={(state) => updateSearch({ state, ...CLEARED_SELECTION })}
                   />
@@ -500,8 +653,13 @@ function PullRequestsRouteView() {
                   selectedRepo={search.selectedRepo}
                   selectedNumber={search.number}
                   showProjectTitle={search.projectId === undefined}
+                  workspaceAssociationByEntryKey={workspaceAssociationByEntryKey}
+                  canArchiveWorkspaceByEntryKey={canArchiveWorkspaceByEntryKey}
                   onSelect={handleSelectPullRequest}
                   onTogglePinned={handleTogglePinned}
+                  onContextMenuAction={(actionId, entry) =>
+                    void handlePullRequestContextMenuAction(actionId, entry)
+                  }
                 />
               )}
               {!exactInvolvementPending &&

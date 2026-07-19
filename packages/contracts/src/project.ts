@@ -5,6 +5,7 @@ import {
   ProcessEnvRecord,
   ProjectId,
   TrimmedNonEmptyString,
+  WorktreeWorkspaceId,
 } from "./baseSchemas";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
@@ -168,15 +169,27 @@ export type ProjectCreateLocalFilePreviewGrantResult =
 // ── Dev Server Process Manager ───────────────────────────────────────
 //
 // Dev servers are first-class background processes owned by the server and
-// keyed by project id, fully decoupled from chat threads. The server tracks
-// their lifecycle and broadcasts changes over the `project.devServerEvent`
-// push channel so every client stays in sync across reconnects.
+// keyed by project/workspace target, fully decoupled from chat threads. A null
+// workspace id preserves the legacy project-root target for older clients.
+// The server tracks their lifecycle and broadcasts changes over the
+// `project.devServerEvent` push channel so every client stays in sync across
+// reconnects.
+
+const ProjectDevServerWorkspaceId = Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+  Schema.withDecodingDefault(() => null),
+);
+
+export const ProjectDevServerTarget = Schema.Struct({
+  projectId: ProjectId,
+  workspaceId: ProjectDevServerWorkspaceId,
+});
+export type ProjectDevServerTarget = typeof ProjectDevServerTarget.Type;
 
 export const ProjectDevServerStatus = Schema.Literals(["starting", "running"]);
 export type ProjectDevServerStatus = typeof ProjectDevServerStatus.Type;
 
 export const ProjectDevServer = Schema.Struct({
-  projectId: ProjectId,
+  ...ProjectDevServerTarget.fields,
   command: TrimmedNonEmptyString,
   cwd: TrimmedNonEmptyString,
   pid: Schema.NullOr(PositiveInt),
@@ -186,7 +199,7 @@ export const ProjectDevServer = Schema.Struct({
 export type ProjectDevServer = typeof ProjectDevServer.Type;
 
 export const ProjectRunDevServerInput = Schema.Struct({
-  projectId: ProjectId,
+  ...ProjectDevServerTarget.fields,
   command: TrimmedNonEmptyString,
   cwd: TrimmedNonEmptyString,
   env: Schema.optional(ProcessEnvRecord),
@@ -199,7 +212,7 @@ export const ProjectRunDevServerResult = Schema.Struct({
 export type ProjectRunDevServerResult = typeof ProjectRunDevServerResult.Type;
 
 export const ProjectStopDevServerInput = Schema.Struct({
-  projectId: ProjectId,
+  ...ProjectDevServerTarget.fields,
 });
 export type ProjectStopDevServerInput = typeof ProjectStopDevServerInput.Type;
 
@@ -227,8 +240,11 @@ export const ProjectDevServerEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("removed"),
-    projectId: ProjectId,
+    ...ProjectDevServerTarget.fields,
     reason: ProjectDevServerRemovedReason,
+    exitCode: Schema.optional(Schema.NullOr(Schema.Int)),
+    exitSignal: Schema.optional(Schema.NullOr(Schema.Int)),
+    message: Schema.optional(Schema.String),
   }),
 ]);
 export type ProjectDevServerEvent = typeof ProjectDevServerEvent.Type;

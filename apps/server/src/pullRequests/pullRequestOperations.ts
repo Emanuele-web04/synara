@@ -1,10 +1,13 @@
-import type { OrchestrationProject, PullRequestDetail } from "@synara/contracts";
+import type {
+  GitHubAccountSelection,
+  OrchestrationProject,
+  PullRequestDetail,
+} from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { Effect } from "effect";
 
 import type { GitHubCliShape } from "../git/Services/GitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
-import { isPullRequestMergeMethodAllowed } from "../pullRequests.logic";
 import type { PullRequestServiceShape } from "./Services/PullRequestService";
 
 type PullRequestOperations = Pick<
@@ -26,17 +29,20 @@ export function makePullRequestOperations(dependencies: {
   loadMergeCapabilities: (
     cwd: string,
     repository: string,
+    account?: GitHubAccountSelection,
   ) => Effect.Effect<PullRequestDetail["mergeCapabilities"], unknown>;
   withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   finalizeMutationCaches: (
     repository: string,
     number: number,
     options: { readonly invalidateReviewMatches: boolean },
+    account?: GitHubAccountSelection,
   ) => Effect.Effect<void, never>;
 }): PullRequestOperations {
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
     Effect.gen(function* () {
       const repository = yield* dependencies.validateProjectRepository(project, repositoryInput);
+      const account = project.githubAccount ?? undefined;
       const [owner = "", repo = ""] = repository.split("/");
       const [detail, mergeCapabilities, reviewCommentsResult] = yield* Effect.all(
         [
@@ -45,17 +51,19 @@ export function makePullRequestOperations(dependencies: {
               cwd: project.workspaceRoot,
               repository,
               number,
+              ...(account ? { account } : {}),
             }),
           ),
-          dependencies.loadMergeCapabilities(project.workspaceRoot, repository),
+          dependencies.loadMergeCapabilities(project.workspaceRoot, repository, account),
           dependencies
             .withGitHubRead(
               dependencies.github.getPullRequestReviewComments({
                 cwd: project.workspaceRoot,
-                host: "github.com",
+                host: account?.host ?? "github.com",
                 owner,
                 repo,
                 number,
+                ...(account ? { account } : {}),
               }),
             )
             .pipe(
@@ -110,31 +118,27 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const account = project.githubAccount ?? undefined;
       return yield* dependencies.withGitHubRead(
         dependencies.github.getPullRequestDiff({
           cwd: project.workspaceRoot,
           repository,
           number: input.number,
+          ...(account ? { account } : {}),
         }),
       );
     });
 
   const action: PullRequestServiceShape["action"] = (input) =>
     Effect.gen(function* () {
+      if (input.action === "merge") {
+        return yield* Effect.fail(
+          new Error("Merge this pull request on GitHub. Synara does not merge pull requests."),
+        );
+      }
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
-      if (input.action === "merge") {
-        const mergeMethod = input.mergeMethod ?? "merge";
-        const capabilities = yield* dependencies.loadMergeCapabilities(
-          project.workspaceRoot,
-          repository,
-        );
-        if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
-          return yield* Effect.fail(
-            new Error(`The repository does not allow the ${mergeMethod} merge method.`),
-          );
-        }
-      }
+      const account = project.githubAccount ?? undefined;
       yield* dependencies.github
         .runPullRequestAction({
           cwd: project.workspaceRoot,
@@ -142,12 +146,16 @@ export function makePullRequestOperations(dependencies: {
           number: input.number,
           action: input.action,
           ...(input.mergeMethod ? { mergeMethod: input.mergeMethod } : {}),
+          ...(account ? { account } : {}),
         })
         .pipe(
           Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, {
-              invalidateReviewMatches: true,
-            }),
+            dependencies.finalizeMutationCaches(
+              repository,
+              input.number,
+              { invalidateReviewMatches: true },
+              account,
+            ),
           ),
         );
       return {
@@ -162,18 +170,23 @@ export function makePullRequestOperations(dependencies: {
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      const account = project.githubAccount ?? undefined;
       yield* dependencies.github
         .commentOnPullRequest({
           cwd: project.workspaceRoot,
           repository,
           number: input.number,
           body: input.body,
+          ...(account ? { account } : {}),
         })
         .pipe(
           Effect.ensuring(
-            dependencies.finalizeMutationCaches(repository, input.number, {
-              invalidateReviewMatches: false,
-            }),
+            dependencies.finalizeMutationCaches(
+              repository,
+              input.number,
+              { invalidateReviewMatches: false },
+              account,
+            ),
           ),
         );
       return {

@@ -4,6 +4,7 @@ import type {
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
 import {
@@ -97,8 +98,8 @@ type CommittedCommandResult = {
 };
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "workspace" | "thread";
+  readonly aggregateId: ProjectId | WorktreeWorkspaceId | ThreadId;
 } {
   switch (command.type) {
     case "project.create":
@@ -107,6 +108,21 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "workspace.create":
+    case "workspace.attach":
+    case "workspace.meta.update":
+    case "workspace.import-legacy":
+    case "workspace.provision.request":
+    case "workspace.provision.complete":
+    case "workspace.archive.request":
+    case "workspace.archive.complete":
+    case "workspace.restore.request":
+    case "workspace.restore.complete":
+    case "workspace.operation.fail":
+      return {
+        aggregateKind: "workspace",
+        aggregateId: command.workspaceId,
       };
     default:
       return {

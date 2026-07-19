@@ -6,6 +6,9 @@ import { migrationEntries, runMigrations } from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
+import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
+import WorktreeWorkspacesMigration from "./Migrations/070_WorktreeWorkspaces.ts";
+import ProjectionProjectsGitHubAccountMigration from "./Migrations/071_ProjectionProjectsGitHubAccount.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -150,6 +153,77 @@ layer("reconcileMigrationLineage", (it) => {
   );
 });
 
+const importedDesktopLineageLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+
+importedDesktopLineageLayer("imported desktop migration lineage", (it) => {
+  it.effect("renumbers migrations 54-56 without losing their schema or data", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 53 });
+
+      yield* ProjectPullRequestPinsMigration;
+      yield* WorktreeWorkspacesMigration;
+      yield* ProjectionProjectsGitHubAccountMigration;
+      yield* sql`
+        INSERT INTO project_pull_request_pins (
+          project_id, repository_key, pull_request_number
+        ) VALUES ('private-project', 'github.com/example/repo', 42)
+      `;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+          (54, 'ProjectPullRequestPins'),
+          (55, 'WorktreeWorkspaces'),
+          (56, 'ProjectionProjectsGitHubAccount')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(executed[0], [54, "DurableProviderCommandDelivery"]);
+      assert.deepStrictEqual(executed.at(-2), [70, "WorktreeWorkspaces"]);
+      assert.deepStrictEqual(executed.at(-1), [71, "ProjectionProjectsGitHubAccount"]);
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+      const pins = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM project_pull_request_pins
+        WHERE project_id = 'private-project' AND pull_request_number = 42
+      `;
+      assert.strictEqual(pins[0]?.count, 1);
+      assert.include(yield* projectionThreadsColumnNames(sql), "workspace_id");
+    }),
+  );
+
+  it.effect("replays safely when the schema is newer than the imported tracker", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 54`;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+          (54, 'ProjectPullRequestPins'),
+          (55, 'WorktreeWorkspaces'),
+          (56, 'ProjectionProjectsGitHubAccount')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 54),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+    }),
+  );
+});
+
 const providerDeliveryCutoverLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 providerDeliveryCutoverLayer(
@@ -262,10 +336,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [67, "ProviderDeliveryReconciliation"],
         [68, "GitHandoffOperations"],
         [69, "ProjectPullRequestPins"],
+        [70, "WorktreeWorkspaces"],
+        [71, "ProjectionProjectsGitHubAccount"],
       ]);
 
       const tracker = yield* trackerRows(sql);
-      assert.deepStrictEqual(tracker.slice(-16), [
+      assert.deepStrictEqual(tracker.slice(-18), [
         { migration_id: 54, name: "DurableProviderCommandDelivery" },
         { migration_id: 55, name: "ManagedAttachments" },
         { migration_id: 56, name: "CommandReceiptFingerprints" },
@@ -282,6 +358,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         { migration_id: 67, name: "ProviderDeliveryReconciliation" },
         { migration_id: 68, name: "GitHandoffOperations" },
         { migration_id: 69, name: "ProjectPullRequestPins" },
+        { migration_id: 70, name: "WorktreeWorkspaces" },
+        { migration_id: 71, name: "ProjectionProjectsGitHubAccount" },
       ]);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state

@@ -159,6 +159,7 @@ export function mergeGitStatusParts<Local extends object, Remote extends object>
       aheadCount: 0,
       behindCount: 0,
       pr: null,
+      prUnavailable: true,
     }),
   } as Local & Remote;
 }

@@ -27,6 +27,7 @@ import {
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import { WorktreeWorkspaceReactor } from "./orchestration/Services/WorktreeWorkspaceReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
@@ -56,6 +57,7 @@ export interface ServerShape {
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | WorktreeWorkspaceReactor
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ProviderService
@@ -113,6 +115,7 @@ export const createEffectServer = Effect.fn(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const orchestrationReactor = yield* OrchestrationReactor;
+  const worktreeWorkspaceReactor = yield* WorktreeWorkspaceReactor;
   const providerService = yield* ProviderService;
   const providerSessionReaper = yield* ProviderSessionReaper;
   const runtimeStartup = yield* ServerRuntimeStartup;
@@ -190,6 +193,9 @@ export const createEffectServer = Effect.fn(function* () {
   // died, so they can never complete on their own) before clients can observe
   // the stale "Working" state.
   yield* reconcileRestartStuckTurns;
+  // Lifecycle recovery performs destructive-safety preflight. Resume it only
+  // after stale provider turns have reached their authoritative restart state.
+  yield* Scope.provide(worktreeWorkspaceReactor.start, subscriptionsScope);
   yield* recoverGitHandoffOperations((command) => orchestrationEngine.dispatch(command)).pipe(
     Effect.mapError(
       (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),

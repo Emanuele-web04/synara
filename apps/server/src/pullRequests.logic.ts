@@ -1,4 +1,5 @@
 import type {
+  GitHubAccountSelection,
   PullRequestActor,
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -94,6 +95,8 @@ export function buildPullRequestListEntry(input: {
   repository: string;
   pullRequest: GitHubPullRequestListItem;
   viewerReviewRequested: boolean;
+  viewerAuthored?: boolean;
+  githubAccount?: GitHubAccountSelection | null;
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
@@ -115,6 +118,8 @@ export function buildPullRequestListEntry(input: {
     updatedAt: pullRequest.updatedAt,
     reviewDecision: pullRequest.reviewDecision,
     viewerReviewRequested: input.viewerReviewRequested,
+    ...(input.viewerAuthored === undefined ? {} : { viewerAuthored: input.viewerAuthored }),
+    ...(input.githubAccount === undefined ? {} : { githubAccount: input.githubAccount }),
     isPinned: input.isPinned,
     projectContexts: [
       {
@@ -126,6 +131,10 @@ export function buildPullRequestListEntry(input: {
     mergeability: pullRequest.mergeability,
     labels: pullRequest.labels,
   };
+}
+
+export function isViewerAuthored(author: PullRequestActor | null, viewer: string): boolean {
+  return author?.login.trim().toLowerCase() === viewer.trim().toLowerCase();
 }
 
 /** Pinned work is the first thing the user sees; each section otherwise retains the existing
@@ -172,7 +181,7 @@ export function pullRequestMatchesInvolvement(
       matchedReviewingQuery,
     );
   }
-  return pullRequest.author?.login.trim().toLowerCase() === viewer.trim().toLowerCase();
+  return isViewerAuthored(pullRequest.author, viewer);
 }
 
 /** Closed and merged PRs cannot have an active review request, so the companion query only adds

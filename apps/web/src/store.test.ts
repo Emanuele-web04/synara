@@ -13,10 +13,12 @@ import {
   ThreadId,
   ThreadMarkerId,
   TurnId,
+  WorktreeWorkspaceId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationWorkspaceShellSnapshot,
   type OrchestrationThreadActivity,
   type ThreadMarker,
 } from "@synara/contracts";
@@ -24,6 +26,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applyWorkspaceShellEvent,
   applyOrchestrationEvents,
   applyOrchestrationEventsHotPath,
   collapseProjectsExcept,
@@ -36,6 +39,7 @@ import {
   setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerShellSnapshot,
+  syncServerWorkspaceShellSnapshot,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
   type AppState,
@@ -987,6 +991,53 @@ describe("store pure functions", () => {
     });
 
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
+  });
+
+  it("preserves workspace ownership when a V1 shell upsert renames a conversation", () => {
+    const threadId = ThreadId.makeUnsafe("thread-workspace-rename");
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-rename");
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ id: threadId, workspaceId })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          workspaceId,
+          title: "Original title",
+        }),
+      ),
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: {
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Renamed title",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "worktree",
+        branch: "synara/workspace-rename",
+        worktreePath: "/tmp/workspace-rename",
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+        handoff: null,
+        session: null,
+      },
+    } satisfies OrchestrationShellStreamEvent);
+
+    expect(getThreadsFromState(next).find((thread) => thread.id === threadId)).toMatchObject({
+      title: "Renamed title",
+      workspaceId,
+    });
+    expect(next.sidebarThreadSummaryById[threadId]?.workspaceId).toBe(workspaceId);
   });
 
   it("settles a running latest turn immediately when session stop is requested", () => {
@@ -4105,5 +4156,137 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(hydratedState, readModel);
 
     expect(threadsOf(next)[0]).toBe(thread);
+  });
+
+  it("normalizes workspace V2 snapshots and applies workspace updates by stable ID", () => {
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-1");
+    const now = "2026-07-13T00:00:00.000Z";
+    const workspace = {
+      id: workspaceId,
+      projectId: ProjectId.makeUnsafe("project-1"),
+      repositoryIdentity: "repository-1",
+      kind: "managed",
+      state: "ready",
+      title: "Workspace one",
+      path: "/tmp/workspace-1",
+      branch: "synara/workspace-1",
+      headRef: "abc123",
+      targetRef: "main",
+      targetResolvedCommit: "abc123",
+      createdFromCommit: "abc123",
+      sourceKind: "new-branch",
+      sourceRef: null,
+      setupStatus: "succeeded",
+      setupError: null,
+      setupLogId: null,
+      lastKnownPr: null,
+      isPinned: false,
+      lifecycleGeneration: 1,
+      activeOperation: null,
+      lastFailure: null,
+      mutationRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      deletedAt: null,
+    } as const;
+    const snapshot = {
+      protocolVersion: 2,
+      snapshotSequence: 5,
+      updatedAt: now,
+      projects: [
+        {
+          id: ProjectId.makeUnsafe("project-1"),
+          kind: "project",
+          title: "Project",
+          workspaceRoot: "/tmp/project",
+          defaultModelSelection: null,
+          scripts: [],
+          repositoryIdentity: "repository-1",
+          defaultTargetRef: "main",
+          githubAccount: { host: "github.com", login: "octocat" },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      workspaces: [workspace],
+      threads: [
+        {
+          id: ThreadId.makeUnsafe("thread-1"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspaceId,
+          title: "Conversation one",
+          modelSelection: { provider: "codex", model: "gpt-5.5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: "worktree",
+          branch: "synara/workspace-1",
+          worktreePath: "/tmp/workspace-1",
+          latestTurn: null,
+          createdAt: now,
+          updatedAt: now,
+          handoff: null,
+          session: null,
+        },
+        {
+          id: ThreadId.makeUnsafe("thread-2"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspaceId,
+          title: "Conversation two",
+          modelSelection: { provider: "codex", model: "gpt-5.5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: "worktree",
+          branch: "synara/workspace-1",
+          worktreePath: "/tmp/workspace-1",
+          latestTurn: null,
+          createdAt: now,
+          updatedAt: now,
+          handoff: null,
+          session: null,
+        },
+      ],
+    } satisfies OrchestrationWorkspaceShellSnapshot;
+
+    const hydrated = syncServerWorkspaceShellSnapshot(makeState(makeThread()), snapshot);
+    expect(hydrated.workspaceProtocolVersion).toBe(2);
+    expect(hydrated.projects[0]).toMatchObject({
+      repositoryIdentity: "repository-1",
+      defaultTargetRef: "main",
+      githubAccount: { host: "github.com", login: "octocat" },
+    });
+    expect(getThreadsFromState(hydrated)[0]?.workspaceId).toBe(workspaceId);
+
+    const lastKnownPr = {
+      number: 42,
+      title: "Ship workspace updates",
+      url: "https://github.com/example/repo/pull/42",
+      baseBranch: "release",
+      headBranch: "synara/workspace-1-renamed",
+      state: "open" as const,
+    };
+    const updated = applyWorkspaceShellEvent(hydrated, {
+      kind: "workspace-upserted",
+      sequence: 6,
+      workspace: {
+        ...workspace,
+        title: "Renamed workspace",
+        branch: "synara/workspace-1-renamed",
+        lastKnownPr,
+        mutationRevision: 2,
+        updatedAt: "2026-07-13T00:01:00.000Z",
+      },
+    });
+    expect(updated.worktreeWorkspaces?.[0]?.title).toBe("Renamed workspace");
+    const updatedThreads = getThreadsFromState(updated);
+    expect(updatedThreads).toHaveLength(2);
+    for (const thread of updatedThreads) {
+      expect(thread).toMatchObject({
+        workspaceId,
+        branch: "synara/workspace-1-renamed",
+        associatedWorktreeBranch: "synara/workspace-1-renamed",
+        lastKnownPr,
+      });
+    }
   });
 });

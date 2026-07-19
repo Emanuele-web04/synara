@@ -3,9 +3,11 @@ import type {
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
+  OrchestrationWorktreeWorkspace,
   ProjectKind,
   ProjectId,
   ThreadId,
+  WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
@@ -32,6 +34,13 @@ export function findProjectById(
   projectId: ProjectId,
 ): OrchestrationProject | undefined {
   return readModel.projects.find((project) => project.id === projectId);
+}
+
+export function findWorkspaceById(
+  readModel: OrchestrationReadModel,
+  workspaceId: WorktreeWorkspaceId,
+): OrchestrationWorktreeWorkspace | undefined {
+  return (readModel.workspaces ?? []).find((workspace) => workspace.id === workspaceId);
 }
 
 // Finds active projects by workspace root using the same comparison rules as import flows.
@@ -90,6 +99,41 @@ export function requireProjectAbsent(input: {
     invariantError(
       input.command.type,
       `Project '${input.projectId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireWorkspace(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly workspaceId: WorktreeWorkspaceId;
+}): Effect.Effect<OrchestrationWorktreeWorkspace, OrchestrationCommandInvariantError> {
+  const workspace = findWorkspaceById(input.readModel, input.workspaceId);
+  if (workspace && workspace.deletedAt === null) {
+    return Effect.succeed(workspace);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      workspace
+        ? `Workspace '${input.workspaceId}' was deleted and cannot handle command '${input.command.type}'.`
+        : `Workspace '${input.workspaceId}' does not exist for command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireWorkspaceAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly workspaceId: WorktreeWorkspaceId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!findWorkspaceById(input.readModel, input.workspaceId)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Workspace '${input.workspaceId}' already exists and cannot be created twice.`,
     ),
   );
 }

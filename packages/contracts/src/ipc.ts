@@ -31,6 +31,12 @@ import type {
 import type {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitCloneRepositoryInput,
+  GitCloneRepositoryResult,
+  GitHubListAccountsInput,
+  GitHubListAccountsResult,
+  GitHubListRepositoriesInput,
+  GitHubListRepositoriesResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -48,10 +54,14 @@ import type {
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
+  GitListPullRequestsInput,
+  GitListPullRequestsResult,
   GitPullInput,
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitRenameBranchInput,
+  GitRenameBranchResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
@@ -158,12 +168,17 @@ import type {
   OrchestrationReconcileProviderDeliveryResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
+  OrchestrationGetCapabilitiesResult,
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
+  OrchestrationWorkspaceShellSnapshot,
+  OrchestrationWorkspaceShellStreamItem,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
+  WorkspaceLifecyclePreflightInput,
+  WorkspaceLifecyclePreflightResult,
 } from "./orchestration";
 import { EditorId } from "./editor";
 import type { ThreadId } from "./baseSchemas";
@@ -545,12 +560,19 @@ export interface NativeApi {
     // Existing branch/worktree API
     githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
+    listPullRequests: (input: GitListPullRequestsInput) => Promise<GitListPullRequestsResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
       input: GitCreateDetachedWorktreeInput,
     ) => Promise<GitCreateDetachedWorktreeResult>;
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
+    renameBranch: (input: GitRenameBranchInput) => Promise<GitRenameBranchResult>;
+    cloneRepository: (input: GitCloneRepositoryInput) => Promise<GitCloneRepositoryResult>;
+    listGitHubAccounts: (input: GitHubListAccountsInput) => Promise<GitHubListAccountsResult>;
+    listGitHubRepositories: (
+      input: GitHubListRepositoriesInput,
+    ) => Promise<GitHubListRepositoriesResult>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
     stashAndCheckout: (input: GitStashAndCheckoutInput) => Promise<void>;
     stashDrop: (input: GitStashDropInput) => Promise<void>;
@@ -655,9 +677,14 @@ export interface NativeApi {
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
   };
   orchestration: {
+    getCapabilities: () => Promise<OrchestrationGetCapabilitiesResult>;
     getSnapshot: () => Promise<OrchestrationReadModel>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getWorkspaceShellSnapshot: () => Promise<OrchestrationWorkspaceShellSnapshot>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
+    getWorkspaceLifecyclePreflight: (
+      input: WorkspaceLifecyclePreflightInput,
+    ) => Promise<WorkspaceLifecyclePreflightResult>;
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
@@ -675,10 +702,15 @@ export interface NativeApi {
     ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
+    subscribeWorkspaceShell: () => Promise<void>;
+    unsubscribeWorkspaceShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
     unsubscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
+    onWorkspaceShellEvent: (
+      callback: (event: OrchestrationWorkspaceShellStreamItem) => void,
+    ) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
   };
   automation: {

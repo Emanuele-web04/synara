@@ -109,6 +109,10 @@ export interface TerminalStartInput extends TerminalOpenInput {
  * TerminalManagerShape - Service API for terminal session lifecycle operations.
  */
 export interface TerminalManagerShape {
+  /** Whether any interactive PTY for the supplied conversation ids is still live. */
+  readonly hasRunningSessionForThreadIds?: (
+    threadIds: ReadonlySet<string>,
+  ) => Effect.Effect<boolean>;
   /**
    * Open or attach to a terminal session.
    *

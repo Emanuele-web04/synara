@@ -25,6 +25,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -229,7 +230,7 @@ describe("ProviderCommandReactor", () => {
         runtimeSessions.push(next);
       }
     };
-    const steerTurn = vi.fn((_: unknown) =>
+    const steerTurn = vi.fn<ProviderServiceShape["steerTurn"]>((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: asTurnId("turn-steer-1"),
@@ -3849,6 +3850,51 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("renames a generic worktree conversation title on its first turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.succeed({
+        title: "Fix worktree tab titles",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-worktree-conversation-title-generic"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New conversation",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-worktree-conversation-turn-start-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-conversation-title-1"),
+          role: "user",
+          text: "Fix conversation tabs that never get named in worktrees",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        "Fix worktree tab titles"
+      );
+    });
+  });
+
   it("uses the configured text generation model for providers without native title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
@@ -3857,6 +3903,7 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
+    const messageText = "Summarize provider startup failures without Codex";
     harness.generateThreadTitle.mockImplementation(() =>
       Effect.succeed({
         title: "Provider startup failures",
@@ -3868,7 +3915,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity-generated"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Summarize provider startup failures without Codex",
+        title: buildPromptThreadTitleFallback(messageText),
       }),
     );
 
@@ -3880,7 +3927,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-antigravity-generated-title-1"),
           role: "user",
-          text: "Summarize provider startup failures without Codex",
+          text: messageText,
           attachments: [],
         },
         modelSelection: {
@@ -3895,7 +3942,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      message: "Summarize provider startup failures without Codex",
+      message: messageText,
       modelSelection: {
         provider: "codex",
       },
@@ -3913,6 +3960,7 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
+    const messageText = "Summarize provider startup failures without Codex";
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3931,7 +3979,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-antigravity-title-1"),
           role: "user",
-          text: "Summarize provider startup failures without Codex",
+          text: messageText,
           attachments: [],
         },
         modelSelection: {
@@ -3944,11 +3992,13 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(
-      async () =>
-        (await readHarnessThread(harness))?.title ===
-        "Summarize provider startup failures without Codex",
-    );
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        buildPromptThreadTitleFallback(messageText)
+      );
+    });
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
   });
 
@@ -4328,6 +4378,11 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -4375,6 +4430,121 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "pivot now",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    });
+  });
+
+  it("starts a normal turn when a stale projection requests Codex steering", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stale-running-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-already-completed"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-stale-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-stale-steer-codex"),
+          role: "user",
+          text: "continue after the stale turn",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "continue after the stale turn",
+    });
+  });
+
+  it("falls back to a normal turn when Codex finishes during steering", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-finishing-during-steer"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-finishing-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-finishing-during-steer"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.steerTurn.mockImplementationOnce(() => {
+      harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/steer",
+          detail: "turn/steer failed: no active turn to steer",
+        }),
+      );
+    });
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-finishing-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-finishing-steer-codex"),
+          role: "user",
+          text: "continue through the race",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "continue through the race",
     });
   });
 

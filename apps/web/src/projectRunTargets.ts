@@ -3,9 +3,19 @@
 // Layer: Web project-run logic
 // Exports: selectPrimaryProjectRunCommand and labels for sidebar run actions.
 
-import type { ProjectDiscoveredScriptTarget, ProjectScript } from "@synara/contracts";
+import type {
+  ProjectDiscoveredScriptTarget,
+  ProjectId,
+  ProjectRunDevServerInput,
+  ProjectScript,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 
-import { nextProjectScriptId, primaryProjectScript } from "./projectScripts";
+import {
+  nextProjectScriptId,
+  primaryProjectScript,
+  projectScriptRuntimeEnv,
+} from "./projectScripts";
 
 const DEFAULT_RUN_SCRIPT_NAME = "dev";
 
@@ -69,6 +79,29 @@ export function selectPrimaryProjectRunCommand(input: {
   }
 
   return null;
+}
+
+/**
+ * Project scripts remain project-owned configuration, but every launch is bound
+ * to the selected workspace target and executes from that workspace's path.
+ */
+export function buildWorkspaceProjectRunInput(input: {
+  project: { id: ProjectId; cwd: string };
+  workspace: { id: WorktreeWorkspaceId; path: string };
+  runCommand: Pick<ProjectRunCommandTarget, "command">;
+  commandOverride?: string;
+}): ProjectRunDevServerInput {
+  const command = input.commandOverride?.trim() || input.runCommand.command;
+  return {
+    projectId: input.project.id,
+    workspaceId: input.workspace.id,
+    command,
+    cwd: input.workspace.path,
+    env: projectScriptRuntimeEnv({
+      project: { cwd: input.project.cwd },
+      worktreePath: input.workspace.path,
+    }),
+  };
 }
 
 // Persists the command typed in the run dialog as the project's primary run

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Cache, Data, Duration, Effect, Exit, FileSystem, Layer, Path, Semaphore } from "effect";
 import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
+  GitBranchPublication,
   GitStackedAction,
+  GitHubAccountSelection,
   ModelSelection,
   ProviderStartOptions,
 } from "@synara/contracts";
@@ -17,7 +19,7 @@ import {
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
 import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 
-import { GitManagerError } from "../Errors.ts";
+import { GitCommandError, GitManagerError } from "../Errors.ts";
 import {
   GitManager,
   type GitActionProgressReporter,
@@ -29,12 +31,17 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
+import { realpathNearestExisting } from "../../realpathNearestExisting.ts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
 // Any-state lookups scan more PRs so the newest merged/closed PR still surfaces.
 const PR_LOOKUP_ALL_STATES_LIMIT = 20;
+const PUBLICATION_CACHE_CAPACITY = 512;
+const PUBLICATION_CACHE_TTL = Duration.seconds(30);
+const PUBLICATION_LOOKUP_CONCURRENCY = 4;
+const PUBLICATION_LOOKUP_TIMEOUT_MS = 5_000;
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 
@@ -74,6 +81,20 @@ interface BranchHeadContext {
   headRepositoryNameWithOwner: string | null;
   headRepositoryOwnerLogin: string | null;
   isCrossRepository: boolean;
+}
+
+class PublicationCacheKey extends Data.Class<{
+  cwd: string;
+  remoteName: string;
+  remoteBranch: string;
+  remoteUrl: string | null;
+  accountHost: string | null;
+  accountLogin: string | null;
+}> {}
+
+interface ParsedRemoteRepository {
+  readonly host: string;
+  readonly nameWithOwner: string;
 }
 
 interface GitTextGenerationParams {
@@ -160,6 +181,30 @@ function resolvePullRequestWorktreeLocalBranchName(
   return `synara/pr-${pullRequest.number}/${suffix}`;
 }
 
+function parseRemoteRepository(url: string | null): ParsedRemoteRepository | null {
+  const trimmed = url?.trim() ?? "";
+  if (trimmed.length === 0) return null;
+
+  const scpMatch = trimmed.includes("://")
+    ? null
+    : /^(?:[^@/\s]+@)?([^:/\s]+):\/?([^\s]+)$/i.exec(trimmed);
+  if (scpMatch?.[1] && scpMatch[2]) {
+    const nameWithOwner = scpMatch[2].replace(/\.git\/?$/i, "").replace(/^\/+|\/+$/g, "");
+    return nameWithOwner.split("/").length === 2
+      ? { host: scpMatch[1].toLowerCase(), nameWithOwner }
+      : null;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const nameWithOwner = parsed.pathname.replace(/\.git\/?$/i, "").replace(/^\/+|\/+$/g, "");
+    return nameWithOwner.split("/").length === 2
+      ? { host: parsed.hostname.toLowerCase(), nameWithOwner }
+      : null;
+  } catch {
+    return null;
+  }
+}
 function parseRepositoryOwnerLogin(nameWithOwner: string | null): string | null {
   const trimmed = nameWithOwner?.trim() ?? "";
   if (trimmed.length === 0) {
@@ -719,6 +764,7 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
     localBranch = pullRequest.headBranch,
+    account?: GitHubAccountSelection,
   ) =>
     Effect.gen(function* () {
       const repositoryNameWithOwner = resolveHeadRepositoryNameWithOwner(pullRequest) ?? "";
@@ -729,6 +775,7 @@ export const makeGitManager = Effect.gen(function* () {
       const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
         cwd,
         repository: repositoryNameWithOwner,
+        ...(account ? { account } : {}),
       });
       const originRemoteUrl = yield* gitCore.readConfigValue(cwd, "remote.origin.url");
       const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
@@ -760,6 +807,7 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
     localBranch = pullRequest.headBranch,
+    account?: GitHubAccountSelection,
   ) =>
     Effect.gen(function* () {
       const repositoryNameWithOwner = resolveHeadRepositoryNameWithOwner(pullRequest) ?? "";
@@ -776,6 +824,7 @@ export const makeGitManager = Effect.gen(function* () {
       const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
         cwd,
         repository: repositoryNameWithOwner,
+        ...(account ? { account } : {}),
       });
       const originRemoteUrl = yield* gitCore.readConfigValue(cwd, "remote.origin.url");
       const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
@@ -818,6 +867,147 @@ export const makeGitManager = Effect.gen(function* () {
 
   const readConfigValueNullable = (cwd: string, key: string) =>
     gitCore.readConfigValue(cwd, key).pipe(Effect.catch(() => Effect.succeed(null)));
+
+  const publicationLookupSemaphore = yield* Semaphore.make(PUBLICATION_LOOKUP_CONCURRENCY);
+
+  const lookupPublication = (key: PublicationCacheKey) =>
+    publicationLookupSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const account =
+          key.accountHost && key.accountLogin
+            ? { host: key.accountHost, login: key.accountLogin }
+            : undefined;
+        const remoteRepository = parseRemoteRepository(key.remoteUrl);
+        const accountHost = account?.host.toLowerCase() ?? null;
+        const isGitHubHosted =
+          remoteRepository !== null &&
+          (remoteRepository.host === "github.com" || remoteRepository.host === accountHost);
+
+        if (
+          remoteRepository?.host === "github.com" &&
+          accountHost !== null &&
+          accountHost !== remoteRepository.host
+        ) {
+          return yield* new GitManagerError({
+            operation: "resolvePublication",
+            detail: `Selected GitHub host ${account?.host} does not match upstream host ${remoteRepository.host}.`,
+          });
+        }
+
+        if (remoteRepository && isGitHubHosted) {
+          const branch = yield* gitHubCli.getBranchBrowserUrl({
+            cwd: key.cwd,
+            repository: remoteRepository.nameWithOwner,
+            branch: key.remoteBranch,
+            ...(account ? { account } : {}),
+          });
+          return branch.url
+            ? ({
+                state: "published",
+                remoteBranch: key.remoteBranch,
+                url: branch.url,
+              } satisfies GitBranchPublication)
+            : ({
+                state: "stale_upstream",
+                remoteBranch: key.remoteBranch,
+              } satisfies GitBranchPublication);
+        }
+
+        const args = [
+          "ls-remote",
+          "--exit-code",
+          "--heads",
+          key.remoteName,
+          `refs/heads/${key.remoteBranch}`,
+        ] as const;
+        const result = yield* gitCore.execute({
+          operation: "GitManager.resolvePublication",
+          cwd: key.cwd,
+          args,
+          allowNonZeroExit: true,
+          timeoutMs: PUBLICATION_LOOKUP_TIMEOUT_MS,
+          maxOutputBytes: 4_096,
+        });
+        if (result.code === 0 && result.stdout.trim().length > 0) {
+          return {
+            state: "upstream",
+            remoteBranch: key.remoteBranch,
+          } satisfies GitBranchPublication;
+        }
+        if (result.code === 2 || (result.code === 0 && result.stdout.trim().length === 0)) {
+          return {
+            state: "stale_upstream",
+            remoteBranch: key.remoteBranch,
+          } satisfies GitBranchPublication;
+        }
+        return yield* new GitCommandError({
+          operation: "GitManager.resolvePublication",
+          command: `git ${args.join(" ")}`,
+          cwd: key.cwd,
+          detail: result.stderr.trim() || `git ls-remote failed with exit code ${result.code}`,
+        });
+      }),
+    );
+
+  const publicationCache = yield* Cache.makeWith({
+    capacity: PUBLICATION_CACHE_CAPACITY,
+    lookup: lookupPublication,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? PUBLICATION_CACHE_TTL : Duration.zero),
+  });
+
+  const resolvePublication = (
+    cwd: string,
+    details: {
+      readonly branch: string | null;
+      readonly upstreamRef: string | null;
+      readonly upstreamBranch: string | null;
+    },
+    account?: GitHubAccountSelection,
+  ) =>
+    Effect.gen(function* () {
+      if (!details.branch || !details.upstreamRef) {
+        return { state: "local_only" } satisfies GitBranchPublication;
+      }
+
+      const configuredRemoteName = yield* readConfigValueNullable(
+        cwd,
+        `branch.${details.branch}.remote`,
+      );
+      const fallbackSeparator = details.upstreamRef.indexOf("/");
+      const remoteName =
+        configuredRemoteName ??
+        (fallbackSeparator > 0 ? details.upstreamRef.slice(0, fallbackSeparator) : null);
+      const remoteBranch =
+        details.upstreamBranch ??
+        (remoteName && details.upstreamRef.startsWith(`${remoteName}/`)
+          ? details.upstreamRef.slice(remoteName.length + 1)
+          : null);
+      if (!remoteName || !remoteBranch) {
+        return yield* new GitManagerError({
+          operation: "resolvePublication",
+          detail: `Could not resolve upstream ${details.upstreamRef} for branch ${details.branch}.`,
+        });
+      }
+
+      const remoteUrl = yield* readConfigValueNullable(cwd, `remote.${remoteName}.url`);
+      let normalizedCwd = cwd;
+      try {
+        normalizedCwd = realpathSync.native(cwd);
+      } catch {
+        // Keep the caller path; GitCore will return the authoritative missing-cwd error.
+      }
+      return yield* Cache.get(
+        publicationCache,
+        new PublicationCacheKey({
+          cwd: normalizedCwd,
+          remoteName,
+          remoteBranch,
+          remoteUrl,
+          accountHost: account?.host ?? null,
+          accountLogin: account?.login ?? null,
+        }),
+      );
+    });
 
   const resolveRemoteRepositoryContext = (cwd: string, remoteName: string | null) =>
     Effect.gen(function* () {
@@ -919,6 +1109,7 @@ export const makeGitManager = Effect.gen(function* () {
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
     >,
+    account?: GitHubAccountSelection,
   ) =>
     Effect.gen(function* () {
       for (const headSelector of headContext.headSelectors) {
@@ -926,6 +1117,7 @@ export const makeGitManager = Effect.gen(function* () {
           cwd,
           headSelector,
           limit: OPEN_PR_LOOKUP_LIMIT,
+          ...(account ? { account } : {}),
         });
         const inferredHeadInfo = inferPullRequestHeadRemoteInfoFromSelector(
           headSelector,
@@ -948,7 +1140,11 @@ export const makeGitManager = Effect.gen(function* () {
       return null;
     });
 
-  const findLatestPr = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
+  const findLatestPr = (
+    cwd: string,
+    details: { branch: string; upstreamRef: string | null },
+    account?: GitHubAccountSelection,
+  ) =>
     Effect.gen(function* () {
       const headContext = yield* resolveBranchHeadContext(cwd, details);
       const parsedByNumber = new Map<number, PullRequestInfo>();
@@ -962,6 +1158,7 @@ export const makeGitManager = Effect.gen(function* () {
           cwd,
           headSelector,
           limit: PR_LOOKUP_ALL_STATES_LIMIT,
+          ...(account ? { account } : {}),
         });
 
         for (const pullRequest of pullRequests) {
@@ -993,12 +1190,17 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     error: unknown,
     headContext: BranchHeadContext,
+    account?: GitHubAccountSelection,
   ) =>
     Effect.gen(function* () {
       const pullRequestUrl = extractPullRequestUrlFromError(error);
       if (pullRequestUrl) {
         const pullRequest = yield* gitHubCli
-          .getPullRequest({ cwd, reference: pullRequestUrl })
+          .getPullRequest({
+            cwd,
+            reference: pullRequestUrl,
+            ...(account ? { account } : {}),
+          })
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (pullRequest) {
           const candidate = toPullRequestInfo(pullRequest);
@@ -1010,7 +1212,7 @@ export const makeGitManager = Effect.gen(function* () {
 
       // `gh pr create` can race with an existing-PR probe. Treat GitHub's
       // create-time duplicate response as success when the PR can be found.
-      return yield* findOpenPr(cwd, headContext);
+      return yield* findOpenPr(cwd, headContext, account);
     });
 
   const resolveBaseBranch = (
@@ -1018,8 +1220,11 @@ export const makeGitManager = Effect.gen(function* () {
     branch: string,
     upstreamRef: string | null,
     headContext: Pick<BranchHeadContext, "isCrossRepository">,
+    account?: GitHubAccountSelection,
+    explicitBaseBranch?: string,
   ) =>
     Effect.gen(function* () {
+      if (explicitBaseBranch) return explicitBaseBranch;
       const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
       if (configured) return configured;
 
@@ -1031,7 +1236,7 @@ export const makeGitManager = Effect.gen(function* () {
       }
 
       const defaultFromGh = yield* gitHubCli
-        .getDefaultBranch({ cwd })
+        .getDefaultBranch({ cwd, ...(account ? { account } : {}) })
         .pipe(Effect.catch(() => Effect.succeed(null)));
       if (defaultFromGh) {
         return defaultFromGh;
@@ -1219,6 +1424,7 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     textGenerationParams?: GitTextGenerationParams,
+    options?: { account?: GitHubAccountSelection; baseBranch?: string },
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1241,7 +1447,7 @@ export const makeGitManager = Effect.gen(function* () {
         upstreamRef: details.upstreamRef,
       });
 
-      const existing = yield* findOpenPr(cwd, headContext);
+      const existing = yield* findOpenPr(cwd, headContext, options?.account);
       if (existing) {
         return {
           status: "opened_existing" as const,
@@ -1253,7 +1459,14 @@ export const makeGitManager = Effect.gen(function* () {
         };
       }
 
-      const baseBranch = yield* resolveBaseBranch(cwd, branch, details.upstreamRef, headContext);
+      const baseBranch = yield* resolveBaseBranch(
+        cwd,
+        branch,
+        details.upstreamRef,
+        headContext,
+        options?.account,
+        options?.baseBranch,
+      );
       if (!headContext.isCrossRepository && baseBranch === headContext.headBranch) {
         return yield* gitManagerError(
           "runPrStep",
@@ -1287,6 +1500,7 @@ export const makeGitManager = Effect.gen(function* () {
           headSelector: headContext.preferredHeadSelector,
           title: generated.title,
           bodyFile,
+          ...(options?.account ? { account: options.account } : {}),
         })
         .pipe(
           Effect.as(null),
@@ -1294,7 +1508,7 @@ export const makeGitManager = Effect.gen(function* () {
             if (!isPullRequestAlreadyExistsError(error)) {
               return Effect.fail(error);
             }
-            return resolveAlreadyExistingPullRequest(cwd, error, headContext);
+            return resolveAlreadyExistingPullRequest(cwd, error, headContext, options?.account);
           }),
           Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))),
         );
@@ -1309,7 +1523,7 @@ export const makeGitManager = Effect.gen(function* () {
         };
       }
 
-      const created = yield* findOpenPr(cwd, headContext);
+      const created = yield* findOpenPr(cwd, headContext, options?.account);
       if (!created) {
         return {
           status: "created" as const,
@@ -1332,17 +1546,31 @@ export const makeGitManager = Effect.gen(function* () {
   const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input) {
     const details = yield* gitCore.statusDetails(input.cwd);
 
-    const pr =
-      details.branch !== null
-        ? yield* findLatestPr(input.cwd, {
-            branch: details.branch,
-            upstreamRef: details.upstreamRef,
-          }).pipe(
-            // Status and PR-resolution surfaces share one mapper so their shapes cannot drift.
-            Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)),
-            Effect.catch(() => Effect.succeed(null)),
-          )
-        : null;
+    // Legacy callers degrade to an omitted publication state when verification is unavailable,
+    // which safely suppresses links. An explicit account remains authoritative and surfaces its
+    // authentication/network failures instead of inventing a publication state.
+    const publicationEffect = input.account
+      ? resolvePublication(input.cwd, details, input.account)
+      : resolvePublication(input.cwd, details).pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const latestPrEffect =
+      details.branch === null
+        ? Effect.succeed(null)
+        : findLatestPr(
+            input.cwd,
+            { branch: details.branch, upstreamRef: details.upstreamRef },
+            input.account,
+          ).pipe(Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)));
+    // Legacy callers may degrade when GitHub is unavailable. An explicitly selected account is
+    // authoritative: surface authentication failures instead of misreporting "no PR".
+    const resilientPrEffect = input.account
+      ? latestPrEffect.pipe(Effect.map((pr) => ({ pr, prUnavailable: false })))
+      : latestPrEffect.pipe(
+          Effect.map((pr) => ({ pr, prUnavailable: false })),
+          Effect.catch(() => Effect.succeed({ pr: null, prUnavailable: true })),
+        );
+    const [publication, prResult] = yield* Effect.all([publicationEffect, resilientPrEffect], {
+      concurrency: 2,
+    });
 
     return {
       branch: details.branch,
@@ -1352,7 +1580,9 @@ export const makeGitManager = Effect.gen(function* () {
       upstreamBranch: details.upstreamBranch,
       aheadCount: details.aheadCount,
       behindCount: details.behindCount,
-      pr,
+      ...(publication ? { publication } : {}),
+      pr: prResult.pr,
+      ...(prResult.prUnavailable ? { prUnavailable: true } : {}),
     };
   });
 
@@ -1401,10 +1631,38 @@ export const makeGitManager = Effect.gen(function* () {
         .getPullRequest({
           cwd: input.cwd,
           reference: normalizePullRequestReference(input.reference),
+          ...(input.account ? { account: input.account } : {}),
         })
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
       return { pullRequest };
+    },
+  );
+
+  const listPullRequests: GitManagerShape["listPullRequests"] = Effect.fnUntraced(
+    function* (input) {
+      const pullRequests = yield* gitHubCli.listWorkspacePullRequests({
+        cwd: input.cwd,
+        filter: input.filter,
+        ...(input.account ? { account: input.account } : {}),
+      });
+
+      return {
+        pullRequests: pullRequests.map((pullRequest) => ({
+          number: pullRequest.number,
+          title: pullRequest.title,
+          url: pullRequest.url,
+          baseBranch: pullRequest.baseRefName,
+          headBranch: pullRequest.headRefName,
+          state: pullRequest.state ?? "open",
+          isDraft: pullRequest.isDraft ?? false,
+          authorLogin: pullRequest.authorLogin ?? null,
+          authorAvatarUrl: pullRequest.authorAvatarUrl ?? null,
+          updatedAt: pullRequest.updatedAt ?? null,
+          additions: pullRequest.additions ?? null,
+          deletions: pullRequest.deletions ?? null,
+        })),
+      };
     },
   );
 
@@ -1416,6 +1674,7 @@ export const makeGitManager = Effect.gen(function* () {
       const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
         cwd: input.cwd,
         reference,
+        ...(input.account ? { account: input.account } : {}),
       });
       const pullRequest = toResolvedPullRequest(summary);
 
@@ -1434,6 +1693,7 @@ export const makeGitManager = Effect.gen(function* () {
           owner: repository.owner,
           repo: repository.repo,
           number: pullRequest.number,
+          ...(input.account ? { account: input.account } : {}),
         })
         .pipe(
           Effect.map((result) => ({
@@ -1464,17 +1724,130 @@ export const makeGitManager = Effect.gen(function* () {
     function* (input) {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = canonicalizeExistingPath(input.cwd);
+      const managedWorktreePath = yield* Effect.gen(function* () {
+        if (!input.managedWorktreePath) {
+          return null;
+        }
+        if (input.mode !== "worktree") {
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "A managed worktree path can only be used in worktree mode.",
+            ),
+          );
+        }
+        if (!path.isAbsolute(input.managedWorktreePath)) {
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "The managed worktree path must be absolute.",
+            ),
+          );
+        }
+
+        const canonicalPath = yield* realpathNearestExisting(input.managedWorktreePath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
+        const relativeToRoot = path.relative(rootWorktreePath, canonicalPath);
+        const isInsideRoot =
+          relativeToRoot === "" ||
+          (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot));
+        if (isInsideRoot) {
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "The managed worktree path must be outside the repository root.",
+            ),
+          );
+        }
+        return canonicalPath;
+      });
       const pullRequestSummary = yield* gitHubCli.getPullRequest({
         cwd: input.cwd,
         reference: normalizedReference,
+        ...(input.account ? { account: input.account } : {}),
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
+
+      const resolvePullRequestBaseCommit = Effect.fnUntraced(function* () {
+        const remoteNames = (yield* gitCore.execute({
+          operation: "GitManager.preparePullRequestThread.listBaseRemotes",
+          cwd: input.cwd,
+          args: ["remote"],
+        })).stdout
+          .split("\n")
+          .map((remote) => remote.trim())
+          .filter(Boolean);
+        const resolveCandidates = (candidates: readonly string[]) =>
+          Effect.gen(function* () {
+            for (const candidate of candidates) {
+              const resolved = yield* gitCore.execute({
+                operation: "GitManager.preparePullRequestThread.resolveBase",
+                cwd: input.cwd,
+                args: ["rev-parse", "--verify", `${candidate}^{commit}`],
+                allowNonZeroExit: true,
+              });
+              const commit = resolved.code === 0 ? resolved.stdout.trim() : "";
+              if (commit) return commit;
+            }
+            return null;
+          });
+        const localCommit = yield* resolveCandidates([
+          pullRequest.baseBranch,
+          ...remoteNames.map((remote) => `${remote}/${pullRequest.baseBranch}`),
+        ]);
+        if (localCommit) return localCommit;
+
+        const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+        if (!repository) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            `Could not determine the base repository for ${pullRequest.url}.`,
+          );
+        }
+        const repositoryNameWithOwner = `${repository.owner}/${repository.repo}`;
+        const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
+          cwd: input.cwd,
+          repository: repositoryNameWithOwner,
+          ...(input.account ? { account: input.account } : {}),
+        });
+        const originRemoteUrl = yield* readConfigValueNullable(input.cwd, "remote.origin.url");
+        const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
+        const remoteName = yield* gitCore.ensureRemote({
+          cwd: input.cwd,
+          preferredName: repository.owner,
+          url: remoteUrl,
+        });
+        yield* gitCore.execute({
+          operation: "GitManager.preparePullRequestThread.fetchBase",
+          cwd: input.cwd,
+          args: [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            remoteName,
+            `+refs/heads/${pullRequest.baseBranch}:refs/remotes/${remoteName}/${pullRequest.baseBranch}`,
+          ],
+          timeoutMs: 120_000,
+        });
+        const fetchedCommit = yield* resolveCandidates([`${remoteName}/${pullRequest.baseBranch}`]);
+        if (!fetchedCommit) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            `The pull request base '${pullRequest.baseBranch}' was fetched but could not be resolved.`,
+          );
+        }
+        return fetchedCommit;
+      });
 
       if (input.mode === "local") {
         yield* gitHubCli.checkoutPullRequest({
           cwd: input.cwd,
           reference: normalizedReference,
           force: true,
+          ...(input.account ? { account: input.account } : {}),
         });
         const details = yield* gitCore.statusDetails(input.cwd);
         yield* configurePullRequestHeadUpstream(
@@ -1484,6 +1857,7 @@ export const makeGitManager = Effect.gen(function* () {
             ...toPullRequestHeadRemoteInfo(pullRequestSummary),
           },
           details.branch ?? pullRequest.headBranch,
+          input.account,
         );
         return {
           pullRequest,
@@ -1491,6 +1865,8 @@ export const makeGitManager = Effect.gen(function* () {
           worktreePath: null,
         };
       }
+
+      const targetResolvedCommit = yield* resolvePullRequestBaseCommit();
 
       const ensureExistingWorktreeUpstream = (worktreePath: string) =>
         Effect.gen(function* () {
@@ -1502,6 +1878,7 @@ export const makeGitManager = Effect.gen(function* () {
               ...toPullRequestHeadRemoteInfo(pullRequestSummary),
             },
             details.branch ?? pullRequest.headBranch,
+            input.account,
           );
         });
 
@@ -1511,6 +1888,51 @@ export const makeGitManager = Effect.gen(function* () {
       } as const;
       const localPullRequestBranch =
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+
+      const managedPathExists = managedWorktreePath
+        ? yield* fileSystem
+            .exists(managedWorktreePath)
+            .pipe(
+              Effect.mapError((cause) =>
+                gitManagerError(
+                  "preparePullRequestThread",
+                  `Could not inspect the managed worktree path '${managedWorktreePath}'.`,
+                  cause,
+                ),
+              ),
+            )
+        : false;
+
+      const rejectManagedPathMismatch = (
+        existingWorktreePath: string | null,
+      ): Effect.Effect<void, GitManagerError> => {
+        if (!managedWorktreePath) {
+          return Effect.void;
+        }
+        if (
+          existingWorktreePath &&
+          canonicalizeExistingPath(existingWorktreePath) === managedWorktreePath
+        ) {
+          return Effect.void;
+        }
+        if (existingWorktreePath) {
+          return Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              `The pull request branch is already checked out in another worktree at '${existingWorktreePath}'.`,
+            ),
+          );
+        }
+        if (managedPathExists) {
+          return Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              `The managed worktree path '${managedWorktreePath}' is already occupied by an unrelated filesystem entry.`,
+            ),
+          );
+        }
+        return Effect.void;
+      };
 
       const findLocalHeadBranch = (cwd: string) =>
         gitCore.listBranches({ cwd }).pipe(
@@ -1544,11 +1966,13 @@ export const makeGitManager = Effect.gen(function* () {
         existingBranchBeforeFetch?.worktreePath &&
         existingBranchBeforeFetchPath !== rootWorktreePath
       ) {
+        yield* rejectManagedPathMismatch(existingBranchBeforeFetch.worktreePath);
         yield* ensureExistingWorktreeUpstream(existingBranchBeforeFetch.worktreePath);
         return {
           pullRequest,
           branch: localPullRequestBranch,
           worktreePath: existingBranchBeforeFetch.worktreePath,
+          targetResolvedCommit,
         };
       }
       if (existingBranchBeforeFetchPath === rootWorktreePath) {
@@ -1558,10 +1982,13 @@ export const makeGitManager = Effect.gen(function* () {
         );
       }
 
+      yield* rejectManagedPathMismatch(null);
+
       yield* materializePullRequestHeadBranch(
         input.cwd,
         pullRequestWithRemoteInfo,
         localPullRequestBranch,
+        input.account,
       );
 
       const existingBranchAfterFetch = yield* findLocalHeadBranch(input.cwd);
@@ -1572,11 +1999,13 @@ export const makeGitManager = Effect.gen(function* () {
         existingBranchAfterFetch?.worktreePath &&
         existingBranchAfterFetchPath !== rootWorktreePath
       ) {
+        yield* rejectManagedPathMismatch(existingBranchAfterFetch.worktreePath);
         yield* ensureExistingWorktreeUpstream(existingBranchAfterFetch.worktreePath);
         return {
           pullRequest,
           branch: localPullRequestBranch,
           worktreePath: existingBranchAfterFetch.worktreePath,
+          targetResolvedCommit,
         };
       }
       if (existingBranchAfterFetchPath === rootWorktreePath) {
@@ -1589,7 +2018,7 @@ export const makeGitManager = Effect.gen(function* () {
       const worktree = yield* gitCore.createWorktree({
         cwd: input.cwd,
         branch: localPullRequestBranch,
-        path: null,
+        path: managedWorktreePath,
       });
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
 
@@ -1597,6 +2026,7 @@ export const makeGitManager = Effect.gen(function* () {
         pullRequest,
         branch: worktree.worktree.branch,
         worktreePath: worktree.worktree.path,
+        targetResolvedCommit,
       };
     },
   );
@@ -2023,6 +2453,34 @@ The local stash entry was kept for recovery.`,
         );
       }
 
+      if (input.preserveWorktree === true) {
+        const worktreeStatus = yield* gitCore.statusDetails(input.worktreePath);
+        if (!worktreeStatus.isRepo) {
+          return yield* gitManagerError(
+            "handoffThread",
+            "The conversation worktree is no longer available. Refresh the project and choose another workspace.",
+          );
+        }
+        const worktreeHeadRef = yield* readHeadRef(input.worktreePath);
+        return {
+          targetMode: "local",
+          branch: currentLocalStatus.branch ?? input.preferredLocalBranch,
+          worktreePath: null,
+          associatedWorktreePath: input.associatedWorktreePath ?? input.worktreePath,
+          associatedWorktreeBranch:
+            input.associatedWorktreeBranch ?? worktreeStatus.branch ?? input.currentBranch,
+          associatedWorktreeRef:
+            input.associatedWorktreeRef ??
+            worktreeHeadRef ??
+            worktreeStatus.branch ??
+            input.currentBranch,
+          changesTransferred: false,
+          conflictsDetected: false,
+          message:
+            "This conversation now runs in the local checkout. Its worktree is unchanged and ready when you return.",
+        };
+      }
+
       const worktreeHeadRef = yield* readHeadRef(input.worktreePath);
       const targetLocalBranch =
         input.currentBranch ?? input.associatedWorktreeBranch ?? input.preferredLocalBranch ?? null;
@@ -2207,6 +2665,32 @@ The local stash entry was kept for recovery.`,
         "handoffThread",
         "Select a base branch before handing off this thread to a worktree.",
       );
+    }
+
+    if (
+      input.preserveWorktree === true &&
+      worktreeIntent.kind === "reuse-associated" &&
+      targetAssociatedWorktreePath
+    ) {
+      const existingWorktreeStatus = yield* gitCore.statusDetails(targetAssociatedWorktreePath);
+      if (existingWorktreeStatus.isRepo) {
+        const existingWorktreeRef = yield* readHeadRef(targetAssociatedWorktreePath);
+        return {
+          targetMode: "worktree",
+          branch: existingWorktreeStatus.branch ?? targetAssociatedWorktreeBranch,
+          worktreePath: targetAssociatedWorktreePath,
+          associatedWorktreePath: targetAssociatedWorktreePath,
+          associatedWorktreeBranch: existingWorktreeStatus.branch ?? targetAssociatedWorktreeBranch,
+          associatedWorktreeRef:
+            existingWorktreeRef ??
+            targetAssociatedWorktreeRef ??
+            existingWorktreeStatus.branch ??
+            targetAssociatedWorktreeBranch,
+          changesTransferred: false,
+          conflictsDetected: false,
+          message: "This conversation is running in its existing worktree again.",
+        };
+      }
     }
 
     const sourceStash = yield* stashWorkingTree(
@@ -2668,7 +3152,10 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams, {
+                      ...(input.account ? { account: input.account } : {}),
+                      ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+                    });
                   }),
                 ),
               )
@@ -2706,6 +3193,7 @@ The local stash entry was kept for recovery.`,
     status,
     readWorkingTreeDiff,
     summarizeDiff,
+    listPullRequests,
     resolvePullRequest,
     pullRequestSnapshot,
     preparePullRequestThread: (input) =>

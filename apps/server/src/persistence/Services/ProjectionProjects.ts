@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  GitHubAccountSelection,
   ProjectId,
   ProjectKind,
   ProjectScript,
@@ -26,6 +27,15 @@ export const ProjectionProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  repositoryIdentity: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  defaultTargetRef: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

@@ -51,6 +51,20 @@ describe("pull request list coalescing", () => {
     );
   });
 
+  it("keeps identical pull requests isolated across GitHub accounts", () => {
+    const personal = makeEntry({
+      githubAccount: { host: "github.com", login: "personal" },
+    });
+    const work = makeEntry({
+      githubAccount: { host: "github.com", login: "work" },
+    });
+
+    expect(pullRequestListRepositoryIdentity(personal)).not.toBe(
+      pullRequestListRepositoryIdentity(work),
+    );
+    expect(coalescePullRequestListEntries([personal, work])).toHaveLength(2);
+  });
+
   it("collapses shared-worktree rows and prefers the head-branch worktree", () => {
     const fallback = makeEntry();
     const branchWorktree = makeEntry({

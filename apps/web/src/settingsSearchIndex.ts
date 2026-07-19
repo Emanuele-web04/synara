@@ -244,7 +244,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "behavior:assistant-output",
     section: "behavior",
     title: "Assistant output",
-    keywords: "Show token-by-token output while a response is in progress. streaming",
+    keywords: "Show assistant output while a response is in progress. live streaming",
   },
   {
     id: "behavior:diff-line-wrapping",

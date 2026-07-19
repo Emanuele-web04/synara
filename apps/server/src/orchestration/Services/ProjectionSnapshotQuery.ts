@@ -15,6 +15,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThread,
   OrchestrationThreadShell,
+  OrchestrationWorkspaceShellSnapshot,
   CheckpointRef,
   ProjectId,
   ProjectKind,
@@ -112,6 +113,11 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getShellSnapshot: () => Effect.Effect<
     OrchestrationShellSnapshot,
+    ProjectionRepositoryError
+  >;
+
+  readonly getWorkspaceShellSnapshot?: () => Effect.Effect<
+    OrchestrationWorkspaceShellSnapshot,
     ProjectionRepositoryError
   >;
 

@@ -1509,6 +1509,78 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect(
+      "returns bounded partial status for output larger than the command capture limit",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          const fileSystem = yield* FileSystem.FileSystem;
+          const largeDirectory = path.join(
+            tmp,
+            ".test-state",
+            ...Array.from({ length: 4 }, (_, index) => `${index}-${"x".repeat(175)}`),
+          );
+          yield* fileSystem.makeDirectory(largeDirectory, { recursive: true });
+          const fileCount = 1_300;
+          yield* Effect.forEach(
+            Array.from({ length: fileCount }, (_, index) => index),
+            (index) =>
+              writeTextFile(
+                path.join(largeDirectory, `${String(index).padStart(5, "0")}.txt`),
+                "changed\n",
+              ),
+            { concurrency: 32, discard: true },
+          );
+          yield* git(tmp, ["add", ".test-state"]);
+          const rawStatus = yield* runShellCommand({
+            command: "git status --porcelain=2 --branch -z",
+            cwd: tmp,
+            maxOutputBytes: 1_000_000,
+          });
+
+          const details = yield* (yield* GitCore).statusDetails(tmp);
+
+          expect(rawStatus.stdoutTruncated).toBe(true);
+          expect(details.branch).toBeTruthy();
+          expect(details.hasWorkingTreeChanges).toBe(true);
+          expect(details.workingTree.files).toHaveLength(500);
+          expect(details.workingTree.totalFiles).toBe(fileCount);
+          expect(details.workingTree.isPartial).toBe(true);
+          expect(details.workingTree.truncated).toBe(true);
+          expect(details.workingTree.statisticsState).toBe("unknown");
+        }),
+      30_000,
+    );
+
+    it.effect("preserves NUL-delimited rename and unusual paths in status details", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const originalPath = "original name.ts";
+        const renamedPath = " renamed\nfile.ts ";
+        const untrackedPath = "untracked\n name.ts ";
+        yield* writeTextFile(path.join(tmp, originalPath), "alpha\nbeta\n");
+        yield* git(tmp, ["add", originalPath]);
+        yield* git(tmp, ["commit", "-m", "add unusual path fixture"]);
+        yield* fileSystem.rename(path.join(tmp, originalPath), path.join(tmp, renamedPath));
+        yield* writeTextFile(path.join(tmp, untrackedPath), "new\nfile\n");
+        yield* git(tmp, ["add", "-A", "--", originalPath, renamedPath]);
+
+        const details = yield* (yield* GitCore).statusDetails(tmp);
+
+        expect(details.hasWorkingTreeChanges).toBe(true);
+        expect(details.workingTree.files.map((file) => file.path)).toEqual([
+          renamedPath,
+          untrackedPath,
+        ]);
+        expect(details.workingTree.isPartial).toBe(false);
+        expect(details.workingTree.truncated).toBe(false);
+        expect(details.workingTree.statisticsState).toBe("complete");
+      }),
+    );
+
     it.effect("preserves adversarial filenames in status details", () =>
       Effect.gen(function* () {
         if (process.platform === "win32") return;

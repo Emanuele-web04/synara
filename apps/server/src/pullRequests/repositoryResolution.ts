@@ -61,9 +61,12 @@ type RepositoryConfig = {
   readonly remoteUrls: ReadonlyMap<string, string>;
 };
 
-function gitHubRepositoryLinkFromRemoteUrl(remoteUrl: string): GitHubRepositoryLink | null {
-  const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
-  return nameWithOwner ? { nameWithOwner, url: `https://github.com/${nameWithOwner}` } : null;
+function gitHubRepositoryLinkFromRemoteUrl(
+  remoteUrl: string,
+  githubHost: string,
+): GitHubRepositoryLink | null {
+  const nameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl, githubHost);
+  return nameWithOwner ? { nameWithOwner, url: `https://${githubHost}/${nameWithOwner}` } : null;
 }
 
 function parseRepositoryConfig(stdout: string, branch: string | null): RepositoryConfig {
@@ -160,19 +163,32 @@ function resolveGitHubRemote(
   cwd: string,
   remoteName: string,
   configuredUrl: string,
+  githubHost: string,
 ) {
-  const direct = gitHubRepositoryLinkFromRemoteUrl(configuredUrl);
+  const direct = gitHubRepositoryLinkFromRemoteUrl(configuredUrl, githubHost);
   if (direct) return Effect.succeed(direct);
+
+  // A fully qualified remote for another host is authoritative and should not make the selected
+  // GitHub account's repository inventory fail. Only shorthand aliases need Git to expand them.
+  if (
+    /^(?:git@[^:]+:|ssh:\/\/git@[^/]+\/|https?:\/\/[^/]+\/|git:\/\/[^/]+\/)/i.test(configuredUrl)
+  ) {
+    return Effect.succeed(null);
+  }
 
   // Preserve the two-process common path. Only URLs the parser cannot understand need a
   // targeted Git call so aliases such as `gh:owner/repo.git` are expanded correctly.
   return readExpandedRemoteUrl(git, cwd, remoteName).pipe(
-    Effect.map(gitHubRepositoryLinkFromRemoteUrl),
+    Effect.map((remoteUrl) => gitHubRepositoryLinkFromRemoteUrl(remoteUrl, githubHost)),
   );
 }
 
 /** Resolve every unique GitHub repository configured by a workspace, in remote preference order. */
-export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
+export function resolveGitHubRepositories(
+  git: GitCoreShape,
+  cwd: string,
+  githubHost = "github.com",
+) {
   return Effect.gen(function* () {
     // A branch query succeeds with empty output in detached/unborn repositories and fails when
     // `cwd` is not a repository, so it also preserves the old authoritative repo boundary.
@@ -200,7 +216,8 @@ export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
     });
     const resolved = yield* Effect.forEach(
       candidates,
-      ({ remoteName, configuredUrl }) => resolveGitHubRemote(git, cwd, remoteName, configuredUrl),
+      ({ remoteName, configuredUrl }) =>
+        resolveGitHubRemote(git, cwd, remoteName, configuredUrl, githubHost),
       { concurrency: 6 },
     );
 
@@ -219,8 +236,8 @@ export function resolveGitHubRepositories(git: GitCoreShape, cwd: string) {
 }
 
 /** Resolve the preferred link while retaining all configured repositories for callers that list. */
-export function resolveGitHubRepository(git: GitCoreShape, cwd: string) {
-  return resolveGitHubRepositories(git, cwd).pipe(
+export function resolveGitHubRepository(git: GitCoreShape, cwd: string, githubHost = "github.com") {
+  return resolveGitHubRepositories(git, cwd, githubHost).pipe(
     Effect.map(({ repositories }) => ({ repository: repositories[0] ?? null, repositories })),
   );
 }

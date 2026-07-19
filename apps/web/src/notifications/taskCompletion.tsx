@@ -6,6 +6,7 @@
 import { ThreadId } from "@synara/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useMemo, useEffect, useRef, useState } from "react";
+import { ShortcutKbd } from "../components/ui/shortcut-kbd";
 import { toastManager } from "../components/ui/toast";
 import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
 import { useAppSettings } from "../appSettings";
@@ -16,6 +17,7 @@ import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
 import type { Thread } from "../types";
+import { formatShortcutLabel } from "../keybindings";
 import {
   buildTerminalAttentionCopy,
   buildTerminalCompletionCopy,
@@ -75,6 +77,15 @@ interface ThreadNotificationCopy {
   body: string;
 }
 
+const OPEN_THREAD_NOTIFICATION_SHORTCUT = {
+  key: "l",
+  altKey: true,
+  ctrlKey: false,
+  metaKey: false,
+  modKey: false,
+  shiftKey: false,
+} as const;
+
 // Notification opens are generic thread activations, so they clear splitViewId
 // instead of resurrecting a hidden split pairing.
 function focusThread(threadId: Thread["id"], navigate: ReturnType<typeof useNavigate>): void {
@@ -122,6 +133,7 @@ function showThreadToast(
   navigate: ReturnType<typeof useNavigate>,
 ): void {
   const { body, title } = copy;
+  const openThread = () => focusThread(threadId, navigate);
   toastManager.add({
     type: tone,
     title,
@@ -130,10 +142,21 @@ function showThreadToast(
       allowCrossThreadVisibility: true,
       threadId,
       dismissAfterVisibleMs: 8000,
+      openThreadShortcut: openThread,
     },
     actionProps: {
-      children: "Open",
-      onClick: () => focusThread(threadId, navigate),
+      "aria-keyshortcuts": "Alt+L",
+      children: (
+        <>
+          <span>Open</span>
+          <ShortcutKbd
+            className="h-4 min-w-4 bg-[var(--notification-fg)]/10 px-0.5 text-[10px] text-[var(--notification-fg)]/70"
+            groupClassName="gap-0.5"
+            shortcutLabel={formatShortcutLabel(OPEN_THREAD_NOTIFICATION_SHORTCUT)}
+          />
+        </>
+      ),
+      onClick: openThread,
     },
   });
 }

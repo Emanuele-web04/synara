@@ -1,9 +1,19 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { primaryKeyColumns, tableExists } from "./schemaHelpers.ts";
+
 /** Scope provider request ids to their owning thread without discarding legacy rows. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+
+  if (yield* tableExists(sql, "projection_pending_interactions")) {
+    return;
+  }
+  const primaryKey = yield* primaryKeyColumns(sql, "projection_pending_approvals");
+  if (primaryKey.length === 2 && primaryKey[0] === "thread_id" && primaryKey[1] === "request_id") {
+    return;
+  }
 
   yield* sql`DROP TABLE IF EXISTS projection_pending_approvals_v58`;
   yield* sql`

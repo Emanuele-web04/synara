@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { truncateChatThreadTitle } from "@synara/shared/chatThreads";
 import { Effect, Layer } from "effect";
 import { expect } from "vitest";
 
@@ -361,7 +362,9 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             },
           });
 
-          expect(generated.title).toBe("Trim reconnect spinner status after resume");
+          expect(generated.title).toBe(
+            truncateChatThreadTitle("Trim reconnect spinner status after resume"),
+          );
 
           const exitLog = yield* waitForFileContent(exitLogPath);
           expect(exitLog).toContain("exit:0");

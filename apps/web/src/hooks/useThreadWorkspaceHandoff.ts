@@ -66,6 +66,7 @@ export function useThreadWorkspaceHandoff(input: {
             input.activeThread.branch ??
             null,
           preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
+          preserveWorktree: true,
         });
 
         if (targetMode === "worktree" && result.worktreePath) {
@@ -83,8 +84,8 @@ export function useThreadWorkspaceHandoff(input: {
           type: result.conflictsDetected ? "warning" : "success",
           title:
             targetMode === "worktree"
-              ? "Thread handed off to worktree"
-              : "Thread handed off to local",
+              ? "Conversation returned to worktree"
+              : "Conversation now uses local checkout",
           ...(result.message ? { description: result.message } : {}),
         });
         return true;
@@ -93,8 +94,8 @@ export function useThreadWorkspaceHandoff(input: {
           type: "error",
           title:
             targetMode === "worktree"
-              ? "Could not hand off to worktree"
-              : "Could not hand off to local",
+              ? "Could not return to worktree"
+              : "Could not use local checkout",
           description:
             error instanceof Error ? error.message : "An error occurred during the handoff.",
         });

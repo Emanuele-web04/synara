@@ -5,7 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
-import type { GitActionProgressEvent } from "@synara/contracts";
+import type { GitActionProgressEvent, GitHubAccountSelection } from "@synara/contracts";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -15,7 +15,11 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -296,13 +300,8 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
 
 function runStackedAction(
   manager: GitManagerShape,
-  input: {
-    cwd: string;
-    action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
+  input: Omit<Parameters<GitManagerShape["runStackedAction"]>[0], "actionId"> & {
     actionId?: string;
-    commitMessage?: string;
-    featureBranch?: boolean;
-    filePaths?: readonly string[];
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
 ) {
@@ -321,7 +320,13 @@ function resolvePullRequest(manager: GitManagerShape, input: { cwd: string; refe
 
 function preparePullRequestThread(
   manager: GitManagerShape,
-  input: { cwd: string; reference: string; mode: "local" | "worktree" },
+  input: {
+    cwd: string;
+    reference: string;
+    mode: "local" | "worktree";
+    managedWorktreePath?: string;
+    account?: GitHubAccountSelection;
+  },
 ) {
   return manager.preparePullRequestThread(input);
 }
@@ -347,8 +352,14 @@ function handoffThread(
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   textGeneration?: Partial<FakeGitTextGeneration>;
+  wrapGitHubCli?: (service: GitHubCliShape) => GitHubCliShape;
 }) {
-  const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const {
+    service: fakeGitHubCli,
+    ghCalls,
+    accountCalls,
+  } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const gitHubCli = input?.wrapGitHubCli?.(fakeGitHubCli) ?? fakeGitHubCli;
   const textGeneration = createTextGeneration(input?.textGeneration);
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-git-manager-test-",
@@ -367,7 +378,7 @@ function makeManager(input?: {
 
   return makeGitManager.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, accountCalls })),
   );
 }
 
@@ -377,6 +388,52 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("lists pull requests for the workspace picker", () =>
+    Effect.gen(function* () {
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            JSON.stringify([
+              {
+                number: 42,
+                title: "Review workspace picker",
+                url: "https://github.com/example-org/sample-repo/pull/42",
+                baseRefName: "main",
+                headRefName: "feature/workspace-picker",
+                state: "OPEN",
+                isDraft: false,
+                additions: 47,
+                deletions: 19,
+                updatedAt: "2026-07-14T12:00:00Z",
+                author: { login: "octocat" },
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* manager.listPullRequests({ cwd: "/repo", filter: "reviewing" });
+
+      expect(result.pullRequests).toEqual([
+        {
+          number: 42,
+          title: "Review workspace picker",
+          url: "https://github.com/example-org/sample-repo/pull/42",
+          baseBranch: "main",
+          headBranch: "feature/workspace-picker",
+          state: "open",
+          isDraft: false,
+          authorLogin: "octocat",
+          authorAvatarUrl: "https://github.com/octocat.png?size=48",
+          updatedAt: "2026-07-14T12:00:00Z",
+          additions: 47,
+          deletions: 19,
+        },
+      ]);
+      expect(ghCalls[0]).toContain("--search review-requested:@me");
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -409,6 +466,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-open-pr");
+      expect(status.publication).toEqual({
+        state: "upstream",
+        remoteBranch: "feature/status-open-pr",
+      });
       expect(status.pr).toEqual({
         number: 13,
         title: "Existing PR",
@@ -422,6 +483,78 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         deletions: 36,
         changedFiles: 3,
       });
+    }),
+  );
+
+  it.effect("status reports local-only and stale-upstream branches authoritatively", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/publication-state"]);
+      const { manager } = yield* makeManager();
+
+      const localOnly = yield* manager.status({ cwd: repoDir });
+      expect(localOnly.publication).toEqual({ state: "local_only" });
+
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/publication-state"]);
+      yield* runGit(repoDir, ["push", "origin", "--delete", "feature/publication-state"]);
+
+      const stale = yield* manager.status({ cwd: repoDir });
+      expect(stale.publication).toEqual({
+        state: "stale_upstream",
+        remoteBranch: "feature/publication-state",
+      });
+    }),
+  );
+
+  it.effect("caches GitHub publication lookup per selected account", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/published"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/published"]);
+
+      // Keep Git fetches local while exposing a GitHub-shaped configured URL to the resolver.
+      yield* runGit(repoDir, [
+        "config",
+        `url.${remoteDir}.insteadOf`,
+        "https://github.com/acme/repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "remote.origin.url", "https://github.com/acme/repo.git"]);
+
+      const authoritativeUrl = "https://github.com/acme/repo/tree/feature%2Fpublished";
+      const { manager, ghCalls, accountCalls } = yield* makeManager({
+        ghScenario: {
+          branchBrowserUrls: {
+            "acme/repo#feature/published": authoritativeUrl,
+          },
+        },
+      });
+      const firstAccount = { host: "github.com", login: "octocat" } as const;
+      const secondAccount = { host: "github.com", login: "hubot" } as const;
+
+      const first = yield* manager.status({ cwd: repoDir, account: firstAccount });
+      const cached = yield* manager.status({ cwd: repoDir, account: firstAccount });
+      const second = yield* manager.status({ cwd: repoDir, account: secondAccount });
+
+      expect(first.publication).toEqual({
+        state: "published",
+        remoteBranch: "feature/published",
+        url: authoritativeUrl,
+      });
+      expect(cached.publication).toEqual(first.publication);
+      expect(second.publication).toEqual(first.publication);
+      expect(
+        ghCalls.filter((call) => call.startsWith("api repos/acme/repo/branches/")),
+      ).toHaveLength(2);
+      expect(accountCalls.map((account) => account.login)).toEqual(
+        expect.arrayContaining(["octocat", "hubot"]),
+      );
+      expect(accountCalls.every((account) => account.host === "github.com")).toBe(true);
     }),
   );
 
@@ -468,6 +601,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         const status = yield* manager.status({ cwd: repoDir });
         expect(status.branch).toBe("synara/pr-488/statemachine");
+        // Legacy callers suppress an unverifiable link instead of claiming a stale branch.
+        expect(status.publication).toBeUndefined();
         expect(status.pr).toEqual({
           number: 488,
           title: "Rebase this PR on latest main",
@@ -482,8 +617,17 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           changedFiles: null,
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt,author",
         );
+
+        const selectedAccountResult = yield* Effect.result(
+          manager.status({
+            cwd: repoDir,
+            account: { host: "github.com", login: "octocat" },
+          }),
+        );
+        // An explicit account is authoritative, so the same lookup failure is surfaced.
+        expect(selectedAccountResult._tag).toBe("Failure");
       }),
     30_000,
   );
@@ -604,6 +748,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-no-gh");
       expect(status.pr).toBeNull();
+      expect(status.prUnavailable).toBe(true);
     }),
   );
 
@@ -1644,6 +1789,68 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("uses the selected account and explicit base branch for PR creation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["branch", "release"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature-explicit-base"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fs.writeFileSync(path.join(repoDir, "changes.txt"), "change\n");
+      yield* runGit(repoDir, ["add", "changes.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature-explicit-base"]);
+      yield* runGit(repoDir, ["config", "branch.feature-explicit-base.gh-merge-base", "main"]);
+
+      const account: GitHubAccountSelection = {
+        host: "github.example.com",
+        login: "octocat",
+      };
+      const lookupAccounts: Array<GitHubAccountSelection | undefined> = [];
+      let createInput:
+        | {
+            readonly account?: GitHubAccountSelection;
+            readonly baseBranch: string;
+          }
+        | undefined;
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: { prListSequence: ["[]", "[]"] },
+        wrapGitHubCli: (service) => ({
+          ...service,
+          listOpenPullRequests: (input) => {
+            lookupAccounts.push(input.account);
+            return service.listOpenPullRequests(input);
+          },
+          createPullRequest: (input) => {
+            createInput = input;
+            return service.createPullRequest(input);
+          },
+        }),
+      });
+
+      const result = yield* runStackedAction(manager, {
+        actionId: "explicit-account-and-base",
+        cwd: repoDir,
+        action: "commit_push_pr",
+        account,
+        baseBranch: "release",
+      });
+
+      expect(result.pr).toMatchObject({ status: "created", baseBranch: "release" });
+      expect(lookupAccounts.length).toBeGreaterThan(0);
+      for (const selected of lookupAccounts) {
+        expect(selected).toEqual(account);
+      }
+      expect(createInput).toMatchObject({ account, baseBranch: "release" });
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base release --head feature-explicit-base"),
+        ),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("opens existing PR when create reports a duplicate branch PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2021,7 +2228,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("prepares pull request threads in worktree mode on the PR head branch", () =>
+  it.effect("prepares pull request threads at a caller-supplied managed worktree path", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
@@ -2035,6 +2242,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-worktree"]);
       yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/77/head"]);
       yield* runGit(repoDir, ["checkout", "main"]);
+      const managedRoot = yield* makeTempDir("synara-managed-pr-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
 
       const { manager } = yield* makeManager({
         ghScenario: {
@@ -2053,16 +2262,157 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "77",
         mode: "worktree",
+        managedWorktreePath,
       });
 
       expect(result.branch).toBe("feature/pr-worktree");
-      expect(result.worktreePath).not.toBeNull();
+      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+        fs.realpathSync.native(managedWorktreePath),
+      );
       expect(fs.existsSync(result.worktreePath as string)).toBe(true);
       const worktreeBranch = (yield* runGit(result.worktreePath as string, [
         "branch",
         "--show-current",
       ])).stdout.trim();
       expect(worktreeBranch).toBe("feature/pr-worktree");
+    }),
+  );
+
+  it.effect("fetches a missing PR base with the selected account before completion", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", "release"]);
+      fs.writeFileSync(path.join(repoDir, "release.txt"), "release\n");
+      yield* runGit(repoDir, ["add", "release.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Release base"]);
+      const releaseCommit = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* runGit(repoDir, ["push", "origin", "release"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/missing-base"]);
+      fs.writeFileSync(path.join(repoDir, "feature.txt"), "feature\n");
+      yield* runGit(repoDir, ["add", "feature.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature head"]);
+      yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/78/head"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      yield* runGit(repoDir, ["branch", "-D", "release"]);
+      yield* runGit(repoDir, ["update-ref", "-d", "refs/remotes/origin/release"]);
+
+      const managedRoot = yield* makeTempDir("synara-managed-pr-base-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
+      const account: GitHubAccountSelection = { host: "github.com", login: "reviewer" };
+      const { manager, accountCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 78,
+            title: "Missing base PR",
+            url: "https://github.com/example-org/sample-repo/pull/78",
+            baseRefName: "release",
+            headRefName: "feature/missing-base",
+            state: "open",
+          },
+          repositoryCloneUrls: {
+            "example-org/sample-repo": { url: remoteDir, sshUrl: remoteDir },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "78",
+        mode: "worktree",
+        managedWorktreePath,
+        account,
+      });
+
+      expect(result.targetResolvedCommit).toBe(releaseCommit);
+      expect(
+        (yield* runGit(repoDir, [
+          "rev-parse",
+          "--verify",
+          "origin/release^{commit}",
+        ])).stdout.trim(),
+      ).toBe(releaseCommit);
+      expect(accountCalls).toContainEqual(account);
+    }),
+  );
+
+  it.effect("rejects an occupied managed worktree path without changing its contents", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-occupied-path"]);
+      fs.writeFileSync(path.join(repoDir, "branch.txt"), "branch\n");
+      yield* runGit(repoDir, ["add", "branch.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Occupied path PR branch"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const managedWorktreePath = yield* makeTempDir("synara-occupied-pr-");
+      const sentinelPath = path.join(managedWorktreePath, "keep.txt");
+      fs.writeFileSync(sentinelPath, "do not replace\n");
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 177,
+            title: "Occupied path PR",
+            url: "https://github.com/example-org/sample-repo/pull/177",
+            baseRefName: "main",
+            headRefName: "feature/pr-occupied-path",
+            state: "open",
+          },
+        },
+      });
+
+      const errorMessage = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+
+      expect(errorMessage).toContain("already occupied");
+      expect(fs.readFileSync(sentinelPath, "utf8")).toBe("do not replace\n");
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+        managedWorktreePath,
+      );
+    }),
+  );
+
+  it.effect("rejects unsafe managed worktree paths before preparing Git state", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      const { manager, ghCalls } = yield* makeManager();
+
+      const relativePathError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath: "relative/worktree",
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(relativePathError).toContain("must be absolute");
+
+      const repositoryPathError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath: path.join(repoDir, ".synara", "worktree"),
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(repositoryPathError).toContain("outside the repository root");
+      expect(ghCalls).toEqual([]);
     }),
   );
 
@@ -2081,6 +2431,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
       yield* runGit(repoDir, ["checkout", "main"]);
+      const managedRoot = yield* makeTempDir("synara-managed-fork-pr-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
 
       const { manager } = yield* makeManager({
         ghScenario: {
@@ -2108,9 +2460,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "81",
         mode: "worktree",
+        managedWorktreePath,
       });
 
-      expect(result.worktreePath).not.toBeNull();
+      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+        fs.realpathSync.native(managedWorktreePath),
+      );
       const upstreamRef = (yield* runGit(result.worktreePath as string, [
         "rev-parse",
         "--abbrev-ref",
@@ -2247,7 +2602,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["add", "existing.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+      const managedRoot = yield* makeTempDir("synara-reused-pr-");
+      const worktreePath = path.join(managedRoot, "worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
 
       const { manager } = yield* makeManager({
@@ -2263,10 +2619,25 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         },
       });
 
+      const otherManagedRoot = yield* makeTempDir("synara-other-managed-pr-");
+      const otherManagedPath = path.join(otherManagedRoot, "worktree");
+      const mismatchError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "78",
+        mode: "worktree",
+        managedWorktreePath: otherManagedPath,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(mismatchError).toContain("already checked out in another worktree");
+      expect(fs.existsSync(otherManagedPath)).toBe(false);
+
       const result = yield* preparePullRequestThread(manager, {
         cwd: repoDir,
         reference: "78",
         mode: "worktree",
+        managedWorktreePath: worktreePath,
       });
 
       expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
@@ -2411,7 +2782,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused fork PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-reused-fork"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-reused-fork-${Date.now()}`);
+      const managedRoot = yield* makeTempDir("synara-reused-fork-pr-");
+      const worktreePath = path.join(managedRoot, "worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-fork"]);
       yield* runGit(worktreePath, ["branch", "--unset-upstream"], true);
 
@@ -2441,6 +2813,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "83",
         mode: "worktree",
+        managedWorktreePath: worktreePath,
       });
 
       expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
@@ -2568,6 +2941,71 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         // we would leak `stash@{0}` on every handoff that carries uncommitted work.
         const stashList = (yield* runGit(repoDir, ["stash", "list"])).stdout.trim();
         expect(stashList).toBe("");
+      }),
+  );
+
+  it.effect(
+    "switches between local and an existing worktree without removing either checkout",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+
+        const { manager } = yield* makeManager();
+        const created = yield* handoffThread(manager, {
+          cwd: repoDir,
+          targetMode: "worktree",
+          currentBranch: "main",
+          worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: "worktree/reversible-context",
+        });
+        const worktreePath = created.worktreePath as string;
+        const worktreeFile = path.join(worktreePath, "worktree-only.txt");
+        fs.writeFileSync(worktreeFile, "stays in the worktree\n");
+
+        const local = yield* manager.handoffThread({
+          cwd: repoDir,
+          targetMode: "local",
+          currentBranch: created.branch,
+          worktreePath,
+          associatedWorktreePath: created.associatedWorktreePath,
+          associatedWorktreeBranch: created.associatedWorktreeBranch,
+          associatedWorktreeRef: created.associatedWorktreeRef,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: null,
+          preserveWorktree: true,
+        });
+
+        expect(local.targetMode).toBe("local");
+        expect(local.branch).toBe("main");
+        expect(local.worktreePath).toBeNull();
+        expect(local.associatedWorktreePath).toBe(worktreePath);
+        expect(fs.readFileSync(worktreeFile, "utf8")).toBe("stays in the worktree\n");
+
+        const returned = yield* manager.handoffThread({
+          cwd: repoDir,
+          targetMode: "worktree",
+          currentBranch: local.branch,
+          worktreePath: null,
+          associatedWorktreePath: local.associatedWorktreePath,
+          associatedWorktreeBranch: local.associatedWorktreeBranch,
+          associatedWorktreeRef: local.associatedWorktreeRef,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: null,
+          preserveWorktree: true,
+        });
+
+        expect(returned.targetMode).toBe("worktree");
+        expect(returned.worktreePath).toBe(worktreePath);
+        expect(returned.branch).toBe("worktree/reversible-context");
+        expect(fs.readFileSync(worktreeFile, "utf8")).toBe("stays in the worktree\n");
       }),
   );
 

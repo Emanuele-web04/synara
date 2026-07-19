@@ -8,6 +8,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
 import {
+  browseWorkspaceEntries,
   discoverProjectScripts,
   listWorkspaceDirectories,
   searchWorkspaceEntries,
@@ -33,6 +34,29 @@ function runGit(cwd: string, args: string[]): void {
     throw new Error(result.stderr || `git ${args.join(" ")} failed`);
   }
 }
+
+describe("browseWorkspaceEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps directory browsing independent from unavailable Git metadata", async () => {
+    const cwd = makeTempDir("synara-workspace-browse-git-isolation-");
+    writeFile(cwd, "src/app.ts", "export {};\n");
+    writeFile(cwd, "docs/guide.md", "# Guide\n");
+    const runProcessSpy = vi
+      .spyOn(ProcessRunner, "runProcess")
+      .mockRejectedValue(new Error("git status output exceeded the bounded capture"));
+
+    const result = await browseWorkspaceEntries({ partialPath: `${cwd}${path.sep}` });
+
+    expect(result.entries.map((entry) => entry.name)).toEqual(["docs", "src"]);
+    expect(runProcessSpy).not.toHaveBeenCalled();
+  });
+});
 
 describe("searchWorkspaceEntries", () => {
   afterEach(() => {

@@ -15,6 +15,7 @@ import {
   PositiveInt,
   ProjectId,
   ThreadId,
+  WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -26,7 +27,7 @@ const CommandFingerprint = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/
 const ReceiptFields = {
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, WorktreeWorkspaceId, ThreadId]),
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
   status: OrchestrationCommandReceiptStatus,

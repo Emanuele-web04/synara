@@ -10,6 +10,7 @@ import { createOrRecoverProjectFromPath } from "./projectCreation";
 
 const NOW_ISO = "2026-06-26T20:00:00.000Z";
 const WORKSPACE_ROOT = "/Users/tester/Developer/synara";
+const GITHUB_ACCOUNT = { host: "github.com", login: "tester" } as const;
 
 function makeProject(id: string, workspaceRoot = WORKSPACE_ROOT) {
   return {
@@ -60,6 +61,7 @@ describe("createOrRecoverProjectFromPath", () => {
     const result = await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
       workspaceRoot: WORKSPACE_ROOT,
+      githubAccount: GITHUB_ACCOUNT,
       loadSnapshot,
     });
 
@@ -70,6 +72,7 @@ describe("createOrRecoverProjectFromPath", () => {
         title: "synara",
         workspaceRoot: WORKSPACE_ROOT,
         createWorkspaceRootIfMissing: false,
+        githubAccount: GITHUB_ACCOUNT,
       }),
     );
     expect(createdProjectId).not.toBeNull();
@@ -95,6 +98,40 @@ describe("createOrRecoverProjectFromPath", () => {
       loadSnapshot,
     });
 
+    expect(result).toMatchObject({
+      projectId: existingProject.id,
+      project: existingProject,
+      created: false,
+    });
+  });
+
+  it("persists the selected GitHub account when duplicate recovery reuses a project", async () => {
+    const existingProject = makeProject("project-existing");
+    const dispatchCommand = vi.fn(async (command: { type?: string }) => {
+      if (command.type === "project.create") {
+        throw new Error(
+          "Orchestration command invariant failed (project.create): Project 'project-existing' already uses workspace root '/Users/tester/Developer/synara'.",
+        );
+      }
+      return { sequence: 3 };
+    });
+    const loadSnapshot = vi.fn(async () => makeSnapshot([existingProject]));
+
+    const result = await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      githubAccount: GITHUB_ACCOUNT,
+      loadSnapshot,
+    });
+
+    expect(dispatchCommand).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "project.meta.update",
+        projectId: existingProject.id,
+        githubAccount: GITHUB_ACCOUNT,
+      }),
+    );
     expect(result).toMatchObject({
       projectId: existingProject.id,
       project: existingProject,

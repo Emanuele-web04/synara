@@ -15,7 +15,6 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { cn } from "~/lib/utils";
-import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
@@ -203,38 +202,6 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     }
     newTerminalGroup();
   };
-
-  const createWorkspaceTerminalFromShortcut = () => {
-    const action = resolveTerminalNewAction({
-      terminalOpen: terminalState.terminalOpen,
-      activeTerminalId: terminalState.activeTerminalId,
-      activeTerminalGroupId: terminalState.activeTerminalGroupId,
-      terminalGroups: terminalState.terminalGroups,
-    });
-
-    if (action.kind === "new-group") {
-      createWorkspaceTerminal();
-      return;
-    }
-
-    createTerminalTab(action.targetTerminalId);
-  };
-
-  useEffect(() => {
-    const onMenuAction = window.desktopBridge?.onMenuAction;
-    if (typeof onMenuAction !== "function") {
-      return;
-    }
-
-    const unsubscribe = onMenuAction((action) => {
-      if (action !== "new-terminal-tab") return;
-      createWorkspaceTerminalFromShortcut();
-    });
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [createWorkspaceTerminalFromShortcut]);
 
   const terminalDrawerProps = {
     threadId,

@@ -14,7 +14,7 @@ import {
   type WorktreeSetupStep,
 } from "../../types";
 
-export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+export const MAX_VISIBLE_WORK_LOG_ENTRIES = 3;
 
 // Ordered item folded into a settled turn's single "Worked for Xs" disclosure.
 // A turn can interleave tool work and intermediate assistant narration
