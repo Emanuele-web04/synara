@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { expect } from "vitest";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AgentGatewayOperationRepository } from "../Services/AgentGatewayOperationRepository.ts";
@@ -94,6 +96,80 @@ layer("AgentGatewayOperationRepository", (it) => {
         now: "2026-07-16T00:00:03.000Z",
       });
       assert.equal((yield* repository.getById(scoped.operationId))?.status, "compensating");
+    }),
+  );
+
+  it.effect("records worktree ownership only after a dispatching operation created it", () =>
+    Effect.gen(function* () {
+      const repository = yield* AgentGatewayOperationRepository;
+      const scoped = {
+        ...base,
+        callerTurnId: "turn-worktree",
+        operationId: "operation-worktree",
+        requestedCount: 1,
+        planJson: JSON.stringify([
+          {
+            workspaceRoot: "/repo",
+            environment: "worktree",
+            newBranch: "agent/owned",
+            plannedWorktreePath: "/worktrees/owned",
+            ownershipPreflightPassed: true,
+            ids: { threadId: "child-owned", compensateCommandId: "delete-child-owned" },
+          },
+        ]),
+      };
+      yield* repository.reserve(scoped);
+      assert.isFalse(
+        yield* repository.recordWorktreeCreated({
+          operationId: scoped.operationId,
+          index: 0,
+          workspaceRoot: "/repo",
+          path: "/worktrees/owned",
+          branch: "agent/owned",
+          now: scoped.now,
+        }),
+      );
+      yield* repository.markDispatching({ operationId: scoped.operationId, now: scoped.now });
+      assert.isTrue(
+        yield* repository.recordWorktreeCreated({
+          operationId: scoped.operationId,
+          index: 0,
+          workspaceRoot: "/repo",
+          path: "/worktrees/owned",
+          branch: "agent/owned",
+          now: "2026-07-16T00:00:01.000Z",
+        }),
+      );
+      expect(
+        JSON.parse((yield* repository.getById(scoped.operationId))!.planJson)[0],
+      ).toMatchObject({
+        worktreeOwnership: {
+          operationId: scoped.operationId,
+          path: "/worktrees/owned",
+          branch: "agent/owned",
+        },
+      });
+    }),
+  );
+
+  it.effect("deletes a caller-purged live operation as soon as it terminalizes", () =>
+    Effect.gen(function* () {
+      const repository = yield* AgentGatewayOperationRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const scoped = { ...base, callerTurnId: "turn-purged", operationId: "operation-purged" };
+      yield* repository.reserve(scoped);
+      yield* repository.markDispatching({ operationId: scoped.operationId, now: scoped.now });
+      yield* sql`
+        UPDATE agent_gateway_operations
+        SET caller_purged_at = '2026-07-16T00:00:01.000Z'
+        WHERE operation_id = ${scoped.operationId}
+      `;
+      yield* repository.fail({
+        operationId: scoped.operationId,
+        errorJson: '{"code":"recovered"}',
+        now: "2026-07-16T00:00:02.000Z",
+      });
+      assert.isNull(yield* repository.getById(scoped.operationId));
     }),
   );
 

@@ -19,6 +19,7 @@ export default Effect.gen(function* () {
       ),
       result_json TEXT,
       error_json TEXT,
+      caller_purged_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE (caller_thread_id, caller_turn_id, operation_kind)

@@ -262,10 +262,78 @@ function normalizeTomlTableHeaderName(line: string): string | undefined {
   if (tableName === undefined) {
     return undefined;
   }
-  return tableName
-    .split(".")
-    .map((part) => part.trim())
-    .join(".");
+  const parts: string[] = [];
+  let index = 0;
+  const skipWhitespace = () => {
+    while (index < tableName.length && /[\t ]/.test(tableName[index]!)) index += 1;
+  };
+  const parseBasicQuotedKey = (): string | undefined => {
+    index += 1;
+    let value = "";
+    while (index < tableName.length) {
+      const character = tableName[index++]!;
+      if (character === '"') return value;
+      if (character !== "\\") {
+        if (character.charCodeAt(0) < 0x20) return undefined;
+        value += character;
+        continue;
+      }
+      const escape = tableName[index++];
+      const simpleEscapes: Readonly<Record<string, string>> = {
+        b: "\b",
+        t: "\t",
+        n: "\n",
+        f: "\f",
+        r: "\r",
+        '"': '"',
+        "\\": "\\",
+      };
+      if (escape !== undefined && simpleEscapes[escape] !== undefined) {
+        value += simpleEscapes[escape];
+        continue;
+      }
+      if (escape !== "u" && escape !== "U") return undefined;
+      const length = escape === "u" ? 4 : 8;
+      const hexadecimal = tableName.slice(index, index + length);
+      if (!new RegExp(`^[0-9A-Fa-f]{${length}}$`).test(hexadecimal)) return undefined;
+      const codePoint = Number.parseInt(hexadecimal, 16);
+      if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return undefined;
+      value += String.fromCodePoint(codePoint);
+      index += length;
+    }
+    return undefined;
+  };
+  const parseLiteralQuotedKey = (): string | undefined => {
+    index += 1;
+    const end = tableName.indexOf("'", index);
+    if (end === -1) return undefined;
+    const value = tableName.slice(index, end);
+    index = end + 1;
+    return value;
+  };
+
+  while (index < tableName.length) {
+    skipWhitespace();
+    let part: string | undefined;
+    if (tableName[index] === '"') {
+      part = parseBasicQuotedKey();
+    } else if (tableName[index] === "'") {
+      part = parseLiteralQuotedKey();
+    } else {
+      const start = index;
+      while (index < tableName.length && /[A-Za-z0-9_-]/.test(tableName[index]!)) index += 1;
+      part = index > start ? tableName.slice(start, index) : undefined;
+    }
+    if (part === undefined) return undefined;
+    parts.push(part);
+    skipWhitespace();
+    if (index === tableName.length) break;
+    if (tableName[index] !== ".") return undefined;
+    index += 1;
+    skipWhitespace();
+    if (index === tableName.length) return undefined;
+  }
+  return parts.length > 0 ? JSON.stringify(parts) : undefined;
 }
 
 function findTomlTableHeader(config: string, header: string) {

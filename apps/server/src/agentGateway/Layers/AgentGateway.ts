@@ -77,8 +77,14 @@ import {
   type McpToolCallResult,
   type McpToolDefinition,
 } from "../protocol.ts";
-import { summarizeThreadDetail, summarizeThreadShell } from "../threadSummary.ts";
+import {
+  summarizeThreadDetail,
+  summarizeThreadShell,
+  summarizeWaitThreadText,
+  WAIT_THREAD_SUMMARY_MAX_CHARS,
+} from "../threadSummary.ts";
 import { extractBearerToken } from "../tokens.ts";
+import { parseRecoverableCreationPlan } from "../operationPlan.ts";
 
 const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
@@ -277,61 +283,6 @@ function makeAgentIds(operationId: string, index: number) {
   };
 }
 
-interface RecoverableCreationPlanEntry {
-  readonly workspaceRoot: string;
-  readonly environment: "local" | "worktree";
-  readonly newBranch: string | null;
-  readonly plannedWorktreePath: string | null;
-  readonly ownershipPreflightPassed: boolean;
-  readonly ids: {
-    readonly threadId: string;
-    readonly compensateCommandId: string;
-  };
-}
-
-function parseRecoverableCreationPlan(
-  planJson: string,
-): ReadonlyArray<RecoverableCreationPlanEntry> {
-  const parsed: unknown = JSON.parse(planJson);
-  if (!Array.isArray(parsed)) {
-    throw new Error("Stored gateway creation plan is not an array.");
-  }
-  return parsed.map((entry, index) => {
-    if (!entry || typeof entry !== "object") {
-      throw new Error(`Stored gateway creation plan entry ${index} is invalid.`);
-    }
-    const value = entry as Record<string, unknown>;
-    const ids = value.ids;
-    if (!ids || typeof ids !== "object") {
-      throw new Error(`Stored gateway creation plan entry ${index} has no deterministic ids.`);
-    }
-    const idRecord = ids as Record<string, unknown>;
-    if (
-      typeof value.workspaceRoot !== "string" ||
-      (value.environment !== "local" && value.environment !== "worktree") ||
-      (value.newBranch !== null && typeof value.newBranch !== "string") ||
-      (value.plannedWorktreePath !== null && typeof value.plannedWorktreePath !== "string") ||
-      typeof idRecord.threadId !== "string" ||
-      typeof idRecord.compensateCommandId !== "string"
-    ) {
-      throw new Error(`Stored gateway creation plan entry ${index} is incomplete.`);
-    }
-    return {
-      workspaceRoot: value.workspaceRoot,
-      environment: value.environment,
-      newBranch: value.newBranch,
-      plannedWorktreePath: value.plannedWorktreePath,
-      // Older in-progress rows predate explicit ownership proof. They remain
-      // decodable, but recovery refuses destructive git cleanup for them.
-      ownershipPreflightPassed: value.ownershipPreflightPassed === true,
-      ids: {
-        threadId: idRecord.threadId,
-        compensateCommandId: idRecord.compensateCommandId,
-      },
-    };
-  });
-}
-
 function readRecordArg(
   args: Record<string, unknown>,
   name: string,
@@ -507,7 +458,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           operationId: operation.operationId,
           now: isoNow(),
         });
-        const plan = parseRecoverableCreationPlan(operation.planJson);
+        const plan = parseRecoverableCreationPlan(operation.planJson, operation.operationId);
         const recoveryErrors: string[] = [];
         yield* Effect.forEach(
           [...plan].reverse(),
@@ -543,26 +494,33 @@ export const makeAgentGateway = Effect.gen(function* () {
           (entry) =>
             entry.environment === "worktree" && entry.plannedWorktreePath && entry.newBranch
               ? Effect.gen(function* () {
-                  if (!entry.ownershipPreflightPassed) {
-                    return yield* Effect.fail(
-                      new Error(
-                        `Refusing to clean worktree ${entry.plannedWorktreePath}: the operation has no durable ownership preflight.`,
-                      ),
-                    );
+                  // A successful preflight only proves the names were free at
+                  // one point in time. Destructive startup cleanup requires a
+                  // marker persisted after git actually created this exact
+                  // worktree. A crash before that marker may leak an owned
+                  // resource, but can never delete a later unrelated one.
+                  if (!entry.worktreeOwnership) {
+                    return;
                   }
+                  const branches = yield* git.listBranches({ cwd: entry.workspaceRoot });
+                  const branch = branches.branches.find(
+                    (candidate) => !candidate.isRemote && candidate.name === entry.newBranch,
+                  );
                   if (existsSync(entry.plannedWorktreePath!)) {
+                    if (branch?.worktreePath !== entry.plannedWorktreePath) {
+                      return yield* Effect.fail(
+                        new Error(
+                          `Refusing to clean worktree ${entry.plannedWorktreePath}: git does not register the operation-owned branch at that path.`,
+                        ),
+                      );
+                    }
                     yield* git.removeWorktree({
                       cwd: entry.workspaceRoot,
                       path: entry.plannedWorktreePath!,
                       force: true,
                     });
                   }
-                  const branches = yield* git.listBranches({ cwd: entry.workspaceRoot });
-                  if (
-                    branches.branches.some(
-                      (branch) => !branch.isRemote && branch.name === entry.newBranch,
-                    )
-                  ) {
+                  if (branch) {
                     yield* git.deleteBranch({
                       cwd: entry.workspaceRoot,
                       branch: entry.newBranch!,
@@ -926,8 +884,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const waitForThreads: ToolEntry = {
     definition: {
       name: "synara_wait_for_threads",
-      description:
-        "Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Timeouts only report progress; they never retry, replace, cancel, or create work.",
+      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. Timeouts only report progress; they never retry, replace, cancel, or create work.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -970,7 +927,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         const timeoutMs = input.timeoutMs ?? 30_000;
         const deadline = Date.now() + timeoutMs;
         const pinned = yield* Effect.forEach(input.threadIds, (threadId, index) =>
-          snapshotQuery.getThreadDetailById(threadId).pipe(
+          snapshotQuery.getThreadShellById(threadId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
             Effect.flatMap(
               Option.match({
@@ -982,75 +939,109 @@ export const makeAgentGateway = Effect.gen(function* () {
                   Effect.succeed({
                     threadId,
                     runId: input.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
+                    shell: thread,
                   }),
               }),
             ),
           ),
         );
 
-        const readPinned = () =>
-          Effect.forEach(pinned, (pin) =>
-            Effect.gen(function* () {
-              const detail = yield* snapshotQuery.getThreadDetailById(pin.threadId).pipe(
-                Effect.mapError((error) => new ToolInputError(errorText(error))),
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () =>
-                      Effect.fail(
-                        new GatewayToolError(
-                          "thread_not_found",
-                          `Thread "${pin.threadId}" was not found.`,
-                        ),
-                      ),
-                    onSome: Effect.succeed,
-                  }),
-                ),
-              );
-              if (pin.runId === null) {
-                return {
-                  threadId: pin.threadId,
-                  runId: null,
-                  state: "idle",
-                  terminal: true,
-                  timedOut: false,
-                  summary: null,
-                  error: null,
-                };
-              }
-              const turn = yield* projectionTurns
-                .getByTurnId({ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) })
-                .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-              const row = Option.getOrUndefined(turn);
-              const state =
-                row?.state ??
-                (detail.latestTurn?.turnId === pin.runId ? detail.latestTurn.state : "pending");
-              const terminal =
-                state === "completed" || state === "error" || state === "interrupted";
-              const assistantMessage = detail.messages
-                .filter((message) => message.role === "assistant" && message.turnId === pin.runId)
-                .at(-1);
-              return {
-                threadId: pin.threadId,
-                runId: pin.runId,
-                state,
-                terminal,
-                timedOut: false,
-                summary: terminal ? (assistantMessage?.text ?? null) : null,
-                error: state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
-              };
-            }),
-          );
+        const initialStateByKey = new Map(
+          pinned.map((pin) => {
+            const shell = pin.shell;
+            return [
+              `${pin.threadId}\u0000${pin.runId ?? ""}`,
+              shell.latestTurn?.turnId === pin.runId ? shell.latestTurn.state : "pending",
+            ] as const;
+          }),
+        );
+        const readPinnedStates = () =>
+          projectionTurns
+            .getManyByTurnId(
+              pinned.flatMap((pin) =>
+                pin.runId === null
+                  ? []
+                  : [{ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) }],
+              ),
+            )
+            .pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
+              Effect.map((turns) => {
+                const turnsByKey = new Map(
+                  turns.map((turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const),
+                );
+                return pinned.map((pin) => {
+                  const state =
+                    pin.runId === null
+                      ? ("idle" as const)
+                      : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
+                        initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
+                        "pending");
+                  const terminal =
+                    state === "idle" ||
+                    state === "completed" ||
+                    state === "error" ||
+                    state === "interrupted";
+                  return {
+                    threadId: pin.threadId,
+                    runId: pin.runId,
+                    state,
+                    terminal,
+                    timedOut: false,
+                    summary: null as string | null,
+                    summaryTruncated: false,
+                    error: null as string | null,
+                    readThread: {
+                      tool: "synara_read_thread" as const,
+                      arguments: { threadId: pin.threadId },
+                    },
+                  };
+                });
+              }),
+            );
 
-        let results = yield* readPinned();
+        let results = yield* readPinnedStates();
+        let pollDelayMs = 200;
         while (results.some((result) => !result.terminal) && Date.now() < deadline) {
-          yield* Effect.sleep(Math.min(200, Math.max(1, deadline - Date.now())));
-          results = yield* readPinned();
+          yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
+          results = yield* readPinnedStates();
+          pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
         }
         const timedOut = results.some((result) => !result.terminal);
-        const finalResults = results.map((result) => ({
-          ...result,
-          timedOut: !result.terminal && timedOut,
-        }));
+        const finalResults = yield* Effect.forEach(results, (result) =>
+          Effect.gen(function* () {
+            if (!result.terminal || result.runId === null) {
+              return { ...result, timedOut: !result.terminal && timedOut };
+            }
+            const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
+              Effect.mapError((error) => new ToolInputError(errorText(error))),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.fail(
+                      new GatewayToolError(
+                        "thread_not_found",
+                        `Thread "${result.threadId}" was not found.`,
+                      ),
+                    ),
+                  onSome: Effect.succeed,
+                }),
+              ),
+            );
+            const assistantMessage = detail.messages
+              .filter((message) => message.role === "assistant" && message.turnId === result.runId)
+              .at(-1);
+            const summary = summarizeWaitThreadText(assistantMessage?.text);
+            return {
+              ...result,
+              timedOut: false,
+              summary: summary.summary,
+              summaryTruncated: summary.truncated,
+              error:
+                result.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
+            };
+          }),
+        );
         return mcpToolResultJson({
           callerThreadId: context.callerThreadId,
           runIds: pinned.map((pin) => pin.runId),
@@ -1407,6 +1398,21 @@ export const makeAgentGateway = Effect.gen(function* () {
               branch = created.worktree.branch;
               worktreePath = created.worktree.path;
               createdWorktrees.push({ cwd: entry.workspaceRoot, path: worktreePath, branch });
+              const ownershipRecorded = yield* operationRepository.recordWorktreeCreated({
+                operationId,
+                index: entry.index,
+                workspaceRoot: entry.workspaceRoot,
+                path: worktreePath,
+                branch,
+                now: isoNow(),
+              });
+              if (!ownershipRecorded) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Could not persist ownership for created worktree ${worktreePath}; compensating it before dispatch.`,
+                  ),
+                );
+              }
             }
 
             yield* orchestrationEngine.dispatch({

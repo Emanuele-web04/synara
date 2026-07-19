@@ -147,6 +147,11 @@ export interface ProjectionTurnRepositoryShape {
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
+  /** Batch lookup used by long-poll status readers to avoid one query per turn. */
+  readonly getManyByTurnId: (
+    input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
+
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
    */

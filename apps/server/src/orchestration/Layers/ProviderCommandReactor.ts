@@ -2190,18 +2190,26 @@ const make = Effect.gen(function* () {
       (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
     const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
     if (reservation) {
-      if (reservation.releaseOnTurnId === undefined) {
-        const terminalTurnIds = reservation.pendingTerminalTurnIds ?? new Set<TurnId>();
-        if (event.turnId !== undefined) {
-          terminalTurnIds.add(event.turnId);
+      if (event.turnId === undefined) {
+        // Some adapters can only report that a stopped turn aborted, not the
+        // provider turn id. Their live session state is authoritative and is
+        // cleared before the terminal event is emitted. Keep the reservation
+        // while a turn is genuinely live; otherwise release it so queued work
+        // cannot remain stranded behind an id-less terminal event.
+        if (yield* hasLiveProviderTurn(event.threadId)) {
+          return;
         }
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+      } else if (reservation.releaseOnTurnId === undefined) {
+        const terminalTurnIds = reservation.pendingTerminalTurnIds ?? new Set<TurnId>();
+        terminalTurnIds.add(event.turnId);
         reservation.pendingTerminalTurnIds = terminalTurnIds;
         return;
-      }
-      if (reservation.releaseOnTurnId !== event.turnId) {
+      } else if (reservation.releaseOnTurnId !== event.turnId) {
         return;
+      } else {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
-      pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
     }
     // Child subagent threads queue under their own id but share the parent's
     // provider session, and terminal runtime events carry the session-owning

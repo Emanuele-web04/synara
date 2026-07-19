@@ -158,7 +158,7 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
-  it.effect("validates every provider-specific option against the advertised descriptor", () =>
+  it.effect("accepts the advertised OpenCode/Kilo agent key without accepting arbitrary keys", () =>
     Effect.gen(function* () {
       const optionDiscovery = {
         listModels: () =>
@@ -189,11 +189,29 @@ describe("agent gateway target resolver", () => {
         yield* resolveAgentGatewayTarget({ target: accepted, discovery: optionDiscovery }),
         accepted,
       );
+      const explicitAgent = {
+        provider: "opencode" as const,
+        model: "openai/gpt-5",
+        options: { agent: "build" },
+      };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({ target: explicitAgent, discovery: optionDiscovery }),
+        explicitAgent,
+      );
+      const kiloAgent = {
+        provider: "kilo" as const,
+        model: "openai/gpt-5",
+        options: { agent: "plan" },
+      };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({ target: kiloAgent, discovery: optionDiscovery }),
+        kiloAgent,
+      );
       const result = yield* resolveAgentGatewayTarget({
         target: {
           provider: "opencode",
           model: "openai/gpt-5",
-          options: { agent: "invented-agent" },
+          options: { inventedOption: "invented-value" },
         },
         discovery: optionDiscovery,
       }).pipe(
@@ -201,6 +219,15 @@ describe("agent gateway target resolver", () => {
         Effect.catch((error) => Effect.succeed(error)),
       );
       assert.equal(result.code, "model_option_unavailable");
+
+      const guidance = agentGatewayTargetOptionGuidance({
+        provider: "opencode",
+        defaultModel: "opencode/big-pickle",
+        enabled: true,
+        available: true,
+        models: (yield* optionDiscovery.listModels({ provider: "opencode" })).models,
+      });
+      assert.deepEqual(guidance.alternativeOptionKeys, ["agent"]);
     }),
   );
 

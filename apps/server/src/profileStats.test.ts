@@ -275,6 +275,71 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("scopes dispatch-origin joins when different threads reuse a message id", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          ) VALUES
+            (
+              'thread-reused-user', 'project-profile', 'User Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+              'default', 'local', '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z', NULL
+            ),
+            (
+              'thread-reused-agent', 'project-profile', 'Agent Thread',
+              '{"provider":"claudeAgent","model":"claude-sonnet-4-6"}', 'full-access',
+              'default', 'local', '2026-06-13T10:00:00.000Z',
+              '2026-06-13T10:00:00.000Z', NULL
+            )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, dispatch_origin,
+            is_streaming, source, created_at, updated_at
+          ) VALUES
+            (
+              'shared-message-id', 'thread-reused-user', 'turn-user', 'user', 'human prompt',
+              NULL, 0, 'native', '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'
+            ),
+            (
+              'shared-message-id', 'thread-reused-agent', 'turn-agent', 'user', 'agent prompt',
+              'agent', 0, 'native', '2026-06-13T10:05:00.000Z', '2026-06-13T10:05:00.000Z'
+            )
+        `;
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id, aggregate_kind, stream_id, stream_version, event_type,
+            occurred_at, actor_kind, payload_json, metadata_json
+          ) VALUES
+            (
+              'event-reused-user', 'thread', 'thread-reused-user', 1,
+              'thread.turn-start-requested', '2026-06-13T09:05:00.000Z', 'client',
+              '{"threadId":"thread-reused-user","messageId":"shared-message-id","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}', '{}'
+            ),
+            (
+              'event-reused-agent', 'thread', 'thread-reused-agent', 1,
+              'thread.turn-start-requested', '2026-06-13T10:05:00.000Z', 'system',
+              '{"threadId":"thread-reused-agent","messageId":"shared-message-id","modelSelection":{"provider":"claudeAgent","model":"claude-sonnet-4-6"}}', '{}'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        expect(stats.insights.topProvider).toBe("codex");
+        expect(stats.insights.topProviderPercent).toBe(100);
+        expect(stats.providerModels).toEqual([
+          expect.objectContaining({ provider: "codex", model: "gpt-5-codex", turnCount: 1 }),
+        ]);
+      }),
+    );
+  });
+
   it("reports token-based provider ranking separately from turn-count profile stats", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

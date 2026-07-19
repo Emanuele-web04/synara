@@ -225,6 +225,32 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const getProjectionTurnsByTurnId = SqlSchema.findAll({
+    Request: Schema.Array(GetProjectionTurnByTurnIdInput),
+    Result: ProjectionTurnByIdDbRowSchema,
+    execute: (input) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          pending_message_id AS "pendingMessageId",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
+          assistant_message_id AS "assistantMessageId",
+          state,
+          requested_at AS "requestedAt",
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount",
+          checkpoint_ref AS "checkpointRef",
+          checkpoint_status AS "checkpointStatus",
+          checkpoint_files_json AS "checkpointFiles"
+        FROM projection_turns
+        WHERE thread_id IN ${sql.in([...new Set(input.map((entry) => entry.threadId))])}
+          AND turn_id IN ${sql.in([...new Set(input.map((entry) => entry.turnId))])}
+      `,
+  });
+
   const clearCheckpointTurnConflictRow = SqlSchema.void({
     Request: ClearCheckpointTurnConflictInput,
     execute: ({ threadId, turnId, checkpointTurnCount }) =>
@@ -320,6 +346,23 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       ),
     );
 
+  const getManyByTurnId: ProjectionTurnRepositoryShape["getManyByTurnId"] = (input) => {
+    if (input.length === 0) return Effect.succeed([]);
+    const requested = new Set(input.map((entry) => `${entry.threadId}\u0000${entry.turnId}`));
+    return getProjectionTurnsByTurnId(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionTurnRepository.getManyByTurnId:query",
+          "ProjectionTurnRepository.getManyByTurnId:decodeRows",
+        ),
+      ),
+      Effect.map((rows) =>
+        rows.filter((row) => requested.has(`${row.threadId}\u0000${row.turnId}`)),
+      ),
+      Effect.map((rows) => rows as ReadonlyArray<Schema.Schema.Type<typeof ProjectionTurnById>>),
+    );
+  };
+
   const clearCheckpointTurnConflict: ProjectionTurnRepositoryShape["clearCheckpointTurnConflict"] =
     (input) =>
       clearCheckpointTurnConflictRow(input).pipe(
@@ -340,6 +383,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     deletePendingTurnStartByThreadId,
     listByThreadId,
     getByTurnId,
+    getManyByTurnId,
     clearCheckpointTurnConflict,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;

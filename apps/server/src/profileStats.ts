@@ -930,7 +930,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           JOIN projection_threads t
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
           LEFT JOIN projection_thread_messages um
-            ON um.message_id = json_extract(e.payload_json, '$.messageId')
+            ON um.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+           AND um.message_id = json_extract(e.payload_json, '$.messageId')
           WHERE e.event_type = 'thread.turn-start-requested'
             AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
         ),

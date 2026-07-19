@@ -8,6 +8,7 @@ import {
   type ReserveAgentGatewayOperationInput,
   type ReserveAgentGatewayOperationResult,
 } from "../Services/AgentGatewayOperationRepository.ts";
+import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 
 interface OperationRow {
   readonly operationId: string;
@@ -125,13 +126,63 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
       Effect.mapError(mapSqlError("markDispatching")),
     );
 
+  const recordWorktreeCreated: AgentGatewayOperationRepositoryShape["recordWorktreeCreated"] = (
+    input,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{
+            readonly planJson: string;
+            readonly status: AgentGatewayOperationRecord["status"];
+          }>`
+            SELECT plan_json AS "planJson", status
+            FROM agent_gateway_operations
+            WHERE operation_id = ${input.operationId}
+            LIMIT 1
+          `;
+          const operation = rows[0];
+          if (!operation || operation.status !== "dispatching") return false;
+          const planJson = recordCreatedWorktreeInPlan({
+            planJson: operation.planJson,
+            operationId: input.operationId,
+            index: input.index,
+            workspaceRoot: input.workspaceRoot,
+            path: input.path,
+            branch: input.branch,
+            recordedAt: input.now,
+          });
+          const updated = yield* sql<{ readonly operationId: string }>`
+            UPDATE agent_gateway_operations
+            SET plan_json = ${planJson}, updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+              AND status = 'dispatching'
+              AND plan_json = ${operation.planJson}
+            RETURNING operation_id AS "operationId"
+          `;
+          return updated.length > 0;
+        }),
+      )
+      .pipe(Effect.mapError(mapSqlError("recordWorktreeCreated")));
+
   const complete: AgentGatewayOperationRepositoryShape["complete"] = (input) =>
-    sql`
-      UPDATE agent_gateway_operations
-      SET status = 'completed', result_json = ${input.resultJson}, error_json = NULL,
-          updated_at = ${input.now}
-      WHERE operation_id = ${input.operationId}
-    `.pipe(Effect.asVoid, Effect.mapError(mapSqlError("complete")));
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            UPDATE agent_gateway_operations
+            SET status = 'completed', result_json = ${input.resultJson}, error_json = NULL,
+                updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+          `;
+          yield* sql`
+            DELETE FROM agent_gateway_operations
+            WHERE operation_id = ${input.operationId}
+              AND caller_purged_at IS NOT NULL
+          `;
+        }),
+      )
+      .pipe(Effect.mapError(mapSqlError("complete")));
 
   const markCompensating: AgentGatewayOperationRepositoryShape["markCompensating"] = (input) =>
     sql`
@@ -142,11 +193,22 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
     `.pipe(Effect.asVoid, Effect.mapError(mapSqlError("markCompensating")));
 
   const fail: AgentGatewayOperationRepositoryShape["fail"] = (input) =>
-    sql`
-      UPDATE agent_gateway_operations
-      SET status = 'failed', error_json = ${input.errorJson}, updated_at = ${input.now}
-      WHERE operation_id = ${input.operationId}
-    `.pipe(Effect.asVoid, Effect.mapError(mapSqlError("fail")));
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`
+            UPDATE agent_gateway_operations
+            SET status = 'failed', error_json = ${input.errorJson}, updated_at = ${input.now}
+            WHERE operation_id = ${input.operationId}
+          `;
+          yield* sql`
+            DELETE FROM agent_gateway_operations
+            WHERE operation_id = ${input.operationId}
+              AND caller_purged_at IS NOT NULL
+          `;
+        }),
+      )
+      .pipe(Effect.mapError(mapSqlError("fail")));
 
   const getById: AgentGatewayOperationRepositoryShape["getById"] = (operationId) =>
     sql<OperationRow>`
@@ -202,6 +264,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
   return {
     reserve,
     markDispatching,
+    recordWorktreeCreated,
     markCompensating,
     complete,
     fail,

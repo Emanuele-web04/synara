@@ -87,6 +87,7 @@ import Migration0068 from "./Migrations/068_GitHandoffOperations.ts";
 import Migration0069 from "./Migrations/069_ProjectPullRequestPins.ts";
 import Migration0070 from "./Migrations/070_AgentGatewayOperations.ts";
 import Migration0071 from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import Migration0072 from "./Migrations/072_AgentGatewayOperationRetention.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -173,6 +174,7 @@ export const migrationEntries = [
   [69, "ProjectPullRequestPins", Migration0069],
   [70, "AgentGatewayOperations", Migration0070],
   [71, "ProjectionThreadsGatewayProvenance", Migration0071],
+  [72, "AgentGatewayOperationRetention", Migration0072],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

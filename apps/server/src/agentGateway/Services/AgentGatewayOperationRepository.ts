@@ -50,6 +50,14 @@ export interface AgentGatewayOperationRepositoryShape {
     readonly operationId: string;
     readonly now: string;
   }) => Effect.Effect<boolean, Error>;
+  readonly recordWorktreeCreated: (input: {
+    readonly operationId: string;
+    readonly index: number;
+    readonly workspaceRoot: string;
+    readonly path: string;
+    readonly branch: string;
+    readonly now: string;
+  }) => Effect.Effect<boolean, Error>;
   readonly markCompensating: (input: {
     readonly operationId: string;
     readonly now: string;

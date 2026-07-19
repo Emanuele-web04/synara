@@ -86,6 +86,7 @@ export const READ_THREAD_DEFAULT_MESSAGE_LIMIT = 20;
 export const READ_THREAD_MAX_MESSAGE_LIMIT = 100;
 export const READ_THREAD_DEFAULT_MESSAGE_CHARS = 1500;
 export const READ_THREAD_MAX_MESSAGE_CHARS = 20_000;
+export const WAIT_THREAD_SUMMARY_MAX_CHARS = 2_000;
 
 export interface AgentThreadMessageSummary {
   readonly index: number;
@@ -112,6 +113,15 @@ function truncateMessageText(
     text: `${text.slice(0, maxChars)}\n[... truncated ${text.length - maxChars} chars]`,
     truncated: true,
   };
+}
+
+export function summarizeWaitThreadText(text: string | null | undefined): {
+  readonly summary: string | null;
+  readonly truncated: boolean;
+} {
+  if (text === null || text === undefined) return { summary: null, truncated: false };
+  const result = truncateMessageText(text, WAIT_THREAD_SUMMARY_MAX_CHARS);
+  return { summary: result.text, truncated: result.truncated };
 }
 
 /**

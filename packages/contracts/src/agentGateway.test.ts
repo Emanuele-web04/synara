@@ -160,7 +160,12 @@ describe("agent gateway contracts", () => {
             terminal: true,
             timedOut: false,
             summary: "Done",
+            summaryTruncated: false,
             error: null,
+            readThread: {
+              tool: "synara_read_thread",
+              arguments: { threadId: "thread-1" },
+            },
           },
         ],
       }),

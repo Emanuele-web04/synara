@@ -368,10 +368,9 @@ function validateOptionsWithoutCatalog(target: ModelSelection): void {
   }
   if (
     (target.provider === "kilo" || target.provider === "opencode") &&
-    target.options !== undefined &&
-    (target.options.variant !== undefined || target.options.agent !== undefined)
+    target.options?.variant !== undefined
   ) {
-    failUnavailableOption(target, target.options.variant ?? target.options.agent ?? "options");
+    failUnavailableOption(target, target.options.variant);
   }
   const rawOptions = target.options as Record<string, unknown> | undefined;
   for (const optionId of ["contextWindow", "autoCompactWindow"]) {
@@ -412,6 +411,14 @@ function validateAdvertisedOption(
   const rawOptions = target.options as Record<string, unknown> | undefined;
   for (const [optionId, value] of Object.entries(rawOptions ?? {})) {
     if (value === undefined) continue;
+    if (
+      optionId === "agent" &&
+      (target.provider === "kilo" || target.provider === "opencode") &&
+      typeof value === "string" &&
+      value.trim().length > 0
+    ) {
+      continue;
+    }
     if (
       optionId === "reasoningEffort" ||
       optionId === "effort" ||

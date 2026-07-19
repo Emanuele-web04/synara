@@ -15,6 +15,7 @@ import {
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { Cause, Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { redactCreationPlanForPurgedCaller } from "./agentGateway/operationPlan.ts";
 
 import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
 import {
@@ -732,6 +733,47 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND state IN ('promoted', 'cancelled')
       `;
+      // Completed/failed/reliably-unstarted gateway operations no longer have
+      // recovery value once their caller is explicitly purged. In-flight rows
+      // retain only deterministic ids and git ownership evidence until startup
+      // or live compensation terminalizes them; repository terminal writes
+      // then delete the caller-purged row atomically.
+      yield* sql`
+        DELETE FROM agent_gateway_operations
+        WHERE caller_thread_id = ${threadId}
+          AND status IN ('reserved', 'completed', 'failed')
+      `;
+      const liveGatewayOperations = yield* sql<{
+        readonly operationId: string;
+        readonly planJson: string;
+      }>`
+        SELECT operation_id AS "operationId", plan_json AS "planJson"
+        FROM agent_gateway_operations
+        WHERE caller_thread_id = ${threadId}
+          AND status IN ('dispatching', 'compensating')
+      `;
+      yield* Effect.forEach(
+        liveGatewayOperations,
+        (operation) => {
+          const recoveryPlanJson = redactCreationPlanForPurgedCaller({
+            planJson: operation.planJson,
+            operationId: operation.operationId,
+          });
+          return sql`
+            UPDATE agent_gateway_operations
+            SET plan_json = ${recoveryPlanJson},
+                request_id = operation_id,
+                fingerprint = operation_id,
+                result_json = NULL,
+                error_json = NULL,
+                caller_purged_at = ${deletedAt},
+                updated_at = ${deletedAt}
+            WHERE operation_id = ${operation.operationId}
+              AND status IN ('dispatching', 'compensating')
+          `;
+        },
+        { concurrency: 1, discard: true },
+      );
       yield* sql`
         DELETE FROM orchestration_events
         WHERE aggregate_kind = 'thread'

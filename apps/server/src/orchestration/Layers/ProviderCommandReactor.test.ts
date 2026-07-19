@@ -4353,6 +4353,88 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("releases a promoted-turn reservation on an id-less terminal event once the session is idle", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running-before-idless-abort"),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-before-idless-abort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running-before-idless-abort"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    for (const [messageId, text] of [
+      ["msg-before-idless-abort", "promote before id-less abort"],
+      ["msg-after-idless-abort", "release after id-less abort"],
+    ] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-${messageId}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(messageId),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+    }
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-complete-before-idless-abort"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-running-before-idless-abort"),
+      payload: { state: "completed" },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.aborted",
+      eventId: asEventId("evt-idless-abort-promoted-turn"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: now,
+      payload: { reason: "interrupted" },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "release after id-less abort",
+    });
+  });
+
   it("queues a child-thread turn while the shared parent session runs and drains it on settle", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

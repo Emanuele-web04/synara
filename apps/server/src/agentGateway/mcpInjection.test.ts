@@ -134,6 +134,14 @@ describe("agent gateway MCP injection", () => {
       configHasTomlTableHeader("  [ mcp_servers.synara ]  # managed", "[mcp_servers.synara]"),
     );
     assert.isTrue(configHasTomlTableHeader("  [ mcp_servers . synara ]", "[mcp_servers.synara]"));
+    assert.isTrue(configHasTomlTableHeader('[mcp_servers."synara"]', "[mcp_servers.synara]"));
+    assert.isTrue(configHasTomlTableHeader("['mcp_servers'.'synara']", "[mcp_servers.synara]"));
+    assert.isTrue(configHasTomlTableHeader('[mcp_servers."syn\\u0061ra"]', "[mcp_servers.synara]"));
+    assert.isTrue(
+      configHasTomlTableHeader('["shell_environment_policy"]', "[shell_environment_policy]"),
+    );
+    assert.isFalse(configHasTomlTableHeader('["mcp_servers.synara"]', "[mcp_servers.synara]"));
+    assert.isFalse(configHasTomlTableHeader('[mcp_servers."syn\\qara"]', "[mcp_servers.synara]"));
     // A commented-out example block must not count as the table being present.
     assert.isFalse(configHasTomlTableHeader("# [mcp_servers.synara]", "[mcp_servers.synara]"));
     assert.isFalse(

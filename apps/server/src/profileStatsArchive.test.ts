@@ -523,6 +523,112 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
+  it("deletes terminal gateway plans and redacts live recovery plans with a purged caller", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+
+        const livePlan = JSON.stringify([
+          {
+            index: 0,
+            spec: { prompt: "private live prompt", branchName: "agent/private" },
+            projectId: "project-archive",
+            workspaceRoot: "/work/archive",
+            environment: "worktree",
+            runtimeMode: "full-access",
+            baseBranch: "main",
+            newBranch: "agent/private",
+            plannedWorktreePath: "/worktrees/private",
+            ownershipPreflightPassed: true,
+            worktreeOwnership: {
+              operationId: "operation-live",
+              path: "/worktrees/private",
+              branch: "agent/private",
+              recordedAt: "2026-06-14T10:06:00.000Z",
+            },
+            ids: {
+              threadId: "agent-private-child",
+              compensateCommandId: "delete-agent-private-child",
+            },
+          },
+        ]);
+        yield* sql`
+          INSERT INTO agent_gateway_operations (
+            operation_id, caller_thread_id, caller_turn_id, operation_kind,
+            request_id, fingerprint, requested_count, plan_json, status,
+            result_json, error_json, created_at, updated_at
+          ) VALUES
+            (
+              'operation-terminal', 'thread-purge', 'turn-purge-terminal', 'create_threads',
+              'terminal-request', 'terminal-fingerprint', 1,
+              '[{"spec":{"prompt":"private terminal prompt"}}]', 'completed',
+              '{"workspaceRoot":"/private/result"}', NULL,
+              '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:00.000Z'
+            ),
+            (
+              'operation-live', 'thread-purge', 'turn-purge-live', 'create_threads',
+              'private-request-id', 'private-fingerprint', 1,
+              ${livePlan}, 'dispatching', NULL, '{"path":"/private/error"}',
+              '2026-06-14T10:06:00.000Z', '2026-06-14T10:06:00.000Z'
+            )
+        `;
+
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          true,
+        );
+        const rows = yield* sql<{
+          readonly operationId: string;
+          readonly requestId: string;
+          readonly fingerprint: string;
+          readonly planJson: string;
+          readonly status: string;
+          readonly resultJson: string | null;
+          readonly errorJson: string | null;
+          readonly callerPurgedAt: string | null;
+        }>`
+          SELECT
+            operation_id AS "operationId", request_id AS "requestId", fingerprint,
+            plan_json AS "planJson", status, result_json AS "resultJson",
+            error_json AS "errorJson", caller_purged_at AS "callerPurgedAt"
+          FROM agent_gateway_operations
+          WHERE caller_thread_id = 'thread-purge'
+        `;
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          operationId: "operation-live",
+          requestId: "operation-live",
+          fingerprint: "operation-live",
+          status: "dispatching",
+          resultJson: null,
+          errorJson: null,
+          callerPurgedAt: expect.any(String),
+        });
+        expect(rows[0]!.planJson).not.toContain("private live prompt");
+        expect(rows[0]!.planJson).not.toContain("project-archive");
+        expect(JSON.parse(rows[0]!.planJson)[0]).toEqual({
+          workspaceRoot: "/work/archive",
+          environment: "worktree",
+          newBranch: "agent/private",
+          plannedWorktreePath: "/worktrees/private",
+          ownershipPreflightPassed: true,
+          worktreeOwnership: {
+            operationId: "operation-live",
+            path: "/worktrees/private",
+            branch: "agent/private",
+            recordedAt: "2026-06-14T10:06:00.000Z",
+          },
+          ids: {
+            threadId: "agent-private-child",
+            compensateCommandId: "delete-agent-private-child",
+          },
+        });
+      }),
+    );
+  });
+
   it("retains unresolved delivery evidence and purges only after explicit settlement", async () => {
     await runArchiveTest(
       Effect.gen(function* () {

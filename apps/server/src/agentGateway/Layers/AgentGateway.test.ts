@@ -38,6 +38,7 @@ import {
   type AgentGatewayOperationRecord,
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayLive } from "./AgentGateway.ts";
+import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -121,7 +122,7 @@ interface GatewayHarness {
   readonly automationCreates: Array<AutomationCreateInput>;
   readonly automationUpdates: Array<{ id: string; enabled?: boolean | undefined }>;
   readonly automationDeletes: Array<{ id: string }>;
-  readonly worktreeCreates: Array<{ newBranch?: string }>;
+  readonly worktreeCreates: Array<{ newBranch?: string; path?: string }>;
   readonly worktreeRemoves: Array<{ path: string }>;
   readonly branchDeletes: Array<{ branch: string }>;
   readonly setThreadDetail: (thread: OrchestrationThread) => void;
@@ -133,6 +134,10 @@ interface GatewayHarness {
   }) => void;
   readonly setProviderStatuses: (statuses: ReadonlyArray<ServerProviderStatus>) => void;
   readonly getOperationStatus: (callerTurnId: string) => string | null;
+  readonly getWaitReadCounts: () => {
+    readonly detailReads: number;
+    readonly batchTurnReads: number;
+  };
   readonly callTool: (input: {
     readonly token: string;
     readonly name: string;
@@ -196,6 +201,7 @@ function makeHarnessLayer(
     readonly interruptedOperations?: ReadonlyArray<AgentGatewayOperationRecord>;
     readonly providerStatuses?: ReadonlyArray<ServerProviderStatus>;
     readonly existingBranches?: ReadonlyArray<string>;
+    readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly failDeleteBranch?: boolean;
     readonly failOperationComplete?: boolean;
     readonly advanceParentTurnAfterDispatch?: {
@@ -208,9 +214,15 @@ function makeHarnessLayer(
   const automationCreates: Array<AutomationCreateInput> = [];
   const automationUpdates: Array<{ id: string; enabled?: boolean | undefined }> = [];
   const automationDeletes: Array<{ id: string }> = [];
-  const worktreeCreates: Array<{ newBranch?: string }> = [];
+  const worktreeCreates: Array<{ newBranch?: string; path?: string }> = [];
   const worktreeRemoves: Array<{ path: string }> = [];
   const branchDeletes: Array<{ branch: string }> = [];
+  const branchWorktreePaths = new Map<string, string | null>(
+    (options.existingBranches ?? []).map((branch) => [branch, null]),
+  );
+  for (const [branch, path] of Object.entries(options.existingWorktrees ?? {})) {
+    branchWorktreePaths.set(branch, path);
+  }
 
   const credentialsLayer = Layer.succeed(AgentGatewayCredentials, {
     mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
@@ -266,6 +278,8 @@ function makeHarnessLayer(
       readonly assistantMessageId: string | null;
     }
   >();
+  let threadDetailReads = 0;
+  let batchTurnReads = 0;
 
   const snapshotLayer = Layer.succeed(ProjectionSnapshotQuery, {
     getShellSnapshot: () =>
@@ -284,8 +298,9 @@ function makeHarnessLayer(
           : Option.none<OrchestrationProjectShell>(),
       ),
     getThreadDetailById: (threadId: ThreadIdType) =>
-      Effect.succeed(
-        Option.fromNullishOr(
+      Effect.sync(() => {
+        threadDetailReads += 1;
+        return Option.fromNullishOr(
           threadDetailsById.get(threadId as string) ??
             Option.getOrUndefined(
               Option.map(
@@ -293,8 +308,8 @@ function makeHarnessLayer(
                 makeThreadDetail,
               ),
             ),
-        ),
-      ),
+        );
+      }),
   } as unknown as (typeof ProjectionSnapshotQuery)["Service"]);
 
   const engineLayer = Layer.succeed(OrchestrationEngineService, {
@@ -373,19 +388,19 @@ function makeHarnessLayer(
       Effect.succeed({
         isRepo: true,
         hasOriginRemote: false,
-        branches: (options.existingBranches ?? []).map((name) => ({
+        branches: [...branchWorktreePaths].map(([name, worktreePath]) => ({
           name,
           current: false,
           isDefault: false,
-          worktreePath: null,
+          worktreePath,
         })),
       }),
-    createWorktree: (input: { newBranch?: string }) =>
+    createWorktree: (input: { newBranch?: string; path?: string }) =>
       Effect.sync(() => {
         worktreeCreates.push(input);
         return {
           worktree: {
-            path: `/tmp/worktrees/${input.newBranch ?? "generated"}`,
+            path: input.path ?? `/tmp/worktrees/${input.newBranch ?? "generated"}`,
             branch: input.newBranch ?? "generated",
           },
         };
@@ -522,6 +537,32 @@ function makeHarnessLayer(
         }
         return false;
       }),
+    recordWorktreeCreated: (input: {
+      operationId: string;
+      index: number;
+      workspaceRoot: string;
+      path: string;
+      branch: string;
+      now: string;
+    }) =>
+      Effect.sync(() => {
+        for (const [key, operation] of operationsByScope) {
+          if (operation.operationId !== input.operationId || operation.status !== "dispatching") {
+            continue;
+          }
+          operationsByScope.set(key, {
+            ...operation,
+            planJson: recordCreatedWorktreeInPlan({
+              planJson: operation.planJson,
+              ...input,
+              recordedAt: input.now,
+            }),
+            updatedAt: input.now,
+          });
+          return true;
+        }
+        return false;
+      }),
     markCompensating: ({ operationId, now }: { operationId: string; now: string }) =>
       Effect.sync(() => {
         for (const [key, operation] of operationsByScope) {
@@ -607,60 +648,64 @@ function makeHarnessLayer(
       ),
   });
 
+  const readProjectionTurn = (threadId: string, turnId: string) => {
+    const pinned = projectionTurnsByKey.get(`${threadId}:${turnId}`);
+    if (pinned) {
+      return {
+        threadId: ThreadId.makeUnsafe(pinned.threadId),
+        turnId: TurnId.makeUnsafe(pinned.turnId),
+        pendingMessageId: null,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId:
+          pinned.assistantMessageId === null
+            ? null
+            : MessageId.makeUnsafe(pinned.assistantMessageId),
+        state: pinned.state,
+        requestedAt: NOW,
+        startedAt: pinned.state === "pending" ? null : NOW,
+        completedAt:
+          pinned.state === "completed" || pinned.state === "error" || pinned.state === "interrupted"
+            ? NOW
+            : null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      };
+    }
+    const thread = threadsById.get(threadId);
+    const turn = thread?.latestTurn;
+    return turn?.turnId === turnId
+      ? {
+          threadId: ThreadId.makeUnsafe(threadId),
+          turnId: TurnId.makeUnsafe(turnId),
+          pendingMessageId: null,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: turn.assistantMessageId,
+          state: turn.state,
+          requestedAt: turn.requestedAt,
+          startedAt: turn.startedAt,
+          completedAt: turn.completedAt,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        }
+      : undefined;
+  };
   const projectionTurnsLayer = Layer.succeed(ProjectionTurnRepository, {
-    getByTurnId: ({ threadId, turnId }: { threadId: string; turnId: string }) => {
-      const pinned = projectionTurnsByKey.get(`${threadId}:${turnId}`);
-      if (pinned) {
-        return Effect.succeed(
-          Option.some({
-            threadId: ThreadId.makeUnsafe(pinned.threadId),
-            turnId: TurnId.makeUnsafe(pinned.turnId),
-            pendingMessageId: null,
-            sourceProposedPlanThreadId: null,
-            sourceProposedPlanId: null,
-            assistantMessageId:
-              pinned.assistantMessageId === null
-                ? null
-                : MessageId.makeUnsafe(pinned.assistantMessageId),
-            state: pinned.state,
-            requestedAt: NOW,
-            startedAt: pinned.state === "pending" ? null : NOW,
-            completedAt:
-              pinned.state === "completed" ||
-              pinned.state === "error" ||
-              pinned.state === "interrupted"
-                ? NOW
-                : null,
-            checkpointTurnCount: null,
-            checkpointRef: null,
-            checkpointStatus: null,
-            checkpointFiles: [],
-          }),
-        );
-      }
-      const thread = threadsById.get(threadId);
-      const turn = thread?.latestTurn;
-      return Effect.succeed(
-        turn?.turnId === turnId
-          ? Option.some({
-              threadId: ThreadId.makeUnsafe(threadId),
-              turnId: TurnId.makeUnsafe(turnId),
-              pendingMessageId: null,
-              sourceProposedPlanThreadId: null,
-              sourceProposedPlanId: null,
-              assistantMessageId: turn.assistantMessageId,
-              state: turn.state,
-              requestedAt: turn.requestedAt,
-              startedAt: turn.startedAt,
-              completedAt: turn.completedAt,
-              checkpointTurnCount: null,
-              checkpointRef: null,
-              checkpointStatus: null,
-              checkpointFiles: [],
-            })
-          : Option.none(),
-      );
-    },
+    getByTurnId: ({ threadId, turnId }: { threadId: string; turnId: string }) =>
+      Effect.succeed(Option.fromNullishOr(readProjectionTurn(threadId, turnId))),
+    getManyByTurnId: (input: ReadonlyArray<{ threadId: string; turnId: string }>) =>
+      Effect.sync(() => {
+        batchTurnReads += 1;
+        return input.flatMap(({ threadId, turnId }) => {
+          const turn = readProjectionTurn(threadId, turnId);
+          return turn ? [turn] : [];
+        });
+      }),
   } as unknown as (typeof ProjectionTurnRepository)["Service"]);
 
   const gatewayLayer = AgentGatewayLive.pipe(
@@ -724,6 +769,10 @@ function makeHarnessLayer(
       getOperationStatus: (callerTurnId) =>
         [...operationsByScope.values()].find((operation) => operation.callerTurnId === callerTurnId)
           ?.status ?? null,
+      getWaitReadCounts: () => ({
+        detailReads: threadDetailReads,
+        batchTurnReads,
+      }),
       callTool,
       postRaw,
     } satisfies GatewayHarness;
@@ -1124,7 +1173,7 @@ describe("AgentGateway", () => {
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const payload = toolResultJson(response.result);
       assert.equal(payload.branch, "agent/refactor-x");
-      assert.equal(payload.worktreePath, "/tmp/worktrees/agent/refactor-x");
+      assert.equal(payload.worktreePath, harness.worktreeCreates[0]?.path);
       const create = harness.dispatched[0]!;
       if (create.type === "thread.create") {
         assert.equal(create.envMode, "worktree");
@@ -1251,6 +1300,103 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect(
+    "does not remove worktree resources from the crash window before ownership was recorded",
+    () => {
+      const interrupted: AgentGatewayOperationRecord = {
+        operationId: "gateway:create:unrecorded-worktree",
+        callerThreadId: "thread-parent",
+        callerTurnId: "turn-parent-active",
+        operationKind: "create_threads",
+        requestId: "unrecorded-worktree-request",
+        fingerprint: "unrecorded-worktree-fingerprint",
+        requestedCount: 1,
+        planJson: JSON.stringify([
+          {
+            workspaceRoot: "/tmp/demo",
+            environment: "worktree",
+            newBranch: "agent/unrelated-after-crash",
+            plannedWorktreePath: "/tmp/unrelated-after-crash",
+            ownershipPreflightPassed: true,
+            ids: {
+              threadId: "agent:unrecorded-worktree-child",
+              compensateCommandId: "agent:unrecorded-worktree-child:compensate-delete",
+            },
+          },
+        ]),
+        status: "dispatching",
+        resultJson: null,
+        errorJson: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        interruptedOperations: [interrupted],
+        existingWorktrees: {
+          "agent/unrelated-after-crash": "/tmp/unrelated-after-crash",
+        },
+      });
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        assert.deepEqual(harness.worktreeRemoves, []);
+        assert.deepEqual(harness.branchDeletes, []);
+        assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
+  it.effect(
+    "refuses recorded cleanup when git registers the branch at a different worktree",
+    () => {
+      const plannedPath = process.cwd();
+      const interrupted: AgentGatewayOperationRecord = {
+        operationId: "gateway:create:mismatched-registration",
+        callerThreadId: "thread-parent",
+        callerTurnId: "turn-parent-active",
+        operationKind: "create_threads",
+        requestId: "mismatched-registration-request",
+        fingerprint: "mismatched-registration-fingerprint",
+        requestedCount: 1,
+        planJson: JSON.stringify([
+          {
+            workspaceRoot: "/tmp/demo",
+            environment: "worktree",
+            newBranch: "agent/recorded-but-replaced",
+            plannedWorktreePath: plannedPath,
+            ownershipPreflightPassed: true,
+            worktreeOwnership: {
+              operationId: "gateway:create:mismatched-registration",
+              path: plannedPath,
+              branch: "agent/recorded-but-replaced",
+              recordedAt: NOW,
+            },
+            ids: {
+              threadId: "agent:mismatched-registration-child",
+              compensateCommandId: "agent:mismatched-registration-child:compensate-delete",
+            },
+          },
+        ]),
+        status: "dispatching",
+        resultJson: null,
+        errorJson: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        interruptedOperations: [interrupted],
+        existingWorktrees: {
+          "agent/recorded-but-replaced": "/tmp/different-registration",
+        },
+      });
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        assert.deepEqual(harness.worktreeRemoves, []);
+        assert.deepEqual(harness.branchDeletes, []);
+        assert.equal(harness.getOperationStatus("turn-parent-active"), "failed");
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
   it.effect("terminalizes startup recovery when an owned branch cannot be deleted", () => {
     const interrupted: AgentGatewayOperationRecord = {
       operationId: "gateway:create:branch-cleanup",
@@ -1267,6 +1413,12 @@ describe("AgentGateway", () => {
           newBranch: "agent/owned-branch",
           plannedWorktreePath: "/tmp/missing-owned-worktree",
           ownershipPreflightPassed: true,
+          worktreeOwnership: {
+            operationId: "gateway:create:branch-cleanup",
+            path: "/tmp/missing-owned-worktree",
+            branch: "agent/owned-branch",
+            recordedAt: NOW,
+          },
           ids: {
             threadId: "agent:branch-cleanup-child",
             compensateCommandId: "agent:branch-cleanup-child:compensate-delete",
@@ -2011,9 +2163,101 @@ describe("AgentGateway", () => {
         (payload.threads as Array<{ summary: string }>).map((entry) => entry.summary),
         ["First result", "Second result"],
       );
+      assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 2, batchTurnReads: 1 });
       assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
+
+  it.effect("bounds wait summaries and points callers to paginated thread reads", () => {
+    const runId = TurnId.makeUnsafe("turn-long-result");
+    const messageId = MessageId.makeUnsafe("message-long-result");
+    const shell = makeThreadShell("thread-long-result", {
+      latestTurn: {
+        turnId: runId,
+        state: "completed",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: NOW,
+        assistantMessageId: messageId,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [makeThreadShell("thread-parent"), shell],
+      [],
+      {
+        threadDetails: new Map([
+          [
+            "thread-long-result",
+            {
+              ...makeThreadDetail(shell),
+              messages: [
+                {
+                  id: messageId,
+                  role: "assistant",
+                  text: "x".repeat(5_000),
+                  turnId: runId,
+                  streaming: false,
+                  source: "native",
+                  createdAt: NOW,
+                  updatedAt: NOW,
+                },
+              ],
+            },
+          ],
+        ]),
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_wait_for_threads",
+        args: { threadIds: ["thread-long-result"], timeoutMs: 0 },
+      });
+      const result = (
+        toolResultJson(response.result).threads as Array<Record<string, unknown>>
+      )[0]!;
+      assert.equal(result.summaryTruncated, true);
+      assert.include(result.summary as string, "[... truncated 3000 chars]");
+      assert.isBelow((result.summary as string).length, 2_100);
+      assert.deepEqual(result.readThread, {
+        tool: "synara_read_thread",
+        arguments: { threadId: "thread-long-result" },
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect(
+    "checks twenty pending waits with one batched turn read and no transcript loads",
+    () => {
+      const pending = Array.from({ length: 20 }, (_, index) =>
+        makeThreadShell(`thread-pending-${index}`, {
+          latestTurn: {
+            turnId: TurnId.makeUnsafe(`turn-pending-${index}`),
+            state: "running",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        }),
+      );
+      const { gatewayLayer, makeHarness } = makeHarnessLayer([
+        makeThreadShell("thread-parent"),
+        ...pending,
+      ]);
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_wait_for_threads",
+          args: { threadIds: pending.map((thread) => thread.id), timeoutMs: 0 },
+        });
+        assert.equal(toolResultJson(response.result).timedOut, true);
+        assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 0, batchTurnReads: 1 });
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
 
   it.effect("replays the original two-agent incident without runaway replacements", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);

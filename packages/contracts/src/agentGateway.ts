@@ -187,7 +187,12 @@ export const SynaraWaitedThreadResult = Schema.Struct({
   terminal: Schema.Boolean,
   timedOut: Schema.Boolean,
   summary: Schema.NullOr(Schema.String),
+  summaryTruncated: Schema.Boolean,
   error: Schema.NullOr(Schema.String),
+  readThread: Schema.Struct({
+    tool: Schema.Literal("synara_read_thread"),
+    arguments: Schema.Struct({ threadId: ThreadId }),
+  }),
 });
 export type SynaraWaitedThreadResult = typeof SynaraWaitedThreadResult.Type;
 
