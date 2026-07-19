@@ -1,7 +1,7 @@
 # Synara Cleanup Audit and Execution Plan
 
 > Generated: 2026-07-19
-> Status: in progress — CLN-013 complete; CLN-014 next
+> Status: in progress — CLN-014 complete; CLN-015 next
 > Scope: monolith decomposition, duplicated logic/views/CSS/functions, unused files/imports
 > Source of truth: this file only; no per-file cleanup documents
 
@@ -138,7 +138,7 @@ Status values: `TODO`, `IN_PROGRESS`, `DONE`, `BLOCKED`, `REJECTED`.
 | CLN-011 | P0  | DONE   | Decompose `composerDraftStore.ts` and its test by migration, attachments, model selection, and actions while preserving storage compatibility.                                               | composer draft/store tests                                                  |
 | CLN-012 | P0  | DONE   | Shrink `ChatView`: adopt existing provider-model and voice hooks, then extract automation setup, terminal actions, composer send/queue, and dialog/layout owners.                            | ChatView logic/browser suites and hook tests                                |
 | CLN-013 | P0  | DONE   | Shrink `Sidebar`: shared thread row, pin/archive/delete controller, project-run controller, with selector granularity unchanged.                                                             | Sidebar logic/UI/import plus new row characterization                       |
-| CLN-014 | P1  | TODO   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
+| CLN-014 | P1  | DONE   | Split `MessagesTimeline`, `session-logic`, chat route surfaces, and their tests along existing row/derivation/surface seams without changing scroll-follow semantics.                        | timeline unit/browser suites; session logic tests                           |
 | CLN-015 | P1  | TODO   | Split settings route into panel-owned components with local subscriptions.                                                                                                                   | focused settings render/disclosure tests                                    |
 | CLN-020 | P1  | TODO   | Decompose Claude and OpenCode adapters along pure mapper/catalog seams; split their tests in lockstep.                                                                                       | adapter and runtime suites                                                  |
 | CLN-021 | P1  | TODO   | Decompose Codex app-server manager into discovery/catalog and transport/routing collaborators; consolidate send/steer input shaping.                                                         | manager and transport suites                                                |
@@ -288,3 +288,23 @@ For every tracker item:
   across **16 files / 208 unit tests** and **2 files / 3 browser tests**; default targeted Oxlint,
   repo unused diagnostics across **1,850 files**, and `git diff --check` all passed. Disclosure
   motion and transcript-follow behavior were untouched.
+- 2026-07-20 — CLN-014 started. Real transcript messages remain the only live-output follow signal;
+  list/virtualizer measurement stays one-way and co-owned with the timeline. Extraction candidates
+  must reduce a demonstrated responsibility or duplicate owner, not merely relocate JSX.
+- 2026-07-20 — CLN-014 complete: the three targeted production roots shrank from **8,776 → 3,333
+  LOC**. `MessagesTimeline.tsx` moved its cohesive work/tool presentation into one **1,172 LOC**
+  owner and fell from **3,847 → 2,622 LOC**; the unreachable modal tool-details view was deleted in
+  favor of the live inline owner (**2 views → 1**), the local basename duplicate now uses the shared
+  path owner, and two dead forwarding/always-null functions were removed. `_chat.$threadId.tsx`
+  fell from **2,420 → 193 LOC** and now owns only hydration/recovery dispatch; split (**1,032 LOC**),
+  single (**963 LOC**), and shared lazy surface primitives (**201 LOC**) have explicit owners, while
+  desktop browser-panel subscriptions moved from **2 implementations → 1** stable **44 LOC** hook.
+  `session-logic.ts` fell from **2,509 → 518 LOC** while preserving its import facade; pending
+  interaction replay moved from **2 state machines → 1** **256 LOC** owner, and the cohesive work-log
+  projection/collapse/timeline domain moved to one **1,776 LOC** owner. Its **4,061 LOC** test split
+  into **910 / 506 / 2,630 LOC** owners with the original test-name multiset preserved and no new
+  fixture layer. The dead work-log presentation version export was deleted. Combined verification
+  passed across **21 files / 544 unit tests** and **6 files / 80 browser tests**; the real-message-only
+  auto-follow characterization passed three additional consecutive focused runs after isolating
+  mount-time tail retries. Independent implementation, route, and coverage reviews are clean; repo
+  unused diagnostics remain **0 across 1,860 files**, and `git diff --check` passed.

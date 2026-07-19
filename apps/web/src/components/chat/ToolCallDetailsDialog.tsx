@@ -1,73 +1,20 @@
 // FILE: ToolCallDetailsDialog.tsx
-// Purpose: Modal inspector for command and file-change tool calls from transcript rows.
+// Purpose: Inline details content for command and file-change transcript rows.
 // Layer: Chat presentation component
-// Exports: ToolCallDetailsDialog
-// Depends on: WorkLogEntry.toolDetails and shared dialog chrome
+// Exports: ToolCallDetailsContent
+// Depends on: WorkLogEntry.toolDetails
 
 import type { ReactNode } from "react";
-import { PencilIcon, TerminalIcon } from "~/lib/icons";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
-import type { WorkLogEntry } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 
 const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
 const DETAIL_CODE_BLOCK_CLASS_NAME =
   "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-[11px] leading-relaxed text-foreground/88";
 const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
   "text-[length:var(--app-font-size-ui,12px)] leading-relaxed";
-
-interface ToolCallDetailsDialogProps {
-  entry: WorkLogEntry | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
-export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
-  const details = entry?.toolDetails;
-  // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
-  // the central pencil, commands use the terminal — so the dialog header matches
-  // the row the user clicked.
-  const Icon = details?.kind === "file-change" ? PencilIcon : TerminalIcon;
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup surface="solid" className="max-h-[min(86vh,760px)] max-w-4xl gap-0 p-0">
-        <DialogHeader className="border-b border-border/55 pr-10">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/62">
-              <Icon className="size-3.5" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <DialogTitle className="truncate text-base">
-                {details?.title ?? "Tool call"}
-              </DialogTitle>
-              <DialogDescription>
-                {details?.kind === "file-change"
-                  ? "Edit payload captured for this tool call."
-                  : "Command payload captured for this tool call."}
-              </DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-        <DialogPanel
-          className="max-h-[min(72vh,620px)] space-y-4 px-4 py-4"
-          data-tool-details-dialog="true"
-        >
-          <ToolCallDetailsContent details={details} />
-        </DialogPanel>
-      </DialogPopup>
-    </Dialog>
-  );
-}
 
 export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetails | undefined }) {
   if (!details) {

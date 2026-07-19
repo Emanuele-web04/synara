@@ -2251,6 +2251,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
         if (typeof normalized.top === "number") scrollContainer.scrollTop = normalized.top;
         scrollContainer.dispatchEvent(new Event("scroll"));
       }) as typeof scrollContainer.scrollTo;
+      // Let mount-time tail/image expansion retries (max 260ms) settle before
+      // isolating scrolls caused by the state transitions below.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
       await waitForLayout();
       scrollToCalls.length = 0;
 
