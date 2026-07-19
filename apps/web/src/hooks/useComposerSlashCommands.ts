@@ -1004,6 +1004,7 @@ export function useComposerSlashCommands(input: {
   );
 
   return {
+    createForkThreadFromSlashCommand,
     handleForkTargetSelection,
     handleReviewTargetSelection,
     isSlashStatusDialogOpen,
